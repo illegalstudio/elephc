@@ -265,6 +265,16 @@ echo $doc->asXML();
 $doc = new SimpleXMLElement('<r/>');
 -- $doc->children()[0]->mark;
 echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark[0] .= 'x';
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark[0] += 2;
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+try { $doc->children()[0]->mark[0] .= XmlWriteTimingBoom(); }
+catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+echo $doc->asXML();
 $ordinary = new XmlWriteTimingHolder();
 XmlWriteTimingOrdinary($ordinary)->receiver()->mark = XmlWriteTimingValue();
 echo $ordinary->mark, "\n";
@@ -273,7 +283,7 @@ unset($doc, $parent, $removed, $ordinary, $error);
     let renamed = source.replace("XmlWriteTiming", "EvalXmlWriteTiming");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<b><child/></b>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>27</mark></r>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nroot|key|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nfresh|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\nordinary|call|value|ok\n";
+    let expected = "rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<b><child/></b>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>27</mark></r>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nroot|key|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nfresh|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>x</mark></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>2</mark></r>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nordinary|call|value|ok\n";
     assert_bundle_with(&[
         BundleCase { name: "computed_write_aot", source, expected },
         BundleCase { name: "computed_write_eval", source: &eval, expected },
@@ -284,4 +294,43 @@ unset($doc, $parent, $removed, $ordinary, $error);
         assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
         out.stdout
     });
+}
+
+/// Indexed XML incdec materializes missing writable nodes and preserves existing node text.
+#[test]
+fn test_simplexml_computed_property_element_incdec() {
+    if skip_without_xml_native("test_simplexml_computed_property_element_incdec") { return; }
+    let source = r###"<?php
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark[0]++;
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+++$doc->children()[0]->mark[0];
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark[0]--;
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+--$doc->children()[0]->mark[0];
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r><a><mark>7</mark><mark>A</mark></a></r>');
+$doc->children()[0]->mark[0]++;
+--$doc->children()[0]->mark[0];
+++$doc->children()[0]->mark[1];
+echo $doc->asXML();
+class XmlIndexedIncdecOrdinary {
+    public array $values = ['9', 4];
+    public function receiver(): mixed { echo 'ordinary|'; return $this; }
+}
+$ordinary = new XmlIndexedIncdecOrdinary();
+$ordinary->receiver()->values[0]++;
+--$ordinary->receiver()->values[1];
+echo json_encode($ordinary->values), "\n";
+unset($doc, $ordinary);
+"###;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert_eq!(out.stdout, "<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r><a><mark>7</mark><mark>A</mark></a></r>\nordinary|ordinary|[10,3]\n");
 }

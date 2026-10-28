@@ -91,6 +91,40 @@ fn root(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, roots: &mut Vec<
     value
 }
 
+/// Runs one update arm while the selected child remains independently rooted.
+pub(super) fn dispatch(
+    ctx: &mut LoweringContext<'_, '_>, fetch: Fetch, span: Span,
+    native_update: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
+    ordinary_update: impl FnOnce(&mut LoweringContext<'_, '_>),
+) {
+    let mut roots = Vec::new();
+    let child = root(ctx, fetch.value, &mut roots, span);
+    if !fetch.conditional {
+        native_update(ctx, child);
+    } else {
+        let absent = ctx.emit_value(Op::IsNull, vec![child.value], None, PhpType::Bool,
+            Op::IsNull.default_effects(), Some(span));
+        let native = ctx.builder.create_named_block("xml.dimension.incdec.native", vec![]);
+        let ordinary = ctx.builder.create_named_block("xml.dimension.incdec.ordinary", vec![]);
+        let merge = ctx.builder.create_named_block("xml.dimension.incdec.merge", vec![]);
+        let initial = ctx.initialized_slots_snapshot();
+        ctx.builder.terminate(Terminator::CondBr { cond: absent.value,
+            then_target: ordinary, then_args: vec![], else_target: native, else_args: vec![] });
+        ctx.builder.position_at_end(native);
+        native_update(ctx, child);
+        jump(ctx, merge);
+        let native_slots = ctx.initialized_slots_snapshot();
+        ctx.builder.position_at_end(ordinary);
+        ctx.restore_initialized_slots(initial);
+        ordinary_update(ctx);
+        jump(ctx, merge);
+        let ordinary_slots = ctx.initialized_slots_snapshot();
+        ctx.builder.position_at_end(merge);
+        ctx.restore_initialized_slots(native_slots.intersection(&ordinary_slots).copied().collect());
+    }
+    retire_property_write_roots(ctx, roots, span);
+}
+
 /// Chooses native offsetSet or the unchanged ordinary property writer after operands are staged.
 pub(super) fn write(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, fetch: Fetch, property: &str,

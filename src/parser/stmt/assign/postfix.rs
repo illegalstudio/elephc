@@ -71,7 +71,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     // A handcrafted assignment without its result target evaluated the value twice.
     if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
         || (op != AssignmentOperator::Assign && (computed_storage_property_target(&lhs_expr)
-            || computed_receiver_property_target(&lhs_expr)))) {
+            || (computed_receiver_property_target(&lhs_expr)
+                && !(matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+                    && matches!(op, AssignmentOperator::Compound(_))))))) {
         let value = if matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
             parse_expr(tokens, pos)?
         } else {
@@ -90,6 +92,12 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    if !is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+        && matches!(op, AssignmentOperator::Compound(_))
+        && computed_receiver_property_target(&lhs_expr)
+    {
+        return lower_computed_property_element_update(lhs_expr, op, rhs, span).map(Some);
+    }
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_postfix_assignment(lhs_expr, op, rhs, span).map(Some);
     }
@@ -852,6 +860,22 @@ fn lower_effectful_postfix_assignment(
     Ok(lowerer.finish(lowered))
 }
 
+/// Captures computed roots and keys without reading an indexed property's writable receiver.
+fn lower_computed_property_element_update(
+    target: Expr, op: AssignmentOperator, rhs: Expr, span: Span,
+) -> Result<Stmt, CompileError> {
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    lowerer.scoped = true;
+    let target = lowerer.stabilize_array_base(target);
+    let rhs = if matches!(op, AssignmentOperator::Compound(_))
+        && compound_rhs_can_disturb_index(&target, &rhs)
+    { lowerer.stabilize_unconditionally(rhs) } else { rhs };
+    let target = lowerer.snapshot_update_dimension(target);
+    let value = assignment_value(target.clone(), op, rhs, span);
+    let statement = assignment_target_store_stmt(target, value, span)?;
+    Ok(lowerer.finish(statement))
+}
+
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
 ///
 /// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
@@ -869,6 +893,12 @@ pub(crate) fn lower_postfix_incdec_assignment(
         AssignmentOperator::Compound(BinOp::Sub)
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
+
+    if matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+        && computed_receiver_property_target(&lhs_expr)
+    {
+        return lower_computed_property_element_update(lhs_expr, op, one, span);
+    }
 
     if computed_storage_property_target(&lhs_expr)
         || (matches!(lhs_expr.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. })

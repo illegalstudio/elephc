@@ -354,3 +354,31 @@ fn test_computed_assignment_logic_does_not_leave_scoped_captures() {
         }
     }
 }
+
+/// Indexed updates capture only their computed root and keep a writable statement target.
+#[test]
+fn test_call_rooted_property_element_updates_keep_delayed_traversal() {
+    for source in [
+        "<?php $doc->children()[0]->mark[0] .= rhs();",
+        "<?php $doc->children()[0]->mark[0] += rhs();",
+        "<?php $doc->children()[0]->mark[0]++;",
+        "<?php $doc->children()[0]->mark[0]--;",
+        "<?php ++$doc->children()[0]->mark[0];",
+        "<?php --$doc->children()[0]->mark[0];",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected captured update: {source}"); };
+        let StmtKind::Assign { name, value } = &body[0].kind else { panic!("expected root capture: {source}"); };
+        assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX), "{source}");
+        assert!(matches!(value.kind, ExprKind::MethodCall { .. }), "{source}");
+        let StmtKind::PropertyArrayAssign { object, value, .. } = &body.last().unwrap().kind else {
+            panic!("expected element write: {source}");
+        };
+        assert!(matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(&array.kind, ExprKind::Variable(root) if root == name)), "{source}");
+        if source.contains("++") || source.contains("--") {
+            let ExprKind::Assignment { value, .. } = &value.kind else { panic!("expected PHP incdec: {source}"); };
+            assert!(matches!(value.kind, ExprKind::PreIncrement(_) | ExprKind::PreDecrement(_)), "{source}");
+        } else { assert!(matches!(value.kind, ExprKind::BinaryOp { .. }), "{source}"); }
+    }
+}

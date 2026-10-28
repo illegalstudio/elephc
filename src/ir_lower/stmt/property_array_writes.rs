@@ -12,6 +12,7 @@ use crate::parser::ast::BinOp;
 
 mod native_xml;
 mod compound;
+mod incdec;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
 /// Defers storage-only receiver chains while preserving early evaluation of computed receivers.
@@ -232,7 +233,13 @@ pub(super) fn lower_property_array_assign_with_update(
 ) {
     let compound = compound_source(value, object, property, index, span);
     let index_expression = index;
-    let source_value = compound.map_or(value, |(_, rhs)| rhs);
+    let delayed_incdec = match update {
+        PropertyElementUpdate::IncDec(increment) if ctx.classes.contains_key("SimpleXMLElement")
+            && !known_buffer_property(ctx, object, property) => Some(increment),
+        _ => None,
+    };
+    let placeholder = Expr::new(ExprKind::Null, span);
+    let source_value = if delayed_incdec.is_some() { &placeholder } else { compound.map_or(value, |(_, rhs)| rhs) };
     let mut roots = Vec::new();
     let (mut receiver, index, value) = if deferred_property_receiver(ctx, object) && !known_buffer_property(ctx, object, property) {
         let source = match update {
@@ -250,6 +257,7 @@ pub(super) fn lower_property_array_assign_with_update(
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let source = match update {
             PropertyElementUpdate::Written => PropertyWriteValue::Expr(source_value),
+            PropertyElementUpdate::IncDec(_) if delayed_incdec.is_some() => PropertyWriteValue::Expr(&placeholder),
             PropertyElementUpdate::IncDec(increment) => {
                 super::buffer_element_updates::property_statement_update(
                     ctx, receiver.value, property, value, increment,
@@ -265,14 +273,24 @@ pub(super) fn lower_property_array_assign_with_update(
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
     if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
-        native_xml::write(ctx, receiver.value, child, property, Some(index), value,
-            compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
+        if let Some(increment) = delayed_incdec {
+            native_xml::dispatch(ctx, child, span,
+                |ctx, child| incdec::native(ctx, child, index, increment, span),
+                |ctx| incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, span));
+        } else {
+            native_xml::write(ctx, receiver.value, child, property, Some(index), value,
+                compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
+        }
         receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
         return;
     }
-    write_ordinary_compound(ctx, receiver.value, property, index, value,
-        compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
+    if let Some(increment) = delayed_incdec {
+        incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, span);
+    } else {
+        write_ordinary_compound(ctx, receiver.value, property, index, value,
+            compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
+    }
     receiver.finish(ctx, span);
     retire_property_write_roots(ctx, roots, span);
 }

@@ -44,3 +44,23 @@ pub(crate) fn lower_native_dimension_write_select(
     if let Some(slot) = owner { retire_owned_call_operand(ctx, slot, expr.span); }
     take_prepublished_call_result(ctx, staging, result, expr.span)
 }
+
+/// Selects a writable offset using a captured key without replaying its source expression.
+pub(crate) fn lower_native_dimension_write_select_from_values(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue, expr: &Expr,
+) -> LoweredValue {
+    let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
+    let ty = ctx.builder.value_php_type(index.value);
+    let name = ctx.declare_owned_hidden_temp(ty.clone());
+    let slot = ctx.local_slots[&name];
+    let rooted = Ownership::php_type_needs_lifetime_tracking(&ty);
+    if rooted { register_owned_call_operand(ctx, slot, expr.span); }
+    store_value_into_temp(ctx, &name, ty, index, expr.span);
+    let key = Expr::new(ExprKind::Variable(name), expr.span);
+    let result = lower_native_dimension_write_select(ctx, object, &key, expr);
+    stage_call_result(ctx, staging.as_ref(), result, expr.span);
+    if rooted { unregister_owned_call_operand(ctx, slot, expr.span); }
+    ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(expr.span));
+    take_prepublished_call_result(ctx, staging, result, expr.span)
+}
