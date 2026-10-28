@@ -165,6 +165,8 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
     add x9, x9, _heap_small_bins@PAGEOFF
     stp xzr, xzr, [x9]
     stp xzr, xzr, [x9, #16]
+    stp xzr, xzr, [x9, #32]
+    stp xzr, xzr, [x9, #48]
     mov x0, #16
     bl __rt_heap_alloc
     str x0, [sp, #-16]!
@@ -204,6 +206,10 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
     mov QWORD PTR [r9 + 8], 0
     mov QWORD PTR [r9 + 16], 0
     mov QWORD PTR [r9 + 24], 0
+    mov QWORD PTR [r9 + 32], 0
+    mov QWORD PTR [r9 + 40], 0
+    mov QWORD PTR [r9 + 48], 0
+    mov QWORD PTR [r9 + 56], 0
     mov eax, 16
     call __rt_heap_alloc
     push rax
@@ -244,7 +250,14 @@ fn test_gc_heap_alloc_reuses_small_bin_before_bump() {
 /// Target-specific ARM64/x86_64 assembly.
 #[test]
 fn test_heap_debug_double_free_reports_error() {
-    let harness = match target().arch {
+    let harness = double_free_harness();
+    let err = compile_harness_expect_failure("<?php", 65_536, harness);
+    assert!(err.contains("heap debug detected double free"), "{err}");
+}
+
+/// Builds two allocations and frees the non-tail payload twice in the executable target ABI.
+fn double_free_harness() -> &'static str {
+    match target().arch {
         Arch::AArch64 => {
             r#"    mov x0, #16
     bl __rt_heap_alloc
@@ -269,8 +282,29 @@ fn test_heap_debug_double_free_reports_error() {
     mov rax, QWORD PTR [rsp + 8]
     call __rt_heap_free"#
         }
+    }
+}
+
+/// Web duplicate detection remains active with expensive heap-debug validation disabled.
+#[test]
+fn test_heap_web_guard_rejects_double_free_without_heap_debug() {
+    let setup = match target().arch {
+        Arch::AArch64 => r#"    adrp x9, _heap_debug_enabled@PAGE
+    add x9, x9, _heap_debug_enabled@PAGEOFF
+    str xzr, [x9]
+    adrp x9, _web_heap_guard_enabled@PAGE
+    add x9, x9, _web_heap_guard_enabled@PAGEOFF
+    mov x10, #1
+    str x10, [x9]
+"#,
+        Arch::X86_64 => r#"    lea r9, [rip + _heap_debug_enabled]
+    mov QWORD PTR [r9], 0
+    lea r9, [rip + _web_heap_guard_enabled]
+    mov QWORD PTR [r9], 1
+"#,
     };
-    let err = compile_harness_expect_failure("<?php", 65_536, harness);
+    let harness = format!("{setup}{}", double_free_harness());
+    let err = compile_harness_expect_failure("<?php", 65_536, &harness);
     assert!(err.contains("heap debug detected double free"), "{err}");
 }
 

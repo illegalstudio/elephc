@@ -207,7 +207,7 @@ impl std::ops::Deref for TestLinkRequirements {
 
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
-fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     let _phase = fixture_phase_timing("assemble");
     if let Some(phase) = &_phase { phase.assembly_input(asm); }
     let mut cmd = Command::new(assembler_cmd());

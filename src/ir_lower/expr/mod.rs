@@ -100,6 +100,8 @@ mod array_access;
 mod string_offset_owners;
 mod array_access_types;
 mod ternary_cast;
+mod missing_string;
+pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
 mod closure_calls;
 mod descriptor_calls;

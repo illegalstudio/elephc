@@ -152,6 +152,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         strict_locals,
         web,
         web_isolation,
+        web_application,
         with_crates,
         quiet,
         ini_overrides,
@@ -600,14 +601,21 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(
-        ast,
-        web,
-        php_version,
-        &ini_overrides,
-        &mut prelude_inventory,
-        preload_startup_path.as_deref(),
-    );
+    let ast = if web_application {
+        web_prelude::application::inject(
+            ast, php_version, &ini_overrides, &mut prelude_inventory,
+            preload_startup_path.as_deref(),
+        )
+    } else {
+        web_prelude::inject_if_web(
+            ast,
+            web,
+            php_version,
+            &ini_overrides,
+            &mut prelude_inventory,
+            preload_startup_path.as_deref(),
+        )
+    };
     timings.record_since("web-prelude", phase_started);
 
     // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
@@ -630,7 +638,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     // archive nothing references contributes nothing to the link.
     crate::progress::phase("extension-prelude");
     let phase_started = Instant::now();
-    let hosted_php_ext = match crate::php_ext::install::resolve_hosted(Path::new(filename), target) {
+    let hosted_php_ext = match crate::php_ext::install::resolve_hosted(Path::new(filename), target, web_application) {
         Ok(hosted) => hosted,
         Err(error) => {
             crate::progress::clear();
@@ -815,6 +823,10 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     );
     timings.record_since("opcache-manifest-bake", phase_started);
 
+    let ast = if web_application {
+        web_prelude::application::wrap_bootstrap(ast)
+    } else { ast };
+
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
     let ast = optimize::fold_constants_for_target(ast, target);
@@ -934,6 +946,14 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
     if preload_startup_path.is_some() {
         exported_function_names.insert(crate::web_prelude::PRELOAD_STARTUP_FN.to_string());
     }
+    if web_application {
+        exported_function_names.extend([
+            web_prelude::application::READY,
+            web_prelude::application::REQUEST,
+            web_prelude::application::SHUTDOWN,
+            web_prelude::application::CONTEXT_OPTION,
+        ].map(str::to_string));
+    }
     // A generic instantiation is reachable by construction — it exists only because a call
     // site asked for it — but no call site NAMES it: the source still says `identity(5)` and
     // lowering is what resolves that to `identity<int>`. Without this the pruner drops every
@@ -996,6 +1016,7 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
             process::exit(1);
         }
     };
+    ir_module.web_application = web_application;
     ir_module.included_files = opcache_manifest
         .iter()
         .map(|entry| entry.path.clone())

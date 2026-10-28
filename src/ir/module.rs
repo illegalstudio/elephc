@@ -144,6 +144,8 @@ pub struct Module {
     /// those names, so a non-web read/write must not assume a live Hash
     /// pointer is already there.
     pub web: bool,
+    /// The web entry bootstraps a retained application after fork rather than per request.
+    pub web_application: bool,
     /// Generated `clone()` property-override applicators, sorted by class id then scope id.
     pub clone_override_applicators: Vec<CloneOverrideApplicator>,
 }
@@ -197,6 +199,7 @@ impl Module {
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
+            web_application: false,
             clone_override_applicators: Vec::new(),
         }
     }

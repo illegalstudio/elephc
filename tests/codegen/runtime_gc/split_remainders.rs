@@ -57,7 +57,7 @@ fn expect_symbol(emitter: &mut String, symbol: &str, expected: usize) {
 fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
-    for remainder in [8, 16, 24, 32, 40, 64, 72, BIN_MAX, BIN_MAX + 8] {
+    for remainder in [8, 16, 24, 32, 40, 48, 56, 64, 72, BIN_MAX, BIN_MAX + 8] {
         for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
             let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };
             symbol_address(&mut emitter, reg, symbol);
@@ -146,7 +146,7 @@ fn test_gc_small_split_remainder_classes_reuse_and_cache_drain() {
 fn test_gc_small_split_remainder_drains_before_live_allocation_free() {
     let mut emitter = String::new();
     instruction(&mut emitter, "sub sp, sp, #64", "sub rsp, 64");
-    for remainder in [8, 16, 24, 32, 40, 64, 72, BIN_MAX, BIN_MAX + 8] {
+    for remainder in [8, 16, 24, 32, 40, 48, 56, 64, 72, BIN_MAX, BIN_MAX + 8] {
         // -- create a split with a live allocation on each side --
         for symbol in ["_gc_allocs", "_gc_frees", "_gc_peak"] {
             let reg = if target().arch == Arch::AArch64 { "x9" } else { "r8" };

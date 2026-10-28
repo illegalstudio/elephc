@@ -189,6 +189,7 @@ pub(crate) struct LoweringSnapshot {
     assigned_php_local_slots: HashSet<LocalSlotId>,
     constants: HashMap<String, (ExprKind, PhpType)>,
     loop_stack: Vec<LoopFrame>,
+    loop_carried_missing_strings: Vec<HashSet<String>>,
     finally_stack: Vec<FinallyFrame>,
     try_loop_depths: Vec<usize>,
     static_callable_locals: HashMap<String, StaticCallableBinding>,
@@ -215,6 +216,10 @@ pub(crate) struct LoweringSnapshot {
     /// Provisional offset receiver reads belonging to this speculative function state.
     string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
+    /// Replay set of locals whose string cast must copy. See `owned_string_cast_locals`.
+    owned_string_cast_locals: HashSet<String>,
+    /// Casts that borrowed a concrete string local inside this speculative state.
+    provisional_borrowed_string_casts: HashSet<String>,
     append_update_cell_aliases: HashSet<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
@@ -307,6 +312,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
+    /// PHP locals whose `(string)` cast must copy: the finished frame slot frees the load.
+    ///
+    /// Filled after the first body lower and applied on the string-storage replay.
+    /// A concrete string slot stays off this set, so the cast keeps borrowing it.
+    pub(crate) owned_string_cast_locals: HashSet<String>,
+    /// Locals a `(string)` cast borrowed because the slot was still a concrete string.
+    pub(crate) provisional_borrowed_string_casts: HashSet<String>,
     /// Whole-body proof that an instance method cannot widen its immutable this slot.
     /// Set before body lowering and preserved across speculative snapshots.
     pub(crate) this_storage_stays_concrete: bool,
@@ -388,6 +400,11 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
+    /// Locals each enclosing loop assigns a value that may still be the missing-string
+    /// sentinel. A cast inside the loop must see those stores even when they are lowered
+    /// later in the body, because the back-edge runs them before the next iteration.
+    /// A `string` parameter is absent unless such a store actually reaches it.
+    pub loop_carried_missing_strings: Vec<HashSet<String>>,
     pub finally_stack: Vec<FinallyFrame>,
     /// Loop-stack depth at each active `try` handler push; see
     /// `LoweringContext::loops_a_throw_would_leave`.
@@ -611,6 +628,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
+            loop_carried_missing_strings: Vec::new(),
             finally_stack: Vec::new(),
             try_loop_depths: Vec::new(),
             taken_finally_exceptions: Vec::new(),
@@ -650,6 +668,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
+            owned_string_cast_locals: HashSet::new(),
+            provisional_borrowed_string_casts: HashSet::new(),
             this_storage_stays_concrete: false,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
@@ -688,6 +708,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             assigned_php_local_slots: self.assigned_php_local_slots.clone(),
             constants: self.constants.clone(),
             loop_stack: self.loop_stack.clone(),
+            loop_carried_missing_strings: self.loop_carried_missing_strings.clone(),
             finally_stack: self.finally_stack.clone(),
             try_loop_depths: self.try_loop_depths.clone(),
             static_callable_locals: self.static_callable_locals.clone(),
@@ -718,6 +739,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
+            owned_string_cast_locals: self.owned_string_cast_locals.clone(),
+            provisional_borrowed_string_casts: self.provisional_borrowed_string_casts.clone(),
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
@@ -742,6 +765,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn push_try_loop_depth(&mut self) {
         let depth = self.loop_stack.len();
         self.try_loop_depths.push(depth);
+    }
+
+    /// Records locals this loop assigns a missing-string sentinel, for casts lowered
+    /// earlier in the body than the store.
+    pub(crate) fn push_loop_carried_missing_strings(&mut self, names: HashSet<String>) {
+        self.loop_carried_missing_strings.push(names);
+    }
+
+    /// Drops the missing-string names recorded for the loop that just finished lowering.
+    pub(crate) fn pop_loop_carried_missing_strings(&mut self) {
+        self.loop_carried_missing_strings.pop();
+    }
+
+    /// Returns whether an enclosing loop assigns `name` a value that may be the sentinel.
+    ///
+    /// Copy-on-write shadows keep the PHP name with a `#cow` suffix. The loop scan records
+    /// the source name, so the suffix is ignored here.
+    pub(crate) fn loop_assigns_missing_string(&self, name: &str) -> bool {
+        let name = name.strip_suffix("#cow").unwrap_or(name);
+        self.loop_carried_missing_strings
+            .iter()
+            .any(|names| names.contains(name))
     }
 
     /// Drops the innermost active `try` handler's record.
@@ -774,6 +819,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.assigned_php_local_slots = snapshot.assigned_php_local_slots;
         self.constants = snapshot.constants;
         self.loop_stack = snapshot.loop_stack;
+        self.loop_carried_missing_strings = snapshot.loop_carried_missing_strings;
         self.finally_stack = snapshot.finally_stack;
         self.try_loop_depths = snapshot.try_loop_depths;
         self.static_callable_locals = snapshot.static_callable_locals;
@@ -803,6 +849,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
         self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
+        self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
+        self.provisional_borrowed_string_casts = snapshot.provisional_borrowed_string_casts;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;

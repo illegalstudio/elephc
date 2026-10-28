@@ -126,6 +126,7 @@ mod decref_hash;
 mod decref_mixed;
 mod decref_object;
 mod eval_array_references;
+pub(crate) mod gc_candidates;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
@@ -134,6 +135,11 @@ mod gc_destructors;
 mod gc_weak_observers;
 mod gc_exceptions;
 mod gc_eval_object_children;
+mod gc_callable_children;
+mod gc_object_children;
+mod gc_frame_children;
+mod gc_frame_slots;
+pub(crate) use gc_frame_slots::emit_native_frame_owners;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
 mod hash_count;
@@ -457,6 +463,8 @@ pub use memory::emit_memory;
 pub use gc_destructors::emit_gc_destructors;
 /// Emits eval-owned object GC edges and final-release dispatch.
 pub use gc_eval_object_children::emit_gc_eval_object_children;
+pub use gc_callable_children::emit_gc_callable_children;
+pub use gc_object_children::emit_gc_object_children;
 /// Emit garbage collection control and status helpers.
 pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
@@ -603,3 +611,6 @@ pub use php_compare_slots::emit_php_compare_slots;
 pub use usort::emit_usort;
 /// Emit user-defined string-array sort helper.
 pub use usort_str::emit_usort_str;
+
+pub use gc_frame_children::emit_gc_frame_children;
+pub use gc_frame_slots::emit_gc_frame_slots;

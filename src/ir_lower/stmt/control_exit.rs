@@ -463,6 +463,10 @@ pub(super) fn persist_scratch_return_string(
 
 /// Gives typed object returns an independent owner and stabilizes borrowed heap reads.
 ///
+/// A borrowed string-to-string cast is persisted too. It aliases its operand except
+/// when that operand is the missing-entry sentinel, which the cast turns into the
+/// canonical empty string. The caller must receive storage it can release on its own.
+///
 /// Function-static slots are included: the slot keeps owning its boxed value across
 /// calls, so `return $static_local` must hand the caller an extra reference, since the
 /// caller releases call results after consuming them, and without the retain that
@@ -488,6 +492,27 @@ pub(super) fn acquire_borrowed_return_value(
     }
     if temporary {
         return value;
+    }
+    // A string-to-string cast normalizes a missing-entry sentinel but otherwise
+    // aliases its operand. Returning that alias would either free the operand
+    // before the caller reads it or hand the caller storage it must not release.
+    // Persist the normalized view so the caller owns an independent string.
+    if value.ir_type == IrType::Str
+        && ctx.builder.value_defining_op(value.value) == Some(Op::Cast)
+        && ctx
+            .builder
+            .value_defining_instruction(value.value)
+            .and_then(|inst| inst.operands.first().copied())
+            .is_some_and(|source| ctx.builder.value_type(source) == IrType::Str)
+    {
+        return ctx.emit_owned_value(
+            Op::StrPersist,
+            vec![value.value],
+            None,
+            PhpType::Str,
+            Op::StrPersist.default_effects(),
+            Some(span),
+        );
     }
     if !Ownership::php_type_needs_lifetime_tracking(&php_type) {
         return value;

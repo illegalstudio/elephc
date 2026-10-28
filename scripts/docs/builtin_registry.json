@@ -80142,7 +80142,7 @@
     "module": "json",
     "name": "json_decode",
     "semantics": {
-      "argument_lowering": "json_decode",
+      "argument_lowering": "json_source",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -80721,7 +80721,7 @@
     "module": "json",
     "name": "json_validate",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "json_source",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -129763,6 +129763,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -129770,6 +129771,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -130338,6 +130340,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -130345,6 +130348,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -130522,6 +130526,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -130529,6 +130534,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -130698,6 +130704,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -130705,6 +130712,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",

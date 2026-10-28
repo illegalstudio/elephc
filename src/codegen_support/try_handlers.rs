@@ -24,6 +24,9 @@ pub(crate) const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
 /// Bytes in an owned-value cleanup activation, including its standard three-word prefix.
 pub(crate) const EXCEPTION_GUARD_SLOT_SIZE: usize = 32;
 
+/// Offset of the pure owner visitor in extended PHP and call-operand activation records.
+pub(crate) const ACTIVATION_OWNER_VISITOR_OFFSET: usize = 40;
+
 /// Offset of the transferred heap owner after the cleanup activation prefix.
 pub(crate) const EXCEPTION_GUARD_OWNER_OFFSET: usize = 24;
 

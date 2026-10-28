@@ -1105,7 +1105,8 @@ mod tests {
         for (name, expected) in [
             ("count", BuiltinArgumentLowering::Count),
             ("date", BuiltinArgumentLowering::Date),
-            ("json_decode", BuiltinArgumentLowering::JsonDecode),
+            ("json_decode", BuiltinArgumentLowering::JsonSource),
+            ("json_validate", BuiltinArgumentLowering::JsonSource),
             ("getenv", BuiltinArgumentLowering::Getenv),
             ("pcntl_exec", BuiltinArgumentLowering::PcntlPreserveOmitted),
             ("pcntl_signal", BuiltinArgumentLowering::PcntlPreserveOmitted),

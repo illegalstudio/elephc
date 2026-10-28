@@ -2778,20 +2778,6 @@ jobs:
         # outcome; tests only elephc runs (the .lfc files) are informational.
         run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
 
-      - name: Install the runtime's stream libraries
-        # The DOOM engine reads its WAD with file_get_contents() on a run-time path,
-        # which links the runtime's stream layer (`-lz -lbz2`,
-        # src/builtins/requirements.rs); the runner image has no libbz2-dev.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libbz2-dev zlib1g-dev
-
-      - name: DOOM showcase suite
-        # Runs here because this job already builds the compiler. Map changes, specials,
-        # pickups and rendering against a small WAD the tests write themselves: no SDL,
-        # display or DOOM1.WAD needed.
-        run: target/debug/elephc test showcases/doom/tests
-
   curl-feature-contract:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest

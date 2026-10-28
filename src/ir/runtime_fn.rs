@@ -1179,6 +1179,15 @@ impl RuntimeFnId {
             );
         }
         match self {
+            // Persistent web requests retire the preceding ambient context owner on replacement.
+            // Captured objects can run destructors, mutate globals, and throw during that release.
+            RuntimeFnId::StreamContextCreate | RuntimeFnId::StreamContextSetDefault
+            | RuntimeFnId::StreamContextSetParams | RuntimeFnId::StreamContextSetOption
+            => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
             ),

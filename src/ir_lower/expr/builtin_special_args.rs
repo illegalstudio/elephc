@@ -476,8 +476,8 @@ pub(super) fn lower_date_args(
     vec![format.value, lower_expr(ctx, &args[1]).value]
 }
 
-/// Stabilizes positional JSON sources in owned roots before evaluating later arguments.
-pub(super) fn lower_json_decode_args(
+/// Roots JSON sources and owns boxed string conversions on normal and exceptional paths.
+pub(super) fn lower_json_source_args(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
@@ -486,7 +486,9 @@ pub(super) fn lower_json_decode_args(
         || crate::types::call_args::has_named_args(args)
         || args.iter().any(is_spread_arg)
     {
-        return lower_args_with_signature(ctx, sig, args);
+        let mut operands = lower_args_with_signature(ctx, sig, args);
+        own_json_source_conversion(ctx, &mut operands, args.first().map(|arg| arg.span));
+        return operands;
     }
     let source = lower_expr(ctx, &args[0]);
     let source = root_evaluated_call_argument(ctx, source, args[0].span);
@@ -509,7 +511,31 @@ pub(super) fn lower_json_decode_args(
         let value = lower_expr(ctx, arg);
         operands.push(root_evaluated_call_argument(ctx, value, arg.span).value);
     }
+    own_json_source_conversion(ctx, &mut operands, Some(args[0].span));
     operands
+}
+
+/// Makes a detached Mixed-to-string buffer visible to ordinary call cleanup and unwinding.
+fn own_json_source_conversion(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    span: Option<crate::span::Span>,
+) {
+    let (Some(source), Some(span)) = (operands.first_mut(), span) else { return; };
+    if !matches!(ctx.builder.value_php_type(*source).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return;
+    }
+    // Conversion can invoke __toString. All source-order arguments are already evaluated,
+    // and their owners remain published if conversion throws before the JSON call starts.
+    let string = ctx.emit_owned_value(
+        Op::Cast,
+        vec![*source],
+        Some(Immediate::CastTarget(IrType::Str)),
+        PhpType::Str,
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    *source = root_evaluated_call_argument(ctx, string, span).value;
 }
 
 /// Emits `StrPersist` for already-string call operands before later arguments can reuse string scratch storage.

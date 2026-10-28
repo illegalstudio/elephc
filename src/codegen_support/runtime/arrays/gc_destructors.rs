@@ -11,7 +11,8 @@
 //!   Bit 17 marks the current scan's original nodes and cannot mean completion.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
+use super::gc_candidates::scans;
+use crate::codegen_support::sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND};
 
 /// Emits destructor snapshots, reachable-node unpinning, and snapshot disposal for every target.
 pub fn emit_gc_destructors(emitter: &mut Emitter) {
@@ -41,9 +42,12 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     // The symbol load may use x9 as address scratch.
     abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("add x10, x9, x10");                                    // bound this allocation-free scan by the current heap extent
+    scans::bounds(emitter, ("x9", "x10"), ("r8", "r9"), &format!("destructor_{phase}"));
     emitter.label(&loop_label);
     emitter.instruction("cmp x9, x10");                                         // have all heap headers been inspected?
     emitter.instruction(&format!("b.hs {done}"));                               // finish before reading outside the managed heap
+    emitter.instruction("str x9, [sp, #40]");                                   // retain the vector cursor while inspecting its header
+    scans::header(emitter, "x9", "r8", &format!("destructor_{phase}"), None);
     emitter.instruction("ldr w11, [x9]");                                       // keep the payload size for the next header
     emitter.instruction("ldr w14, [x9, #4]");                                   // inspect the live owner count
     emitter.instruction(&format!("cbz w14, {next}"));                           // free-list blocks cannot be pinned
@@ -55,6 +59,8 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction(&format!("b.lo {next}"));                               // raw allocations and strings are not cycle candidates
     emitter.instruction("cmp x13, #5");                                         // candidates end at boxed Mixed storage
     emitter.instruction(&format!("b.ls {loop_label}_known"));                   // preserve the existing container candidate range
+    emitter.instruction(&format!("cmp x13, #{CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction(&format!("b.eq {ready}"));                              // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x13, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells need pins during user destructors
     emitter.instruction(&format!("b.eq {ready}"));                              // protect cell storage while callbacks inspect aliases
     emitter.instruction(&format!("b {next}"));                                  // ignore other heap kinds
@@ -65,6 +71,8 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("ubfx x15, x12, #8, #7");                               // inspect the indexed element storage tag
     emitter.instruction("cmp x15, #4");                                         // scalar and string arrays cannot own graph cycles
     emitter.instruction(&format!("b.lo {next}"));                               // leave non-reference arrays to their actual owners
+    emitter.instruction("cmp x15, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction(&format!("b.eq {ready}"));                              // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x15, #7");                                         // accept array, hash, object, and Mixed elements
     emitter.instruction(&format!("b.hi {next}"));                               // unknown element layouts are not collector candidates
     emitter.label(&ready);
@@ -93,6 +101,7 @@ fn emit_scan_aarch64(emitter: &mut Emitter, fill: bool) {
     emitter.label(&next);
     emitter.instruction("add x9, x9, x11");                                     // skip the current payload
     emitter.instruction("add x9, x9, #16");                                     // skip the uniform heap header
+    scans::next(emitter, "x9", "r8", "[sp, #40]", "[rbp - 40]", &format!("destructor_{phase}"));
     emitter.instruction(&format!("b {loop_label}"));                            // continue the allocation-free candidate scan
     emitter.label(&done);
 }
@@ -218,9 +227,12 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     abi::emit_symbol_address(emitter, "r8", "_heap_buf");
     abi::emit_load_symbol_to_reg(emitter, "r9", "_heap_off", 0);
     emitter.instruction("add r9, r8");                                          // capture the allocation-free scan's heap limit
+    scans::bounds(emitter, ("x9", "x10"), ("r8", "r9"), &format!("destructor_{phase}"));
     emitter.label(&loop_label);
     emitter.instruction("cmp r8, r9");                                          // have all headers in the current heap been inspected?
     emitter.instruction(&format!("jae {done}"));                                // never read beyond the managed heap
+    emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // retain the vector cursor while inspecting its header
+    scans::header(emitter, "x9", "r8", &format!("destructor_{phase}"), None);
     emitter.instruction("mov r10d, DWORD PTR [r8]");                            // preserve the payload size for advancement
     emitter.instruction("cmp DWORD PTR [r8 + 4], 0");                           // distinguish live graph nodes from free-list entries
     emitter.instruction(&format!("je {next}"));                                 // free storage owns no destructor data
@@ -233,6 +245,8 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction(&format!("jb {next}"));                                 // raw storage and strings are not cycle candidates
     emitter.instruction("cmp ecx, 5");                                          // graph candidates end at boxed Mixed cells
     emitter.instruction(&format!("jbe {loop_label}_known"));                    // preserve the existing container candidate range
+    emitter.instruction(&format!("cmp ecx, {CALLABLE_HEAP_KIND}"));             // callable descriptors own graph captures
+    emitter.instruction(&format!("je {ready}"));                                // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp ecx, {REFERENCE_CELL_HEAP_KIND}"));       // owned reference cells need pins during user destructors
     emitter.instruction(&format!("je {ready}"));                                // protect cell storage while callbacks inspect aliases
     emitter.instruction(&format!("jmp {next}"));                                // ignore other heap kinds
@@ -245,6 +259,8 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     emitter.instruction("and edx, 0x7f");                                       // discard persistent-array flags
     emitter.instruction("cmp edx, 4");                                          // scalar and string elements do not form cycles
     emitter.instruction(&format!("jb {next}"));                                 // leave non-reference arrays to their ordinary owners
+    emitter.instruction("cmp edx, 10");                                         // callable slots own descriptors with managed capture graphs
+    emitter.instruction(&format!("je {ready}"));                                // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp edx, 7");                                          // accept array, hash, object, and Mixed elements
     emitter.instruction(&format!("ja {next}"));                                 // reject unknown indexed storage tags
     emitter.label(&ready);
@@ -266,6 +282,7 @@ fn emit_scan_x86_64(emitter: &mut Emitter, fill: bool) {
     }
     emitter.label(&next);
     emitter.instruction("lea r8, [r8 + r10 + 16]");                             // advance past the payload and its uniform header
+    scans::next(emitter, "x9", "r8", "[sp, #40]", "[rbp - 40]", &format!("destructor_{phase}"));
     emitter.instruction(&format!("jmp {loop_label}"));                          // continue the allocation-free graph scan
     emitter.label(&done);
 }

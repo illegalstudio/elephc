@@ -51,20 +51,11 @@ fn emit_cell_ensure_unique(emitter: &mut Emitter) {
         }
     }
     abi::emit_call_label(emitter, "__rt_mixed_clone");
-    // The old cell had at least two owners. Dropping this one cannot run a
-    // destructor, and the new cell already retained the underlying array.
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::load_at_offset(emitter, "x9", 8);
-            emitter.instruction("ldr w10, [x9, #-12]");                         // reload the shared cell's count after cloning
-            emitter.instruction("sub w10, w10, #1");                            // transfer this receiver away from the old cell
-            emitter.instruction("str w10, [x9, #-12]");                         // preserve all other value aliases
-        }
-        Arch::X86_64 => {
-            abi::load_at_offset(emitter, "r10", 8);
-            emitter.instruction("sub DWORD PTR [r10 - 12], 1");                 // transfer this receiver away from the shared old cell
-        }
-    }
+    // A split can retire the final external owner of a cyclic old cell.
+    abi::store_at_offset(emitter, result, 16);
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    abi::load_at_offset(emitter, result, 16);
     abi::emit_jump(emitter, "__rt_array_cell_unique");
     emitter.label("__rt_array_cell_invalid");
     abi::emit_load_int_immediate(emitter, result, 0);

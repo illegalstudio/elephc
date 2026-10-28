@@ -554,6 +554,9 @@ pub(crate) fn emit_runtime_data_user(
         let destruct_key = php_symbol_key("__destruct");
         for class_id in 0..=max_class_id {
             let entry = match class_info_by_id.get(&class_id) {
+                Some(_) if all_class_id_by_name.get("Fiber") == Some(&class_id)
+                    || all_class_id_by_name.get("Generator") == Some(&class_id) =>
+                    "__rt_coroutine_force_close".to_string(),
                 Some(class_info) => source_instance_method_entry(
                     class_info,
                     &destruct_key,

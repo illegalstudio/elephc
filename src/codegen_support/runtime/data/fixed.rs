@@ -72,6 +72,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     out.push_str(&comm_directive(
         "_itoa_spill_ring",
         32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
@@ -617,6 +618,18 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_resource_inventory_head", 8, target));
     out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
     out.push_str(".globl _gc_enabled\n_gc_enabled:\n    .quad 1\n");
+    for symbol in [
+        "_gc_candidates_enabled", "_gc_candidates_gathering", "_gc_candidates_visited",
+        "_gc_candidates_roots", "_gc_candidates_roots_count", "_gc_candidates_roots_capacity",
+        "_gc_candidates_nodes", "_gc_candidates_nodes_count", "_gc_candidates_nodes_capacity",
+        "_gc_candidates_anchors", "_gc_candidates_anchors_count", "_gc_candidates_anchors_capacity",
+        "_gc_candidate_root_scan_fn",
+        "_gc_proofs", "_gc_proofs_count", "_gc_proofs_capacity", "_gc_proofs_initialized",
+        "_gc_proof_parent", "_gc_proof_slot", "_gc_proofs_debt", "_gc_proofs_visited",
+        "_gc_proof_epoch", "_gc_proof_memos", "_gc_proof_memos_capacity", "_gc_proofs_cost",
+    ] {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
     out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
     out.push_str(&comm_directive("_gc_pin_head", 8, target));
@@ -990,6 +1003,8 @@ pub(crate) fn emit_runtime_data_fixed(
     {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    out.push_str(".globl _generator_msg_force_close\n_generator_msg_force_close:\n    .ascii \"Cannot yield from finally in a force-closed generator\"\n");
+    out.push_str(".globl _fiber_msg_force_close\n_fiber_msg_force_close:\n    .ascii \"Cannot suspend in a force-closed fiber\"\n");
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");

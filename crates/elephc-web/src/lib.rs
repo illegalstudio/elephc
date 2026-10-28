@@ -23,6 +23,9 @@ mod server;
 mod session;
 mod trans_sid;
 mod worker;
+mod process;
+
+pub use process::{elephc_web_application_popen, elephc_web_application_system};
 
 // Re-exported so the compiled `--web` runtime's `__rt_stdout_write` capture
 // branch links against the real per-request output sink (defined in

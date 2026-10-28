@@ -68,13 +68,13 @@ See [showcases/http-server/](showcases/http-server/) for full source and build i
 
 ## DOOM rendered in PHP
 
-The flagship showcase: the shareware episode of DOOM played from the original `DOOM1.WAD`, entirely in PHP compiled to a native binary. A BSP column renderer draws DOOM's own 320x200 frame with textured walls, floors and sky, sprites and sector lighting, and the game runs doors, lifts, switches, pickups and the status bar at 35 tics per second.
+An independently maintained showcase: the shareware episode of DOOM played from the original `DOOM1.WAD`, entirely in PHP compiled to a native binary. A BSP column renderer draws DOOM's own 320x200 frame with textured walls, floors and sky, sprites and sector lighting, and the game runs doors, lifts, switches, pickups and the status bar at 35 tics per second.
 
 https://github.com/user-attachments/assets/6bc3012a-4e59-4061-b53d-ca2152cb0845
 
 [Download the walkthrough (MP4)](https://raw.githubusercontent.com/getelephc/static/main/assets/doom/0.27.6/doom-walkthrough.mp4).
 
-See [showcases/doom/](showcases/doom/) for full source and build instructions.
+See [getelephc/doom](https://github.com/getelephc/doom) for full source, tests and build instructions. The game is developed in its own repository.
 
 ## Benchmarks
 
@@ -392,6 +392,7 @@ elephc --target linux-x86_64 hello.php
 elephc --web app.php                          # fastest; trusted application code
 elephc --web --web-isolation=pool app.php     # crash containment + concurrent handlers
 elephc --web --web-isolation=request app.php  # discard all native state after each request
+elephc --web --web-lifecycle=application bootstrap.php # retain one application per worker
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 
@@ -455,7 +456,7 @@ cargo run -- hello.php
 | Showcase | Description |
 |---|---|
 | [HTTP server](showcases/http-server/) | Async HTTP/1.1 server with a non-blocking `poll()` event loop, one `Fiber` per connection, POSIX sockets via `extern` FFI, `ptr` buffers, HTTP parser and router |
-| [DOOM](showcases/doom/) | DOOM's shareware episode from the original WAD: BSP column renderer, textures, sprites, lighting, doors and lifts, status bar; SDL2 FFI, `packed class` map records, `buffer<T>` storage |
+| [DOOM](https://github.com/getelephc/doom) | DOOM's shareware episode from the original WAD: BSP column renderer, textures, sprites, lighting, doors and lifts, status bar; SDL2 FFI, `packed class` map records, `buffer<T>` storage |
 | [SDL framebuffer](examples/sdl_framebuffer/) | Pixel-level rendering with SDL2 via FFI |
 | [SDL audio](examples/sdl_audio/) | Audio playback with SDL2 via FFI |
 | [Hot-path buffers](examples/hot-path/) | `packed class` + `buffer<T>` for performance-critical data |

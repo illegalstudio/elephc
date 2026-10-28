@@ -165,8 +165,8 @@ pub enum BuiltinArgumentLowering {
     Count,
     /// Preserve date's literal-format specialization inputs.
     Date,
-    /// Preserve JSON decode's source-sensitive option handling.
-    JsonDecode,
+    /// Preserve JSON source storage and own any boxed string conversion through the call.
+    JsonSource,
     /// Preserve getenv's nullable name until runtime selects lookup or enumeration.
     Getenv,
     /// Keep source-sensitive omitted PCNTL defaults absent after named/spread planning.

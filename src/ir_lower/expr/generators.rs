@@ -20,17 +20,23 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
     } else {
         None
     };
-    if let Some(value) = value {
-        let value = lower_expr(ctx, value);
-        // Transfer fresh values into a single-use box before suspension. The runtime
-        // owns that box while suspended, so no original temporary remains on the stack.
-        // A returned Mixed cell also needs a distinct suspension owner. Retire its
-        // producer reference now, so abandoning the coroutine cannot strand it.
-        let value = if ctx.value_is_owning_temporary(value) {
-            ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span))
-        } else { value };
-        operands.push(value.value);
-    }
+    let yielded = if let Some(value) = value {
+        let source = lower_expr(ctx, value);
+        // Transfer a fresh value into one suspension owner, retiring the producer now.
+        let yielded = if ctx.value_is_owning_temporary(source) {
+            let boxed = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(expr.span));
+            let source_is_marked_copy = ctx.builder.value_defining_instruction(source.value)
+                .is_some_and(|inst| inst.op == Op::StrPersist
+                    && inst.immediate == Some(Immediate::Bool(true)));
+            if !source_is_marked_copy {
+                // The boxed result owns its bytes; nested normalization copies are no longer read.
+                crate::ir_lower::ownership::release_marked_normalized_cast_copies(ctx, source, Some(expr.span));
+            }
+            boxed
+        } else { source };
+        operands.push(yielded.value);
+        Some(yielded)
+    } else { None };
     if key_owner.is_some() && ctx.builder.value_php_type(operands[0]).codegen_repr() == PhpType::Str {
         let owner = key_owner.take().unwrap();
         // The key's box must own its bytes before its source owner retires. Transfer this
@@ -46,6 +52,13 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
         Op::GeneratorYield.default_effects(), Some(expr.span));
     if let Some(owner) = key_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
+    }
+    // The yield boxes its own copy of the string. The cast copy under `trim`
+    // is not that cell and would otherwise stay live for every suspension.
+    if let Some(yielded) = yielded {
+        crate::ir_lower::ownership::release_marked_normalized_cast_copies(
+            ctx, yielded, Some(expr.span),
+        );
     }
     result
 }
@@ -63,6 +76,10 @@ pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
     if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return lower_yield_from_array(ctx, value, expr);
     }
+    let staging = prepublish_user_call_result(
+        ctx, None, &ReturnArgAlias::None, &PhpType::Mixed, expr.span,
+    );
+    let (value, owner) = root_owned_call_operand(ctx, value, expr.span);
     let result = ctx.emit_value(
         Op::GeneratorYieldFrom,
         vec![value.value],
@@ -71,14 +88,13 @@ pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
         Op::GeneratorYieldFrom.default_effects(),
         Some(expr.span),
     );
-    // `__rt_gen_delegate` borrows the inner generator. When it is a fresh owning
-    // temporary (`yield from inner()`) nothing else frees it once delegation
-    // ends, so release it here; a borrowed local (`yield from $g`) keeps its
-    // owner and must not be released (it would double-free at scope end).
-    if ctx.value_is_owning_temporary(value) {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    stage_call_result(ctx, staging.as_ref(), result, expr.span);
+    // Delegation can suspend or throw before returning. Its temporary owner must
+    // unwind before a same-frame finally, while borrowed locals keep their owner.
+    if let Some(owner) = owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
     }
-    result
+    take_prepublished_call_result(ctx, staging, result, expr.span)
 }
 
 /// Desugars `yield from <array>` into an iterator loop that re-yields each

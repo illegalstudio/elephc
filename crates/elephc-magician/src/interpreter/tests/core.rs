@@ -120,6 +120,17 @@ fn execute_program_catches_throwable_inside_eval() {
     assert_eq!(values.type_tag(caught), Ok(EVAL_TAG_OBJECT));
     assert_eq!(values.get(result), FakeValue::Int(42));
 }
+/// Catch-all matching rejects native control objects outside the Throwable hierarchy.
+#[test]
+fn execute_program_catch_throwable_requires_runtime_interface() {
+    let context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let control = values.alloc(FakeValue::Object(Vec::new()));
+    values.object_classes.insert(control.as_ptr() as usize, "KnownClass".into());
+    assert!(!catch_types_match_thrown(control, &["Throwable".into()], &context, &mut values).unwrap());
+    values.release(control).unwrap();
+}
+
 /// Verifies eval `catch (Throwable)` can handle a throw without binding a variable.
 #[test]
 fn execute_program_catches_throwable_without_variable_inside_eval() {

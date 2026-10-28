@@ -213,6 +213,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     e.label("__rt_warning_allocation_failed");
     abi::emit_jump(e, "__rt_heap_allocation_failed");
     emit_cleanup(e);
+    super::arrays::emit_native_frame_owners(e, "__rt_gc_warning_frame_owners", &[ARGS, RESULT]);
     emit_reset(e);
 }
 
@@ -284,6 +285,9 @@ fn emit_activation(e: &mut Emitter) {
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 16);
     abi::emit_load_int_immediate(e, scratch, 0);
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 24);
+    abi::emit_store_to_sp(e, scratch, ACTIVATION + 32);
+    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
+    abi::emit_store_to_sp(e, scratch, ACTIVATION + 40);
     abi::emit_temporary_stack_address(e, scratch, ACTIVATION);
     abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
 }
@@ -297,7 +301,11 @@ fn emit_cleanup(e: &mut Emitter) {
     abi::emit_store_to_sp(e, a0, 0);
     for (offset, helper) in [(ARGS, "__rt_decref_mixed"), (RESULT, "__rt_decref_mixed")] {
         abi::emit_load_temporary_stack_slot(e, result, 0);
-        abi::emit_load_from_address(e, result, result, offset);
+        let record = if e.target.arch == Arch::AArch64 { "x10" } else { "r10" };
+        abi::emit_reg_move(e, record, result);
+        abi::emit_load_from_address(e, result, record, offset);
+        abi::emit_load_int_immediate(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, 0);
+        abi::emit_store_to_address(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, record, offset);
         abi::emit_call_label(e, helper);
     }
     abi::emit_load_temporary_stack_slot(e, a0, 0);

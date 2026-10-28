@@ -130,6 +130,7 @@ Subcommands:
 Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
+  --web-lifecycle MODE    request (default) | application; application requires worker isolation
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
   --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
 
@@ -245,6 +246,8 @@ pub(crate) struct CliConfig {
     pub(crate) web: bool,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
+    /// Retain a typed application between requests in worker isolation.
+    pub(crate) web_application: bool,
     /// Optional capabilities the user force-enabled with `--with-<name>` (short
     /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
     /// staticlib; runtime capabilities enable their helper/native requirements.
@@ -385,6 +388,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut web = false;
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
+    let mut web_application = false;
+    let mut web_lifecycle_explicit = false;
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
@@ -546,6 +551,15 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_locals = true;
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-lifecycle" {
+            i += 1;
+            web_application = parse_web_lifecycle(&required_value(
+                &args, i, "Missing mode after --web-lifecycle (expected request|application)",
+            ));
+            web_lifecycle_explicit = true;
+        } else if let Some(value) = arg.strip_prefix("--web-lifecycle=") {
+            web_application = parse_web_lifecycle(value);
+            web_lifecycle_explicit = true;
         } else if arg == "--web-isolation" {
             i += 1;
             web_isolation = parse_web_isolation(&required_value(
@@ -630,6 +644,12 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if web_isolation_explicit && !web {
         fail("--web-isolation requires --web (or --with-web)");
     }
+    if web_lifecycle_explicit && !web {
+        fail("--web-lifecycle requires --web (or --with-web)");
+    }
+    if web_application && web_isolation != WebIsolation::Worker {
+        fail("--web-lifecycle=application requires --web-isolation=worker");
+    }
 
     // With no explicit `--php-version`, take the profile the project already declares. Every
     // source is optional at every level, so a lone `.php` file still resolves to the default
@@ -677,6 +697,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         strict_locals,
         web,
         web_isolation,
+        web_application,
         with_crates,
         quiet,
         ini_overrides,
@@ -869,6 +890,15 @@ fn parse_web_isolation(value: &str) -> WebIsolation {
             "Unknown --web-isolation value: {} (expected worker|pool|request)",
             other
         )),
+    }
+}
+
+/// Parses the independent PHP application lifetime selection.
+fn parse_web_lifecycle(value: &str) -> bool {
+    match value {
+        "request" => false,
+        "application" => true,
+        _ => fail("Unknown --web-lifecycle value (expected request|application)"),
     }
 }
 
@@ -1117,6 +1147,20 @@ mod tests {
         let config = compile_config(&args);
         assert!(config.web);
         assert_eq!(config.web_isolation, WebIsolation::Worker);
+        assert!(!config.web_application);
+    }
+
+    /// Both lifecycle spellings retain request semantics unless application is explicit.
+    #[test]
+    fn web_lifecycle_selects_application_explicitly() {
+        for (value, expected) in [("request", false), ("application", true)] {
+            for flags in [vec![format!("--web-lifecycle={value}")], vec!["--web-lifecycle".into(), value.into()]] {
+                let mut args = vec!["elephc".into(), "--web".into()];
+                args.extend(flags);
+                args.push("app.php".into());
+                assert_eq!(compile_config(&args).web_application, expected);
+            }
+        }
     }
 
     /// Verifies all explicit web-isolation spellings select their compile-time model.

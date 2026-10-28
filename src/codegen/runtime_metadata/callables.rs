@@ -8,7 +8,7 @@
 //! - Excludes synthetic property initializers and preserves include-variant callable groups.
 
 use super::*;
-use crate::codegen::abi;
+use crate::codegen_support::abi;
 
 /// Returns user functions visible to runtime callable-name metadata.
 pub(in crate::codegen) fn runtime_user_function_sigs(module: &Module) -> HashMap<String, FunctionSig> {
@@ -147,12 +147,13 @@ fn emit_intrinsic_method_wrapper(emitter: &mut Emitter, wrapper: &IntrinsicMetho
     for _ in &wrapper.consumed_mixed_parameters { abi::emit_pop_call_operand_owner(emitter); }
     // Forward through the ordinary argument planner, including overflow
     // words. The wrapper frame must not shift a native helper's arguments.
-    for (index, ty) in wrapper.arg_types.iter().enumerate() {
+    let first_native_argument = usize::from(wrapper.is_static);
+    for (index, ty) in wrapper.arg_types.iter().enumerate().skip(first_native_argument) {
         abi::emit_load(emitter, ty, (index + 1) * 16);
         abi::emit_push_result_value(emitter, ty);
     }
     let assignments = abi::build_outgoing_arg_assignments_for_target(
-        emitter.target, &wrapper.arg_types, 0,
+        emitter.target, &wrapper.arg_types[first_native_argument..], 0,
     );
     let overflow = abi::materialize_outgoing_args(emitter, &assignments);
     let pad = abi::outgoing_call_stack_pad_bytes(emitter.target, overflow);
@@ -287,4 +288,37 @@ mod tests {
             }
         }
     }
+
+    /// Coroutine wrappers transfer one independent cell and exclude a static called-class word.
+    #[test]
+    fn coroutine_wrapper_transfers_are_owned_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            for (method, is_static) in [("resume", false), ("suspend", true)] {
+                let intrinsic = if is_static { IntrinsicCall::static_method("Fiber", method) }
+                    else { IntrinsicCall::instance_method("Fiber", method) }.unwrap();
+                let wrapper = IntrinsicMethodWrapper {
+                    class_name: "Fiber".to_string(), method_key: method.to_string(),
+                    helper: intrinsic.runtime_helper().unwrap(), is_static,
+                    arg_types: vec![if is_static { PhpType::Int } else { PhpType::Object("Fiber".into()) }, PhpType::Mixed],
+                    returns_owned: true, consumed_mixed_parameters: intrinsic.consumed_mixed_parameters().to_vec(),
+                };
+                let mut emitter = Emitter::new(target);
+                emit_intrinsic_method_wrapper(&mut emitter, &wrapper);
+                let assembly = emitter.output();
+                assert_eq!(assembly.matches("__rt_mixed_clone").count(), 1, "{name}: {method}");
+                let (_, transfer) = assembly.split_once("__rt_mixed_clone").unwrap();
+                let transfer = transfer.split(wrapper.helper).next().unwrap();
+                let mut argument = Emitter::new(target);
+                abi::emit_load(&mut argument, &PhpType::Mixed, 32);
+                assert!(transfer.contains(argument.output().trim()), "{name}: {method}: forward the cloned value");
+                if is_static {
+                    let mut class_word = Emitter::new(target);
+                    abi::emit_load(&mut class_word, &PhpType::Int, 16);
+                    assert!(!transfer.contains(class_word.output().trim()), "{name}: class id is not a native value argument");
+                }
+            }
+        }
+    }
+
 }

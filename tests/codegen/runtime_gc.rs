@@ -139,6 +139,8 @@ mod omitted_by_ref_default_args;
 mod callable_property_owners;
 #[path = "runtime_gc/foreach_object_source.rs"]
 mod foreach_object_source;
+mod foreach_nested_owners;
+mod fiber_transfer_owners;
 #[path = "runtime_gc/foreach_iterator_aggregate_owner.rs"]
 mod foreach_iterator_aggregate_owner;
 #[path = "runtime_gc/nested_property_defaults.rs"]
@@ -242,5 +244,28 @@ mod gc_incoming_cache;
 mod unshift_reference_cow;
 mod native_callback_results;
 mod entity_slot_owners;
+
+#[path = "runtime_gc/heap_small_bins.rs"]
+mod heap_small_bins;
+
+#[path = "runtime_gc/gc_candidate_cost.rs"]
+mod gc_candidate_cost;
+
+mod callable_cycles;
+
+mod native_object_cycles;
+
+mod incomplete_object_cycles;
+
+mod coroutine_cancellation;
+#[path = "runtime_gc/coroutine_boundaries.rs"]
+mod coroutine_boundaries;
+#[path = "runtime_gc/coroutine_eval.rs"]
+mod coroutine_eval;
+
+#[path = "runtime_gc/coroutine_debuginfo.rs"]
+mod coroutine_debuginfo;
+
+mod coroutine_slot_set;
 #[path = "runtime_gc/counter_regions.rs"]
 mod counter_regions;

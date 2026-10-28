@@ -24,9 +24,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 /// # Output (ARM64)
 /// - `x1`: output string pointer in `concat_buf`
 /// - `x2`: output string length
-pub fn emit_shell_exec(emitter: &mut Emitter) {
+pub fn emit_shell_exec(emitter: &mut Emitter, web: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_shell_exec_linux_x86_64(emitter);
+        emit_shell_exec_linux_x86_64(emitter, web);
         return;
     }
 
@@ -49,7 +49,7 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
 
     // -- open pipe with popen("cmd", "r") --
     emitter.instruction("add x1, sp, #32");                                     // x1 = pointer to "r\0" on stack
-    emitter.bl_c("popen");                                                      // popen(cmd, "r") → x0=FILE*
+    emitter.bl_c(if web { "elephc_web_application_popen" } else { "popen" }); // popen(cmd, "r") → x0=FILE*
     emitter.instruction("str x0, [sp, #0]");                                    // save FILE* on stack
 
     // -- reserve a growable output buffer before reading the pipe --
@@ -116,7 +116,7 @@ pub fn emit_shell_exec(emitter: &mut Emitter) {
 /// Returns output pointer in `rax`, length in `rdx`.
 /// On `popen()` failure, returns null pointer and zero length.
 /// Fallback label `__rt_shell_exec_empty` handles the NULL return path.
-fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
+fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.blank();
     emitter.comment("--- runtime: shell_exec ---");
     emitter.label_global("__rt_shell_exec");
@@ -130,7 +130,7 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [rbp - 32], 0x72");                       // store 'r' as the popen mode string's first byte
     emitter.instruction("mov BYTE PTR [rbp - 31], 0");                          // store the popen mode string's trailing C null terminator
     emitter.instruction("lea rsi, [rbp - 32]");                                 // pass the address of the local \"r\\0\" mode string in the SysV second-argument register
-    emitter.bl_c("popen");                                                      // popen(cmd, \"r\") → rax=FILE* or NULL on failure
+    emitter.bl_c(if web { "elephc_web_application_popen" } else { "popen" }); // popen(cmd, \"r\") → rax=FILE* or NULL on failure
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the FILE* so the read loop and close path can reload it later
     emitter.instruction("test rax, rax");                                       // did popen succeed and return a readable pipe?
     emitter.instruction("je __rt_shell_exec_empty");                            // failed pipes map to the empty PHP string result
@@ -186,4 +186,27 @@ fn emit_shell_exec_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the x86_64 shell helper's aligned local frame before returning the empty result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the empty shell result
     emitter.instruction("ret");                                                 // return to the caller with the empty PHP string result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Web process helpers use the mask-aware bridge on every ABI, while CLI keeps libc popen.
+    #[test]
+    fn web_process_creation_bridge_is_target_aware() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            for web in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emit_shell_exec(&mut emitter, web);
+                crate::codegen_support::runtime::io::emit_popen(&mut emitter, web);
+                let assembly = emitter.output();
+                let callee = target.extern_symbol(if web { "elephc_web_application_popen" } else { "popen" });
+                let instruction = if target.arch == Arch::AArch64 { "bl" } else { "call" };
+                assert_eq!(assembly.matches(&format!("{instruction} {callee}")).count(), 2, "{name}: web={web}");
+                assert_eq!(assembly.contains("elephc_web_application_popen"), web, "{name}");
+            }
+        }
+    }
 }

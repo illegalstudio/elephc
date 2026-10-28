@@ -28,6 +28,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp]");                                        // start at the new exception whose caller roots the chain
     emitter.instruction("str x1, [sp, #8]");                                    // own the old exception until a link adopts it or it is released
     emitter.instruction("cbz x1, __rt_exception_chain_return");                 // there is no previous owner to attach
+    emitter.instruction("ldr x9, [x1]");                                        // internal force-close markers are never PHP-visible previous exceptions
+    emitter.instruction("cmn x9, #3");                                          // recognize the reserved forced-unwind class identity
+    emitter.instruction("b.eq __rt_exception_chain_release");                   // consume the marker instead of attaching it to a real Throwable
     emitter.label("__rt_exception_chain_scan");
     emitter.instruction("ldr x0, [sp, #8]");                                    // restart the old chain for this new-chain node
     emitter.label("__rt_exception_chain_ancestors");
@@ -85,6 +88,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // keep the old owner until adoption or release
     emitter.instruction("test rdi, rdi");                                       // inspect the incoming previous owner
     emitter.instruction("jz __rt_exception_chain_return");                      // skip traversal when no previous exception exists
+    emitter.instruction("cmp QWORD PTR [rdi], -3");                             // internal forced-unwind markers cannot escape through getPrevious
+    emitter.instruction("je __rt_exception_chain_release");                     // release the marker while preserving the real pending Throwable
     emitter.label("__rt_exception_chain_scan");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // restart the old chain at its root
     emitter.label("__rt_exception_chain_ancestors");

@@ -382,8 +382,8 @@ fn lower_planned_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::Date => {
             lower_date_args(ctx, sig, args)
         }
-        crate::builtins::semantics::BuiltinArgumentLowering::JsonDecode => {
-            lower_json_decode_args(ctx, sig, args)
+        crate::builtins::semantics::BuiltinArgumentLowering::JsonSource => {
+            lower_json_source_args(ctx, sig, args)
         }
         crate::builtins::semantics::BuiltinArgumentLowering::Getenv => {
             lower_getenv_args(ctx, sig, args)

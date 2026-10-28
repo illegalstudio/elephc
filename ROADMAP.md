@@ -1144,7 +1144,7 @@ real-world validation rather than by speculative pass work.
 ### Planned
 
 - [ ] Performance within 2x of C -O0 on compute benchmarks
-- [ ] DOOM showcase performance gate after EIR optimizations — build and run a reproducible SDL benchmark for `showcases/doom`, track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
+- [ ] Standalone DOOM performance gate after EIR optimizations: build and run a reproducible SDL benchmark for [getelephc/doom](https://github.com/getelephc/doom), track EIR FPS / generated assembly size / runtime helper counts, optionally compare against the last known legacy baseline when available, and require no large real-world regression before release
 - [ ] Real-world CLI tools compiled as validation
 
 ## v0.28.x — Include-graph, library, and native-surface completion

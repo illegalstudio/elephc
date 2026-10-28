@@ -379,7 +379,10 @@ pub(super) fn destructor_sources_are_open(
     stmts: &[Stmt],
     summarized: &HashMap<String, ThrownTypes>,
 ) -> bool {
-    if detect::first_reference(stmts, detect::Symbol::function(EVAL_FUNCTION)).is_some() {
+    // Coroutine destruction resumes arbitrary finally code even without a PHP __destruct.
+    if crate::types::checker::builtin_class_gate::program_may_reference_generator(stmts)
+        || crate::types::checker::builtin_class_gate::program_may_reference_fiber(stmts)
+        || detect::first_reference(stmts, detect::Symbol::function(EVAL_FUNCTION)).is_some() {
         return true;
     }
     declared_destructor_is_unsummarized(stmts, summarized)

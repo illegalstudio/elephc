@@ -10,12 +10,12 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
+use crate::codegen_support::sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND};
 
 /// First bit available for transient incoming counts below the x86 heap marker.
 pub(super) const X86_INCOMING_SHIFT: u32 = 19;
 /// Saturation requests the exact fallback scan rather than an approximate root decision.
-pub(super) const X86_INCOMING_MAX: u32 = (1 << (32 - X86_INCOMING_SHIFT)) - 1;
+pub(super) const X86_INCOMING_MAX: u32 = (1 << (31 - X86_INCOMING_SHIFT)) - 1;
 /// The counter excludes storage, reachability, snapshot pins, and the ELPH marker.
 pub(super) const X86_INCOMING_MASK: u64 = (X86_INCOMING_MAX as u64) << X86_INCOMING_SHIFT;
 
@@ -24,7 +24,7 @@ pub(super) const X86_INCOMING_MASK: u64 = (X86_INCOMING_MAX as u64) << X86_INCOM
 /// non-refcounted kinds (strings/raw buffers). For valid refcounted array/hash/object/Mixed
 /// children, bumps the transient incoming-edge counter stored in the high 32 bits of
 /// the child block's kind word on ARM64. x86_64 caches a saturated count in
-/// bits19..31 while preserving the high-word heap marker and the real refcount.
+/// bits19..30 while preserving the high-word heap marker and the real refcount.
 ///
 /// # Inputs
 /// - `x0` (ARM64) or `rax` (x86_64): borrowed child payload pointer.
@@ -59,10 +59,13 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     // -- every live graph node, including boxed Mixed cells, receives incoming edges --
     emitter.instruction("ldr w11, [x0, #-12]");                                 // load the child refcount from the heap header
     emitter.instruction("cbz w11, __rt_gc_note_child_ref_done");                // freed blocks are not part of the graph
-    emitter.instruction("ldr x12, [x0, #-8]");                                  // load the full child kind word
+    emitter.instruction("ldr x12, [x0, #-8]");                                  // inspect the child snapshot metadata
+    emitter.instruction("tbz x12, #17, __rt_gc_note_child_ref_done");           // edges outside the prepared snapshot remain external roots
     emitter.instruction("and x13, x12, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_note_child_ref_done");                    // strings/raw buffers do not participate in cycle accounting
+    emitter.instruction(&format!("cmp x13, #{CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction("b.eq __rt_gc_note_child_ref_record");                  // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x13, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells participate in incoming-edge accounting
     emitter.instruction("b.eq __rt_gc_note_child_ref_record");                  // count the cell owner rather than shortcutting its payload
     emitter.instruction("cmp x13, #5");                                         // include boxed Mixed nodes as well as arrays, hashes, and objects
@@ -79,7 +82,7 @@ pub fn emit_gc_note_child_ref(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
-/// Records one x86 incoming edge in bits19..31 after validating snapshot membership.
+/// Records one x86 incoming edge in bits19..30 after validating snapshot membership.
 ///
 /// Saturation preserves the heap marker and requests an exact root-classification
 /// fallback. The borrowed child and every live source-walker register are preserved.
@@ -108,7 +111,9 @@ fn emit_gc_note_child_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the marker, snapshot flags, and kind
     emitter.instruction("mov r11, r10");                                        // preserve the complete word while checking its marker
     emitter.instruction("shr r11, 32");                                         // isolate the x86 managed-heap marker
-    emitter.instruction(&format!("cmp r11, {}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // reject foreign storage even inside the managed address range
+    emitter.instruction(                                                        // reject foreign storage even inside the managed address range
+        &format!("cmp r11, {}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)
+    );
     emitter.instruction("jne __rt_gc_note_child_ref_done");                     // a foreign header is not a valid graph node
     emitter.instruction("test r10, 0x20000");                                   // require membership in the current collection snapshot
     emitter.instruction("jz __rt_gc_note_child_ref_done");                      // new allocations are outside this edge-counting pass
@@ -116,6 +121,8 @@ fn emit_gc_note_child_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("and r11d, 0xff");                                      // discard storage and collector metadata
     emitter.instruction("cmp r11d, 2");                                         // strings and raw blocks own no cyclic graph identity
     emitter.instruction("jb __rt_gc_note_child_ref_done");                      // do not count non-graph payloads
+    emitter.instruction(&format!("cmp r11d, {CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction("je __rt_gc_note_child_ref_record");                    // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp r11d, {REFERENCE_CELL_HEAP_KIND}"));      // independently owned reference cells are graph nodes
     emitter.instruction("je __rt_gc_note_child_ref_record");                    // record the edge to the cell rather than its payload
     emitter.instruction("cmp r11d, 5");                                         // arrays, hashes, objects, and Mixed cells are supported
@@ -127,7 +134,9 @@ fn emit_gc_note_child_ref_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("and r10d, {X86_INCOMING_MAX}"));              // remove the shifted marker and unrelated flags
     emitter.instruction(&format!("cmp r10d, {X86_INCOMING_MAX}"));              // a full field must retain the exact-fallback sentinel
     emitter.instruction("je __rt_gc_note_child_ref_done");                      // avoid wrapping a saturated incoming count
-    emitter.instruction(&format!("add DWORD PTR [rax - 8], {}", 1 << X86_INCOMING_SHIFT)); // add one edge without changing owner counts or marker bits
+    emitter.instruction(                                                        // add one edge without changing owner counts or marker bits
+        &format!("add DWORD PTR [rax - 8], {}", 1 << X86_INCOMING_SHIFT)
+    );
 
     // -- restore every register borrowed from the shared outgoing-edge walker --
     emitter.label("__rt_gc_note_child_ref_done");

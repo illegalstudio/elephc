@@ -135,10 +135,6 @@ const NOT_STATICALLY_ANALYZABLE: &[(&str, &str)] = &[
          registers. The signal-guard call before the hand-off is covered by \
          fiber_signal_guard_call_is_sysv_aligned",
     ),
-    (
-        "__rt_gc_mark_reachable",
-        "shares a tail between the framed body and a frameless early-out",
-    ),
 ];
 
 /// The release chain a curl handle travels into the C bridge. These may NEVER appear in
@@ -180,7 +176,9 @@ fn functions_of(asm: &str) -> Vec<Function> {
     let mut functions: Vec<Function> = Vec::new();
     let mut inside = false;
     for (number, raw) in asm.lines().enumerate() {
-        let text = raw.trim();
+        // GC emitters attach inline intent comments to branches as well as calls.
+        // They cannot participate in operand or local-label matching.
+        let text = raw.split('#').next().unwrap_or_default().trim();
         if let Some(rest) = text.strip_prefix(".section .text.") {
             let name = rest.split(',').next().unwrap_or_default().to_string();
             functions.push(Function { name, body: Vec::new() });
@@ -288,6 +286,7 @@ fn walk(
         match mnemonic {
             "push" | "pushfq" => work.push((index + 1, offset - 8)),
             "pop" | "popfq" => work.push((index + 1, offset + 8)),
+            "leave" => work.push((index + 1, 0)),
             "ret" | "hlt" | "ud2" | "iret" => {}
             "call" => {
                 if offset.rem_euclid(16) != 8 {
@@ -468,6 +467,35 @@ fn explicit_stack_alignment_preserves_subsequent_call_checks() {
         assert!(analysis.unanalyzable.is_none(), "{padding}: {:?}", analysis.unanalyzable);
         assert_eq!(analysis.misaligned.len(), 1, "{padding}: {:?}", analysis.misaligned);
         assert_eq!(analysis.misaligned[0].1, "misaligned");
+    }
+}
+
+/// Inline intent comments preserve local flow while an actual misaligned call still fails.
+#[test]
+fn inline_comments_preserve_call_alignment_control_flow() {
+    let assembly = ".section .text.fixture\nfixture:\npush rbp # save frame\nmov rbp, rsp\njmp body # same frame\nbody:\ncall aligned # correctly aligned\nsub rsp, 8 # intentional fault\ncall misaligned # must still be rejected\nleave\nret\n";
+    let functions = functions_of(assembly);
+    assert_eq!(functions.len(), 1);
+    let analysis = analyze(&functions[0]);
+    assert!(analysis.unanalyzable.is_none(), "{:?}", analysis.unanalyzable);
+    assert_eq!(analysis.misaligned.len(), 1, "{:?}", analysis.misaligned);
+    assert_eq!(analysis.misaligned[0].1, "misaligned");
+}
+
+/// A frame restored by leave rejoins a frameless return without hiding a missing restore.
+#[test]
+fn leave_restores_entry_stack_offset_before_shared_return() {
+    for restore in ["leave", "nop"] {
+        let function = Function {
+            name: "fixture".into(),
+            body: [
+                "fixture:", "test rdi, rdi", "jz done", "push rbp", "mov rbp, rsp",
+                "sub rsp, 32", "call aligned", restore, "done:", "ret",
+            ].into_iter().map(str::to_string).enumerate().collect(),
+        };
+        let analysis = analyze(&function);
+        assert_eq!(analysis.unanalyzable.is_none(), restore == "leave");
+        assert!(analysis.misaligned.is_empty());
     }
 }
 

@@ -53,7 +53,12 @@ pub(super) fn lower_stream_context_set_option_4(
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_stream_context_set_option_4");
+    let target = if ctx.module.web_application {
+        crate::names::function_symbol(crate::web_prelude::application::CONTEXT_OPTION)
+    } else {
+        "__rt_stream_context_set_option_4".to_string()
+    };
+    abi::emit_call_label(ctx.emitter, &target);
     Ok(())
 }
 
@@ -73,6 +78,7 @@ pub(super) fn store_stream_context_options(
         return Ok(());
     }
     ctx.load_value_to_result(options)?;
+    if ctx.module.web_application { normalize_application_options(ctx); }
     match ctx.emitter.target.arch {
         Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null),
         Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
@@ -80,8 +86,59 @@ pub(super) fn store_stream_context_options(
     Ok(())
 }
 
+/// Opens a physically boxed array before publishing its borrowed raw-container pointer.
+fn normalize_application_options(ctx: &mut FunctionContext<'_>) {
+    let boxed = ctx.next_label("application_options_boxed");
+    let array = ctx.next_label("application_options_array");
+    let null = ctx.next_label("application_options_null");
+    let done = ctx.next_label("application_options_normalized");
+    let value = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, value);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #5");                              // heap kind five denotes Mixed storage, independently of its PHP value tag
+            ctx.emitter.instruction(&format!("b.eq {boxed}"));                  // unwrap managed Mixed cells before storing options
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 5");                              // distinguish Mixed heap cells from concrete containers
+            ctx.emitter.instruction(&format!("je {boxed}"));                    // leave raw packed and associative storage unchanged
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, value);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&boxed);
+    abi::emit_pop_reg(ctx.emitter, value);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    for tag in [4, 5, 8] {
+        let label = if tag == 8 { &null } else { &array };
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp x0, #{tag}"));            // accept arrays and the optional null default
+                ctx.emitter.instruction(&format!("b.eq {label}"));              // select the payload representation
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp rax, {tag}"));            // inspect the unboxed PHP value tag
+                ctx.emitter.instruction(&format!("je {label}"));                // distinguish array payloads from null
+            }
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, "Stream context options must be of type array");
+    ctx.emitter.label(&array);
+    let payload = if ctx.emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" };
+    abi::emit_reg_move(ctx.emitter, value, payload);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null);
+    abi::emit_load_int_immediate(ctx.emitter, value, 0);
+    ctx.emitter.label(&done);
+}
+
 /// Stores the loaded AArch64 options pointer into `_stream_context_options`.
 pub(super) fn store_stream_context_options_aarch64(ctx: &mut FunctionContext<'_>, clear_on_null: bool) {
+    if ctx.module.web_application {
+        store_application_context_options(ctx, clear_on_null);
+        return;
+    }
     let skip_label = ctx.next_label("sctx_store_done");
     if clear_on_null {
         let zero_label = ctx.next_label("sctx_store_zero");
@@ -104,6 +161,10 @@ pub(super) fn store_stream_context_options_aarch64(ctx: &mut FunctionContext<'_>
 
 /// Stores the loaded x86_64 options pointer into `_stream_context_options`.
 pub(super) fn store_stream_context_options_x86_64(ctx: &mut FunctionContext<'_>, clear_on_null: bool) {
+    if ctx.module.web_application {
+        store_application_context_options(ctx, clear_on_null);
+        return;
+    }
     let skip_label = ctx.next_label("sctx_store_done_x86");
     if clear_on_null {
         let zero_label = ctx.next_label("sctx_store_zero_x86");
@@ -130,6 +191,11 @@ pub(super) fn store_stream_context_options_x86_64(ctx: &mut FunctionContext<'_>,
 
 /// Clears the runtime's single stream-context options slot.
 pub(super) fn clear_stream_context_options(ctx: &mut FunctionContext<'_>) {
+    if ctx.module.web_application {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_call_label(ctx.emitter, "__rt_web_context_options_store");
+        return;
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
@@ -140,6 +206,14 @@ pub(super) fn clear_stream_context_options(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // clear the persisted stream-context options pointer
         }
     }
+}
+
+/// Publishes application-mode context options while balancing the previous ambient owner.
+fn store_application_context_options(ctx: &mut FunctionContext<'_>, clear_on_null: bool) {
+    let done = ctx.next_label("application_context_options_stored");
+    if !clear_on_null { abi::emit_branch_if_int_result_zero(ctx.emitter, &done); }
+    abi::emit_call_label(ctx.emitter, "__rt_web_context_options_store");
+    ctx.emitter.label(&done);
 }
 
 /// Emits an empty associative hash with Mixed values as the current result.

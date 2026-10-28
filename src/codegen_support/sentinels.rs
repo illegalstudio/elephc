@@ -161,8 +161,11 @@ pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
 /// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
 pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
+/// Heap-owned callable descriptor with typed capture metadata.
+pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
+
 /// The complete registered top-level heap-kind namespace.
-const MANAGED_HEAP_KINDS: [u32; 8] = [
+const MANAGED_HEAP_KINDS: [u32; 9] = [
     STRING_HEAP_KIND,
     ARRAY_HEAP_KIND,
     HASH_HEAP_KIND,
@@ -171,6 +174,7 @@ const MANAGED_HEAP_KINDS: [u32; 8] = [
     THROWABLE_HEAP_KIND,
     CONCAT_TEMP_HEAP_KIND,
     REFERENCE_CELL_HEAP_KIND,
+    CALLABLE_HEAP_KIND,
 ];
 
 /// Reject duplicate heap-kind registrations at compile time. The reference-cell allocator

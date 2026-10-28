@@ -146,6 +146,7 @@ pub(crate) fn emit_closure_bind(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #96");                                         // include the hidden 16-byte called-class capture
     emitter.label("__rt_closure_bind_allocate");
     emitter.instruction("bl __rt_heap_alloc");                                  // x0 = fresh descriptor block
+    crate::codegen_support::callable_descriptor::emit_initialize_runtime_descriptor(emitter, "x0");
     emitter.instruction("bl __rt_object_handle_acquire");                       // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
     emitter.instruction("str x0, [sp, #16]");                                   // save the new descriptor pointer
 
@@ -315,6 +316,7 @@ fn emit_closure_bind_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, 96");                                         // include the hidden 16-byte called-class capture
     emitter.label("__rt_closure_bind_allocate");
     emitter.instruction("call __rt_heap_alloc");                                // rax = fresh descriptor block
+    crate::codegen_support::callable_descriptor::emit_initialize_runtime_descriptor(emitter, "rax");
     emitter.instruction("call __rt_object_handle_acquire");                     // Closure::bind creates a NEW Closure in PHP, so it takes a new object handle
     emitter.instruction("mov [rsp+16], rax");                                   // save the new descriptor pointer
 

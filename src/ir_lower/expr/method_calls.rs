@@ -181,6 +181,19 @@ pub(super) fn lower_method_call(
     begin_call_argument_evaluation(ctx);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     let mut arg_values = arg_values;
+    if method_is_fiber_start(ctx, object.value, dispatch_method) {
+        for argument in &mut arg_values {
+            let omitted = ctx.builder.value_defining_instruction(*argument).is_some_and(|inst| {
+                inst.op == Op::ConstNull && inst.span.is_some_and(|span| span.line == 0 && span.col == 0)
+            });
+            if omitted { continue; }
+            // The native start buffer borrows Mixed cells. Publish boxing in EIR
+            // so ordinary argument cleanup owns it on return, suspension and throw.
+            let value = lowered_value_from_id(ctx, *argument);
+            let boxed = coerce_value_for_temp(ctx, value, &PhpType::Mixed, expr.span);
+            *argument = root_evaluated_call_argument(ctx, boxed, expr.span).value;
+        }
+    }
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,

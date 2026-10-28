@@ -96,6 +96,44 @@ pub(crate) fn persist_string_byte_view(
     value
 }
 
+/// Releases normalized `(string)` copies nested under `value`.
+///
+/// `trim((string)$s)` and a hash key `(string)$s` own that copy separately from
+/// the value a caller sees. After the caller has copied or finished reading it,
+/// the copy is released here.
+pub(crate) fn release_marked_normalized_cast_copies(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) {
+    let Some(inst) = ctx.builder.value_defining_instruction(value.value) else {
+        return;
+    };
+    let copies = if inst.op == Op::StrPersist && inst.immediate == Some(crate::ir::Immediate::Bool(true)) {
+        vec![value.value]
+    } else if inst.op == Op::RuntimeCall {
+        inst.operands
+            .iter()
+            .copied()
+            .filter(|operand| {
+                ctx.builder.value_defining_instruction(*operand).is_some_and(|producer| {
+                    producer.op == Op::StrPersist
+                        && producer.immediate == Some(crate::ir::Immediate::Bool(true))
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    for copy in copies {
+        release_if_owned(
+            ctx,
+            LoweredValue { value: copy, ir_type: crate::ir::IrType::Str },
+            span,
+        );
+    }
+}
+
 /// Emits a type-gated release; the backend filters the value's ownership state.
 pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>) {
     let php_type = ctx.builder.value_php_type(value.value);
