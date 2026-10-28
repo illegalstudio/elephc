@@ -13,26 +13,29 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 thread_local! {
-    /// Active magic unsets share the runtime thread, including reentrant native-to-eval contexts.
-    static ACTIVE_PROPERTY_UNSETS: RefCell<HashSet<(u64, String)>> = RefCell::new(HashSet::new());
+    /// Active magic accessor calls share the runtime thread, including reentrant native-to-eval
+    /// contexts, keyed by hook, object and property.
+    static ACTIVE_PROPERTY_HOOKS: RefCell<HashSet<(&'static str, u64, String)>> = RefCell::new(HashSet::new());
 }
 
 /// Clears an object/property recursion guard on both ordinary return and Rust error unwinding.
-pub(super) struct EvalPropertyUnsetGuard((u64, String));
+/// PHP runs `__get`, `__isset` and `__unset` at most once per object and property at a time: the
+/// same access inside the hook reaches the property itself.
+pub(super) struct EvalPropertyHookGuard((&'static str, u64, String));
 
-impl EvalPropertyUnsetGuard {
-    /// Enters a magic unset unless the same object/property is already being handled.
-    pub(super) fn enter(identity: u64, property: &str) -> Option<Self> {
-        let key = (identity, property.to_string());
-        ACTIVE_PROPERTY_UNSETS.with(|active| active.borrow_mut().insert(key.clone()))
+impl EvalPropertyHookGuard {
+    /// Enters magic hook `hook` unless the same object/property is already inside it.
+    pub(super) fn enter(hook: &'static str, identity: u64, property: &str) -> Option<Self> {
+        let key = (hook, identity, property.to_string());
+        ACTIVE_PROPERTY_HOOKS.with(|active| active.borrow_mut().insert(key.clone()))
             .then(|| Self(key))
     }
 }
 
-impl Drop for EvalPropertyUnsetGuard {
-    /// Removes only this invocation's guard so later independent unsets may call the hook again.
+impl Drop for EvalPropertyHookGuard {
+    /// Removes only this invocation's guard so later independent accesses may call the hook again.
     fn drop(&mut self) {
-        ACTIVE_PROPERTY_UNSETS.with(|active| active.borrow_mut().remove(&self.0));
+        ACTIVE_PROPERTY_HOOKS.with(|active| active.borrow_mut().remove(&self.0));
     }
 }
 
@@ -50,9 +53,12 @@ pub(super) fn eval_native_magic_property_unset(
         return Ok(false);
     }
     let name = values.string(property)?;
+    let scope = super::native_property_access::native_magic_scope(context);
+    values.publish_magic_scope(scope.as_deref());
     let result = eval_native_method_with_evaluated_args(
         object, &native_class, "__unset", positional_args(vec![name.borrowed()]), context, values,
     );
+    values.publish_magic_scope(None);
     let result = result.and_then(|result| release_expr_result(result, context, values));
     let released = release_expr_result(name, context, values);
     result.and(released).map(|()| true)
@@ -183,17 +189,27 @@ pub(super) fn eval_throw_hooked_property_unset_error<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::EvalPropertyUnsetGuard;
+    use super::EvalPropertyHookGuard;
 
     /// Denied reentry leaves the outer guard active until its actual owner exits.
     #[test]
     fn denied_magic_unset_reentry_preserves_outer_guard() {
-        let outer = EvalPropertyUnsetGuard::enter(1, "value").unwrap();
-        assert!(EvalPropertyUnsetGuard::enter(1, "value").is_none());
-        assert!(EvalPropertyUnsetGuard::enter(1, "value").is_none());
-        assert!(EvalPropertyUnsetGuard::enter(1, "other").is_some());
-        assert!(EvalPropertyUnsetGuard::enter(2, "value").is_some());
+        let outer = EvalPropertyHookGuard::enter("__unset", 1, "value").unwrap();
+        assert!(EvalPropertyHookGuard::enter("__unset", 1, "value").is_none());
+        assert!(EvalPropertyHookGuard::enter("__unset", 1, "value").is_none());
+        assert!(EvalPropertyHookGuard::enter("__unset", 1, "other").is_some());
+        assert!(EvalPropertyHookGuard::enter("__unset", 2, "value").is_some());
         drop(outer);
-        assert!(EvalPropertyUnsetGuard::enter(1, "value").is_some());
+        assert!(EvalPropertyHookGuard::enter("__unset", 1, "value").is_some());
+    }
+
+    /// Each hook guards on its own: inside `__get`, the same property's `__isset` still runs, as
+    /// in PHP, where only the same hook is blocked for that object and property.
+    #[test]
+    fn each_magic_hook_guards_independently() {
+        let get = EvalPropertyHookGuard::enter("__get", 1, "value").unwrap();
+        assert!(EvalPropertyHookGuard::enter("__get", 1, "value").is_none());
+        assert!(EvalPropertyHookGuard::enter("__isset", 1, "value").is_some());
+        drop(get);
     }
 }

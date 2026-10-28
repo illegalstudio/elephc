@@ -277,6 +277,151 @@ fn emit_print_r_str_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
+/// `__rt_print_r_property_key`: write an object property key as print_r shows it. A php-src
+/// mangled key prints its annotation (`[x:A:private] => `, `[y:protected] => `); any other key
+/// goes to `__rt_print_r_str_key`.
+/// Input: AArch64 x0=ptr x1=len x2=indent / x86_64 rdi=ptr rsi=len rdx=indent.
+pub fn emit_print_r_property_key(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_print_r_property_key_x86_64(emitter);
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_property_key ---");
+    emitter.label_global("__rt_print_r_property_key");
+    emitter.instruction("cbz x1, __rt_pr_prop_key_plain");                      // an empty key is not mangled
+    emitter.instruction("ldrb w9, [x0]");                                       // a mangled key starts with NUL
+    emitter.instruction("cbnz w9, __rt_pr_prop_key_plain");                     // a plain key prints as it is
+    emitter.instruction("mov x10, #1");                                         // scan for the NUL that ends the class part
+    emitter.label("__rt_pr_prop_key_scan");
+    emitter.instruction("cmp x10, x1");                                         // past the key?
+    emitter.instruction("b.hs __rt_pr_prop_key_plain");                         // no second NUL: not a mangled key
+    emitter.instruction("ldrb w9, [x0, x10]");                                  // next byte
+    emitter.instruction("cbz w9, __rt_pr_prop_key_found");                      // the class part ends here
+    emitter.instruction("add x10, x10, #1");                                    // keep scanning
+    emitter.instruction("b __rt_pr_prop_key_scan");                             // next byte
+    emitter.label("__rt_pr_prop_key_plain");
+    emitter.instruction("b __rt_print_r_str_key");                                     // print the key as it is
+    emitter.label("__rt_pr_prop_key_found");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate the key frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the key frame
+    emitter.instruction("str x0, [sp, #0]");                                    // key ptr
+    emitter.instruction("str x1, [sp, #8]");                                    // key len
+    emitter.instruction("str x10, [sp, #16]");                                  // offset of the second NUL
+    emitter.instruction("mov x0, x2");                                          // indent
+    emitter.instruction("bl __rt_print_r_spaces");                              // pad the entry indent
+    abi::emit_symbol_address(emitter, "x1", "_pr_lbrack");
+    emitter.instruction("mov x2, #1");                                          // len("[") = 1
+    emitter.instruction("bl __rt_pr_write");                                    // write `[`
+    emitter.instruction("ldr x9, [sp, #0]");                                    // key ptr
+    emitter.instruction("ldr x10, [sp, #16]");                                  // second NUL
+    emitter.instruction("ldr x11, [sp, #8]");                                   // key len
+    emitter.instruction("add x1, x9, x10");                                     // the name follows the second NUL
+    emitter.instruction("add x1, x1, #1");                                      // skip it
+    emitter.instruction("sub x2, x11, x10");                                    // name length
+    emitter.instruction("sub x2, x2, #1");                                      // without the NUL
+    emitter.instruction("bl __rt_pr_write");                                    // write the property name
+    emitter.instruction("ldr x10, [sp, #16]");                                  // second NUL
+    emitter.instruction("cmp x10, #2");                                         // a one-byte class part?
+    emitter.instruction("b.ne __rt_pr_prop_key_private");                       // a class name: private
+    emitter.instruction("ldr x9, [sp, #0]");                                    // key ptr
+    emitter.instruction("ldrb w11, [x9, #1]");                                  // the class part
+    emitter.instruction("cmp w11, #42");                                        // `*` marks a protected property
+    emitter.instruction("b.ne __rt_pr_prop_key_private");                       // a one-letter class name
+    abi::emit_symbol_address(emitter, "x1", "_pr_key_protected");
+    emitter.instruction("mov x2, #10");                                         // len(":protected") = 10
+    emitter.instruction("bl __rt_pr_write");                                    // write the protected annotation
+    emitter.instruction("b __rt_pr_prop_key_arrow");                            // close the key
+    emitter.label("__rt_pr_prop_key_private");
+    abi::emit_symbol_address(emitter, "x1", "_pr_key_colon");
+    emitter.instruction("mov x2, #1");                                          // len(":") = 1
+    emitter.instruction("bl __rt_pr_write");                                    // write `:`
+    emitter.instruction("ldr x9, [sp, #0]");                                    // key ptr
+    emitter.instruction("ldr x10, [sp, #16]");                                  // second NUL
+    emitter.instruction("add x1, x9, #1");                                      // the class name
+    emitter.instruction("sub x2, x10, #1");                                     // its length
+    emitter.instruction("bl __rt_pr_write");                                    // write the declaring class
+    abi::emit_symbol_address(emitter, "x1", "_pr_key_private");
+    emitter.instruction("mov x2, #8");                                          // len(":private") = 8
+    emitter.instruction("bl __rt_pr_write");                                    // write the private annotation
+    emitter.label("__rt_pr_prop_key_arrow");
+    abi::emit_symbol_address(emitter, "x1", "_pr_arrow");
+    emitter.instruction("mov x2, #5");                                          // len("] => ") = 5
+    emitter.instruction("bl __rt_pr_write");                                    // write `] => `
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the key frame
+    emitter.instruction("ret");                                                 // return to the walker
+}
+
+/// x86_64 `__rt_print_r_property_key`.
+fn emit_print_r_property_key_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: print_r_property_key ---");
+    emitter.label_global("__rt_print_r_property_key");
+    emitter.instruction("test rsi, rsi");                                       // an empty key is not mangled
+    emitter.instruction("jz __rt_pr_prop_key_plain_x");                         // print it as it is
+    emitter.instruction("cmp BYTE PTR [rdi], 0");                               // a mangled key starts with NUL
+    emitter.instruction("jne __rt_pr_prop_key_plain_x");                        // a plain key prints as it is
+    emitter.instruction("mov r10, 1");                                          // scan for the NUL that ends the class part
+    emitter.label("__rt_pr_prop_key_scan_x");
+    emitter.instruction("cmp r10, rsi");                                        // past the key?
+    emitter.instruction("jae __rt_pr_prop_key_plain_x");                        // no second NUL: not a mangled key
+    emitter.instruction("cmp BYTE PTR [rdi + r10], 0");                         // next byte
+    emitter.instruction("je __rt_pr_prop_key_found_x");                         // the class part ends here
+    emitter.instruction("add r10, 1");                                          // keep scanning
+    emitter.instruction("jmp __rt_pr_prop_key_scan_x");                         // next byte
+    emitter.label("__rt_pr_prop_key_plain_x");
+    emitter.instruction("jmp __rt_print_r_str_key");                                   // print the key as it is
+    emitter.label("__rt_pr_prop_key_found_x");
+    emitter.instruction("push rbp");                                            // save caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the key frame
+    emitter.instruction("sub rsp, 32");                                         // key slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // key ptr
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // key len
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // offset of the second NUL
+    emitter.instruction("mov rdi, rdx");                                        // indent
+    emitter.instruction("call __rt_print_r_spaces");                            // pad the entry indent
+    abi::emit_symbol_address(emitter, "rsi", "_pr_lbrack");
+    emitter.instruction("mov edx, 1");                                          // len("[") = 1
+    emitter.instruction("call __rt_pr_write");                                  // write `[`
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // key ptr
+    emitter.instruction("add rsi, QWORD PTR [rbp - 24]");                       // at the second NUL
+    emitter.instruction("add rsi, 1");                                          // the name follows it
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // key len
+    emitter.instruction("sub rdx, QWORD PTR [rbp - 24]");                       // minus the class part
+    emitter.instruction("sub rdx, 1");                                          // and the NUL
+    emitter.instruction("call __rt_pr_write");                                  // write the property name
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 2");                         // a one-byte class part?
+    emitter.instruction("jne __rt_pr_prop_key_private_x");                      // a class name: private
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // key ptr
+    emitter.instruction("cmp BYTE PTR [rax + 1], 42");                          // `*` marks a protected property
+    emitter.instruction("jne __rt_pr_prop_key_private_x");                      // a one-letter class name
+    abi::emit_symbol_address(emitter, "rsi", "_pr_key_protected");
+    emitter.instruction("mov edx, 10");                                         // len(":protected") = 10
+    emitter.instruction("call __rt_pr_write");                                  // write the protected annotation
+    emitter.instruction("jmp __rt_pr_prop_key_arrow_x");                        // close the key
+    emitter.label("__rt_pr_prop_key_private_x");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_key_colon");
+    emitter.instruction("mov edx, 1");                                          // len(":") = 1
+    emitter.instruction("call __rt_pr_write");                                  // write `:`
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // key ptr
+    emitter.instruction("add rsi, 1");                                          // the class name
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // second NUL
+    emitter.instruction("sub rdx, 1");                                          // the class name's length
+    emitter.instruction("call __rt_pr_write");                                  // write the declaring class
+    abi::emit_symbol_address(emitter, "rsi", "_pr_key_private");
+    emitter.instruction("mov edx, 8");                                          // len(":private") = 8
+    emitter.instruction("call __rt_pr_write");                                  // write the private annotation
+    emitter.label("__rt_pr_prop_key_arrow_x");
+    abi::emit_symbol_address(emitter, "rsi", "_pr_arrow");
+    emitter.instruction("mov edx, 5");                                          // len("] => ") = 5
+    emitter.instruction("call __rt_pr_write");                                  // write `] => `
+    emitter.instruction("mov rsp, rbp");                                        // release the key slots
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to the walker
+}
+
 /// `__rt_print_r_value`: render one PHP value (no type wrapper). Tags 4/5 recurse
 /// into the array walkers, tag 7 unboxes a Mixed cell and redispatches, scalars
 /// render directly, null/object render nothing/Array-header only.
@@ -757,6 +902,10 @@ fn emit_print_r_hash_entries_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #96");                                    // establish the walk frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the hash pointer
     emitter.instruction("str x1, [sp, #16]");                                   // save the entry indent
+    abi::emit_symbol_address(emitter, "x9", "_dump_unmangle");
+    emitter.instruction("ldr x10, [x9]");                                       // are these an object's property keys?
+    emitter.instruction("str x10, [sp, #88]");                                  // keep the answer for this walk
+    emitter.instruction("str xzr, [x9]");                                       // nested arrays print their keys as they are
     emitter.instruction("bl __rt_hash_count");                                  // x0 = number of entries
     emitter.instruction("str x0, [sp, #24]");                                   // save the entry count
     emitter.instruction("str xzr, [sp, #32]");                                  // iterator cursor = 0
@@ -784,6 +933,11 @@ fn emit_print_r_hash_entries_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the key ptr
     emitter.instruction("ldr x1, [sp, #56]");                                   // reload the key len
     emitter.instruction("ldr x2, [sp, #16]");                                   // entry indent
+    emitter.instruction("ldr x9, [sp, #88]");                                   // an object's property keys?
+    emitter.instruction("cbz x9, __rt_pr_hash_plain_key");                      // no: print the key as it is
+    emitter.instruction("bl __rt_print_r_property_key");                        // write `<indent>[KEY:annotation] => `
+    emitter.instruction("b __rt_pr_hash_after_key");                            // continue to the value
+    emitter.label("__rt_pr_hash_plain_key");
     emitter.instruction("bl __rt_print_r_str_key");                             // write `<indent>[KEY] => `
     emitter.instruction("b __rt_pr_hash_after_key");                            // continue to the value
     emitter.label("__rt_pr_hash_int_key");
@@ -854,6 +1008,10 @@ fn emit_print_r_hash_entries_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 96");                                         // allocate the hash-walk frame
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the entry indent
+    abi::emit_symbol_address(emitter, "r10", "_dump_unmangle");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // are these an object's property keys?
+    emitter.instruction("mov QWORD PTR [rbp - 96], r11");                       // keep the answer for this walk
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // nested arrays print their keys as they are
     emitter.instruction("call __rt_hash_count");                                // rax = number of entries (hash ptr already in rdi)
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the entry count
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // iterator cursor = 0
@@ -881,6 +1039,11 @@ fn emit_print_r_hash_entries_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the key ptr
     emitter.instruction("mov rsi, QWORD PTR [rbp - 64]");                       // reload the key len
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // entry indent
+    emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // an object's property keys?
+    emitter.instruction("je __rt_pr_hash_plain_key_x86");                       // no: print the key as it is
+    emitter.instruction("call __rt_print_r_property_key");                      // write `<indent>[KEY:annotation] => `
+    emitter.instruction("jmp __rt_pr_hash_after_key_x86");                      // continue to the value
+    emitter.label("__rt_pr_hash_plain_key_x86");
     emitter.instruction("call __rt_print_r_str_key");                           // write `<indent>[KEY] => `
     emitter.instruction("jmp __rt_pr_hash_after_key_x86");                      // continue to the value
     emitter.label("__rt_pr_hash_int_key_x86");

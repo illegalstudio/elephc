@@ -242,6 +242,12 @@ impl Rewriter {
                 ..
             } => {
                 let label = format!("function '{}'", name);
+                // A compiler-internal function is no PHP frame a backtrace shows, and one an
+                // extern registers as a C callback (a hosted extension's dispatcher) cannot take
+                // the hidden collector at all: it keeps only the arguments its body reads.
+                let internal = name.to_ascii_lowercase().starts_with("__elephc");
+                let capture_all = self.capture_all_frames;
+                self.capture_all_frames = capture_all && !internal;
                 self.walk_function_scope(
                     label,
                     params,
@@ -250,6 +256,7 @@ impl Rewriter {
                     variadic_type,
                     body,
                 );
+                self.capture_all_frames = capture_all;
             }
             StmtKind::ClassDecl {
                 name,

@@ -33,6 +33,9 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_resource_state(resource: *mut RuntimeCell, subtype: i64);
     /// Writes an already-dispatched diagnostic without invoking the user handler again.
     pub(super) fn __elephc_eval_warning_raw(message: *const u8, length: u64);
+    /// Stores the class-scope chain of an eval magic property access where a hosted PHP
+    /// extension's wrapper reads it (null clears it); a no-op without the extension host.
+    pub(super) fn __elephc_eval_publish_magic_scope(chain: *const u8, length: u64);
     /// Returns one owned boxed native backtrace frame or null after the final visible frame.
     pub(super) fn __elephc_eval_backtrace_entry(index: u64, options: i64) -> *mut RuntimeCell;
     /// Returns an owned boxed snapshot of the shared native resource inventory.

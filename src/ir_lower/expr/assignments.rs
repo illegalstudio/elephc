@@ -571,7 +571,7 @@ pub(super) fn lower_dynamic_property_assign(
     ctx.emit_void(
         Op::DynamicPropSet,
         vec![object.value, property.value, store_value.value],
-        None,
+        crate::source::current_strict_types().then_some(Immediate::Bool(true)),
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );

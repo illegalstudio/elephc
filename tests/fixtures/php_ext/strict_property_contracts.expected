@@ -1,0 +1,9 @@
+TypeError: Cannot assign string to property DemoRecord::$count of type int
+TypeError: Cannot assign float to property DemoRecord::$count of type int
+TypeError: Cannot assign true to property DemoRecord::$count of type int
+int(6)
+float(3)
+TypeError: Cannot assign string to property DemoRecord::$ratio of type ?float
+NULL
+TypeError: Cannot assign string to property DemoRecord::$count of type int
+string(8) "42 rec 7"

@@ -112,9 +112,10 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     for name in superglobals::SUPERGLOBALS {
         emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
     }
-    // A hosted extension ends the previous request (RSHUTDOWN) once its destructors have run,
-    // while the tables and callbacks it may still call back into are alive; the tables go right
-    // after, as php-src frees request memory after RSHUTDOWN, in the main epilogue's order.
+    // A hosted extension ends the previous request (RSHUTDOWN, then its open resources close) once
+    // its destructors have run, while the tables and callbacks it may still call back into are
+    // alive; the tables go right after, as php-src frees the object store after closing the
+    // resources, in the main epilogue's order.
     if super::block_emit::module_hosts_php_ext(module) {
         let symbol = emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
         abi::emit_call_label(emitter, &symbol);
@@ -126,6 +127,13 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // hosting table released, may still reach C code that calls a saved callback.
     if super::frame::module_binds_extern_callbacks(module) {
         abi::emit_call_label(emitter, super::frame::EXTERN_CALLBACK_RELEASE_LABEL);
+    }
+    // With its objects and callbacks gone, the request deactivates: resources are freed, the INI
+    // directives it changed are restored, post-deactivate hooks run and its leftover request
+    // allocations are freed, before the next request's RINIT.
+    if super::block_emit::module_hosts_php_ext(module) {
+        let symbol = emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_DEACTIVATE);
+        abi::emit_call_label(emitter, &symbol);
     }
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on

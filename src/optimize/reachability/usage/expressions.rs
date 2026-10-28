@@ -313,6 +313,14 @@ impl Scanner<'_> {
                 self.scan_call_user_func_class_introspection(&key, &normalized);
             }
             "method_exists" => self.method_exists(args),
+            // On a hosted extension class, lowering routes these through the prelude's engine
+            // queries (`crate::ir_lower::expr::hosted_queries`), which must survive pruning.
+            "property_exists" => {
+                self.record_callable(crate::php_ext::prelude::PROPERTY_EXISTS_FUNCTION);
+            }
+            "get_class_vars" => {
+                self.record_callable(crate::php_ext::prelude::CLASS_VARS_FUNCTION);
+            }
             "get_class_methods" => self.usage.hazards.dynamic_method = true,
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,

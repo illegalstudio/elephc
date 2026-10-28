@@ -514,7 +514,7 @@ fn lower_property_assign_value(
         ctx.emit_void(
             Op::DynamicPropSet,
             vec![object.value, property_name.value, value.value],
-            None,
+            crate::source::current_strict_types().then_some(Immediate::Bool(true)),
             Op::DynamicPropSet.default_effects(),
             Some(span),
         );
@@ -868,7 +868,7 @@ pub(super) fn lower_magic_property_set(
     ctx.emit_void(
         Op::DynamicPropSet,
         vec![object, property_name.value, value.value],
-        None,
+        crate::source::current_strict_types().then_some(Immediate::Bool(true)),
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );

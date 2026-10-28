@@ -125,6 +125,14 @@ impl<'a> FunctionContext<'a> {
             .map_or(-1, |class| class.class_id as i64)
     }
 
+    /// Whether the instruction being lowered is a property write by name that strict code
+    /// (`declare(strict_types=1)`) makes: `__set` then converts its value as strict code does.
+    pub(super) fn current_write_is_strict(&self) -> bool {
+        self.current_inst
+            .and_then(|id| self.function.instruction(id))
+            .is_some_and(|inst| inst.op == Op::DynamicPropSet && inst.immediate == Some(Immediate::Bool(true)))
+    }
+
     /// Packs source strictness into the existing framed invocation-scope word.
     /// Weak calls keep legacy class ids and global -1; strict calls use -scope-3.
     pub(super) fn callable_invocation_profile(&self) -> i64 {

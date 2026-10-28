@@ -84,6 +84,187 @@ fn hosted_calls_match_real_php() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+/// A hosted object's declared properties keep their PHP contract (#2103), line for line with real
+/// PHP: private and protected ones are out of reach of the global scope but not of the class's
+/// own methods nor (protected) of a program subclass, a readonly one is set once and only from
+/// its class's lineage, and a typed one takes only values of its type, converted in weak mode.
+#[test]
+fn property_contracts_match_real_php() {
+    let dir = project("properties");
+    let program = fs::read_to_string(fixture_dir().join("property_contracts.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("property_contracts.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A program hosting an extension compiles with `eval()`, and eval code reaches a hosted
+/// object's properties in its own class scope: a protected one from a subclass method, never
+/// from the global scope. Line for line with real PHP.
+#[test]
+fn eval_reaches_hosted_properties_in_its_scope() {
+    let dir = project("eval-properties");
+    let program = fs::read_to_string(fixture_dir().join("eval_property_contracts.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("eval_property_contracts.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A program subclass of a hosted class behaves as one of the internal class: it may write an
+/// ancestor's private name (a dynamic property of its own), declare `__get`, `__set`, `__isset`,
+/// `__unset` and `__clone` with any signature PHP accepts (a clone still gets its own engine object
+/// before the program's `__clone()` runs), and an accessor override elsewhere does not change the
+/// scope a dynamically dispatched access runs in. Line for line with real PHP.
+#[test]
+fn program_subclasses_extend_hosted_classes_as_php_does() {
+    let dir = project("subclasses");
+    let program = fs::read_to_string(fixture_dir().join("hosted_subclasses.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("hosted_subclasses.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Code declaring `strict_types=1` assigns a hosted typed property as strict code does: only an
+/// int converts (to a float property), anything else is a TypeError. Line for line with real PHP.
+#[test]
+fn strict_code_assigns_hosted_typed_properties_strictly() {
+    let dir = project("strict-properties");
+    let program = fs::read_to_string(fixture_dir().join("strict_property_contracts.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("strict_property_contracts.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// The host's internals are not PHP symbols: a program naming them at run time (a string
+/// callable, a method by name, `new` of a class name) gets what PHP gives for a missing one.
+#[test]
+fn host_internals_are_not_reachable_by_name() {
+    // One program, one case per run (`argv[1]`): a hosted build is slow enough that a compile per
+    // case brought the test to the suite's per-test limit.
+    let dir = project("internals");
+    let run = compile_and_run(
+        &dir,
+        "<?php
+$case = $argv[1] ?? '';
+$c = new DemoCounter(3);
+if ($case === '') {
+    $n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
+    var_dump(is_callable($n));
+    var_dump($c->value());
+} elseif ($case === 'function') {
+    $n = $argc > 5 ? 'x' : 'elephc_php_ext_object_release';
+    $n(1);
+    echo 'reached';
+} elseif ($case === 'method') {
+    $m = $argc > 5 ? 'x' : '__elephcObject';
+    var_dump($c->$m());
+} else {
+    $k = $argc > 5 ? 'x' : '__ElephcPhpExtOwner';
+    var_dump(new $k);
+}
+",
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "bool(false)
+int(3)
+");
+    // Elephc ends the program on these misses where PHP throws a catchable Error; what matters
+    // here is that none of them reaches the internal symbol.
+    for (case, refused) in [
+        ("function", "undefined function"),
+        ("method", "callable array"),
+        ("class", "Class \"__ElephcPhpExtOwner\" not found"),
+    ] {
+        let run = Command::new(dir.join("main")).arg(case).current_dir(&dir).output().expect("run the compiled program");
+        let all = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+        assert!(!run.status.success() && !all.contains("reached") && !all.contains("int(") && !all.contains("object("), "{case}: {all}");
+        assert!(all.contains(refused), "{case}: {all}");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// `var_dump()` object ids with the digits dropped: the wrapper identity table holds an id of its
+/// own, so a hosted object's `#N` can run ahead of PHP's (see `dumps_show_the_engine_object`).
+fn without_object_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '#' {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+        }
+    }
+    out
+}
+
+/// A hosted object's properties as PHP's introspection shows them, from the engine object:
+/// `get_object_vars()` in the caller's scope, `(array)` under mangled keys, `var_dump()` and
+/// `print_r()` in declaration order with their visibility, `property_exists()` and
+/// `get_class_vars()`; and a `__debugInfo()` array's mangled keys print unmangled, as PHP does
+/// for any class. Line for line with real PHP (object ids aside).
+#[test]
+fn hosted_property_views_match_real_php() {
+    let dir = project("property-views");
+    let program = fs::read_to_string(fixture_dir().join("hosted_property_views.php")).unwrap();
+    let expected = fs::read_to_string(fixture_dir().join("hosted_property_views.expected")).unwrap();
+    let run = compile_and_run(&dir, &program);
+    assert_success(&run, "compiled program");
+    assert_eq!(without_object_ids(&String::from_utf8_lossy(&run.stdout)), without_object_ids(&expected));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// Introspection sees a hosted class as PHP's internal class: none of the wrapper's own members
+/// (`__elephc…` methods, its `__get`/`__set`/`__isset`/`__unset`/`__clone`, the marker
+/// interface) is listed or reported, and Reflection lists methods in declaration order.
+#[test]
+fn introspection_does_not_see_the_wrapper() {
+    let dir = project("introspection");
+    let run = compile_and_run(
+        &dir,
+        r#"<?php
+$c = new DemoCounter(3);
+echo implode(',', get_class_methods($c)), "
+";
+var_dump(method_exists($c, '__get'), method_exists('DemoCounter', '__elephcObject'), method_exists($c, 'add'));
+var_dump(is_callable([$c, '__get']), is_callable([$c, 'add']));
+var_dump(class_implements($c), interface_exists('__ElephcPhpExtObject'));
+$r = new ReflectionClass('DemoCounter');
+foreach ($r->getMethods() as $m) { echo $m->getName(), ','; }
+echo "
+";
+var_dump($r->hasMethod('__clone'), $r->getInterfaceNames());
+"#,
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "__construct,add,value,merge,fromString,split
+bool(false)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+array(0) {
+}
+bool(false)
+__construct,add,value,merge,fromString,split,
+bool(false)
+array(0) {
+}
+"
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
 /// `add` reports the surface and names the function it cannot call yet;
 /// `list` shows the extension as built.
 #[test]
@@ -92,7 +273,7 @@ fn add_and_list_report_the_surface() {
     let list = Command::new(elephc()).current_dir(&dir).args(["extension", "list"]).output().unwrap();
     assert_success(&list, "extension list");
     let text = String::from_utf8_lossy(&list.stdout);
-    assert!(text.contains("elephc_demo 1.2.3 — 33 functions, 8 classes, 3 constants"), "{text}");
+    assert!(text.contains("elephc_demo 1.2.3 — 36 functions, 9 classes, 3 constants"), "{text}");
     assert!(text.contains("not callable yet: demo_inspect()"), "{text}");
     assert!(!text.contains("demo_apply()"), "callables are passed: {text}");
     let manifest = fs::read_to_string(dir.join("elephc.toml")).unwrap();
@@ -280,6 +461,87 @@ echo $sum > 0 ? "ran" : "empty", " ", elephc_zend_live_blocks() - $blocks, " ", 
         String::from_utf8_lossy(&run.stdout),
         "ran 0 0 0 0 0 0 bounded\n",
         "engine blocks, calls, objects, iterations, callables, live wrapper entries, wrapper table size"
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// The engine object behind a wrapper is released when the wrapper is freed, whatever PHP
+/// destructor runs (#2101): a subclass overriding `__destruct()` without calling anything, and a
+/// subclass constructor that throws after `parent::__construct()` (PHP never destructs that
+/// object), both leave the engine's held objects and blocks at their warmed-up baseline, with the
+/// extension's `free_obj` run once per object. A wrapper its destructor resurrects keeps its
+/// engine object until it is really gone.
+#[test]
+fn engine_objects_are_released_whatever_the_destructor_does() {
+    let dir = project("owner");
+    let main = dir.join("main.php");
+    fs::write(
+        &main,
+        r#"<?php
+extern function elephc_php_ext_live_entries(int $kind): int;
+extern function elephc_zend_live_blocks(): int;
+class Silent extends DemoCounter {
+    public function __destruct() {}
+}
+class Failing extends DemoCounter {
+    public function __construct(int $n) {
+        parent::__construct($n);
+        throw new RuntimeException("refused");
+    }
+}
+class Back extends DemoCounter {
+    public static ?Back $kept = null;
+    public function __destruct() { self::$kept = $this; }
+}
+function silent(int $n): void {
+    for ($i = 0; $i < $n; $i++) {
+        $counter = new Silent($i);
+        $counter->add(1);
+        unset($counter);
+    }
+}
+function failing(int $n): int {
+    $caught = 0;
+    for ($i = 0; $i < $n; $i++) {
+        try {
+            new Failing($i);
+        } catch (RuntimeException $e) {
+            $caught++;
+        }
+    }
+    return $caught;
+}
+silent(5);
+failing(5);
+$freed = demo_counters_freed();
+$blocks = elephc_zend_live_blocks();
+$held = elephc_php_ext_live_entries(0);
+silent(100);
+echo demo_counters_freed() - $freed, " ";
+$caught = failing(100);
+echo demo_counters_freed() - $freed, " ", $caught, " ", elephc_zend_live_blocks() - $blocks, " ",
+    elephc_php_ext_live_entries(0) - $held, "\n";
+$freed = demo_counters_freed();
+$back = new Back(7);
+$back->add(1);
+unset($back);
+echo demo_counters_freed() - $freed, " ", Back::$kept->value(), "\n";
+Back::$kept = null;
+echo demo_counters_freed() - $freed, "\n";
+"#,
+    )
+    .unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).args(["--heap-debug"]).arg(&main).output().unwrap();
+    assert_success(&compile, "compile");
+    let run = Command::new(dir.join("main")).output().unwrap();
+    assert_success(&run, "compiled program");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "100 200 100 0 0\n0 8\n1\n",
+        "freed after the silent subclass, after the failing constructors, exceptions caught, engine \
+         blocks, held objects; then a resurrected wrapper keeps its object until it is dropped"
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "{stderr}");
@@ -700,37 +962,142 @@ echo $child->tag(), " | ", $child->describe(), "\n";
 /// Compiles `source` in `dir`, runs it with `ELEPHC_DEMO_TRACE` set, and returns the lines the
 /// extension traced on stderr (`RINIT`, `RSHUTDOWN`, `MSHUTDOWN`) with the program's exit status.
 fn run_traced(dir: &Path, source: &str) -> (Vec<String>, Option<i32>, String) {
+    run_traced_with(dir, source, &[])
+}
+
+/// `run_traced` with extra environment variables for the run.
+fn run_traced_with(dir: &Path, source: &str, env: &[(&str, &str)]) -> (Vec<String>, Option<i32>, String) {
     let main = dir.join("main.php");
     fs::write(&main, source).unwrap();
     let compile = Command::new(elephc()).current_dir(dir).arg(&main).output().expect("run elephc");
     assert_success(&compile, "compile");
-    let run = Command::new(dir.join("main")).env("ELEPHC_DEMO_TRACE", "1").output().expect("run the program");
+    let run = Command::new(dir.join("main"))
+        .env("ELEPHC_DEMO_TRACE", "1")
+        .envs(env.iter().copied())
+        .output()
+        .expect("run the program");
     let stderr = String::from_utf8_lossy(&run.stderr).into_owned();
     let traced = stderr.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).map(str::to_string).collect();
     (traced, run.status.code(), String::from_utf8_lossy(&run.stdout).into_owned())
 }
 
 /// The extension's request and module lifecycle ends the way php-cli's does: request shutdown
-/// (RSHUTDOWN) and then module shutdown (MSHUTDOWN), after the output is flushed, on a normal end
-/// and on `exit()` alike, and never for a program that uses no extension function.
+/// (RSHUTDOWN), then post-deactivation once the request's resources and INI changes are undone
+/// (the greeting a script changed is back to its configured value), then module shutdown
+/// (MSHUTDOWN), after the output is flushed, on a normal end and on `exit()` alike, and never for a
+/// program that uses no extension function.
 #[test]
 fn the_extension_is_shut_down_when_the_program_ends() {
     let dir = project("lifecycle");
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho demo_add(1, 2), \"\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "3\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho demo_add(1, 2), \"\\n\";\nexit(3);\n");
     assert_eq!((status, stdout.as_str()), (Some(3), "3\n"));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, _) = run_traced(&dir, "<?php\nfunction fail() { throw new RuntimeException('x'); }\necho demo_add(1, 2), \"\\n\";\nfail();\n");
     assert_eq!(status, Some(255));
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "MSHUTDOWN"]);
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
+
+    let (traced, status, stdout) =
+        run_traced(&dir, "<?php\nvar_dump(demo_set_greeting('Hi'));\necho demo_greet('a'), \"\\n\";\n");
+    assert_eq!((status, stdout.as_str()), (Some(0), "bool(true)\nHi, a.\n"));
+    // The request's change holds through its RSHUTDOWN and is undone before post-deactivation.
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hi", "POST_DEACTIVATE Hello", "MSHUTDOWN"]);
 
     let (traced, status, stdout) = run_traced(&dir, "<?php\necho \"no extension call\\n\";\n");
     assert_eq!((status, stdout.as_str()), (Some(0), "no extension call\n"));
     assert!(traced.is_empty(), "{traced:?}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// An engine object still alive when the request ends (held in a cycle) is freed after the
+/// request's resources close, as php-src's `shutdown_executor` runs `zend_close_rsrc_list` before
+/// freeing the object store: a resource destructor still finds the objects it refers to.
+#[test]
+fn live_engine_objects_are_freed_after_resources_close() {
+    let dir = project("teardown-order");
+    let source = "<?php\n$cycle = new stdClass;\n$cycle->self = $cycle;\n$cycle->counter = new DemoCounter(9);\ndemo_open_handle('h');\necho \"end\\n\";\n";
+    let (traced, status, stdout) = run_traced(&dir, source);
+    assert_eq!((status, stdout.as_str()), (Some(0), "end\n"));
+    assert_eq!(
+        traced,
+        ["RINIT", "RSHUTDOWN Hello", "CLOSE h alive=1", "FREE counter 9", "POST_DEACTIVATE Hello", "MSHUTDOWN"]
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// An engine error thrown from a guarded property write inside a method is caught by the caller:
+/// on linux-x86_64 the rethrow reached the unwinder by `jmp`, and the destructors it ran called
+/// into the engine on a misaligned stack (a segfault with no output).
+#[test]
+fn a_readonly_write_inside_a_method_throws_a_catchable_error() {
+    let dir = project("readonly-in-method");
+    let run = compile_and_run(
+        &dir,
+        "<?php
+class Kid extends DemoRecord {
+    public function bad(): void { $this->number = 9; }
+}
+try { (new Kid(3))->bad(); } catch (Throwable $e) { echo $e->getMessage(), \"\\n\"; }
+echo \"done\\n\";
+",
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Cannot modify readonly property DemoRecord::$number\ndone\n");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A program subclass cannot reach the wrapper's bookkeeping: `$this->__elephcOwner`, by literal
+/// or run-time name, is an ordinary dynamic property on the object (PHP's deprecation included),
+/// and clearing it leaves the engine object alive.
+#[test]
+fn subclasses_cannot_reach_the_wrapper_bookkeeping() {
+    let dir = project("bookkeeping");
+    let run = compile_and_run(
+        &dir,
+        "<?php
+class C extends DemoCounter {
+    public function clearLiteral(): void { $this->__elephcOwner = null; }
+    public function clearDynamic(string $n): void { $this->$n = null; }
+    public function readDynamic(string $n): mixed { return $this->$n ?? 'unset'; }
+}
+$c = new C(4);
+$c->clearLiteral();
+echo $c->value(), \"\\n\";
+$d = new C(5);
+$d->clearDynamic('__elephc' . 'Owner');
+echo $d->value(), \"\\n\";
+var_dump($d->readDynamic('__elephc' . 'Handle') === 'unset');
+",
+    );
+    assert_success(&run, "compiled program");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "4\n5\nbool(true)\n");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr).matches("Creation of dynamic property C::$__elephcOwner is deprecated").count(),
+        2
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A request's resources close after RSHUTDOWN and before post-deactivation, newest first, while
+/// the request state their destructor reads is still there (#2104), and a fatal error in
+/// RSHUTDOWN cancels none of the deactivation: resources still close, the INI change is still
+/// undone, post-deactivation and MSHUTDOWN still run, and the process ends with status 255, as
+/// php-cli's `php_request_shutdown` runs each phase in its own `zend_try`.
+#[test]
+fn request_deactivation_closes_resources_and_survives_a_fatal_rshutdown() {
+    let dir = project("deactivation");
+    let source = "<?php\ndemo_open_handle('h1');\ndemo_open_handle('h2');\nvar_dump(demo_set_greeting('Hi'));\necho demo_banner(), \"\\n\";\n";
+    let expected = ["RINIT", "RSHUTDOWN Hi", "CLOSE h2 alive=1", "CLOSE h1 alive=1", "POST_DEACTIVATE Hello", "MSHUTDOWN"];
+    let (traced, status, stdout) = run_traced(&dir, source);
+    assert_eq!((status, stdout.as_str()), (Some(0), "bool(true)\npersistent banner\n"));
+    assert_eq!(traced, expected);
+    let (traced, status, stdout) = run_traced_with(&dir, source, &[("ELEPHC_DEMO_FAIL_RSHUTDOWN", "1")]);
+    assert_eq!((status, stdout.as_str()), (Some(255), "bool(true)\npersistent banner\n"));
+    assert_eq!(traced, expected);
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -796,6 +1163,95 @@ fn http_body(address: &str) -> String {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response.split_once("\r\n\r\n").map(|(_, body)| body.to_string()).unwrap_or(response)
+}
+
+/// A runtime INI change lasts one request (#2105) and each request is torn down in php-src's order
+/// (#2104): every request of a `--web` worker sees the configured greeting even though the
+/// previous one changed it, and between requests the worker runs RSHUTDOWN, then
+/// post-deactivation with the greeting already restored, then the next RINIT.
+#[test]
+fn a_runtime_ini_change_does_not_cross_web_requests() {
+    use std::os::unix::process::CommandExt;
+    let dir = project("web-ini");
+    let main = dir.join("main.php");
+    fs::write(&main, "<?php\necho demo_greet('a');\ndemo_set_greeting('Hi');\necho ' ', demo_greet('b');\n").unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    assert_success(&compile, "compile --web");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let address = format!("127.0.0.1:{port}");
+    let stderr = fs::File::create(dir.join("server.err")).unwrap();
+    let server = ServerGroup(
+        Command::new(dir.join("main"))
+            .args(["--listen", &address, "--workers", "1"])
+            .env("ELEPHC_DEMO_TRACE", "1")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .expect("spawn the web server"),
+    );
+    server.wait_until_listening(&address);
+    let bodies: Vec<String> = (0..3).map(|_| http_body(&address).trim().to_string()).collect();
+    drop(server);
+    let output = fs::read_to_string(dir.join("server.err")).unwrap();
+    let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(bodies, ["Hello, a. Hi, b.", "Hello, a. Hi, b.", "Hello, a. Hi, b."]);
+    assert_eq!(
+        &traced[..7],
+        ["RINIT", "RSHUTDOWN Hi", "POST_DEACTIVATE Hello", "RINIT", "RSHUTDOWN Hi", "POST_DEACTIVATE Hello", "RINIT"],
+        "{output}"
+    );
+}
+
+/// Between `--web` requests the worker deactivates each request as php-src does: the request's
+/// resources close before post-deactivation, a persistent allocation MINIT made survives every
+/// request heap sweep, and an engine object a leaked wrapper still holds is freed with the request
+/// (its free handler runs, as php-src's object store frees every live object) rather than left
+/// pointing into the swept heap.
+#[test]
+fn web_requests_free_their_resources_and_leaked_objects() {
+    use std::os::unix::process::CommandExt;
+    let dir = project("web-deactivation");
+    let main = dir.join("main.php");
+    fs::write(
+        &main,
+        "<?php\ndemo_open_handle('w');\necho demo_banner(), ' ', demo_counters_freed();\n$o = new stdClass;\n$o->self = $o;\n$o->counter = new DemoCounter(1);\n",
+    )
+    .unwrap();
+    let compile = Command::new(elephc()).current_dir(&dir).arg("--web").arg(&main).output().expect("run elephc");
+    assert_success(&compile, "compile --web");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let address = format!("127.0.0.1:{port}");
+    let stderr = fs::File::create(dir.join("server.err")).unwrap();
+    let server = ServerGroup(
+        Command::new(dir.join("main"))
+            .args(["--listen", &address, "--workers", "1"])
+            .env("ELEPHC_DEMO_TRACE", "1")
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(stderr)
+            .spawn()
+            .expect("spawn the web server"),
+    );
+    server.wait_until_listening(&address);
+    let bodies: Vec<String> = (0..3).map(|_| http_body(&address).trim().to_string()).collect();
+    drop(server);
+    let output = fs::read_to_string(dir.join("server.err")).unwrap();
+    let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
+    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(bodies, ["persistent banner 0", "persistent banner 1", "persistent banner 2"], "{output}");
+    // The counter the leaked cycle holds is freed after the request's resource closes.
+    assert_eq!(
+        &traced[..11],
+        [
+            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "FREE counter 1", "POST_DEACTIVATE Hello",
+            "RINIT", "RSHUTDOWN Hello", "CLOSE w alive=1", "FREE counter 1", "POST_DEACTIVATE Hello", "RINIT",
+        ],
+        "{output}"
+    );
 }
 
 /// A `--web` worker serves one request after another in one process, but an extension's request
@@ -876,6 +1332,6 @@ fn a_failed_request_startup_ends_the_web_worker() {
     let traced: Vec<&str> = output.lines().filter_map(|line| line.strip_prefix("elephc_demo: ")).collect();
     fs::remove_dir_all(dir).unwrap();
     assert_eq!(first, "1");
-    assert_eq!(traced, ["RINIT", "RSHUTDOWN", "RINIT failed"], "{output}");
+    assert_eq!(traced, ["RINIT", "RSHUTDOWN Hello", "POST_DEACTIVATE Hello", "RINIT failed"], "{output}");
     assert!(output.contains("request_startup() for elephc_demo module failed"), "{output}");
 }

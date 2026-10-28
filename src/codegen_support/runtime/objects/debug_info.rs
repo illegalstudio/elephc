@@ -487,6 +487,18 @@ fn emit_render_epilogue(emitter: &mut Emitter, none_label: &str) {
     abi::emit_return(emitter);
 }
 
+/// Tells the hash walker about to run that its string keys are an object's property keys, which
+/// var_dump and print_r show unmangled, as php-src does for a `__debugInfo()` result.
+fn emit_mark_property_keys(emitter: &mut Emitter) {
+    let (address, one) = match emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    abi::emit_symbol_address(emitter, address, "_dump_unmangle");
+    abi::emit_load_int_immediate(emitter, one, 1);
+    abi::emit_store_to_address(emitter, one, address, 0);
+}
+
 /// `__rt_vd_debuginfo_object`: render an object through its run-time `__debugInfo()`.
 ///
 /// Input: AArch64 x0 / x86_64 rdi = object pointer, already on the `_vd_seen` stack.
@@ -527,6 +539,7 @@ pub(crate) fn emit_vd_debuginfo_object(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_var_dump_indexed");
     abi::emit_jump(emitter, "__rt_vd_debuginfo_close");
     emitter.label("__rt_vd_debuginfo_hash");
+    emit_mark_property_keys(emitter);
     abi::load_at_offset(emitter, arg0, CONT);
     abi::emit_call_label(emitter, "__rt_var_dump_hash");
     emitter.label("__rt_vd_debuginfo_close");
@@ -566,6 +579,7 @@ pub(crate) fn emit_pr_debuginfo_object(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_print_r_indexed");
     abi::emit_jump(emitter, "__rt_pr_debuginfo_release");
     emitter.label("__rt_pr_debuginfo_hash");
+    emit_mark_property_keys(emitter);
     abi::load_at_offset(emitter, arg0, CONT);
     abi::load_at_offset(emitter, arg1, BASE);
     abi::emit_call_label(emitter, "__rt_print_r_hash");

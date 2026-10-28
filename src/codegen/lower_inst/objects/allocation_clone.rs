@@ -24,6 +24,13 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
         class_id, &ctx.module.class_infos,
     );
     let payload_size = dynamic_properties_offset + dynamic_properties_bytes + usize::from(creation_line_offset.is_some()) * 8;
+    // A hosted extension's engine-object owner is bookkeeping PHP never allocates: leaving it
+    // handle-less keeps every visible object number where PHP puts it.
+    let takes_handle = ctx
+        .module
+        .class_infos
+        .get(crate::php_ext::prelude::OWNER_CLASS)
+        .is_none_or(|class| class.class_id != class_id);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -31,7 +38,9 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks object instances for ownership helpers
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the object payload
-            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
+            if takes_handle {
+                ctx.emitter.instruction("bl __rt_object_handle_acquire");       // bind the new object to its PHP object handle
+            }
             ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the compile-time class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
         }
@@ -44,7 +53,9 @@ pub(in crate::codegen::lower_inst) fn emit_object_allocation(
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             ));
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the object payload
-            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
+            if takes_handle {
+                ctx.emitter.instruction("call __rt_object_handle_acquire");     // bind the new object to its PHP object handle
+            }
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the compile-time class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
         }

@@ -13,6 +13,8 @@ ZEND_BEGIN_MODULE_GLOBALS(elephc_demo)
     zend_long counters_freed;
     zend_long iterators_freed;
     HashTable kept;
+    /* Set by RINIT, cleared by the post-deactivation hook: what a handle's destructor relies on. */
+    zend_bool request_alive;
 ZEND_END_MODULE_GLOBALS(elephc_demo)
 
 ZEND_EXTERN_MODULE_GLOBALS(elephc_demo)

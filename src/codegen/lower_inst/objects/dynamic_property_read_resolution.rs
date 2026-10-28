@@ -228,6 +228,9 @@ pub(super) fn declared_mixed_property_get_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if crate::php_ext::prelude::is_host_plumbing_property(property) {
+                continue;
+            }
             let (slot, kind) =
                 match resolve_property_read_arm(ctx, class_name, property, mode, inst) {
                     Ok(Some(PropertyNameArm::Slot(slot))) => (slot, MixedPropertyReadKind::Slot),

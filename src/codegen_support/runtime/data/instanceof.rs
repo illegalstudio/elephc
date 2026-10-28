@@ -22,11 +22,16 @@ pub(super) fn emit_instanceof_target_lookup_data(
     sorted_interfaces: &[(&String, &InterfaceInfo)],
     sorted_classes: &[(&String, &ClassInfo)],
 ) {
-    let entry_count = (sorted_classes.len() + sorted_interfaces.len()) * 2;
+    // The extension host's classes and interfaces have no name PHP code can reach: `new $name`,
+    // `$x instanceof $name` and the other string lookups never find them.
+    let visible = |name: &str| !crate::php_ext::prelude::is_host_internal_symbol(name);
+    let lookup_classes = sorted_classes.iter().filter(|(name, _)| visible(name)).collect::<Vec<_>>();
+    let lookup_interfaces = sorted_interfaces.iter().filter(|(name, _)| visible(name)).collect::<Vec<_>>();
+    let entry_count = (lookup_classes.len() + lookup_interfaces.len()) * 2;
     out.push_str(".globl _instanceof_target_count\n_instanceof_target_count:\n");
     out.push_str(&format!("    .quad {}\n", entry_count));
     out.push_str(".globl _instanceof_target_entries\n_instanceof_target_entries:\n");
-    for (class_name, class_info) in sorted_classes {
+    for (class_name, class_info) in lookup_classes {
         out.push_str(&format!("    .quad _instanceof_name_class_{}\n", class_info.class_id));
         out.push_str(&format!("    .quad {}\n", class_name.len()));
         out.push_str(&format!("    .quad {}\n", class_info.class_id));
@@ -39,7 +44,7 @@ pub(super) fn emit_instanceof_target_lookup_data(
         out.push_str(&format!("    .quad {}\n", class_info.class_id));
         out.push_str("    .quad 0\n");
     }
-    for (interface_name, interface_info) in sorted_interfaces {
+    for (interface_name, interface_info) in lookup_interfaces {
         out.push_str(&format!(
             "    .quad _instanceof_name_interface_{}\n",
             interface_info.interface_id

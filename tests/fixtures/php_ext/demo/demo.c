@@ -61,6 +61,56 @@ PHP_FUNCTION(demo_greet)
 #endif
 }
 
+/* demo_set_greeting(string $value): bool — changes the greeting INI directive at run time, as
+ * ini_set() does; the change lasts the request. */
+PHP_FUNCTION(demo_set_greeting)
+{
+    zend_string *value;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(value)
+    ZEND_PARSE_PARAMETERS_END();
+    zend_string *name = zend_string_init("elephc_demo.greeting", sizeof("elephc_demo.greeting") - 1, 0);
+    zend_result changed = zend_alter_ini_entry(name, value, PHP_INI_USER, PHP_INI_STAGE_RUNTIME);
+    zend_string_release(name);
+    RETURN_BOOL(changed == SUCCESS);
+}
+
+static void demo_trace(const char *phase);
+
+/* The resource type of demo_open_handle()'s handles. */
+static int le_demo_handle;
+
+/* A banner MINIT allocates in persistent memory: it outlives every request. */
+static char *demo_banner_text;
+
+/* Closes a handle. It reads request state the post-deactivation hook clears, so it shows that
+ * php-src closes a request's resources before post-deactivation runs. */
+static void demo_handle_dtor(zend_resource *res)
+{
+    char line[64];
+    snprintf(line, sizeof(line), "CLOSE %s alive=%d", (const char *) res->ptr, DEMO_G(request_alive) ? 1 : 0);
+    demo_trace(line);
+    efree(res->ptr);
+}
+
+/* demo_open_handle(string $name): void — opens a handle the request's resource list alone
+ * holds, so request deactivation closes it. */
+PHP_FUNCTION(demo_open_handle)
+{
+    zend_string *name;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_STR(name)
+    ZEND_PARSE_PARAMETERS_END();
+    zend_register_resource(estrndup(ZSTR_VAL(name), ZSTR_LEN(name)), le_demo_handle);
+}
+
+/* demo_banner(): string — the persistent banner MINIT allocated. */
+PHP_FUNCTION(demo_banner)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    RETURN_STRING(demo_banner_text);
+}
+
 /* demo_split(string $subject, string $separator = ","): array — a list. */
 PHP_FUNCTION(demo_split)
 {
@@ -308,6 +358,17 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_is_even, 0, 1, _IS_BOOL, 0)
     ZEND_ARG_TYPE_INFO(0, n, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_set_greeting, 0, 1, _IS_BOOL, 0)
+    ZEND_ARG_TYPE_INFO(0, value, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_open_handle, 0, 1, IS_VOID, 0)
+    ZEND_ARG_TYPE_INFO(0, name, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_banner, 0, 0, IS_STRING, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_greet, 0, 1, IS_STRING, 0)
@@ -676,11 +737,93 @@ static const zend_function_entry demo_bag_methods[] = {
     PHP_FE_END
 };
 
+/* DemoRecord: properties with a contract — private, protected, readonly and typed — that its
+ * own methods read and write in the class's scope, as an extension does. */
+zend_class_entry *demo_record_ce;
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_demo_record_construct, 0, 0, 1)
+    ZEND_ARG_TYPE_INFO(0, number, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_demo_record_describe, 0, 0, IS_STRING, 0)
+ZEND_END_ARG_INFO()
+
+PHP_METHOD(DemoRecord, __construct)
+{
+    zend_long number;
+    ZEND_PARSE_PARAMETERS_START(1, 1)
+        Z_PARAM_LONG(number)
+    ZEND_PARSE_PARAMETERS_END();
+    zend_update_property_long(demo_record_ce, Z_OBJ_P(ZEND_THIS), "number", sizeof("number") - 1, number);
+}
+
+/* "<secret> <kind> <number>": the private and protected properties, read in the class's scope. */
+PHP_METHOD(DemoRecord, describe)
+{
+    zval rv;
+    ZEND_PARSE_PARAMETERS_NONE();
+    zend_object *self = Z_OBJ_P(ZEND_THIS);
+    zval *secret = zend_read_property(demo_record_ce, self, "secret", sizeof("secret") - 1, 0, &rv);
+    zend_long value = Z_LVAL_P(secret);
+    zval *kind = zend_read_property(demo_record_ce, self, "kind", sizeof("kind") - 1, 0, &rv);
+    zend_string *text = zend_string_copy(Z_STR_P(kind));
+    zval *number = zend_read_property(demo_record_ce, self, "number", sizeof("number") - 1, 0, &rv);
+    RETVAL_STR(zend_strpprintf(0, ZEND_LONG_FMT " %s " ZEND_LONG_FMT, value, ZSTR_VAL(text), Z_LVAL_P(number)));
+    zend_string_release(text);
+}
+
+/* Sets the private property in the class's scope, then the readonly one again, which throws. */
+PHP_METHOD(DemoRecord, rotate)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    zend_object *self = Z_OBJ_P(ZEND_THIS);
+    zend_update_property_long(demo_record_ce, self, "secret", sizeof("secret") - 1, 43);
+    zend_update_property_long(demo_record_ce, self, "number", sizeof("number") - 1, 8);
+}
+
+static const zend_function_entry demo_record_methods[] = {
+    PHP_ME(DemoRecord, __construct, arginfo_demo_record_construct, ZEND_ACC_PUBLIC)
+    PHP_ME(DemoRecord, describe, arginfo_demo_record_describe, ZEND_ACC_PUBLIC)
+    PHP_ME(DemoRecord, rotate, arginfo_demo_record_describe, ZEND_ACC_PUBLIC)
+    PHP_FE_END
+};
+
+/* Declares DemoRecord's properties: private int $secret = 42, protected string $kind = "rec",
+ * public readonly int $number and $late (never set), public int $count = 0, public ?float
+ * $ratio = null. */
+static void demo_register_record(void)
+{
+    zend_class_entry ce;
+    INIT_CLASS_ENTRY(ce, "DemoRecord", demo_record_methods);
+    demo_record_ce = zend_register_internal_class(&ce);
+    zval value;
+    ZVAL_LONG(&value, 42);
+    zend_declare_typed_property(demo_record_ce, zend_string_init_interned("secret", sizeof("secret") - 1, 1), &value,
+        ZEND_ACC_PRIVATE, NULL, (zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0));
+    ZVAL_INTERNED_STR(&value, zend_string_init_interned("rec", sizeof("rec") - 1, 1));
+    zend_declare_typed_property(demo_record_ce, zend_string_init_interned("kind", sizeof("kind") - 1, 1), &value,
+        ZEND_ACC_PROTECTED, NULL, (zend_type) ZEND_TYPE_INIT_CODE(IS_STRING, 0, 0));
+    ZVAL_UNDEF(&value);
+    zend_declare_typed_property(demo_record_ce, zend_string_init_interned("number", sizeof("number") - 1, 1), &value,
+        ZEND_ACC_PUBLIC | ZEND_ACC_READONLY, NULL, (zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0));
+    zend_declare_typed_property(demo_record_ce, zend_string_init_interned("late", sizeof("late") - 1, 1), &value,
+        ZEND_ACC_PUBLIC | ZEND_ACC_READONLY, NULL, (zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0));
+    ZVAL_LONG(&value, 0);
+    zend_declare_typed_property(demo_record_ce, zend_string_init_interned("count", sizeof("count") - 1, 1), &value,
+        ZEND_ACC_PUBLIC, NULL, (zend_type) ZEND_TYPE_INIT_CODE(IS_LONG, 0, 0));
+    ZVAL_NULL(&value);
+    zend_declare_typed_property(demo_record_ce, zend_string_init_interned("ratio", sizeof("ratio") - 1, 1), &value,
+        ZEND_ACC_PUBLIC, NULL, (zend_type) ZEND_TYPE_INIT_CODE(IS_DOUBLE, 1, 0));
+}
+
 static const zend_function_entry demo_functions[] = {
     PHP_FE(demo_add, arginfo_demo_add)
     PHP_FE(demo_scale, arginfo_demo_scale)
     PHP_FE(demo_is_even, arginfo_demo_is_even)
     PHP_FE(demo_greet, arginfo_demo_greet)
+    PHP_FE(demo_set_greeting, arginfo_demo_set_greeting)
+    PHP_FE(demo_open_handle, arginfo_demo_open_handle)
+    PHP_FE(demo_banner, arginfo_demo_banner)
     PHP_FE(demo_split, arginfo_demo_split)
     PHP_FE(demo_stats, arginfo_demo_stats)
     PHP_FE(demo_inc, arginfo_demo_inc)
@@ -718,11 +861,15 @@ static PHP_GINIT_FUNCTION(elephc_demo)
     elephc_demo_globals->calls = 0;
     elephc_demo_globals->counters_freed = 0;
     elephc_demo_globals->iterators_freed = 0;
+    elephc_demo_globals->request_alive = 0;
 }
 
 PHP_MINIT_FUNCTION(elephc_demo)
 {
     REGISTER_INI_ENTRIES();
+    le_demo_handle = zend_register_list_destructors_ex(demo_handle_dtor, NULL, "demo handle", module_number);
+    demo_banner_text = pemalloc(sizeof("persistent banner"), 1);
+    memcpy(demo_banner_text, "persistent banner", sizeof("persistent banner"));
     REGISTER_LONG_CONSTANT("DEMO_ANSWER", 42, CONST_CS | CONST_PERSISTENT);
     REGISTER_STRING_CONSTANT("DEMO_NAME", "demo", CONST_CS | CONST_PERSISTENT);
     REGISTER_DOUBLE_CONSTANT("DEMO_RATIO", 0.25, CONST_CS | CONST_PERSISTENT);
@@ -739,12 +886,11 @@ PHP_MINIT_FUNCTION(elephc_demo)
     INIT_CLASS_ENTRY(ce, "DemoBag", demo_bag_methods);
     demo_bag_ce = zend_register_internal_class(&ce);
     zend_class_implements(demo_bag_ce, 1, zend_ce_countable);
+    demo_register_record();
     demo_register_counter();
     zend_register_functions(NULL, demo_late_functions, NULL, MODULE_PERSISTENT);
     return SUCCESS;
 }
-
-static void demo_trace(const char *phase);
 
 PHP_RINIT_FUNCTION(elephc_demo)
 {
@@ -759,6 +905,7 @@ PHP_RINIT_FUNCTION(elephc_demo)
     started++;
     demo_trace("RINIT");
     zend_hash_init(&DEMO_G(kept), 8, NULL, ZVAL_PTR_DTOR, 0);
+    DEMO_G(request_alive) = 1;
     return SUCCESS;
 }
 
@@ -771,17 +918,36 @@ static void demo_trace(const char *phase)
     }
 }
 
-/* Destroys what demo_keep() kept: RINIT built the table for this request. */
+/* Destroys what demo_keep() kept: RINIT built the table for this request. The trace names the
+ * greeting, which a request's runtime change still holds here. ELEPHC_DEMO_FAIL_RSHUTDOWN makes it
+ * end in a fatal error, after which php-src still deactivates the request. */
 PHP_RSHUTDOWN_FUNCTION(elephc_demo)
 {
-    demo_trace("RSHUTDOWN");
+    char line[96];
+    snprintf(line, sizeof(line), "RSHUTDOWN %s", DEMO_G(greeting) ? DEMO_G(greeting) : "");
+    demo_trace(line);
     zend_hash_destroy(&DEMO_G(kept));
+    if (getenv("ELEPHC_DEMO_FAIL_RSHUTDOWN") != NULL) {
+        zend_error(E_ERROR, "elephc_demo request shutdown failed");
+    }
+    return SUCCESS;
+}
+
+/* Runs once the request's resources are closed and its INI changes undone, as php-src's
+ * zend_post_deactivate_modules does; the trace shows the greeting is back to its value. */
+ZEND_MODULE_POST_ZEND_DEACTIVATE_D(elephc_demo)
+{
+    if (getenv("ELEPHC_DEMO_TRACE") != NULL) {
+        fprintf(stderr, "elephc_demo: POST_DEACTIVATE %s\n", DEMO_G(greeting) ? DEMO_G(greeting) : "");
+    }
+    DEMO_G(request_alive) = 0;
     return SUCCESS;
 }
 
 PHP_MSHUTDOWN_FUNCTION(elephc_demo)
 {
     demo_trace("MSHUTDOWN");
+    pefree(demo_banner_text, 1);
     UNREGISTER_INI_ENTRIES();
     return SUCCESS;
 }
@@ -807,7 +973,7 @@ zend_module_entry elephc_demo_module_entry = {
     PHP_MODULE_GLOBALS(elephc_demo),
     PHP_GINIT(elephc_demo),
     NULL,
-    NULL,
+    ZEND_MODULE_POST_ZEND_DEACTIVATE_N(elephc_demo),
     STANDARD_MODULE_PROPERTIES_EX
 };
 

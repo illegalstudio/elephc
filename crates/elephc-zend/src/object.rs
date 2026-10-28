@@ -20,6 +20,7 @@ use crate::abi::*;
 use crate::alloc::{alloc, free};
 use crate::global::Global;
 use crate::hash;
+use crate::property::{self, Access};
 use crate::string::{self, bytes};
 use crate::zval::{copy, copy_value, set_double, set_long, type_of, zval_ptr_dtor};
 
@@ -265,6 +266,7 @@ pub unsafe extern "C" fn zend_object_release(object: *mut zend_object) {
 /// it.
 #[no_mangle]
 pub unsafe extern "C" fn zend_object_std_dtor(object: *mut zend_object) {
+    release_shadowing(object);
     let table = (*object).properties;
     if !table.is_null() {
         (*object).properties = ptr::null_mut();
@@ -295,6 +297,13 @@ pub unsafe extern "C" fn zend_objects_clone_members(new_object: *mut zend_object
             hash::zend_array_release((*new_object).properties);
         }
         (*new_object).properties = copy;
+    }
+    let shadowed = shadowing(old_object, false);
+    if !shadowed.is_null() {
+        let copy = hash::zend_array_dup(shadowed);
+        if let Some(previous) = SHADOWING.get().get_or_insert_with(Default::default).insert(new_object as usize, copy) {
+            hash::zend_array_release(previous);
+        }
     }
     let clone = (*(*new_object).ce).clone;
     if !clone.is_null() {
@@ -332,6 +341,216 @@ pub unsafe extern "C" fn zend_std_clone_obj_with(
 
 // ------------------------------------------------------------ properties
 
+/// Each object's dynamic properties named like a private property of an ancestor (`$this->secret`
+/// in a subclass of the class declaring `private $secret`). php-src keeps them in the properties
+/// table beside the private one, which it keys by its mangled name; this engine keys a declared
+/// property by its plain name, so these live in a table of their own, by object address.
+static SHADOWING: Global<Option<std::collections::HashMap<usize, *mut HashTable>>> = Global::new(None);
+
+/// `object`'s table of properties shadowing an ancestor's private ones, created when `create`;
+/// NULL when it has none.
+unsafe fn shadowing(object: *mut zend_object, create: bool) -> *mut HashTable {
+    let tables = SHADOWING.get().get_or_insert_with(Default::default);
+    match tables.get(&(object as usize)) {
+        Some(&table) => table,
+        None if create => *tables.entry(object as usize).or_insert_with(|| hash::_zend_new_array(0)),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Releases `object`'s shadowing properties, as it is freed.
+unsafe fn release_shadowing(object: *mut zend_object) {
+    if let Some(table) = SHADOWING.get().as_mut().and_then(|tables| tables.remove(&(object as usize))) {
+        hash::zend_array_release(table);
+    }
+}
+
+/// The array PHP's `get_object_vars()` (`mangled` false) or `(array)` cast and debug table
+/// (`mangled` true) give for `object`, built as php-src's properties table orders it: declared
+/// properties in declaration order (the root class's first), skipping one never initialized,
+/// then dynamic ones in creation order. Unmangled, only what the program access's scope may see
+/// is listed; mangled, every property under php-src's key (`"\0Class\0name"` for a private one,
+/// `"\0*\0name"` for a protected one).
+pub unsafe fn property_view(object: *mut zend_object, mangled: bool) -> *mut HashTable {
+    let result = hash::_zend_new_array(0);
+    let table = zend_elephc_object_properties(object);
+    let mut declared = std::collections::HashSet::new();
+    let add = |key: *mut zend_string, value: *mut zval| {
+        let mut copied = zval::UNDEF;
+        copy(&mut copied, crate::zval::deref(value));
+        if hash::zend_hash_add(result, key, &mut copied).is_null() {
+            zval_ptr_dtor(&mut copied);
+        }
+    };
+    for ce in crate::class::lineage((*object).ce) {
+        let Some(list) = crate::class::declared(ce) else { continue };
+        for property in list {
+            let name = property.name;
+            if !declared.insert(bytes(name).to_vec()) {
+                continue;
+            }
+            let info = property::info((*object).ce, name);
+            if info.is_null() || table.is_null() {
+                continue;
+            }
+            let value = hash::zend_hash_find_ind(table, name);
+            if value.is_null() {
+                continue;
+            }
+            if mangled {
+                let key = mangled_name(info);
+                add(key, value);
+                string::zend_string_release(key);
+            } else if matches!(property::visibility(object, info), Access::Allowed) {
+                add(name, value);
+            }
+        }
+    }
+    let dynamic = |source: *mut HashTable| {
+        if source.is_null() {
+            return;
+        }
+        for idx in 0..(*source).nNumUsed {
+            let bucket = hash::bucket(source, idx);
+            if (*bucket).val.u1.v.r#type == IS_UNDEF {
+                continue;
+            }
+            if (*bucket).key.is_null() {
+                let mut copied = zval::UNDEF;
+                copy(&mut copied, crate::zval::deref(&mut (*bucket).val));
+                hash::zend_hash_index_update(result, (*bucket).h, &mut copied);
+            } else if !declared.contains(bytes((*bucket).key)) || source != table {
+                add((*bucket).key, &mut (*bucket).val);
+            }
+        }
+    };
+    dynamic(table);
+    dynamic(shadowing(object, false));
+    result
+}
+
+/// Whether class `ce` (or an ancestor) declares property `name`, in any visibility, static or
+/// not, as `property_exists()` asks.
+pub unsafe fn class_declares(ce: *mut zend_class_entry, name: *mut zend_string) -> bool {
+    let mut current = ce;
+    while !current.is_null() {
+        if !hash::zend_hash_find_ptr(&(*current).properties_info, name).is_null() {
+            return true;
+        }
+        current = (*current).parent_u.parent;
+    }
+    false
+}
+
+/// Whether `object` has property `name` as `property_exists()` sees it: declared by its class, or
+/// held as a dynamic property.
+pub unsafe fn object_has_property(object: *mut zend_object, name: *mut zend_string) -> bool {
+    if class_declares((*object).ce, name) {
+        return true;
+    }
+    let table = zend_elephc_object_properties(object);
+    let shadowed = shadowing(object, false);
+    (!table.is_null() && !hash::zend_hash_find_ind(table, name).is_null())
+        || (!shadowed.is_null() && !hash::zend_hash_find_ind(shadowed, name).is_null())
+}
+
+/// `get_class_vars()` of class `ce` from a program scope whose nearest hosted class is
+/// `ancestor` (null for the global scope or a class extending none): the declared instance
+/// properties' defaults in declaration order, null for one with no default. A program class is
+/// never an engine class, so a private property is never listed and a protected one only from a
+/// class in its lineage.
+pub unsafe fn class_defaults(ce: *mut zend_class_entry, ancestor: *mut zend_class_entry) -> *mut HashTable {
+    let result = hash::_zend_new_array(0);
+    let mut seen = std::collections::HashSet::new();
+    for class in crate::class::lineage(ce) {
+        let Some(list) = crate::class::declared(class) else { continue };
+        for property in list {
+            if !seen.insert(bytes(property.name).to_vec()) {
+                continue;
+            }
+            let info = property::info(ce, property.name);
+            if info.is_null() {
+                continue;
+            }
+            let flags = (*info).flags;
+            let visible = if flags & ZEND_ACC_PRIVATE != 0 {
+                false
+            } else if flags & ZEND_ACC_PROTECTED != 0 {
+                !ancestor.is_null() && crate::class::instanceof_function(ancestor, (*info).ce)
+            } else {
+                true
+            };
+            if !visible {
+                continue;
+            }
+            let mut value = zval::UNDEF;
+            if property.default.u1.v.r#type == IS_UNDEF {
+                value.u1.type_info = IS_NULL as u32;
+            } else {
+                copy(&mut value, &property.default);
+            }
+            hash::zend_hash_add(result, property.name, &mut value);
+        }
+    }
+    result
+}
+
+/// php-src's key for a declared property in a properties table: `"\0Class\0name"` for a
+/// private one, `"\0*\0name"` for a protected one, the name for a public one.
+unsafe fn mangled_name(info: *mut zend_property_info) -> *mut zend_string {
+    let name = bytes((*info).name);
+    let mut key = Vec::with_capacity(name.len() + 16);
+    if (*info).flags & ZEND_ACC_PRIVATE != 0 {
+        key.push(0);
+        key.extend_from_slice(bytes((*(*info).ce).name));
+        key.push(0);
+    } else if (*info).flags & ZEND_ACC_PROTECTED != 0 {
+        key.extend_from_slice(b"\0*\0");
+    }
+    key.extend_from_slice(name);
+    string::new(&key)
+}
+
+/// Whether the engine answers an access to property `name` of `object` itself, in the program
+/// access's scope: php-src's standard handlers call a class's `__get`, `__set`, `__isset` or
+/// `__unset` only for a name that scope cannot reach or the object does not hold. A class with
+/// its own read handler decides what it holds through its `has_property` handler.
+pub unsafe fn answers_directly(object: *mut zend_object, name: *mut zend_string) -> bool {
+    let handlers = (*object).handlers;
+    let standard = (*handlers).read_property.map(|read| read as *const () as usize) == Some(zend_std_read_property as *const () as usize);
+    if !standard {
+        return match (*handlers).has_property {
+            Some(has) => has(object, name, ZEND_PROPERTY_EXISTS as c_int, ptr::null_mut()) != 0,
+            None => false,
+        };
+    }
+    let info = property::info((*object).ce, name);
+    match property::visibility(object, info) {
+        Access::Allowed => !info.is_null() || !hash::zend_hash_find_ind(zend_elephc_object_properties(object), name).is_null(),
+        Access::Undeclared => {
+            let table = shadowing(object, false);
+            !table.is_null() && !hash::zend_hash_find_ind(table, name).is_null()
+        }
+        Access::Denied | Access::Probe => false,
+    }
+}
+
+/// Whether `object` may gain the dynamic property `name` (php-src's `zend_std_write_property`):
+/// a class that forbids dynamic properties throws PHP's Error, one that does not allow them
+/// deprecates their creation.
+unsafe fn may_create_dynamic(object: *mut zend_object, name: *mut zend_string) -> bool {
+    let flags = (*(*object).ce).ce_flags;
+    let named = || format!("{}::${}", property::display_class(object), string::text(name));
+    if flags & ZEND_ACC_NO_DYNAMIC_PROPERTIES != 0 {
+        crate::exception::throw_error(crate::exception::zend_ce_error, &format!("Cannot create dynamic property {}", named()));
+        return false;
+    }
+    if flags & ZEND_ACC_ALLOW_DYNAMIC_PROPERTIES == 0 {
+        crate::error::deprecated(&format!("Creation of dynamic property {} is deprecated", named()));
+    }
+    crate::startup::eg().exception.is_null()
+}
+
 /// Finds a property of an object by name in its property table, resolving indirect slots; NULL when
 /// absent.
 pub unsafe fn find_property(object: *mut zend_object, name: &[u8]) -> *mut zval {
@@ -345,9 +564,19 @@ pub unsafe fn set_property(object: *mut zend_object, name: &[u8], value: *mut zv
     hash::zend_hash_str_update(table, name.as_ptr().cast(), name.len(), value);
 }
 
-/// `zend_std_read_property`: reads a property from the object's property table; a missing one
-/// raises an "Undefined property" warning (except for isset/unset style reads) and yields the
-/// engine's uninitialized zval.
+/// Warns that `name` is not a property of `object` (unless the read is isset- or unset-style) and
+/// yields the engine's uninitialized zval.
+unsafe fn undefined_property(object: *mut zend_object, name: *mut zend_string, r#type: c_int) -> *mut zval {
+    if !property::is_silent(r#type) {
+        crate::error::warning(&format!("Undefined property: {}::${}", property::display_class(object), string::text(name)));
+    }
+    &mut crate::startup::eg().uninitialized_zval
+}
+
+/// `zend_std_read_property`: reads a property from the object's property table, as the accessing
+/// scope may (see `crate::property`). A missing one raises an "Undefined property" warning, or
+/// PHP's Error for a typed property never initialized (except for isset/unset style reads), and
+/// yields the engine's uninitialized zval.
 #[no_mangle]
 pub unsafe extern "C" fn zend_std_read_property(
     object: *mut zend_object,
@@ -356,22 +585,42 @@ pub unsafe extern "C" fn zend_std_read_property(
     _cache_slot: *mut *mut c_void,
     _rv: *mut zval,
 ) -> *mut zval {
+    let info = property::info((*object).ce, name);
+    match property::visibility(object, info) {
+        Access::Allowed => {}
+        Access::Undeclared => {
+            let table = shadowing(object, false);
+            let found = if table.is_null() { ptr::null_mut() } else { hash::zend_hash_find_ind(table, name) };
+            return if found.is_null() { undefined_property(object, name, r#type) } else { found };
+        }
+        Access::Denied => {
+            if r#type != BP_VAR_IS {
+                property::denied(object, info);
+            }
+            return &mut crate::startup::eg().uninitialized_zval;
+        }
+        Access::Probe => {
+            property::need_scope();
+            return &mut crate::startup::eg().uninitialized_zval;
+        }
+    }
     let found = hash::zend_hash_find_ind(zend_elephc_object_properties(object), name);
     if !found.is_null() {
         return found;
     }
-    if r#type != BP_VAR_IS && r#type != BP_VAR_UNSET {
-        crate::error::warning(&format!(
-            "Undefined property: {}::${}",
-            string::text((*(*object).ce).name),
-            string::text(name)
-        ));
+    if property::is_typed(info) {
+        if !property::is_silent(r#type) {
+            property::uninitialized(info);
+        }
+        return &mut crate::startup::eg().uninitialized_zval;
     }
-    &mut crate::startup::eg().uninitialized_zval
+    undefined_property(object, name, r#type)
 }
 
 /// `zend_std_write_property`: stores a copy of `value` under the property name, creating the
-/// property if needed, and returns its slot.
+/// property if needed, and returns its slot. A declared property is written only as the accessing
+/// scope may, a readonly one only once, and a typed one only with a value of its type (converted
+/// in weak mode); a refused write throws PHP's error and returns `EG(error_zval)`.
 #[no_mangle]
 pub unsafe extern "C" fn zend_std_write_property(
     object: *mut zend_object,
@@ -379,9 +628,59 @@ pub unsafe extern "C" fn zend_std_write_property(
     value: *mut zval,
     _cache_slot: *mut *mut c_void,
 ) -> *mut zval {
+    let refused = &mut crate::startup::eg().error_zval as *mut zval;
+    let info = property::info((*object).ce, name);
+    match property::visibility(object, info) {
+        Access::Allowed => {}
+        // A parent's private name is a dynamic property of its own to this scope.
+        Access::Undeclared => {
+            let mut stored = zval::UNDEF;
+            copy(&mut stored, value);
+            let table = shadowing(object, false);
+            if (table.is_null() || hash::zend_hash_find_ind(table, name).is_null()) && !may_create_dynamic(object, name) {
+                zval_ptr_dtor(&mut stored);
+                return refused;
+            }
+            return hash::zend_hash_update_ind(shadowing(object, true), name, &mut stored);
+        }
+        Access::Denied => {
+            property::denied(object, info);
+            return refused;
+        }
+        Access::Probe => {
+            property::need_scope();
+            return refused;
+        }
+    }
+    let table = properties(object);
+    if property::is_readonly(info) {
+        if !hash::zend_hash_find_ind(table, name).is_null() {
+            property::readonly_modified(info, false);
+            return refused;
+        }
+        match property::readonly_scope_allows(object, info, false) {
+            Some(true) => {}
+            Some(false) => return refused,
+            None => {
+                property::need_scope();
+                return refused;
+            }
+        }
+    }
     let mut stored = zval::UNDEF;
-    copy(&mut stored, value);
-    hash::zend_hash_update_ind(properties(object), name, &mut stored)
+    if property::is_typed(info) {
+        copy(&mut stored, crate::zval::deref(value));
+        if !property::verify_type(info, &mut stored, property::uses_strict_types(object)) {
+            zval_ptr_dtor(&mut stored);
+            return refused;
+        }
+    } else {
+        if info.is_null() && hash::zend_hash_find_ind(table, name).is_null() && !may_create_dynamic(object, name) {
+            return refused;
+        }
+        copy(&mut stored, value);
+    }
+    hash::zend_hash_update_ind(table, name, &mut stored)
 }
 
 /// `zend_std_get_property_ptr_ptr`: returns the property's slot for in-place access, creating it
@@ -394,10 +693,21 @@ pub unsafe extern "C" fn zend_std_get_property_ptr_ptr(
     r#type: c_int,
     _cache_slot: *mut *mut c_void,
 ) -> *mut zval {
+    // A property the scope may not reach, or whose writes are checked, has no slot to hand out:
+    // the caller falls back to the read and write handlers, as php-src's callers do.
+    let info = property::info((*object).ce, name);
+    if !info.is_null()
+        && (!matches!(property::visibility(object, info), Access::Allowed) || property::is_readonly(info) || property::is_typed(info))
+    {
+        return ptr::null_mut();
+    }
     let table = properties(object);
     let found = hash::zend_hash_find_ind(table, name);
     if !found.is_null() || r#type == BP_VAR_R || r#type == BP_VAR_IS {
         return found;
+    }
+    if info.is_null() && !may_create_dynamic(object, name) {
+        return &mut crate::startup::eg().error_zval;
     }
     let mut null = zval::UNDEF;
     null.u1.type_info = IS_NULL as u32;
@@ -413,7 +723,19 @@ pub unsafe extern "C" fn zend_std_has_property(
     has_set_exists: c_int,
     _cache_slot: *mut *mut c_void,
 ) -> c_int {
-    let found = hash::zend_hash_find_ind(zend_elephc_object_properties(object), name);
+    let table = match property::visibility(object, property::info((*object).ce, name)) {
+        Access::Allowed => zend_elephc_object_properties(object),
+        Access::Probe => {
+            property::need_scope();
+            return 0;
+        }
+        Access::Undeclared => shadowing(object, false),
+        Access::Denied => return 0,
+    };
+    if table.is_null() {
+        return 0;
+    }
+    let found = hash::zend_hash_find_ind(table, name);
     if found.is_null() {
         return 0;
     }
@@ -425,9 +747,32 @@ pub unsafe extern "C" fn zend_std_has_property(
     }) as c_int
 }
 
-/// `zend_std_unset_property`: removes a property from the object's property table.
+/// `zend_std_unset_property`: removes a property from the object's property table, as the
+/// accessing scope may; an initialized readonly property cannot be unset.
 #[no_mangle]
 pub unsafe extern "C" fn zend_std_unset_property(object: *mut zend_object, name: *mut zend_string, _cache_slot: *mut *mut c_void) {
+    let info = property::info((*object).ce, name);
+    match property::visibility(object, info) {
+        Access::Allowed => {}
+        Access::Undeclared => {
+            let table = shadowing(object, false);
+            if !table.is_null() {
+                hash::zend_hash_del(table, name);
+            }
+            return;
+        }
+        Access::Denied => return property::denied(object, info),
+        Access::Probe => return property::need_scope(),
+    }
+    if property::is_readonly(info) {
+        if !(*object).properties.is_null() && !hash::zend_hash_find_ind((*object).properties, name).is_null() {
+            return property::readonly_modified(info, true);
+        }
+        match property::readonly_scope_allows(object, info, true) {
+            Some(_) => return,
+            None => return property::need_scope(),
+        }
+    }
     if !(*object).properties.is_null() {
         hash::zend_hash_del((*object).properties, name);
     }
@@ -670,34 +1015,36 @@ pub unsafe extern "C" fn zend_std_get_closure(
 
 // ------------------------------------------------------------ property helpers
 
+/// Runs `body` with `EG(fake_scope)` set to `scope`, as php-src's property API does, so the
+/// handlers check visibility and readonly rules from that class.
+unsafe fn in_scope<T>(scope: *mut zend_class_entry, body: impl FnOnce() -> T) -> T {
+    let outer = std::mem::replace(&mut crate::startup::eg().fake_scope, scope);
+    let result = body();
+    crate::startup::eg().fake_scope = outer;
+    result
+}
+
 /// Updates a property by name from a zval, through the object's `write_property` handler (or the
-/// standard write), consuming the temporary name string.
-unsafe fn update(object: *mut zend_object, name: *const c_char, len: usize, mut value: zval) {
+/// standard write) run in `scope`, consuming the temporary name string.
+unsafe fn update(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, len: usize, mut value: zval) {
     let key = string::zend_string_init(name, len, false);
-    match (*(*object).handlers).write_property {
-        Some(write) => {
-            write(object, key, &mut value, ptr::null_mut());
-        }
-        None => {
-            zend_std_write_property(object, key, &mut value, ptr::null_mut());
-        }
-    }
+    zend_update_property_ex(scope, object, key, &mut value);
     string::zend_string_release(key);
     zval_ptr_dtor(&mut value);
 }
 
 /// `zend_update_property_ex`: sets a property by `zend_string` name through the object's write
-/// handler.
+/// handler, run in `scope`.
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_ex(_scope: *mut zend_class_entry, object: *mut zend_object, name: *mut zend_string, value: *mut zval) {
-    match (*(*object).handlers).write_property {
+pub unsafe extern "C" fn zend_update_property_ex(scope: *mut zend_class_entry, object: *mut zend_object, name: *mut zend_string, value: *mut zval) {
+    in_scope(scope, || match (*(*object).handlers).write_property {
         Some(write) => {
             write(object, name, value, ptr::null_mut());
         }
         None => {
             zend_std_write_property(object, name, value, ptr::null_mut());
         }
-    }
+    })
 }
 
 /// `zend_update_property`: sets a property by pointer and length name to the given zval.
@@ -710,54 +1057,54 @@ pub unsafe extern "C" fn zend_update_property(scope: *mut zend_class_entry, obje
 
 /// `zend_update_property_null`: sets a property to null.
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_null(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize) {
-    update(object, name, name_length, crate::zval::null());
+pub unsafe extern "C" fn zend_update_property_null(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize) {
+    update(scope, object, name, name_length, crate::zval::null());
 }
 
 /// `zend_update_property_bool`: sets a property to a boolean (non-zero is true).
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_bool(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: zend_long) {
+pub unsafe extern "C" fn zend_update_property_bool(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: zend_long) {
     let mut zv = zval::UNDEF;
     crate::zval::set_bool(&mut zv, value != 0);
-    update(object, name, name_length, zv);
+    update(scope, object, name, name_length, zv);
 }
 
 /// `zend_update_property_long`: sets a property to an integer.
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_long(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: zend_long) {
-    update(object, name, name_length, crate::zval::long(value));
+pub unsafe extern "C" fn zend_update_property_long(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: zend_long) {
+    update(scope, object, name, name_length, crate::zval::long(value));
 }
 
 /// `zend_update_property_double`: sets a property to a float.
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_double(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: f64) {
+pub unsafe extern "C" fn zend_update_property_double(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: f64) {
     let mut zv = zval::UNDEF;
     crate::zval::set_double(&mut zv, value);
-    update(object, name, name_length, zv);
+    update(scope, object, name, name_length, zv);
 }
 
 /// `zend_update_property_str`: sets a property to a string, taking a reference to the given
 /// `zend_string`.
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_str(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: *mut zend_string) {
+pub unsafe extern "C" fn zend_update_property_str(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: *mut zend_string) {
     let mut zv = zval::UNDEF;
     crate::zval::set_str_copy(&mut zv, value);
-    update(object, name, name_length, zv);
+    update(scope, object, name, name_length, zv);
 }
 
 /// `zend_update_property_string`: sets a property to a copy of a NUL-terminated C string.
 #[no_mangle]
-pub unsafe extern "C" fn zend_update_property_string(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: *const c_char) {
+pub unsafe extern "C" fn zend_update_property_string(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize, value: *const c_char) {
     let mut zv = zval::UNDEF;
     crate::zval::set_bytes(&mut zv, CStr::from_ptr(value).to_bytes());
-    update(object, name, name_length, zv);
+    update(scope, object, name, name_length, zv);
 }
 
 /// `zend_update_property_stringl`: sets a property to a copy of a string given by pointer and
 /// length.
 #[no_mangle]
 pub unsafe extern "C" fn zend_update_property_stringl(
-    _scope: *mut zend_class_entry,
+    scope: *mut zend_class_entry,
     object: *mut zend_object,
     name: *const c_char,
     name_length: usize,
@@ -766,35 +1113,36 @@ pub unsafe extern "C" fn zend_update_property_stringl(
 ) {
     let mut zv = zval::UNDEF;
     crate::zval::set_str(&mut zv, string::zend_string_init(value, value_length, false));
-    update(object, name, name_length, zv);
+    update(scope, object, name, name_length, zv);
 }
 
-/// `zend_unset_property`: removes a property by name through the object's unset handler.
+/// `zend_unset_property`: removes a property by name through the object's unset handler, run in
+/// `scope`.
 #[no_mangle]
-pub unsafe extern "C" fn zend_unset_property(_scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize) {
+pub unsafe extern "C" fn zend_unset_property(scope: *mut zend_class_entry, object: *mut zend_object, name: *const c_char, name_length: usize) {
     let key = string::zend_string_init(name, name_length, false);
     if let Some(unset) = (*(*object).handlers).unset_property {
-        unset(object, key, ptr::null_mut());
+        in_scope(scope, || unset(object, key, ptr::null_mut()));
     }
     string::zend_string_release(key);
 }
 
 /// `zend_read_property_ex`: reads a property by `zend_string` name through the object's read
-/// handler; `silent` makes it an isset-style read that raises no undefined-property diagnostics,
-/// and `rv` is scratch storage for the result.
+/// handler, run in `scope`; `silent` makes it an isset-style read that raises no undefined-property
+/// diagnostics, and `rv` is scratch storage for the result.
 #[no_mangle]
 pub unsafe extern "C" fn zend_read_property_ex(
-    _scope: *mut zend_class_entry,
+    scope: *mut zend_class_entry,
     object: *mut zend_object,
     name: *mut zend_string,
     silent: bool,
     rv: *mut zval,
 ) -> *mut zval {
     let r#type = if silent { BP_VAR_IS } else { BP_VAR_R };
-    match (*(*object).handlers).read_property {
+    in_scope(scope, || match (*(*object).handlers).read_property {
         Some(read) => read(object, name, r#type, ptr::null_mut(), rv),
         None => zend_std_read_property(object, name, r#type, ptr::null_mut(), rv),
-    }
+    })
 }
 
 /// `zend_read_property`: reads a property by pointer and length name; see `zend_read_property_ex`.

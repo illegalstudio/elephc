@@ -84,6 +84,8 @@ pub mod class;
 #[cfg(feature = "engine")]
 pub mod object;
 #[cfg(feature = "engine")]
+pub mod property;
+#[cfg(feature = "engine")]
 pub mod exception;
 #[cfg(feature = "engine")]
 pub mod api;

@@ -1285,7 +1285,153 @@ fn hosted_modules_follow_the_request_lifecycle() {
             seen(),
             ["MINIT", "RINIT", "RSHUTDOWN", "RINIT", "ld", "RSHUTDOWN", "ld", "pld", "MSHUTDOWN"]
         );
-        assert_eq!((*left_open).r#type, -1, "closed by the request's end");
-        crate::api::zend_list_delete(left_open);
+        // `left_open` was closed (the second "ld") and freed with its request, as php-src's
+        // `zend_destroy_rsrc_list` does: nothing is left to release.
+        let _ = left_open;
+    }
+}
+
+/// The resource type `teardown_rinit` opens a resource of, for `teardown_lifecycle_*`.
+static TEARDOWN_KIND: Mutex<c_int> = Mutex::new(0);
+/// What the module's directive read in each RINIT and RSHUTDOWN, for the INI assertions.
+static TEARDOWN_SEEN: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+
+/// Test helper: the current value of the `teardown.level` directive.
+unsafe fn teardown_level() -> i64 {
+    crate::ini::zend_ini_long(c"teardown.level".as_ptr(), 14, 0)
+}
+
+unsafe extern "C" fn teardown_minit(_type: c_int, number: c_int) -> zend_result {
+    let defs = [
+        zend_ini_entry_def {
+            name: c"teardown.level".as_ptr(),
+            on_modify: Some(teardown_on_modify),
+            mh_arg1: ptr::null_mut(),
+            mh_arg2: ptr::null_mut(),
+            mh_arg3: ptr::null_mut(),
+            value: c"1".as_ptr(),
+            displayer: None,
+            value_length: 1,
+            name_length: 14,
+            modifiable: ZEND_INI_ALL as u8,
+        },
+        std::mem::zeroed(),
+    ];
+    crate::ini::zend_register_ini_entries(defs.as_ptr(), number);
+    *TEARDOWN_KIND.lock().unwrap() =
+        crate::api::zend_register_list_destructors_ex(Some(teardown_close), None, c"teardown".as_ptr(), number);
+    event("MINIT")
+}
+unsafe extern "C" fn teardown_rinit(_type: c_int, _number: c_int) -> zend_result {
+    TEARDOWN_SEEN.lock().unwrap().push(teardown_level());
+    // A request allocation the module never frees, and a resource it leaves open: both are the
+    // request's end to reclaim.
+    crate::alloc::emalloc(4096);
+    crate::api::zend_register_resource(ptr::null_mut(), *TEARDOWN_KIND.lock().unwrap());
+    event("RINIT")
+}
+unsafe extern "C" fn teardown_rshutdown(_type: c_int, _number: c_int) -> zend_result {
+    TEARDOWN_SEEN.lock().unwrap().push(teardown_level());
+    event("RSHUTDOWN")
+}
+unsafe extern "C" fn teardown_post_deactivate() -> zend_result {
+    event("POST")
+}
+unsafe extern "C" fn teardown_close(_res: *mut zend_resource) {
+    event("RSRC");
+}
+unsafe extern "C" fn teardown_on_modify(
+    _entry: *mut zend_ini_entry,
+    _value: *mut zend_string,
+    _arg1: *mut std::ffi::c_void,
+    _arg2: *mut std::ffi::c_void,
+    _arg3: *mut std::ffi::c_void,
+    stage: c_int,
+) -> zend_result {
+    if stage == ZEND_INI_STAGE_DEACTIVATE {
+        event("INI");
+    }
+    SUCCESS
+}
+
+/// Verifies a request is torn down in php-src's `php_request_shutdown` order and leaves nothing
+/// behind for the next one (issues #2102, #2104, #2105):
+/// - RSHUTDOWN runs first and still sees the request's INI override; the open resource is closed,
+///   then the directive is restored through its handler at the deactivation stage, and only then
+///   does the post-deactivate hook run;
+/// - the next request's RINIT sees the configured value again;
+/// - an `emalloc` block RINIT leaves behind is freed with its request, so 100 requests end at the
+///   same live-block count, while a persistent block survives and a block the module freed or
+///   moved itself is not freed a second time.
+#[test]
+fn a_request_is_torn_down_in_php_order_and_leaves_nothing_behind() {
+    let _guard = lock();
+    unsafe {
+        let module: &'static mut zend_module_entry = Box::leak(Box::new(std::mem::zeroed()));
+        module.size = std::mem::size_of::<zend_module_entry>() as u16;
+        module.zend_api = ZEND_MODULE_API_NO as u32;
+        module.name = c"teardown_probe".as_ptr();
+        module.version = c"1".as_ptr();
+        module.build_id = c"API20250925,NTS".as_ptr();
+        module.module_startup_func = Some(teardown_minit);
+        module.request_startup_func = Some(teardown_rinit);
+        module.request_shutdown_func = Some(teardown_rshutdown);
+        module.post_deactivate_func = Some(teardown_post_deactivate);
+        LIFECYCLE.lock().unwrap().clear();
+        TEARDOWN_SEEN.lock().unwrap().clear();
+        let seen = || std::mem::take(&mut *LIFECYCLE.lock().unwrap());
+        // Between the two calls the program releases the request's objects (its hosting tables):
+        // `OBJ` marks where, so the order pins resources closing before any object is freed.
+        let next_request = || {
+            crate::host::elephc_php_ext_request_shutdown();
+            event("OBJ");
+            crate::host::elephc_php_ext_request_deactivate();
+            crate::host::elephc_php_ext_request_startup();
+        };
+
+        assert!(crate::host::boot_module(module));
+        assert_eq!(seen(), ["MINIT", "RINIT"]);
+
+        // A runtime override lasts the request: RSHUTDOWN still sees 9, the next RINIT sees 1.
+        // Persistent: these outlive the request they are made in, which sweeps request strings.
+        let name = crate::string::zend_string_init(c"teardown.level".as_ptr(), 14, true);
+        let nine = crate::string::zend_string_init(c"9".as_ptr(), 1, true);
+        assert_eq!(crate::ini::zend_alter_ini_entry(name, nine, ZEND_INI_USER, ZEND_INI_STAGE_RUNTIME), SUCCESS);
+        let persistent = crate::alloc::__zend_malloc(64);
+        let freed = crate::alloc::emalloc(32);
+        crate::alloc::efree(freed);
+        let moved = crate::alloc::erealloc(crate::alloc::emalloc(16), 4096);
+        crate::alloc::efree(moved);
+        next_request();
+        assert_eq!(seen(), ["RSHUTDOWN", "RSRC", "OBJ", "INI", "POST", "RINIT"], "php_request_shutdown order");
+        assert_eq!(*TEARDOWN_SEEN.lock().unwrap(), [1, 9, 1], "RINIT 1, RSHUTDOWN 9, next RINIT 1");
+        assert_eq!(teardown_level(), 1);
+
+        let baseline = crate::alloc::elephc_zend_live_blocks();
+        for _ in 0..100 {
+            // A request block grown through the persistent `perealloc` backend moves: the sweep
+            // must free it at its new address, never the old one.
+            crate::alloc::__zend_realloc(crate::alloc::emalloc(16), 8192);
+            // A request string and a request array (header and bucket storage) nobody releases
+            // go with the request too, as php-src's memory manager frees them.
+            crate::string::zend_string_alloc(32, false);
+            let leaked = crate::hash::_zend_new_array(0);
+            crate::hash::zend_hash_next_index_insert(leaked, &mut std::mem::zeroed());
+            next_request();
+        }
+        assert_eq!(crate::alloc::elephc_zend_live_blocks(), baseline, "each request's leftovers go with it");
+        *persistent.cast::<u8>() = 1;
+        crate::alloc::free(persistent);
+
+        // Each further request: RSHUTDOWN, its resource, its objects, post-deactivate, the next
+        // RINIT (no INI phase: nothing was changed). The program's exit then ends the last request
+        // the same way.
+        crate::host::elephc_php_ext_exit_hook();
+        let events = seen();
+        assert_eq!(events.len(), 100 * 5 + 3, "{events:?}");
+        assert_eq!(&events[..5], ["RSHUTDOWN", "RSRC", "OBJ", "POST", "RINIT"]);
+        assert_eq!(&events[events.len() - 3..], ["RSHUTDOWN", "RSRC", "POST"]);
+        crate::string::zend_string_release(name);
+        crate::string::zend_string_release(nine);
     }
 }

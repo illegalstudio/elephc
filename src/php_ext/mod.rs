@@ -24,6 +24,7 @@ pub mod config_m4;
 pub mod headers;
 pub mod install;
 pub mod manifest;
+pub mod overrides;
 pub mod prelude;
 pub mod source;
 pub mod surface;

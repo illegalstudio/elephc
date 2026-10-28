@@ -123,6 +123,11 @@ pub trait RuntimeValueOps {
     /// Publishes a successful eval-owned resource close to a shared native inventory.
     fn resource_closed(&mut self, _resource: RuntimeCellHandle) -> Result<(), EvalStatus> { Ok(()) }
 
+    /// Publishes the class scope of a magic property accessor call (the class, then its parents,
+    /// comma-separated; `None` clears it) for a hosted PHP extension's wrapper, which takes it on
+    /// entry: the native side decides visibility in that scope. A no-op without the extension host.
+    fn publish_magic_scope(&mut self, _chain: Option<&str>) {}
+
     /// Writes a diagnostic already dispatched and filtered by its precise PHP error level.
     fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
         self.warning(message)

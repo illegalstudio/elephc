@@ -1,0 +1,5 @@
+string(3) "rec"
+bool(true)
+string(3) "evk"
+Error: Cannot access protected property EvalKid::$kind
+int(0)

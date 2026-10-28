@@ -267,7 +267,7 @@ pub(super) fn checked_object_expr_class(
 }
 
 /// Resolves the receiver type without evaluating a property probe's source expression.
-fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<PhpType> {
+pub(super) fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<PhpType> {
     Some(match &object.kind {
         ExprKind::Variable(name) => ctx.local_type(name),
         ExprKind::This => PhpType::Object(ctx.current_class.clone()?),

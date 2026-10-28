@@ -124,7 +124,7 @@ fn relation_names(
 fn class_implements(ctx: &FunctionContext<'_>, target: &ClassLikeTarget) -> Vec<String> {
     match target {
         ClassLikeTarget::Class(class_name) => lookup_class(ctx, class_name)
-            .map(|info| info.interfaces.clone())
+            .map(|info| info.interfaces.iter().filter(|name| !crate::php_ext::prelude::is_internal_name(name)).cloned().collect())
             .unwrap_or_default(),
         ClassLikeTarget::Interface(interface_name) => {
             let mut names = Vec::new();

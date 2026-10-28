@@ -164,11 +164,92 @@ pub(super) fn emit_resolved_method_call(
     ctx: &mut FunctionContext<'_>,
     target: &MethodCallTarget,
 ) -> Result<()> {
+    let publishes_scope = emit_magic_scope_publish(ctx, target);
     if let Some(slot) = target.dynamic_slot {
         emit_dynamic_instance_method_call_with_abi(ctx, slot, target.source_abi);
-        return Ok(());
+    } else {
+        emit_direct_resolved_method_call(ctx, target)?;
     }
-    emit_direct_resolved_method_call(ctx, target)
+    if publishes_scope {
+        emit_magic_scope_cell_store(ctx, None, false);
+    }
+    Ok(())
+}
+
+
+/// Whether `method` is one of the magic property accessors a hosted object's wrapper answers.
+fn is_magic_accessor(method: &str) -> bool {
+    ["__get", "__set", "__isset", "__unset"].iter().any(|name| method.eq_ignore_ascii_case(name))
+}
+
+/// Whether `class` stands for a hosted extension object (it implements the wrapper interface).
+fn is_hosted_class(classes: &std::collections::HashMap<String, crate::types::ClassInfo>, class: &str) -> bool {
+    classes
+        .get(class)
+        .is_some_and(|info| info.interfaces.iter().any(|i| i == crate::php_ext::prelude::OBJECT_INTERFACE))
+}
+
+/// Publishes the caller's lexical class before a `__get`, `__set`, `__isset` or `__unset` call
+/// in a program hosting PHP extensions. A hosted object's properties obey the visibility of the
+/// scope that names them, which only the call site knows: the wrapper's accessor takes it from
+/// the engine cell on entry. Returns whether the cell was written, so the caller clears it once
+/// the accessor returned and no later call made without a publication finds a stale scope.
+fn emit_magic_scope_publish(ctx: &mut FunctionContext<'_>, target: &MethodCallTarget) -> bool {
+    if !is_magic_accessor(&target.method_key) || !ctx.module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
+        return false;
+    }
+    // A call that can land in a wrapper's accessor publishes: that accessor takes the scope as
+    // its first statement, and so does a program subclass's override of it
+    // (`crate::php_ext::overrides`), so no program code runs while the cell holds a scope a
+    // later, unpublished caller (eval, a callable) would inherit.
+    let classes = &ctx.module.class_infos;
+    if !is_hosted_class(classes, &target.impl_class) {
+        return false;
+    }
+    // The class and its ancestors, comma-separated (no class name holds a comma): the engine
+    // takes the first it hosts as the class the scope stands for.
+    let scope = ctx.lexical_class().map(|class| {
+        let mut chain = vec![class.to_string()];
+        while let Some(parent) = ctx.module.class_infos.get(chain.last().unwrap()).and_then(|info| info.parent.clone()) {
+            if chain.contains(&parent) {
+                break;
+            }
+            chain.push(parent);
+        }
+        chain.join(",")
+    });
+    let strict = ctx.current_write_is_strict();
+    emit_magic_scope_cell_store(ctx, scope.as_deref(), strict);
+    true
+}
+
+/// Writes `scope` (`None`: the global scope) and whether the accessing code is `strict` into the
+/// engine's magic-scope cell. Uses only the symbol and secondary scratch registers, so the call's
+/// argument registers survive.
+fn emit_magic_scope_cell_store(ctx: &mut FunctionContext<'_>, scope: Option<&str>, strict: bool) {
+    let cell = abi::symbol_scratch_reg(ctx.emitter);
+    let value = abi::secondary_scratch_reg(ctx.emitter);
+    let symbol = ctx.emitter.target.extern_symbol(crate::php_ext::prelude::MAGIC_SCOPE_CELL);
+    abi::emit_extern_symbol_address(ctx.emitter, cell, &symbol);
+    match scope {
+        Some(class) => {
+            let (label, len) = ctx.data.add_string(class.as_bytes());
+            abi::emit_symbol_address(ctx.emitter, value, &label);
+            abi::emit_store_to_address(ctx.emitter, value, cell, 0);
+            abi::emit_load_int_immediate(ctx.emitter, value, len as i64);
+            abi::emit_store_to_address(ctx.emitter, value, cell, 8);
+        }
+        None => {
+            abi::emit_store_zero_to_address(ctx.emitter, cell, 0);
+            abi::emit_store_zero_to_address(ctx.emitter, cell, 8);
+        }
+    }
+    if strict {
+        abi::emit_load_int_immediate(ctx.emitter, value, 1);
+        abi::emit_store_to_address(ctx.emitter, value, cell, 16);
+    } else {
+        abi::emit_store_zero_to_address(ctx.emitter, cell, 16);
+    }
 }
 
 /// Calls one statically selected implementation through its validated ABI entry.

@@ -408,6 +408,7 @@ fn visible_class_method_names(
                 !declaring.is_property_hook_method(method)
             })
             .filter(|method| class_method_visible(ctx, class_name, info, method))
+            .filter(|method| !crate::php_ext::prelude::is_wrapper_plumbing_method(ctx.classes, info, method))
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()
     } else if let Some(info) = ctx.interfaces.get(class_name) {

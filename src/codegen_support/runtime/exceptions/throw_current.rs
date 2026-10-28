@@ -121,6 +121,11 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the x86_64 throw helper
     emitter.instruction("push r12");                                            // preserve the active handler record pointer across helper calls
     emitter.instruction("push r13");                                            // preserve the scratch callee-saved register used for the fatal path
+    // Compiled code reaches this helper by `call`, by `jmp` and by a conditional branch, so the
+    // entry stack phase varies; the cleanup walk below runs destructors that may reach C or Rust
+    // (a hosted extension object's release), which require System V alignment. The helper never
+    // returns (it longjmps or ends the program), so realigning here loses nothing.
+    emitter.instruction("and rsp, -16");                                        // realign every cleanup and dispatch call whatever the entry phase
     emit_instr_throw_hook(emitter);
     abi::emit_load_symbol_to_reg(emitter, "r12", "_exc_handler_top", 0);
     abi::emit_load_symbol_to_reg(emitter, "r10", "_debuginfo_guard", 0);
@@ -265,6 +270,20 @@ mod tests {
         let mut emitter = Emitter::new(Target::new(platform, arch));
         emit_throw_current(&mut emitter);
         emitter.output()
+    }
+
+    /// Compiled code enters the x86_64 helper by `call`, `jmp` and conditional branch alike, so it
+    /// realigns the stack before the first call: the cleanup walk runs destructors that can reach
+    /// Rust (a hosted extension object's release), which faulted on an 8-byte-off stack after a
+    /// guarded property write threw from inside a method.
+    #[test]
+    fn the_x86_unwinder_realigns_before_any_call() {
+        let asm = emitted(Platform::Linux, Arch::X86_64);
+        let entry = asm.find("__rt_throw_current:").unwrap();
+        let body = &asm[entry..];
+        let realign = body.find("and rsp, -16").expect("realignment");
+        let first_call = body.find("call ").unwrap();
+        assert!(realign < first_call, "{body}");
     }
 
     /// Every throw tells the profiler, and pays nothing when there is none.

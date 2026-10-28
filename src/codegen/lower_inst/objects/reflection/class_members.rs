@@ -18,8 +18,9 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
             break;
         };
-        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-        push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+        let shown = |method: &&String| !crate::php_ext::prelude::is_wrapper_plumbing_method(&ctx.module.class_infos, info, method);
+        push_unique_method_names(info.methods.keys().filter(shown), &mut names, &mut seen);
+        push_unique_method_names(info.static_methods.keys().filter(shown), &mut names, &mut seen);
         current = info.parent.clone();
         if current.as_deref() == Some(resolved_name) {
             break;
@@ -40,7 +41,7 @@ pub(super) fn reflection_class_property_names(
         push_unique_property_name("name", &mut names, &mut seen);
     }
     for (name, _) in &info.properties {
-        if reflection_property_visible_from_class(info, class_name, name, false) {
+        if reflection_property_visible_from_class(info, class_name, name, false) && !crate::php_ext::prelude::is_internal_name(name) {
             push_unique_property_name(name, &mut names, &mut seen);
         }
     }

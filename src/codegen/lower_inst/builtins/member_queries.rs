@@ -79,7 +79,9 @@ fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<St
                     .cloned(),
             );
         }
-        "interface_exists" => candidates.extend(ctx.module.interface_infos.keys().cloned()),
+        "interface_exists" => candidates.extend(
+            ctx.module.interface_infos.keys().filter(|name| !is_internal_synthetic_class_name(name)).cloned(),
+        ),
         "trait_exists" => candidates.extend(ctx.module.trait_table.names.iter().cloned()),
         "enum_exists" => candidates.extend(ctx.module.enum_infos.keys().cloned()),
         _ => {}
@@ -324,6 +326,9 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     target_is_object: bool,
 ) -> bool {
     let method_key = php_symbol_key(method_name);
+    if crate::php_ext::prelude::is_wrapper_plumbing_method(&ctx.module.class_infos, class_info, &method_key) {
+        return false;
+    }
     if class_info.methods.contains_key(&method_key) {
         return target_is_object
             || method_visible_from_class_string(
@@ -397,6 +402,9 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
     property_name: &str,
     _target_is_object: bool,
 ) -> bool {
+    if crate::php_ext::prelude::is_internal_name(property_name) {
+        return false;
+    }
     property_visible_from_class_string(
         resolved_class,
         property_name,

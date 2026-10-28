@@ -97,7 +97,10 @@ pub fn intern(data: &[u8]) -> *mut zend_string {
         if let Some(existing) = table.get(data) {
             return *existing;
         }
-        let s = new(data);
+        // Persistent storage: the table keeps it for the program's life, so a request that interns
+        // a name must not hand it to the request sweep.
+        let s = zend_string_alloc(data.len(), true);
+        ptr::copy_nonoverlapping(data.as_ptr(), (*s).val.as_mut_ptr().cast::<u8>(), data.len());
         (*s).gc.u.type_info = GC_STRING | IS_STR_INTERNED | IS_STR_PERMANENT;
         zend_string_hash_val(s);
         table.insert(data.to_vec(), s);
@@ -124,7 +127,8 @@ pub fn hash_bytes(data: &[u8]) -> zend_ulong {
 #[no_mangle]
 pub extern "C" fn zend_string_alloc(len: usize, persistent: bool) -> *mut zend_string {
     let size = (HEADER + len + 1 + 7) & !7;
-    let s = alloc(size).cast::<zend_string>();
+    // php-src's `pemalloc`: a request string goes with its request when nobody released it.
+    let s = crate::alloc::record_unless_persistent(alloc(size), persistent).cast::<zend_string>();
     unsafe {
         (*s).gc.refcount = 1;
         (*s).gc.u.type_info = GC_STRING | if persistent { IS_STR_PERSISTENT } else { 0 };

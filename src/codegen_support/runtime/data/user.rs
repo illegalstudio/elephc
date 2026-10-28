@@ -565,6 +565,51 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // A hosted PHP extension's objects keep their properties on the engine object: the runtime's
+    // object projection (`get_object_vars()`, `(array)`) asks `__elephc_php_ext_object_view`,
+    // through this pointer (0 in a program hosting no extension), before walking descriptors.
+    let hosting = classes.contains_key(crate::php_ext::prelude::OWNER_CLASS);
+    out.push_str(".globl _elephc_object_view_hook\n_elephc_object_view_hook:\n");
+    out.push_str(if hosting { "    .quad __elephc_php_ext_object_view\n" } else { "    .quad 0\n" });
+    if hosting {
+        // Per class id: the wrapper's `get_object_vars()` and `(array)` view methods (0 for a
+        // class that wraps no engine object), and the class chain a scope class id publishes.
+        out.push_str(".globl _class_hosted_view_ptrs\n_class_hosted_view_ptrs:\n");
+        let vars_key = php_symbol_key(crate::php_ext::prelude::OBJECT_VARS_METHOD);
+        let cast_key = php_symbol_key(crate::php_ext::prelude::OBJECT_CAST_METHOD);
+        let mut chains = Vec::new();
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                let (vars, cast) = match class_info_by_id.get(&class_id) {
+                    Some(class_info) if is_hosted_extension_class(class_info) && class_info.method_impl_classes.contains_key(&vars_key) => (
+                        source_instance_method_entry(class_info, &vars_key, classes)?,
+                        source_instance_method_entry(class_info, &cast_key, classes)?,
+                    ),
+                    _ => ("0".to_string(), "0".to_string()),
+                };
+                out.push_str(&format!("    .quad {}\n    .quad {}\n", vars, cast));
+                let mut chain = Vec::new();
+                let mut current = class_name_by_id.get(&class_id).map(|name| name.to_string());
+                while let Some(name) = current {
+                    if chain.contains(&name) {
+                        break;
+                    }
+                    current = classes.get(&name).and_then(|info| info.parent.clone());
+                    chain.push(name);
+                }
+                chains.push(chain.join(","));
+            }
+        }
+        out.push_str(".globl _elephc_scope_chains\n_elephc_scope_chains:\n");
+        for (class_id, chain) in chains.iter().enumerate() {
+            out.push_str(&format!("    .quad _elephc_scope_chain_{class_id}\n    .quad {}\n", chain.len()));
+        }
+        for (class_id, chain) in chains.iter().enumerate() {
+            out.push_str(&format!("_elephc_scope_chain_{class_id}:\n    .ascii \"{}\"\n", escaped_ascii(chain)));
+        }
+        out.push_str("    .p2align 3\n");
+    }
+
     // Dense class-id-indexed __toString table for runtime string coercions that
     // cannot know the concrete class during EIR lowering (notably
     // unserialize()'s allowed_classes values).
@@ -1605,7 +1650,7 @@ pub(crate) fn emit_runtime_data_user(
             }
         }
 
-        emit_class_callable_methods(&mut out, class_info);
+        emit_class_callable_methods(&mut out, class_info, classes);
         emit_user_wrapper_vtable(&mut out, class_info, classes)?;
         emit_user_filter_vtable(&mut out, class_info, classes)?;
     }
@@ -2912,11 +2957,17 @@ fn emit_classes_by_name_table(
             escaped_ascii(class_name)
         ));
     }
+    // The extension host's classes have no name PHP code can construct them by. Other
+    // preludes' `__Elephc…` classes stay: PDO registers its BLOB stream wrapper by class name.
+    let by_name = sorted_classes
+        .iter()
+        .filter(|(class_name, _)| !crate::php_ext::prelude::is_host_internal_symbol(class_name))
+        .collect::<Vec<_>>();
     out.push_str(".p2align 3\n");
     out.push_str(".globl _classes_by_name_count\n_classes_by_name_count:\n");
-    out.push_str(&format!("    .quad {}\n", sorted_classes.len()));
+    out.push_str(&format!("    .quad {}\n", by_name.len()));
     out.push_str(".globl _classes_by_name\n_classes_by_name:\n");
-    for (class_name, class_info) in sorted_classes {
+    for (class_name, class_info) in by_name {
         let obj_size = class_object_payload_size(class_name, class_info)
             + usize::from(crate::codegen_support::throwable_layout::ordinary_creation_line_offset(class_name, classes).is_some()) * 8;
         out.push_str(&format!(
@@ -3229,7 +3280,7 @@ fn emit_user_wrapper_vtable(
 /// Emits the per-class callable-method name table and count for __invoke support.
 /// Only public instance methods are included. Each method name is emitted as an
 /// ASCII label; the table is indexed by class_id at runtime.
-fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
+fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo, classes: &HashMap<String, ClassInfo>) {
     let mut public_methods: Vec<&String> = class_info
         .methods
         .keys()
@@ -3238,6 +3289,7 @@ fn emit_class_callable_methods(out: &mut String, class_info: &ClassInfo) {
                 .method_visibilities
                 .get(*method_name)
                 .is_some_and(|visibility| matches!(visibility, Visibility::Public))
+                && !crate::php_ext::prelude::is_wrapper_plumbing_method(classes, class_info, method_name)
         })
         .collect();
     public_methods.sort();
@@ -3815,10 +3867,12 @@ fn var_dump_descriptor_rows(
 /// subclass of a Reflection class still hides the slots it inherits. `class_name` is only
 /// the fallback when the declaring class is unknown.
 ///
-/// A hosted extension object's wrapper keeps the engine handle in a protected property
-/// too; PHP's object has no such property, so no renderer shows it.
+/// A hosted extension object's wrapper keeps the engine handle and the object owning it in
+/// protected properties too; PHP's object has neither, so no renderer shows them.
 fn is_reflection_backing_slot(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> bool {
-    if prop_name == crate::php_ext::prelude::HANDLE_PROPERTY && is_hosted_extension_class(class_info) {
+    if (prop_name == crate::php_ext::prelude::HANDLE_PROPERTY || prop_name == crate::php_ext::prelude::OWNER_PROPERTY)
+        && is_hosted_extension_class(class_info)
+    {
         return true;
     }
     if !prop_name.starts_with("__")

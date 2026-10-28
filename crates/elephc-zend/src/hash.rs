@@ -92,7 +92,12 @@ unsafe fn is_undef(p: *const Bucket) -> bool {
 /// Allocates storage for `size` buckets with all slots empty.
 unsafe fn allocate(ht: *mut HashTable, size: u32) {
     let mask = (size as u32).wrapping_mul(2).wrapping_neg();
-    let block = alloc(hash_size(mask) + size as usize * std::mem::size_of::<Bucket>());
+    // A request table's storage goes with its request when nobody destroyed the table.
+    let persistent = (*ht).gc.u.type_info & GC_PERSISTENT != 0;
+    let block = crate::alloc::record_unless_persistent(
+        alloc(hash_size(mask) + size as usize * std::mem::size_of::<Bucket>()),
+        persistent,
+    );
     ptr::write_bytes(block.cast::<u8>(), 0xff, hash_size(mask));
     (*ht).nTableMask = mask;
     (*ht).nTableSize = size;
@@ -598,7 +603,8 @@ pub unsafe extern "C" fn zend_symtable_clean(ht: *mut HashTable) {
 /// A new PHP array (values released with `zval_ptr_dtor`).
 #[no_mangle]
 pub unsafe extern "C" fn _zend_new_array(size: u32) -> *mut HashTable {
-    let ht = crate::alloc::alloc_struct::<HashTable>();
+    let ht = crate::alloc::record_unless_persistent(crate::alloc::alloc_struct::<HashTable>().cast(), false)
+        .cast::<HashTable>();
     _zend_hash_init(ht, size, Some(zval_ptr_dtor), false);
     ht
 }

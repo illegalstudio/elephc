@@ -11,7 +11,11 @@
 //! Key details:
 //! - Like php.ini, a configured value is what the directive starts with; if
 //!   its handler refuses it, the default is used instead. A value set after
-//!   the directive is registered is applied through its handler at once.
+//!   the directive is registered is applied through its handler at once and
+//!   becomes the directive's configured value.
+//! - A runtime change (`zend_alter_ini_entry`, `ini_set`) lasts one request:
+//!   `zend_ini_deactivate` restores it at request shutdown, as php-src's
+//!   `zend_deactivate` does.
 //! - Directives live in `EG(ini_directives)` under their name.
 
 use std::collections::HashMap;
@@ -35,15 +39,48 @@ fn configuration() -> &'static mut HashMap<Vec<u8>, *mut zval> {
 
 /// Records a php.ini line; applies it at once to a registered directive. php-src applies php.ini
 /// to a directive whatever level it is modifiable at, so the late form passes every level.
+///
+/// A late line is configuration, not a runtime change: it becomes the value the directive starts
+/// every request with, so request shutdown (`zend_ini_deactivate`) never undoes it. When a script
+/// has overridden the directive in the current request, that override stays visible until the
+/// request ends and is then restored to this configured value.
 pub unsafe fn set_configuration(name: &[u8], value: &[u8]) {
     let slot = alloc_struct::<zval>();
     crate::zval::set_str(slot, string::intern(value));
     configuration().insert(name.to_vec(), slot);
+    let entry = entry(name);
+    if entry.is_null() {
+        return;
+    }
+    let value = string::intern(value);
+    if (*entry).modified != 0 {
+        (*entry).orig_value = value;
+    } else if modify(entry, value, ZEND_INI_STAGE_RUNTIME) {
+        (*entry).value = value;
+    }
+}
+
+/// `zend_ini_deactivate`: request shutdown's INI phase. Every directive a script or an extension
+/// changed during the request goes back to its configured value and modifiable level, through its
+/// handler at the deactivation stage, so the next request starts from the configuration.
+pub unsafe fn zend_ini_deactivate() {
     let directives = eg().ini_directives;
-    if !directives.is_null() && !hash::zend_hash_str_find(directives, name.as_ptr().cast(), name.len()).is_null() {
-        let key = string::new(name);
-        zend_alter_ini_entry_chars(key, value.as_ptr().cast(), value.len(), ZEND_INI_ALL, ZEND_INI_STAGE_RUNTIME);
-        string::zend_string_release(key);
+    if directives.is_null() {
+        return;
+    }
+    for idx in 0..(*directives).nNumUsed {
+        let p = hash::bucket(directives, idx);
+        if (*p).val.u1.v.r#type == IS_UNDEF {
+            continue;
+        }
+        let entry = (*p).val.value.ptr.cast::<zend_ini_entry>();
+        if (*entry).modified == 0 {
+            continue;
+        }
+        modify(entry, (*entry).orig_value, ZEND_INI_STAGE_DEACTIVATE);
+        (*entry).value = (*entry).orig_value;
+        (*entry).modifiable = (*entry).orig_modifiable;
+        (*entry).modified = 0;
     }
 }
 

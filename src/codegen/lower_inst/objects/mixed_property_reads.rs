@@ -203,6 +203,13 @@ pub(super) fn lower_declared_mixed_prop_get(
     // answer, which is php's `Undefined property` warning on a value read and silence on a probe.
     for (arm, label) in hash_arms.iter().zip(match_labels.iter().skip(candidates.len())) {
         ctx.emitter.label(label);
+        // A class with `__get` (or `__isset` for a probe) answers a name its hash lacks from the
+        // accessor, as php does; only a class without one warns.
+        if let Some(magic) = magic_property_arm(ctx, &arm.class_name, mode)? {
+            emit_hash_then_magic_arm(ctx, arm, &magic, property, &done_label)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            continue;
+        }
         let base_reg = abi::int_result_reg(ctx.emitter);
         emit_scope_dynamic_property_hash_probe(
             ctx,
@@ -239,6 +246,42 @@ pub(super) fn lower_declared_mixed_prop_get(
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Emits a hash arm for a class that also has magic accessors: the object (in the int result
+/// register) is probed for a dynamic property of that name first, which php returns without
+/// consulting an accessor, and a miss falls through to the accessor arm.
+fn emit_hash_then_magic_arm(
+    ctx: &mut FunctionContext<'_>,
+    arm: &MixedClassHashArm,
+    magic: &MixedMagicArm,
+    property: &str,
+    done_label: &str,
+) -> Result<()> {
+    let target = ctx.emitter.target;
+    let object = abi::int_result_reg(ctx.emitter);
+    let (label, key_len) = ctx.data.add_string(property.as_bytes());
+    let miss = ctx.next_label("mixed_prop_hash_magic_miss");
+    abi::emit_push_reg(ctx.emitter, object);
+    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), object, arm.hash_offset);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), key_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &miss);
+    match target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+        }
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_pop_reg(ctx.emitter, abi::symbol_scratch_reg(ctx.emitter));
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&miss);
+    abi::emit_pop_reg(ctx.emitter, object);
+    emit_magic_property_arm(ctx, magic, property, done_label)
 }
 
 /// One class of a `Mixed` ladder that answers a name from its magic accessors.

@@ -1,0 +1,31 @@
+bool(false)
+int(1)
+bool(true)
+string(8) "42 rec 3"
+bool(false)
+string(8) "42 rec 3"
+string(8) "get:kind"
+set q
+bool(true)
+bool(false)
+unset q
+clone 42 rec 4
+string(8) "42 rec 4"
+string(3) "rec"
+string(3) "rec"
+Error: Cannot access protected property DemoRecord::$kind
+int(0)
+string(8) "get:kind"
+string(10) "get:secret"
+string(7) "get:zzz"
+int(4)
+int(9)
+set kind
+set q
+isset kind
+isset zz
+bool(true)
+bool(true)
+bool(true)
+string(3) "rec"
+Error: Cannot modify readonly property DemoRecord::$number

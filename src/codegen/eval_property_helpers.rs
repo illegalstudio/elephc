@@ -93,6 +93,161 @@ pub(super) fn emit_eval_property_helpers(
     unset::emit_property_unset_helper(module, emitter, data, &slots);
     emit_property_hash_slot_helper(module, emitter);
     emit_dynamic_property_exists_helper(module, emitter);
+    emit_publish_magic_scope_helper(module, emitter);
+}
+
+/// Emits `__elephc_eval_publish_magic_scope(chain, len)`: Magician publishes the class scope of
+/// an eval property access around the native call, as compiled call sites do, so a hosted PHP
+/// extension's wrapper decides visibility in it. In a program hosting no extension the helper
+/// only returns: there is no wrapper, and no engine cell to write.
+fn emit_publish_magic_scope_helper(module: &Module, emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- eval bridge: publish a magic property access's class scope ---");
+    label_c_global(module, emitter, "__elephc_eval_publish_magic_scope");
+    if module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
+        let cell = abi::symbol_scratch_reg(emitter);
+        let symbol = module.target.extern_symbol(crate::php_ext::prelude::MAGIC_SCOPE_CELL);
+        abi::emit_extern_symbol_address(emitter, cell, &symbol);
+        let (chain, len) = match module.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rdi", "rsi"),
+        };
+        abi::emit_store_to_address(emitter, chain, cell, 0);
+        abi::emit_store_to_address(emitter, len, cell, 8);
+        // eval'd code is coercive unless it declares otherwise itself.
+        abi::emit_store_zero_to_address(emitter, cell, 16);
+    }
+    emitter.instruction("ret");                                                 // return to Magician with the cell published
+}
+
+/// Emits `__elephc_php_ext_object_view(object, cast, scope_class_id)` in a program hosting a PHP
+/// extension: the runtime's object projection calls it first (`_elephc_object_view_hook`). For an
+/// object wrapping an engine object it publishes the scope class's chain in the engine's
+/// magic-scope cell, calls the wrapper's view method (`get_object_vars()` or `(array)`) and
+/// returns the owned hash that method's `mixed` result holds (a fresh empty one for an empty
+/// list); for any other object it returns 0 and the projection walks the descriptors.
+pub(super) fn emit_hosted_object_view_helper(module: &Module, emitter: &mut Emitter) {
+    if !module.class_infos.contains_key(crate::php_ext::prelude::OWNER_CLASS) {
+        return;
+    }
+    let cell_symbol = module.target.extern_symbol(crate::php_ext::prelude::MAGIC_SCOPE_CELL);
+    emitter.blank();
+    emitter.comment("--- php extension host: hosted object property view ---");
+    emitter.label_global("__elephc_php_ext_object_view");
+    match module.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("stp x29, x30, [sp, #-64]!");                   // open the view frame and save the linkage
+            emitter.instruction("mov x29, sp");                                 // establish the view frame
+            emitter.instruction("str x0, [sp, #16]");                           // keep the object across the calls
+            emitter.instruction("str x2, [sp, #32]");                           // keep the scope class id
+            emitter.instruction("ldr x9, [x0]");                                // x9 = the object's class id (bounded by the caller)
+            abi::emit_symbol_address(emitter, "x10", "_class_hosted_view_ptrs");
+            emitter.instruction("add x10, x10, x9, lsl #4");                    // two view methods per class id
+            emitter.instruction("ldr x10, [x10, x1, lsl #3]");                  // pick the get_object_vars (0) or cast (1) view
+            emitter.instruction("cbz x10, __elephc_php_ext_object_view_none");  // the class wraps no engine object
+            emitter.instruction("str x10, [sp, #40]");                          // keep the view method entry
+            abi::emit_extern_symbol_address(emitter, "x11", &cell_symbol);
+            emitter.instruction("ldr x2, [sp, #32]");                           // reload the scope class id
+            emitter.instruction("cmp x2, #0");                                  // the global scope has no class chain
+            emitter.instruction("b.lt __elephc_php_ext_object_view_global");    // publish the global scope
+            abi::emit_symbol_address(emitter, "x12", "_elephc_scope_chains");
+            emitter.instruction("add x12, x12, x2, lsl #4");                    // the scope class's chain entry
+            emitter.instruction("ldr x13, [x12]");                              // chain bytes
+            emitter.instruction("ldr x14, [x12, #8]");                          // chain length
+            emitter.instruction("str x13, [x11]");                              // publish the chain
+            emitter.instruction("str x14, [x11, #8]");                          // publish its length
+            emitter.instruction("b __elephc_php_ext_object_view_published");    // the scope is in the cell
+            emitter.label("__elephc_php_ext_object_view_global");
+            emitter.instruction("str xzr, [x11]");                              // no class: the global scope
+            emitter.instruction("str xzr, [x11, #8]");                          // with no bytes
+            emitter.label("__elephc_php_ext_object_view_published");
+            emitter.instruction("str xzr, [x11, #16]");                         // a listing converts nothing: not strict
+            emitter.instruction("ldr x0, [sp, #16]");                           // the object is the view method's receiver
+            emitter.instruction("ldr x10, [sp, #40]");                          // reload the view method entry
+            emitter.instruction("blr x10");                                     // x0 = the owned mixed result
+            emitter.instruction("str x0, [sp, #40]");                           // keep the box to release it
+            emitter.instruction("bl __rt_mixed_unbox");                         // x0 = tag, x1 = payload
+            emitter.instruction("cmp x0, #5");                                  // a hash holds the listed properties
+            emitter.instruction("b.ne __elephc_php_ext_object_view_empty");     // an empty list arrives as an empty indexed array
+            emitter.instruction("mov x0, x1");                                  // the hash the box holds
+            emitter.instruction("str x0, [sp, #48]");                           // keep it as the result
+            emitter.instruction("bl __rt_incref");                              // own it beyond the box
+            emitter.instruction("ldr x0, [sp, #40]");                           // the box
+            emitter.instruction("bl __rt_decref_any");                          // release the box
+            emitter.instruction("ldr x0, [sp, #48]");                           // return the owned hash
+            emitter.instruction("b __elephc_php_ext_object_view_out");          // done
+            emitter.label("__elephc_php_ext_object_view_empty");
+            emitter.instruction("ldr x0, [sp, #40]");                           // the box
+            emitter.instruction("bl __rt_decref_any");                          // release the box
+            emitter.instruction("mov x0, #16");                                 // a small capacity
+            emitter.instruction("mov x1, #7");                                  // of mixed values
+            emitter.instruction("bl __rt_hash_new");                            // a fresh empty hash
+            emitter.instruction("b __elephc_php_ext_object_view_out");          // done
+            emitter.label("__elephc_php_ext_object_view_none");
+            emitter.instruction("mov x0, #0");                                  // not a hosted object
+            emitter.label("__elephc_php_ext_object_view_out");
+            emitter.instruction("ldp x29, x30, [sp], #64");                     // close the view frame
+            emitter.instruction("ret");                                         // back to the projection
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // save the caller frame
+            emitter.instruction("mov rbp, rsp");                                // establish the view frame
+            emitter.instruction("sub rsp, 48");                                 // view slots, keeping 16-byte alignment
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // keep the object across the calls
+            emitter.instruction("mov QWORD PTR [rbp - 24], rdx");               // keep the scope class id
+            emitter.instruction("mov r9, QWORD PTR [rdi]");                     // r9 = the object's class id (bounded by the caller)
+            emitter.instruction("shl r9, 4");                                   // two view methods per class id
+            abi::emit_symbol_address(emitter, "r10", "_class_hosted_view_ptrs");
+            emitter.instruction("add r10, r9");                                 // the class's view pair
+            emitter.instruction("mov r10, QWORD PTR [r10 + rsi * 8]");          // pick the get_object_vars (0) or cast (1) view
+            emitter.instruction("test r10, r10");                               // does the class wrap an engine object?
+            emitter.instruction("jz __elephc_php_ext_object_view_none");        // no: the projection walks the descriptors
+            emitter.instruction("mov QWORD PTR [rbp - 32], r10");               // keep the view method entry
+            abi::emit_extern_symbol_address(emitter, "r11", &cell_symbol);
+            emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");               // reload the scope class id
+            emitter.instruction("test rdx, rdx");                               // the global scope has no class chain
+            emitter.instruction("js __elephc_php_ext_object_view_global");      // publish the global scope
+            emitter.instruction("shl rdx, 4");                                  // chain entries are 16 bytes
+            abi::emit_symbol_address(emitter, "rcx", "_elephc_scope_chains");
+            emitter.instruction("add rcx, rdx");                                // the scope class's chain entry
+            emitter.instruction("mov r8, QWORD PTR [rcx]");                     // chain bytes
+            emitter.instruction("mov QWORD PTR [r11], r8");                     // publish the chain
+            emitter.instruction("mov r8, QWORD PTR [rcx + 8]");                 // chain length
+            emitter.instruction("mov QWORD PTR [r11 + 8], r8");                 // publish its length
+            emitter.instruction("jmp __elephc_php_ext_object_view_published");  // the scope is in the cell
+            emitter.label("__elephc_php_ext_object_view_global");
+            emitter.instruction("mov QWORD PTR [r11], 0");                      // no class: the global scope
+            emitter.instruction("mov QWORD PTR [r11 + 8], 0");                  // with no bytes
+            emitter.label("__elephc_php_ext_object_view_published");
+            emitter.instruction("mov QWORD PTR [r11 + 16], 0");                 // a listing converts nothing: not strict
+            emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                // the object is the view method's receiver
+            emitter.instruction("call QWORD PTR [rbp - 32]");                   // rax = the owned mixed result
+            emitter.instruction("mov QWORD PTR [rbp - 32], rax");               // keep the box to release it
+            emitter.instruction("call __rt_mixed_unbox");                       // rax = tag, rdi = payload
+            emitter.instruction("cmp rax, 5");                                  // a hash holds the listed properties
+            emitter.instruction("jne __elephc_php_ext_object_view_empty");      // an empty list arrives as an empty indexed array
+            emitter.instruction("mov QWORD PTR [rbp - 40], rdi");               // keep the hash as the result
+            emitter.instruction("mov rax, rdi");                                // the hash the box holds
+            emitter.instruction("call __rt_incref");                            // own it beyond the box
+            emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // the box
+            emitter.instruction("call __rt_decref_any");                        // release the box
+            emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // return the owned hash
+            emitter.instruction("jmp __elephc_php_ext_object_view_out");        // done
+            emitter.label("__elephc_php_ext_object_view_empty");
+            emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // the box
+            emitter.instruction("call __rt_decref_any");                        // release the box
+            emitter.instruction("mov rdi, 16");                                 // a small capacity
+            emitter.instruction("mov rsi, 7");                                  // of mixed values
+            emitter.instruction("call __rt_hash_new");                          // a fresh empty hash
+            emitter.instruction("jmp __elephc_php_ext_object_view_out");        // done
+            emitter.label("__elephc_php_ext_object_view_none");
+            emitter.instruction("xor eax, eax");                                // not a hosted object
+            emitter.label("__elephc_php_ext_object_view_out");
+            emitter.instruction("mov rsp, rbp");                                // drop the view slots
+            emitter.instruction("pop rbp");                                     // restore the caller frame
+            emitter.instruction("ret");                                         // back to the projection
+        }
+    }
 }
 
 /// Returns whether this binary links the eval bridge, and therefore needs these helpers.

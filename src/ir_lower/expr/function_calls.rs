@@ -30,6 +30,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         .get(&(ctx.loop_storage_scope.clone(), expr.span))
         .cloned();
     let canonical = instantiated.as_deref().unwrap_or_else(|| name.as_str());
+    if let Some(value) = lower_hosted_class_query(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_class_introspection(ctx, canonical, args, expr) {
         return value;
     }

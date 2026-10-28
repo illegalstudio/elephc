@@ -562,7 +562,9 @@ physical PHP-mode file:
   builtin's float type guard; LFC source retains the extension guard. Type narrowing
   and mixed-storage warnings follow the guarded statement's file mode, not its caller;
 - names prefixed with `__elephc_` are reserved for the compiler and rejected in
-  user code.
+  user code, as are the PHP extension host's `elephc_php_ext_` functions and
+  `__elephc`-prefixed class, method and property names, whether a declaration,
+  a call, a class position or a string literal names them.
 
 The audit covers a PHP entry plus every PHP-mode `include`/`require`d and
 autoloaded user file. Physical `.lfc` files are always extension-enabled, even

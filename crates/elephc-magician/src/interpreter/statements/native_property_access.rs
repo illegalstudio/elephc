@@ -35,6 +35,8 @@ pub(in crate::interpreter) fn eval_native_magic_property_set(
     }
     let result = (|| {
         let name = values.string(property)?;
+        let scope = native_magic_scope(context);
+        values.publish_magic_scope(scope.as_deref());
         let call = eval_native_method_with_evaluated_args(
             object,
             &owner,
@@ -43,12 +45,61 @@ pub(in crate::interpreter) fn eval_native_magic_property_set(
             context,
             values,
         );
+        values.publish_magic_scope(None);
         let call = call.and_then(|result| release_expr_result(result, context, values));
         let released = release_expr_result(name, context, values);
         call.and(released)
     })();
     let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
     result.and(popped).map(|()| true)
+}
+
+/// The caller's class scope a native magic accessor call publishes for a hosted PHP extension's
+/// wrapper, which decides visibility in it: the eval's class, then its parents, comma-separated,
+/// read before the call enters the accessor's own class. `None` in global code, which the wrapper
+/// reads as the global scope. The caller keeps the string alive until it clears the cell.
+pub(in crate::interpreter) fn native_magic_scope(context: &ElephcEvalContext) -> Option<String> {
+    let class = context.current_class_scope()?;
+    let mut chain = vec![class.trim_start_matches('\\').to_string()];
+    chain.extend(context.class_parent_names(class));
+    Some(chain.join(","))
+}
+
+/// Invokes a native class's `__get` or `__isset` (`method`) with the property name, as PHP does
+/// for a property the scope cannot see; `None` when the class declares no such accessor.
+pub(in crate::interpreter) fn eval_native_magic_property_call(
+    object: RuntimeCellHandle,
+    object_class: &str,
+    property: &str,
+    method: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(flags) = values.reflection_method_flags(object_class, method)? else {
+        return Ok(None);
+    };
+    if flags & (EVAL_REFLECTION_MEMBER_FLAG_STATIC | EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT) != 0 {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let owner = values
+        .reflection_method_declaring_class(object_class, method)?
+        .unwrap_or_else(|| object_class.to_string());
+    let name = values.string(property)?;
+    let scope = native_magic_scope(context);
+    values.publish_magic_scope(scope.as_deref());
+    let call = eval_native_method_with_evaluated_args(
+        object,
+        &owner,
+        method,
+        positional_args(vec![name.borrowed()]),
+        context,
+        values,
+    );
+    values.publish_magic_scope(None);
+    let released = release_expr_result(name, context, values);
+    let result = call?;
+    released?;
+    Ok(Some(result))
 }
 
 /// Reads a native property through its getter, or its backing storage when no getter exists.

@@ -1,0 +1,40 @@
+string(8) "42 rec 7"
+int(0)
+Error: Cannot access private property DemoRecord::$secret
+Error: Cannot access protected property DemoRecord::$kind
+bool(false)
+bool(false)
+bool(true)
+Error: Cannot access private property DemoRecord::$secret
+Error: Cannot access protected property DemoRecord::$kind
+Error: Cannot access protected property DemoRecord::$kind
+Error: Cannot modify readonly property DemoRecord::$number
+Error: Cannot modify readonly property DemoRecord::$number
+Error: Cannot modify protected(set) readonly property DemoRecord::$late from global scope
+Error: Cannot unset readonly property DemoRecord::$number
+Error: Cannot unset protected(set) readonly property DemoRecord::$late from global scope
+Error: Typed property DemoRecord::$late must not be accessed before initialization
+bool(false)
+done
+int(12)
+TypeError: Cannot assign string to property DemoRecord::$count of type int
+TypeError: Cannot assign null to property DemoRecord::$count of type int
+done
+int(1)
+done
+float(3)
+done
+float(2.5)
+TypeError: Cannot assign array to property DemoRecord::$ratio of type ?float
+done
+NULL
+done
+Error: Typed property DemoRecord::$count must not be accessed before initialization
+done
+Error: Cannot modify readonly property DemoRecord::$number
+string(8) "43 rec 7"
+string(3) "rec"
+Error: Cannot access protected property RecordKid::$kind
+int(1)
+string(5) "unset"
+string(8) "42 rec 3"

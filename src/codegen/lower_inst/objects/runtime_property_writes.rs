@@ -1437,6 +1437,9 @@ pub(super) fn declared_mixed_property_set_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if crate::php_ext::prelude::is_host_plumbing_property(property) {
+                continue;
+            }
             let Some(candidate) = mixed_property_write_candidate(
                 ctx,
                 class_name,
@@ -2228,6 +2231,9 @@ fn declared_mixed_property_unset_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if crate::php_ext::prelude::is_host_plumbing_property(property) {
+                continue;
+            }
             let Ok(action) = resolve_property_runtime_action(
                 ctx,
                 class_name,

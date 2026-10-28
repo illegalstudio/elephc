@@ -110,6 +110,7 @@ pub(super) fn reflection_class_property_names_for_filter(
             .iter()
             .chain(class_info.static_properties.iter())
             .map(|(name, _)| name)
+            .filter(|name| !crate::php_ext::prelude::is_internal_name(name))
             .filter(|name| reflection_property_matches_filter(class_info, name, filter))
             .cloned()
             .collect(),
@@ -123,14 +124,30 @@ pub(super) fn reflection_class_method_names_for_filter(
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
     let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    // PHP lists the class's own methods in declaration order, then each parent's; methods a
+    // compiler-injected class declares without a source body follow, sorted.
+    let mut order = Vec::new();
+    let mut declaring = Some(class_info);
+    while let Some(info) = declaring {
+        order.extend(info.method_decls.iter().map(|method| php_symbol_key(&method.name)));
+        declaring = info.parent.as_ref().and_then(|parent| ctx.classes.get(parent));
+    }
+    let mut rest = class_info.methods.keys().chain(class_info.static_methods.keys()).cloned().collect::<Vec<_>>();
+    rest.sort_unstable();
+    order.extend(rest);
     let mut names = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for name in class_info
-        .methods
-        .keys()
-        .chain(class_info.static_methods.keys())
-    {
-        if seen.insert(php_symbol_key(name))
+    for key in order {
+        let Some(name) = class_info
+            .methods
+            .get_key_value(&key)
+            .or_else(|| class_info.static_methods.get_key_value(&key))
+            .map(|(name, _)| name)
+        else {
+            continue;
+        };
+        if seen.insert(key.clone())
+            && !crate::php_ext::prelude::is_wrapper_plumbing_method(ctx.classes, class_info, name)
             && reflection_method_matches_filter(class_info, name, filter)
         {
             names.push(name.clone());

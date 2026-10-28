@@ -57,6 +57,9 @@ const HOSTED_EXIT_HOOK: &str = "elephc_php_ext_exit_hook";
 /// The hosted-extension engine's request shutdown (RSHUTDOWN), called by the `--web` reset after
 /// the previous request's destructors and before its hosting tables are released.
 pub(super) const HOSTED_REQUEST_SHUTDOWN: &str = "elephc_php_ext_request_shutdown";
+/// The hosted-extension engine's request deactivation (resources, INI restore, post-deactivate,
+/// request heap), called once the request's hosting tables and saved callbacks are released.
+pub(super) const HOSTED_REQUEST_DEACTIVATE: &str = "elephc_php_ext_request_deactivate";
 /// The hosted-extension engine's request startup (RINIT), called at the start of every `--web`
 /// request once the reset is done.
 pub(super) const HOSTED_REQUEST_STARTUP: &str = "elephc_php_ext_request_startup";

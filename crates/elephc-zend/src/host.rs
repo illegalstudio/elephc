@@ -37,6 +37,9 @@ const CALL_OK: i64 = 0;
 const CALL_EXCEPTION: i64 = 1;
 const CALL_FATAL: i64 = 2;
 const CALL_UNSUPPORTED: i64 = 3;
+/// A property access probed without the caller's scope, which decides it: name the scope
+/// (`elephc_php_ext_property_scope`) and run it again.
+const CALL_NEEDS_SCOPE: i64 = 4;
 
 /// Kinds reported by `elephc_php_ext_value_kind`.
 const VALUE_PLAIN: i64 = 0;
@@ -56,6 +59,13 @@ struct Call {
     scope: *mut zend_class_entry,
     /// The property a property access names (NULL for a call).
     property: *mut zend_string,
+    /// The class the program sees a property access's object as, for messages.
+    access_class: Option<String>,
+    /// The scope a property access runs in, once named: the caller's nearest hosted class (or
+    /// null) and the caller's class name (`None` for the global scope). `None` probes.
+    access_scope: Option<(*mut zend_class_entry, Option<String>)>,
+    /// Whether the code making a property access declared `strict_types=1`.
+    access_strict: bool,
     /// The callback a dispatch to a program callable carries (NULL otherwise).
     callback: *mut Callback,
     argc: u32,
@@ -121,9 +131,14 @@ pub unsafe extern "C" fn elephc_php_ext_ini(name: *const c_char, value: *const c
 /// `elephc_zend_protected_call`.
 unsafe extern "C" fn boot_trampoline(module: *mut c_void, booted: *mut c_void) {
     let module = module.cast::<zend_module_entry>();
+    // MINIT's allocations outlive every request; the module starts inside a running request, whose
+    // RINIT allocations are request ones again.
+    crate::alloc::set_request_recording(false);
     let registered = crate::module::zend_register_internal_module(module);
     let mut ok = false;
-    if !registered.is_null() && crate::module::zend_startup_module_ex(registered) == SUCCESS {
+    let started = !registered.is_null() && crate::module::zend_startup_module_ex(registered) == SUCCESS;
+    crate::alloc::set_request_recording(true);
+    if started {
         HOSTED.get().push(registered);
         ok = request_startup(registered);
         if ok {
@@ -148,19 +163,38 @@ static HOSTED: Global<Vec<*mut zend_module_entry>> = Global::new(Vec::new());
 /// Hosted modules whose request startup (RINIT) has run and whose request
 /// shutdown (RSHUTDOWN) has not, in start order.
 static IN_REQUEST: Global<Vec<*mut zend_module_entry>> = Global::new(Vec::new());
+/// Hosted modules whose RSHUTDOWN has run and whose post-deactivation has not, in start order:
+/// the request is being torn down (objects, resources, INI) between the two.
+static DEACTIVATING: Global<Vec<*mut zend_module_entry>> = Global::new(Vec::new());
 
 /// What `lifecycle_trampoline` runs.
 const PHASE_REQUEST_SHUTDOWN: usize = 0;
 const PHASE_REQUEST_STARTUP: usize = 1;
 const PHASE_MODULE_SHUTDOWN: usize = 2;
+const PHASE_REQUEST_DEACTIVATE: usize = 3;
+
+/// The steps of request deactivation, in order; php-src's `php_request_shutdown` runs each in its
+/// own `zend_try`, so a fatal error in one never skips the next.
+const DEACTIVATE_CLOSE_RESOURCES: usize = 0;
+const DEACTIVATE_FREE_OBJECTS: usize = 1;
+const DEACTIVATE_RESTORE_INI: usize = 2;
+const DEACTIVATE_DESTROY_RESOURCES: usize = 3;
+const DEACTIVATE_POST_DEACTIVATE: usize = 4;
+const DEACTIVATE_SWEEP_HEAP: usize = 5;
 
 /// Bailout-protected body of one lifecycle phase over the hosted modules, as
-/// php-src orders them: request shutdown (RSHUTDOWN, then the post-deactivate
-/// hooks) walks the modules that are in a request in reverse start order,
-/// request startup (RINIT) walks every hosted module in start order, and module
-/// shutdown (MSHUTDOWN, then the globals destructors) walks them in reverse.
-/// A phase a fatal error interrupts stops there, as in PHP.
-unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, _unused: *mut c_void) {
+/// php-src's `php_request_shutdown` orders them:
+/// - request shutdown runs RSHUTDOWN on the modules in the request, in reverse start order;
+/// - the caller then releases the request's objects (the program's hosting tables);
+/// - request deactivation (`zend_deactivate`, then `zend_post_deactivate_modules`, then
+///   `shutdown_memory_manager`) closes the regular resources, restores the INI directives the
+///   request changed, runs the post-deactivate hooks in reverse start order, and frees the
+///   request allocations left behind;
+/// - request startup (RINIT) walks every hosted module in start order;
+/// - module shutdown (MSHUTDOWN, then the globals destructors) walks them in reverse.
+/// A phase a fatal error interrupts stops there, as in PHP; request shutdown and deactivation
+/// run each step in its own bailout frame instead (`shut_down_request`, `deactivate_request`).
+unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, step: *mut c_void) {
     let call = |module: *mut zend_module_entry, handler: module_func_t| {
         if let Some(handler) = handler {
             crate::module::with_module(module, || {
@@ -170,19 +204,38 @@ unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, _unused: *mut c_vo
     };
     match phase as usize {
         PHASE_REQUEST_SHUTDOWN => {
-            let modules = std::mem::take(IN_REQUEST.get());
-            for &module in modules.iter().rev() {
-                call(module, (*module).request_shutdown_func);
+            let module = step.cast::<zend_module_entry>();
+            call(module, (*module).request_shutdown_func);
+        }
+        PHASE_REQUEST_DEACTIVATE => match step as usize {
+            // `shutdown_executor`: every resource the request left open is closed, then the
+            // objects no wrapper released are freed.
+            DEACTIVATE_CLOSE_RESOURCES => crate::api::close_regular_resources(),
+            DEACTIVATE_FREE_OBJECTS => {
+                // The request's symbol table goes with it (`init_executor` makes a new one), before
+                // the request sweep would free its storage under it.
+                let symbols = &mut eg().symbol_table as *mut HashTable;
+                hash::zend_hash_destroy(symbols);
+                hash::init(symbols, 8, Some(zval_ptr_dtor), false);
+                free_held_objects()
             }
-            for &module in modules.iter().rev() {
-                if let Some(post_deactivate) = (*module).post_deactivate_func {
-                    crate::module::with_module(module, || post_deactivate());
+            // `zend_deactivate`: the INI directives the request changed go back to their
+            // configured values, then the closed resources go.
+            DEACTIVATE_RESTORE_INI => crate::ini::zend_ini_deactivate(),
+            DEACTIVATE_DESTROY_RESOURCES => crate::api::destroy_regular_resources(),
+            DEACTIVATE_POST_DEACTIVATE => {
+                let modules = std::mem::take(DEACTIVATING.get());
+                for &module in modules.iter().rev() {
+                    if let Some(post_deactivate) = (*module).post_deactivate_func {
+                        crate::module::with_module(module, || post_deactivate());
+                    }
                 }
             }
-            // php-src's request shutdown then closes every resource the request left open.
-            crate::api::close_regular_resources();
-        }
+            // `shutdown_memory_manager`: what the request allocated and did not free goes now.
+            _ => crate::alloc::sweep_request_heap(),
+        },
         PHASE_REQUEST_STARTUP => {
+            crate::alloc::set_request_recording(true);
             for &module in HOSTED.get().clone().iter() {
                 if !request_startup(module) {
                     // php-src's `zend_activate_modules`: warn, then end the process. The module
@@ -219,31 +272,74 @@ unsafe extern "C" fn lifecycle_trampoline(phase: *mut c_void, _unused: *mut c_vo
 
 /// Runs one lifecycle phase inside a bailout frame.
 unsafe fn run_lifecycle(phase: usize) {
-    elephc_zend_protected_call(
-        Some(lifecycle_trampoline),
-        phase as *mut c_void,
-        ptr::null_mut(),
-        &mut eg().bailout,
-    );
+    run_step(phase, ptr::null_mut());
 }
 
-/// Ends the request that finished in a long-lived process (a `--web` worker serving one request
-/// after another): request shutdown (RSHUTDOWN) for every module in it. The worker calls it once
-/// the request's destructors have run and before its memory is released, as php-src does.
-/// Does nothing before any hosted extension has started, or twice for one request.
+/// Runs one step of a lifecycle phase inside its own bailout frame.
+unsafe fn run_step(phase: usize, step: *mut c_void) {
+    elephc_zend_protected_call(Some(lifecycle_trampoline), phase as *mut c_void, step, &mut eg().bailout);
+}
+
+/// Request shutdown: RSHUTDOWN for every module in the request, in reverse start order, each in its
+/// own bailout frame as php-src's `zend_deactivate_modules` runs them. The modules await
+/// deactivation from the start, so a fatal RSHUTDOWN never cancels it.
+///
+/// The regular resources close here too, before the caller releases the request's objects:
+/// `shutdown_executor` runs `zend_close_rsrc_list` before
+/// `zend_objects_store_free_object_storage`, so a resource destructor still finds the objects it
+/// refers to, and a `free_obj` handler finds its resources closed. Deactivation's own close step
+/// then finds nothing left open.
+unsafe fn shut_down_request() {
+    let modules = std::mem::take(IN_REQUEST.get());
+    DEACTIVATING.get().extend(modules.iter().copied());
+    for &module in modules.iter().rev() {
+        run_step(PHASE_REQUEST_SHUTDOWN, module.cast());
+    }
+    run_step(PHASE_REQUEST_DEACTIVATE, DEACTIVATE_CLOSE_RESOURCES as *mut c_void);
+}
+
+/// Request deactivation, one bailout frame per step.
+unsafe fn deactivate_request() {
+    for step in DEACTIVATE_CLOSE_RESOURCES..=DEACTIVATE_SWEEP_HEAP {
+        run_step(PHASE_REQUEST_DEACTIVATE, step as *mut c_void);
+    }
+}
+
+/// Ends the request that finished: request shutdown (RSHUTDOWN) for every module in it, then the
+/// request's open resources close (`shut_down_request`). The
+/// program calls it once the request's destructors have run and before it releases the request's
+/// objects; `elephc_php_ext_request_deactivate` follows once they are gone, as php-src orders
+/// `zend_deactivate_modules` before `zend_deactivate`. Does nothing before any hosted extension
+/// has started, or twice for one request.
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_request_shutdown() {
     if HOSTED.get().is_empty() {
         return;
     }
-    run_lifecycle(PHASE_REQUEST_SHUTDOWN);
+    shut_down_request();
     // The next request takes its own start time, as php-src's `sapi_activate` resets it.
     (*ptr::addr_of_mut!(crate::startup::sapi_globals)).global_request_time = 0.0;
 }
 
+/// Finishes tearing down the request after the program released its objects: the objects nobody
+/// released are freed, the INI directives the request changed are restored, the post-deactivate hooks run and
+/// the request's leftover allocations are freed, in php-src's order. Does nothing when no request
+/// is being torn down.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_request_deactivate() {
+    // Only a request RSHUTDOWN ended is torn down: a stray call must not close the resources,
+    // restore the INI or sweep the heap of a request still running.
+    if HOSTED.get().is_empty() || DEACTIVATING.get().is_empty() {
+        return;
+    }
+    deactivate_request();
+}
+
 /// Begins the next request in a long-lived process: request startup (RINIT) for every hosted
-/// module, so per-request extension state never crosses requests. Does nothing before any hosted
+/// module, so per-request extension state never crosses requests. A previous request whose
+/// deactivation the program did not reach is finished first. Does nothing before any hosted
 /// extension has started.
 /// c: hidden
 #[no_mangle]
@@ -251,20 +347,31 @@ pub unsafe extern "C" fn elephc_php_ext_request_startup() {
     if HOSTED.get().is_empty() || !IN_REQUEST.get().is_empty() {
         return;
     }
+    if !DEACTIVATING.get().is_empty() {
+        deactivate_request();
+    }
     run_lifecycle(PHASE_REQUEST_STARTUP);
 }
 
-/// The compiled program is about to terminate: the request ends (RSHUTDOWN) and
-/// then the modules shut down (MSHUTDOWN), in php-src's order. Called by every
-/// exit path after output buffers are flushed; calling it again is harmless.
+/// The compiled program is about to terminate: the request ends (RSHUTDOWN, then deactivation)
+/// and then the modules shut down (MSHUTDOWN), in php-src's order. Called by every exit path
+/// after output buffers are flushed; a phase the epilogue already ran finds nothing left to do.
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_exit_hook() {
     if HOSTED.get().is_empty() {
         return;
     }
-    run_lifecycle(PHASE_REQUEST_SHUTDOWN);
+    shut_down_request();
+    if !DEACTIVATING.get().is_empty() {
+        deactivate_request();
+    }
     run_lifecycle(PHASE_MODULE_SHUTDOWN);
+    // A fatal error while the request or the modules shut down ends the process with status 255,
+    // as php-src's `EG(exit_status)` does, whatever status the program was leaving with.
+    if eg().exit_status == 255 {
+        std::process::exit(255);
+    }
 }
 
 /// Registers and starts `module` (MINIT, then RINIT) the first time it is
@@ -506,6 +613,9 @@ unsafe fn new_call(function: *mut zend_function, this: *mut zend_object, scope: 
         this,
         scope,
         property: ptr::null_mut(),
+        access_class: None,
+        access_scope: None,
+        access_strict: false,
         callback: ptr::null_mut(),
         argc,
         frame: new_frame(function, argc),
@@ -967,6 +1077,32 @@ unsafe fn held() -> &'static mut std::collections::HashMap<u32, (*mut zend_objec
     HELD.get().get_or_insert_with(Default::default)
 }
 
+/// Frees the objects wrappers still hold as the request is torn down (a wrapper the program
+/// leaked, or kept alive past its cleanup), as php-src's `zend_objects_store_free_object_storage`
+/// frees every live object before the memory manager reclaims the request heap: newest first, each
+/// object's free handler runs once, with no destructor, and only then is its memory released, so
+/// one object's free handler never releases another already gone. A wrapper that releases its
+/// object later finds no handle and does nothing.
+unsafe fn free_held_objects() {
+    let mut objects: Vec<(u32, *mut zend_object)> = held().drain().map(|(handle, (object, _))| (handle, object)).collect();
+    objects.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    for &(_, object) in &objects {
+        let flags = &mut (*object).gc.u.type_info;
+        if *flags & IS_OBJ_FREE_CALLED != 0 {
+            continue;
+        }
+        *flags |= IS_OBJ_DESTRUCTOR_CALLED | IS_OBJ_FREE_CALLED;
+        (*object).gc.refcount += 1;
+        if let Some(free_obj) = (*(*object).handlers).free_obj {
+            free_obj(object);
+        }
+    }
+    for &(_, object) in &objects {
+        let start = object.cast::<u8>().sub((*(*object).handlers).offset as usize);
+        free(start.cast());
+    }
+}
+
 /// Records one more wrapper reference to `object` (the caller already
 /// counted it in the object's refcount) and returns its handle.
 unsafe fn hold(object: *mut zend_object) -> i64 {
@@ -1253,12 +1389,137 @@ pub unsafe extern "C" fn elephc_php_ext_property_new(object: i64, name: *const c
     call.cast()
 }
 
+/// Names the class the program sees a property access's object as (its wrapper's), which PHP's
+/// messages about the access give, and the scope the wrapper's accessor took
+/// (`elephc_php_ext_take_scope`), whose strictness its writes follow.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_property_as(handle: *mut c_void, class: *const c_char, scope: *const c_char) {
+    let call = handle.cast::<Call>();
+    (*call).access_class = Some(CStr::from_ptr(class).to_string_lossy().into_owned());
+    (*call).access_strict = CStr::from_ptr(scope).to_bytes().first() == Some(&crate::property::STRICT_MARK);
+}
+
+/// The caller scope compiled code published for the magic property accessor running, which the
+/// wrapper's accessor takes on entry: the caller's class chain, "" for the global scope, after a
+/// `!` when the caller declared `strict_types=1`.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_take_scope() -> *const c_char {
+    static TAKEN: Global<Option<CString>> = Global::new(None);
+    let name = crate::property::take_magic_scope();
+    TAKEN.get().insert(CString::new(name).unwrap_or_default()).as_ptr()
+}
+
+/// Names the scope of a property access a probe left to its caller (status 4): `scope` is what
+/// `elephc_php_ext_take_scope` gave, the caller's class followed by its ancestors, comma-separated
+/// ("" the global scope). The first of them the engine hosts is the class the scope stands for.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_property_scope(handle: *mut c_void, scope: *const c_char) {
+    let chain = CStr::from_ptr(scope).to_bytes();
+    let chain = chain.strip_prefix(&[crate::property::STRICT_MARK]).unwrap_or(chain);
+    let mut classes = chain.split(|&byte| byte == b',').filter(|name| !name.is_empty());
+    let name = classes.clone().next().map(|name| String::from_utf8_lossy(name).into_owned());
+    let ancestor = classes.find_map(|name| Some(crate::class::lookup(name)).filter(|ce| !ce.is_null())).unwrap_or(ptr::null_mut());
+    (*handle.cast::<Call>()).access_scope = Some((ancestor, name));
+}
+
+/// Whether the engine answers the prepared property access itself, in the scope
+/// `elephc_php_ext_property_scope` named: 1 when the property is declared and visible there, or the
+/// object holds it, so PHP would not call a program subclass's magic accessor; 0 otherwise.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_property_direct(handle: *mut c_void) -> i64 {
+    let call = handle.cast::<Call>();
+    let object = (*call).this;
+    let class = (*call).access_class.clone().unwrap_or_else(|| crate::object::class_name(object));
+    let scope = (*call).access_scope.as_ref().map(|(ancestor, name)| crate::property::ProgramScope {
+        ancestor: *ancestor,
+        name: name.clone(),
+    });
+    crate::property::begin_program_access(object, class, scope, (*call).access_strict);
+    let direct = crate::object::answers_directly(object, (*call).property);
+    crate::property::end_program_access();
+    i64::from(direct)
+}
+
+/// The engine class a program scope stands for: the first class of `chain` (comma-separated, as
+/// `elephc_php_ext_take_scope` gives it, `!` prefix allowed) the engine hosts, or null.
+unsafe fn scope_ancestor(chain: &[u8]) -> *mut zend_class_entry {
+    let chain = chain.strip_prefix(&[crate::property::STRICT_MARK]).unwrap_or(chain);
+    chain
+        .split(|&byte| byte == b',')
+        .filter(|name| !name.is_empty())
+        .find_map(|name| Some(crate::class::lookup(name)).filter(|ce| !ce.is_null()))
+        .unwrap_or(ptr::null_mut())
+}
+
+/// Starts `module` (MINIT, then RINIT) if nothing has yet, so its classes are registered; 1 when
+/// it runs.
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_boot(module: *mut c_void) -> i64 {
+    i64::from(boot_module(module.cast()))
+}
+
+/// A class-level query on the engine class named `class`, as a call whose result
+/// `__elephc_php_ext_result` rebuilds (NULL when no such class): `op` 0 tells whether the class
+/// declares property `name` (`property_exists()`), 1 lists its properties' defaults visible from
+/// `scope` (`get_class_vars()`).
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_class_query(
+    class: *const c_char,
+    scope: *const c_char,
+    name: *const c_char,
+    op: i64,
+) -> *mut c_void {
+    let ce = find_class(class);
+    if ce.is_null() {
+        return ptr::null_mut();
+    }
+    let call = new_call(ptr::null_mut(), ptr::null_mut(), ce, 0).cast::<Call>();
+    if op == 0 {
+        let name = string::new(CStr::from_ptr(name).to_bytes());
+        set_bool(&mut (*call).result, crate::object::class_declares(ce, name));
+        string::zend_string_release(name);
+    } else {
+        let ancestor = scope_ancestor(CStr::from_ptr(scope).to_bytes());
+        set_arr(&mut (*call).result, crate::object::class_defaults(ce, ancestor));
+    }
+    call.cast()
+}
+
+/// `property_exists()` on the engine object a wrapper holds by `handle`, as a call whose bool
+/// result `__elephc_php_ext_result` rebuilds (NULL for a released object).
+/// c: hidden
+#[no_mangle]
+pub unsafe extern "C" fn elephc_php_ext_object_query(handle: i64, name: *const c_char) -> *mut c_void {
+    let object = held_object(handle);
+    if object.is_null() {
+        return ptr::null_mut();
+    }
+    let call = new_call(ptr::null_mut(), object, (*object).ce, 0).cast::<Call>();
+    let name = string::new(CStr::from_ptr(name).to_bytes());
+    set_bool(&mut (*call).result, crate::object::object_has_property(object, name));
+    string::zend_string_release(name);
+    call.cast()
+}
+
 const PROPERTY_READ: i64 = 0;
 const PROPERTY_WRITE: i64 = 1;
 const PROPERTY_ISSET: i64 = 2;
 const PROPERTY_UNSET: i64 = 3;
 const PROPERTY_DEBUG: i64 = 4;
 const PROPERTY_CLONE: i64 = 5;
+/// A write the hosted class makes itself (the wrapper seeding the state its C methods read), in
+/// the object's own scope.
+const PROPERTY_SEED: i64 = 6;
+/// The properties `get_object_vars()` gives in the access's scope.
+const PROPERTY_VARS: i64 = 7;
+/// The properties an `(array)` cast gives, under php-src's mangled keys.
+const PROPERTY_CAST: i64 = 8;
 
 /// Bailout-protected body of a property access: runs the read, write, isset or unset object handler
 /// selected by `*op` on the call's object and property, leaving a read or isset result in the call.
@@ -1296,12 +1557,22 @@ unsafe extern "C" fn property_trampoline(handle: *mut c_void, op: *mut c_void) {
                 unset(object, name, ptr::null_mut());
             }
         }
+        PROPERTY_VARS | PROPERTY_CAST => {
+            set_arr(&mut (*call).result, crate::object::property_view(object, *op.cast::<i64>() == PROPERTY_CAST));
+        }
         PROPERTY_DEBUG => {
-            // What `var_dump()` shows: the debug-info handler's table, else the properties.
+            // What `var_dump()` shows: the debug-info handler's table; the standard one is the
+            // properties under their mangled keys, as php-src's properties table holds them.
             let mut is_temp: c_int = 0;
+            let standard = (*handlers).get_debug_info.map(|debug| debug as *const () as usize)
+                == Some(crate::object::zend_std_get_debug_info as *const () as usize);
             let table = match (*handlers).get_debug_info {
+                _ if standard || (*handlers).get_debug_info.is_none() => {
+                    is_temp = 1;
+                    crate::object::property_view(object, true)
+                }
                 Some(debug) => debug(object, &mut is_temp),
-                None => crate::object::zend_elephc_object_properties(object),
+                None => ptr::null_mut(),
             };
             if !table.is_null() {
                 let owned = if is_temp != 0 { table } else { hash::zend_array_dup(table) };
@@ -1327,12 +1598,33 @@ unsafe extern "C" fn property_trampoline(handle: *mut c_void, op: *mut c_void) {
 
 /// Runs a prepared property access: `op` 0 read (the result), 1 write, 2
 /// isset (a bool result), 3 unset, 4 the debug table (an array result), 5 a
-/// clone (an object result). Statuses as `elephc_php_ext_call_invoke`.
+/// clone (an object result), 6 a write in the object's own scope. Statuses as `elephc_php_ext_call_invoke`, plus 4: a read, write,
+/// isset or unset the caller's scope decides, which ran without effect (see
+/// `elephc_php_ext_property_scope`).
 /// c: hidden
 #[no_mangle]
 pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op: i64) -> i64 {
     let call = handle.cast::<Call>();
     set_null(&mut (*call).result);
+    // A seed runs in the engine object's own class scope (`EG(fake_scope)`), so even a private
+    // property of the class takes it.
+    let seed = op == PROPERTY_SEED;
+    let op = if seed { PROPERTY_WRITE } else { op };
+    let outer_scope = eg().fake_scope;
+    if seed {
+        eg().fake_scope = (*(*call).this).ce;
+    }
+    // A read, write, isset or unset is the program's, checked in its scope (`crate::property`).
+    let access = matches!(op, PROPERTY_READ | PROPERTY_WRITE | PROPERTY_ISSET | PROPERTY_UNSET | PROPERTY_VARS);
+    if access {
+        let object = (*call).this;
+        let class = (*call).access_class.clone().unwrap_or_else(|| crate::object::class_name(object));
+        let scope = (*call).access_scope.as_ref().map(|(ancestor, name)| crate::property::ProgramScope {
+            ancestor: *ancestor,
+            name: name.clone(),
+        });
+        crate::property::begin_program_access(object, class, scope, (*call).access_strict);
+    }
     let mut op = op;
     let bailed = elephc_zend_protected_call(
         Some(property_trampoline),
@@ -1340,6 +1632,8 @@ pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op:
         (&mut op as *mut i64).cast(),
         &mut eg().bailout,
     );
+    let needs_scope = access && crate::property::end_program_access();
+    eg().fake_scope = outer_scope;
     if bailed != 0 {
         settle_without_exception();
         return CALL_FATAL;
@@ -1349,6 +1643,10 @@ pub unsafe extern "C" fn elephc_php_ext_property_invoke(handle: *mut c_void, op:
         return CALL_EXCEPTION;
     }
     settle_without_exception();
+    if needs_scope {
+        set_null(&mut (*call).result);
+        return CALL_NEEDS_SCOPE;
+    }
     CALL_OK
 }
 

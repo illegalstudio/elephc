@@ -664,31 +664,66 @@ fn emit_clone_hook(
             emit_static_clone_hook_visibility_error(ctx, candidate);
             continue;
         }
-        let receiver_ty = PhpType::Object(candidate.class_name.clone());
-        let params = [receiver_ty.clone()];
-        let refs = [false];
-        let operands = [object_operand];
-        let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
-            ctx,
-            &receiver_reg,
-            &receiver_ty,
-            &operands,
-            &params,
-            &refs,
-            RefArgCellLifetime::CallOnly,
-        )?;
-        let pad = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
-        abi::emit_reserve_temporary_stack(ctx.emitter, pad);
-        emit_resolved_method_call(ctx, &candidate.target)?;
-        abi::emit_release_temporary_stack(ctx.emitter, pad);
-        abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-        emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-        emit_ref_arg_writebacks(ctx, &call_args)?;
+        // A program subclass of a hosted extension class that declares its own `__clone()`:
+        // the copy takes its own engine object first, as php-src's `clone_obj` handler runs
+        // before `__clone()` (the wrapper's `__clone()` does this itself).
+        if let Some(plumbing) = hosted_clone_plumbing(ctx, candidate)? {
+            emit_clone_hook_call(ctx, &receiver_reg, &candidate.class_name, object_operand, &plumbing)?;
+        }
+        emit_clone_hook_call(ctx, &receiver_reg, &candidate.class_name, object_operand, &candidate.target)?;
         abi::emit_jump(ctx.emitter, &done);
     }
     ctx.emitter.label(&no_hook);
     ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Calls one clone hook `target` on the clone held in `receiver_reg`.
+fn emit_clone_hook_call(
+    ctx: &mut FunctionContext<'_>,
+    receiver_reg: &str,
+    class_name: &str,
+    object_operand: ValueId,
+    target: &MethodCallTarget,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(class_name.to_string());
+    let params = [receiver_ty.clone()];
+    let refs = [false];
+    let operands = [object_operand];
+    let call_args = materialize_method_call_args_with_receiver_reg_and_refs(
+        ctx,
+        receiver_reg,
+        &receiver_ty,
+        &operands,
+        &params,
+        &refs,
+        RefArgCellLifetime::CallOnly,
+    )?;
+    let pad = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
+    abi::emit_reserve_temporary_stack(ctx.emitter, pad);
+    emit_resolved_method_call(ctx, target)?;
+    abi::emit_release_temporary_stack(ctx.emitter, pad);
+    abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
+    emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
+    emit_ref_arg_writebacks(ctx, &call_args)?;
+    Ok(())
+}
+
+/// The hosted wrapper's engine-clone method, for a clone hook a program subclass of a hosted
+/// extension class declared; `None` for any other hook.
+fn hosted_clone_plumbing(ctx: &FunctionContext<'_>, candidate: &CloneHookCandidate) -> Result<Option<MethodCallTarget>> {
+    let classes = &ctx.module.class_infos;
+    let plumbing = php_symbol_key(crate::php_ext::prelude::CLONE_METHOD);
+    let Some(info) = classes.get(&candidate.class_name) else {
+        return Ok(None);
+    };
+    let Some(owner) = info.method_impl_classes.get(&plumbing) else {
+        return Ok(None);
+    };
+    if candidate.target.impl_class == *owner {
+        return Ok(None);
+    }
+    resolve_method_call_target(ctx, &candidate.class_name, crate::php_ext::prelude::CLONE_METHOD, 1).map(Some)
 }
 
 /// Collects clone hooks for every runtime class, including an inherited private hook.

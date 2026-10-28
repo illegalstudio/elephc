@@ -196,8 +196,27 @@ declared class. So:
   `foreach`, keys included, and passed to `iterator_to_array()`,
   `iterator_count()` and `iterator_apply()`. Breaking out of the loop
   releases the extension's iterator.
+- A declared property keeps its PHP contract: a private or protected one is
+  reachable only from the scope PHP allows (the class's own methods, and a
+  program subclass for a protected one), a readonly one is set once, and a
+  typed one takes only values of its type, converted as PHP's weak mode does,
+  or as strict code does in a file declaring `strict_types=1`. A subclass
+  writing the name of an ancestor's private property gets a dynamic property
+  of its own, as in PHP, and creating a dynamic property is deprecated unless
+  the class allows them. The errors are PHP's; the engine reports its warnings
+  and deprecations on stderr, without a file and line. One difference remains:
+  the value of an assignment expression (`$x = $object->count = "12"`) is the
+  assigned value, not the converted one PHP gives.
+- A subclass may declare `__get`, `__set`, `__isset`, `__unset` and `__clone`
+  with any signature PHP accepts, as the extension's class has none of them;
+  a clone still gets its own copy of the extension's object before your
+  `__clone()` runs. As in PHP, your accessors run only for a name the
+  extension's object does not answer: one it does not declare or hold, or one
+  the calling scope cannot reach.
 - An object is released when its last instance is; the extension's
-  destructor and `free_obj` handler then run, as in PHP.
+  destructor and `free_obj` handler then run, as in PHP. That holds when a
+  subclass overrides `__destruct()` without calling the parent, and when its
+  constructor throws after the extension's constructor ran.
 - `clone` goes through the class's `clone_obj` handler, so the copy carries
   the extension's own state; a class without one throws PHP's `Error`
   ("Trying to clone an uncloneable object").
@@ -232,7 +251,12 @@ but cannot be called yet: it throws an `Error` saying why.
   and `elephc extension add` lists them.
 - **Magic methods other than `__toString` and `__debugInfo`** (`__serialize`,
   `__invoke`...) are not forwarded. `var_dump()` and `print_r()` show an
-  extension object's debug table, as PHP does.
+  extension object's debug table, as PHP does: its properties in declaration
+  order with their visibility; `get_object_vars()`, `(array)`,
+  `property_exists()` and `get_class_vars()` read the extension's object and
+  class too. Two gaps remain: a typed property never initialized is left out of
+  `var_dump()` where PHP prints `uninitialized(int)`, and
+  `ReflectionClass::getProperties()` does not list the extension's properties.
 - **The engine is PHP's extension API, not PHP's runtime.** Elephc's engine
   provides what extensions call to handle values, parse arguments, register
   functions, classes, constants and INI directives, throw exceptions,
@@ -247,6 +271,21 @@ but cannot be called yet: it throws an `Error` saying why.
   `--web` program (`PHP_SAPI`, `sapi_module.name`, `sapi_cli_is_cli()`), as
   `php_sapi_name()` answers. Resources still open when a request ends are
   closed then, and persistent resources at program exit, as in PHP.
+- **A request ends in PHP's order**, at a program's exit and between two
+  requests of a `--web` worker: RSHUTDOWN, then its resources close (newest
+  first), then the request's extension objects are released and any extension
+  object a leaked instance still holds is freed, the INI directives it changed
+  at run time go back to their configured values, the post-deactivate hooks
+  run, and the request memory it did not free is freed: `emalloc` and friends,
+  non-persistent `zend_string`s, arrays and hash storage, and objects. An
+  `ini_set`-style change never reaches the next request. Each step runs on its
+  own, as in PHP: a fatal error in one extension's RSHUTDOWN skips none of the
+  others, nor the rest of the teardown, and the program then exits with status
+  255. Allocations an extension makes in MINIT or with `pemalloc(…, 1)` (or a
+  persistent string or table) are kept, as in PHP.
+  One difference remains: an extension object a global variable shares with
+  another, or a static property holds, is freed with the program's globals,
+  before RSHUTDOWN, where PHP frees it after the resources close.
 - **Integrations with other extensions are compiled out.** Elephc does not
   host `session`, `pcre`, streams or output buffering, so an optional
   integration guarded by `HAVE_PHP_SESSION` and the like (msgpack's and

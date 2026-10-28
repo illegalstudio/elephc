@@ -64,6 +64,20 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x10]");                                      // load the current object/descriptor operand for `ldr x10, [x10]`
     emitter.instruction("cmp x9, x10");                                         // evaluate `cmp x9, x10` before selecting the projection branch
     emitter.instruction("b.hs __rt_object_to_hash_empty");                      // use `__rt_object_to_hash_empty` when the object or metadata is absent
+    // -- a hosted PHP extension object lists its engine object's properties --
+    abi::emit_symbol_address(emitter, "x10", "_elephc_object_view_hook");
+    emitter.instruction("ldr x10, [x10]");                                      // the program's hosted-object view helper, or 0
+    emitter.instruction("cbz x10, __rt_object_to_hash_descriptors");            // a program hosting no extension walks the descriptors
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the cast mode selects the view
+    emitter.instruction("ldr x2, [sp, #48]");                                   // the lexical class id names the scope
+    emitter.instruction("blr x10");                                             // x0 = the owned view hash, or 0 for another object
+    emitter.instruction("cbz x0, __rt_object_to_hash_reload");                  // not a hosted object: project it here
+    emitter.instruction("str x0, [sp, #16]");                                   // the view is the result
+    emitter.instruction("b __rt_object_to_hash_done");                          // return it
+    emitter.label("__rt_object_to_hash_reload");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object after the helper call
+    emitter.instruction("ldr x9, [x0]");                                        // reload its class id
+    emitter.label("__rt_object_to_hash_descriptors");
     abi::emit_symbol_address(emitter, "x11", "_class_reflection_public_cast_flags");
     emitter.instruction("ldr x11, [x11, x9, lsl #3]");                          // select Reflection public-only cast projection policy
     emitter.instruction("str x11, [sp, #104]");                                 // retain the cast projection flag across property iteration
@@ -296,6 +310,23 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rip + _class_gc_desc_count]");     // load the current object/descriptor operand for `mov r10, QWORD PTR [rip + _class_gc_desc_count]`
     emitter.instruction("cmp r9, r10");                                         // evaluate `cmp r9, r10` before selecting the projection branch
     emitter.instruction("jae __rt_object_to_hash_empty_x");                     // use `__rt_object_to_hash_empty_x` when the object or metadata is absent
+    // -- a hosted PHP extension object lists its engine object's properties --
+    abi::emit_symbol_address(emitter, "r10", "_elephc_object_view_hook");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // the program's hosted-object view helper, or 0
+    emitter.instruction("test r10, r10");                                       // does the program host an extension?
+    emitter.instruction("jz __rt_object_to_hash_descriptors_x");                // no: walk the descriptors
+    emitter.instruction("mov rdi, rax");                                        // the object
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the cast mode selects the view
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // the lexical class id names the scope
+    emitter.instruction("call r10");                                            // rax = the owned view hash, or 0 for another object
+    emitter.instruction("test rax, rax");                                       // was it a hosted object?
+    emitter.instruction("jz __rt_object_to_hash_reload_x");                     // no: project it here
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // the view is the result
+    emitter.instruction("jmp __rt_object_to_hash_done_x");                      // return it
+    emitter.label("__rt_object_to_hash_reload_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object after the helper call
+    emitter.instruction("mov r9, QWORD PTR [rax]");                             // reload its class id
+    emitter.label("__rt_object_to_hash_descriptors_x");
     emitter.instruction("lea r10, [rip + _class_reflection_public_cast_flags]"); // materialize the Reflection public-only cast-policy table
     emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");                   // select the Reflection public-only cast projection policy
     emitter.instruction("mov QWORD PTR [rbp - 128], r10");                      // retain the cast projection flag across property iteration

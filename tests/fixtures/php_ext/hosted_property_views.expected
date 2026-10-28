@@ -1,0 +1,84 @@
+array(3) {
+  ["number"]=>
+  int(7)
+  ["count"]=>
+  int(0)
+  ["ratio"]=>
+  NULL
+}
+array(5) {
+  ["kind"]=>
+  string(3) "rec"
+  ["number"]=>
+  int(3)
+  ["late"]=>
+  int(5)
+  ["count"]=>
+  int(0)
+  ["ratio"]=>
+  NULL
+}
+~DemoRecord~secret=42
+~*~kind='rec'
+number=7
+count=0
+ratio=NULL
+object(LateRecord)#2 (6) {
+  ["secret":"DemoRecord":private]=>
+  int(42)
+  ["kind":protected]=>
+  string(3) "rec"
+  ["number"]=>
+  int(3)
+  ["late"]=>
+  int(5)
+  ["count"]=>
+  int(0)
+  ["ratio"]=>
+  NULL
+}
+LateRecord Object
+(
+    [secret:DemoRecord:private] => 42
+    [kind:protected] => rec
+    [number] => 3
+    [late] => 5
+    [count] => 0
+    [ratio] => 
+)
+
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+array(1) {
+  ["label"]=>
+  string(7) "counter"
+}
+array(5) {
+  ["kind"]=>
+  string(3) "rec"
+  ["number"]=>
+  NULL
+  ["late"]=>
+  NULL
+  ["count"]=>
+  int(0)
+  ["ratio"]=>
+  NULL
+}
+object(Mangled)#3 (3) {
+  ["hidden":"Mangled":private]=>
+  int(1)
+  ["shared":protected]=>
+  int(2)
+  ["open"]=>
+  int(3)
+}
+Mangled Object
+(
+    [hidden:Mangled:private] => 1
+    [shared:protected] => 2
+    [open] => 3
+)
+

@@ -44,7 +44,10 @@ pub(super) fn dynamic_new_candidates(
     let mut sorted_classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
     sorted_classes.sort_by_key(|(_, class_info)| class_info.class_id);
     for (class_name, class_info) in sorted_classes {
-        if !class_is_same_or_descends_from(ctx, class_name, required_parent) {
+        // The extension host's classes are not classes PHP code can name.
+        if !class_is_same_or_descends_from(ctx, class_name, required_parent)
+            || crate::php_ext::prelude::is_host_internal_symbol(class_name)
+        {
             continue;
         }
         if let Some(candidate) =

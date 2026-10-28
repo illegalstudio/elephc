@@ -52,6 +52,13 @@ impl RuntimeValueOps for ElephcRuntimeOps {
         Ok(())
     }
 
+    /// Hands the chain to the generated helper, which stores it in the extension host's cell. The
+    /// bytes stay borrowed: the caller keeps them alive until the accessor returned and cleared it.
+    fn publish_magic_scope(&mut self, chain: Option<&str>) {
+        let (ptr, len) = chain.map_or((std::ptr::null(), 0), |chain| (chain.as_ptr(), chain.len() as u64));
+        unsafe { __elephc_eval_publish_magic_scope(ptr, len) };
+    }
+
     /// Keeps trigger_error's precise level and avoids redispatching default formatted text.
     fn warning_unhandled(&mut self, message: &str) -> Result<(), EvalStatus> {
         unsafe { __elephc_eval_warning_raw(message.as_ptr(), message.len() as u64); }

@@ -62,8 +62,13 @@ static HashTable *demo_counter_debug_info(zend_object *object, int *is_temp)
     return table;
 }
 
+/* free_obj: counts the frees, and traces them as demo.c's lifecycle trace does, so a test sees
+ * where an object still alive at the request's end is freed relative to its resources. */
 static void demo_counter_free(zend_object *object)
 {
+    if (getenv("ELEPHC_DEMO_TRACE") != NULL) {
+        fprintf(stderr, "elephc_demo: FREE counter " ZEND_LONG_FMT "\n", counter_of(object)->value);
+    }
     DEMO_G(counters_freed)++;
     zend_object_std_dtor(object);
 }

@@ -689,6 +689,8 @@ pub(super) fn runtime_name_candidate_properties(
             }
         }
     }
+    // A hosted wrapper's bookkeeping is no property a run-time name reaches.
+    names.retain(|name| !crate::php_ext::prelude::is_host_plumbing_property(name));
     Ok(names)
 }
 

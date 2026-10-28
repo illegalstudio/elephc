@@ -448,6 +448,35 @@ fn test_audit_rejects_reserved_elephc_call() {
     );
 }
 
+/// Verifies the audit rejects reaching a hosted PHP extension's hidden bookkeeping: its C entry
+/// points, the wrapper's `__elephc*` members and the owner class, which PHP code never sees.
+#[test]
+fn test_audit_rejects_extension_host_internals() {
+    expect_audit_violation("<?php elephc_php_ext_object_release(1);", "reserved for the PHP extension host");
+    expect_audit_violation(
+        "<?php class M { public function o(): mixed { return $this->__elephcOwner; } }",
+        "property '__elephcOwner' is reserved for the compiler",
+    );
+    expect_audit_violation("<?php $o = new \\__ElephcPhpExtOwner(1, 1);", "class '__ElephcPhpExtOwner' is reserved");
+    expect_audit_violation("<?php function f(object $w): int { return $w->__elephcObject(); }", "method '__elephcObject' is reserved");
+    // Declarations: a subclass would otherwise hijack the wrapper's handle getter.
+    expect_audit_violation("<?php class K { public function __elephcObject(): int { return 0; } }", "method '__elephcObject' is reserved");
+    expect_audit_violation("<?php class K { public int $__elephcHandle = 0; }", "property '__elephcHandle' is reserved");
+    expect_audit_violation("<?php class __ElephcMine {}", "class '__ElephcMine' is reserved");
+    // Static receivers, class-name positions and type declarations.
+    expect_audit_violation("<?php \\__ElephcPhpExtObjects::$objects = [];", "class '__ElephcPhpExtObjects' is reserved");
+    expect_audit_violation("<?php echo __ElephcPhpExtOwner::class;", "class '__ElephcPhpExtOwner' is reserved");
+    expect_audit_violation("<?php var_dump($x instanceof __ElephcPhpExtObject);", "class '__ElephcPhpExtObject' is reserved");
+    expect_audit_violation("<?php function f(__ElephcPhpExtOwner $o): void {}", "class '__ElephcPhpExtOwner' is reserved");
+    expect_audit_violation("<?php function f(object $o): void { $o->__elephcHandle = 0; }", "property '__elephcHandle' is reserved");
+    // Names reached through strings: callables, dynamic members and dynamic classes.
+    expect_audit_violation("<?php call_user_func('elephc_php_ext_object_release', 1);", "names a compiler-reserved symbol");
+    expect_audit_violation("<?php $f = 'elephc_php_ext_object_release'; $f(1);", "names a compiler-reserved symbol");
+    expect_audit_violation("<?php function f(object $o): mixed { return $o->{'__elephcOwner'}; }", "names a compiler-reserved symbol");
+    expect_audit_violation("<?php $c = '__ElephcPhpExtOwner'; $o = new $c(1, 1);", "names a compiler-reserved symbol");
+    expect_audit_violation("<?php function f(object $o): mixed { $f = [$o, '__elephcObject']; return $f(); }", "names a compiler-reserved symbol");
+}
+
 /// Verifies extension expressions inside PHP attribute arguments on a function
 /// declaration are rejected: attribute args are ordinary expressions and must
 /// not be an audit blind spot.

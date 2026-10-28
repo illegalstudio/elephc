@@ -1071,8 +1071,8 @@ pub unsafe extern "C" fn zend_register_resource(rsrc_pointer: *mut c_void, rsrc_
 }
 
 /// php-src's `zend_close_rsrc_list(&EG(regular_list))` at the end of a request: every resource
-/// still open is closed through its type's destructor, newest first. A holder that still points at
-/// one sees it closed (type -1) and releases it later.
+/// still open is closed through its type's destructor, newest first. `destroy_regular_resources`
+/// then frees them.
 pub unsafe fn close_regular_resources() {
     let list = &mut eg().regular_list as *mut HashTable;
     let mut idx = (*list).nNumUsed;
@@ -1091,6 +1091,28 @@ pub unsafe fn close_regular_resources() {
             zend_list_close(res);
         }
     }
+}
+
+/// php-src's `zend_destroy_rsrc_list(&EG(regular_list))` once a request's resources are closed:
+/// every `zend_resource` the request registered is freed (whatever pointed at one belonged to the
+/// finished request), and the list and its handle numbering start over for the next request.
+pub unsafe fn destroy_regular_resources() {
+    let list = &mut eg().regular_list as *mut HashTable;
+    let mut doomed = Vec::new();
+    for idx in 0..(*list).nNumUsed {
+        let p = hash::bucket(list, idx);
+        if (*p).val.u1.v.r#type == IS_RESOURCE {
+            doomed.push((*p).val.value.res);
+        }
+    }
+    // The list itself is request memory, as `init_executor` creates it for each request: its
+    // storage goes now, not with the request sweep while the list still points at it.
+    hash::zend_hash_destroy(list);
+    hash::init(list, 8, None, false);
+    for res in doomed {
+        free(res.cast());
+    }
+    *NEXT_RESOURCE.get() = 1;
 }
 
 /// Stores a persistent resource (handle -1) in `EG(persistent_list)` under `key`, replacing any

@@ -687,6 +687,14 @@ fn compile_inner(config: CliConfig, entry: EntryKind<'_>) {
         };
     timings.record_since("autoload-run", phase_started);
 
+    // A program subclass of a hosted extension class may declare its own magic accessors; PHP
+    // calls them only for a name the extension's object does not answer, so each one first asks
+    // the engine. Runs once every class is in the AST with resolved names.
+    let ast = match &hosted_php_ext {
+        Some(_) => crate::php_ext::overrides::route_program_accessors(ast),
+        None => ast,
+    };
+
     // `elephc test`: discover the test classes now that every class they extend, including
     // the ones autoloading just brought in, is in the AST with resolved names, and append
     // the synthesized driver. An empty run is a compile error here, not a binary that

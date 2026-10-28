@@ -397,6 +397,7 @@ fn finalize_user_asm(
 ) -> Result<GeneratedUserAsm> {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     mbstring_configuration::emit(module, &mut emitter, &mut data);
+    eval_property_helpers::emit_hosted_object_view_helper(module, &mut emitter);
     let emit_eval_reflection_metadata =
         eval_bridge || module.required_runtime_features.eval_scope;
     if eval_bridge {

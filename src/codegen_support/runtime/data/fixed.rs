@@ -1567,6 +1567,13 @@ pub(crate) fn emit_runtime_data_fixed(
     // key bytes and `"]=>\n` after, matching PHP's `["key"]=>` line format.
     out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"[\\\"\"\n");
     out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // A mangled property key's annotation, as var_dump and print_r show an object's properties.
+    out.push_str(".globl _vd_key_protected\n_vd_key_protected:\n    .ascii \"\\\":protected]=>\\n\"\n");
+    out.push_str(".globl _vd_key_private_open\n_vd_key_private_open:\n    .ascii \"\\\":\\\"\"\n");
+    out.push_str(".globl _vd_key_private_close\n_vd_key_private_close:\n    .ascii \"\\\":private]=>\\n\"\n");
+    out.push_str(".globl _pr_key_protected\n_pr_key_protected:\n    .ascii \":protected\"\n");
+    out.push_str(".globl _pr_key_colon\n_pr_key_colon:\n    .ascii \":\"\n");
+    out.push_str(".globl _pr_key_private\n_pr_key_private:\n    .ascii \":private\"\n");
     // var_dump nested-container delimiters: `array(` + count + `) {\n` opens a
     // nested array/hash on its value line, `}\n` closes it at the same indent.
     out.push_str(".globl _vd_array_prefix\n_vd_array_prefix:\n    .ascii \"array(\"\n");
@@ -1613,6 +1620,10 @@ pub(crate) fn emit_runtime_data_fixed(
     // _debuginfo_pad: 1 while a var_dump render is fetching `__debugInfo()` (PHP has already
     // printed the nested value's indent when the fatal fires), 0 for print_r.
     out.push_str(&comm_directive("_debuginfo_pad", 8, target));
+    // _dump_unmangle: 1 from the moment a `__debugInfo()` renderer hands its array to a hash
+    // walker until that walker takes it on entry: its string keys are object property keys, which
+    // var_dump and print_r show unmangled (`["x":"A":private]`). Nested arrays never see it.
+    out.push_str(&comm_directive("_dump_unmangle", 8, target));
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by

@@ -103,7 +103,7 @@ pub(super) fn reflection_class_metadata_for_name(
             reflected_name: Some(class_name.to_string()),
             attr_names: info.attribute_names.clone(),
             attr_args: info.attribute_args.clone(),
-            interface_names: info.interfaces.clone(),
+            interface_names: info.interfaces.iter().filter(|name| !crate::php_ext::prelude::is_internal_name(name)).cloned().collect(),
             trait_names: info.used_traits.clone(),
             trait_aliases: info.trait_aliases.clone(),
             parent_names: reflection_parent_class_names(ctx, info),

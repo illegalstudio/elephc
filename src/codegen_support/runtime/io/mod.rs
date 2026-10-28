@@ -286,7 +286,7 @@ pub(crate) use user_wrapper_url_stat::{
 };
 pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
-    emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
+    emit_print_r_open, emit_print_r_property_key, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
 };
 pub(crate) use print_r_buffer::{
     emit_pr_append, emit_pr_base, emit_pr_finish, emit_pr_flush_deferred, emit_pr_release,
@@ -310,7 +310,7 @@ pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
     emit_var_dump_array_str, emit_var_dump_close_container, emit_var_dump_emit_bool_line,
     emit_var_dump_emit_callable, emit_var_dump_emit_float_line, emit_var_dump_emit_indexed_key,
-    emit_var_dump_emit_int_line, emit_var_dump_emit_null_line, emit_var_dump_emit_string_key,
+    emit_var_dump_emit_int_line, emit_var_dump_emit_null_line, emit_var_dump_emit_property_key, emit_var_dump_emit_string_key,
     emit_var_dump_emit_string_line, emit_var_dump_hash, emit_var_dump_indent_step,
     emit_var_dump_indexed, emit_var_dump_open_container, emit_var_dump_pad, emit_var_dump_value,
     emit_var_dump_write,

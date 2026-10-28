@@ -36,8 +36,9 @@ void smart_string_appendl_ex(void *dest, const char *str, size_t len, _Bool pers
 
 /* ------------------------------------------------------------ formatting */
 
-/* Formats into a malloc'd buffer (emalloc is malloc), NUL-terminated, at most
- * `max_len` bytes when it is non-zero, as spprintf() does. */
+/* Formats into a malloc'd buffer, NUL-terminated, at most `max_len` bytes when it is
+ * non-zero, as spprintf() does. The caller's efree() releases it: an efree of a block the
+ * request heap never recorded just frees it, and the end-of-request sweep never sees it. */
 static char *elephc_vformat(size_t max_len, size_t *out_len, const char *format, va_list args) {
     va_list copy;
     va_copy(copy, args);

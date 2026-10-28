@@ -22,6 +22,23 @@ use super::super::validation::{
 use super::state::ClassBuildState;
 use super::{collect_attribute_args, collect_attribute_names};
 
+/// Whether `method_key` overrides one of the magic methods a hosted PHP extension class's wrapper
+/// declares as its own plumbing (`__get`, `__set`, `__isset`, `__unset`, `__clone`). The hosted
+/// class has none of them in PHP, so a program subclass declares them with any signature PHP
+/// accepts for a magic method, as it would extending the internal class.
+fn overrides_hosted_wrapper_plumbing(checker: &Checker, declaring_class: Option<&str>, method_key: &str) -> bool {
+    let hosted = |name: &str| {
+        checker
+            .classes
+            .get(name)
+            .is_some_and(|info| info.interfaces.iter().any(|i| i == crate::php_ext::prelude::OBJECT_INTERFACE))
+    };
+    matches!(method_key, "__get" | "__set" | "__isset" | "__unset" | "__clone")
+        && declaring_class.is_some_and(|owner| {
+            hosted(owner) && checker.classes.get(owner).and_then(|info| info.parent.as_deref()).is_none_or(|parent| !hosted(parent))
+        })
+}
+
 /// Validates and registers all methods of a flattened class into the build state.
 /// Enforces abstract/final modifiers, method body presence, and delegates to
 /// `apply_static_method` or `apply_instance_method` based on `method.is_static`.
@@ -239,8 +256,9 @@ fn apply_instance_method(
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
-    let internal_exception_override = injected_exception_final_override(class, method, &method_key);
     let inherited_declaring_class = state.method_declaring_classes.get(&method_key).cloned();
+    let internal_exception_override = injected_exception_final_override(class, method, &method_key)
+        || overrides_hosted_wrapper_plumbing(checker, inherited_declaring_class.as_deref(), &method_key);
     let mut sig = build_method_sig(checker, method, &class.name)?;
     let serializable = state.interfaces.iter().chain(class.implements.iter()).any(|name|
         name.eq_ignore_ascii_case("Serializable") || checker.interface_extends_interface(name, "Serializable"));

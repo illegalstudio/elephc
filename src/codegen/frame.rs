@@ -761,11 +761,15 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     let (static_properties, hosting_tables) =
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
     emit_main_static_property_cleanup(ctx, static_properties);
-    // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
-    // hosting tables release the engine objects (`free_obj` may still use module state), and the
-    // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
-    // store before `php_module_shutdown`. The hook's own RSHUTDOWN then finds no request left.
-    if !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module) {
+    // Hosted extensions end the request (RSHUTDOWN, then the open resources close) after the
+    // program's destructors, then their hosting tables release the engine objects (`free_obj` may
+    // still use module state), then the request deactivates (INI restore, post-deactivate,
+    // request heap), and the exit
+    // sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object store
+    // before `zend_post_deactivate_modules` and both before `php_module_shutdown`. The hook's own
+    // request phases then find no request left.
+    let hosts_php_ext = !hosting_tables.is_empty() && super::block_emit::module_hosts_php_ext(ctx.module);
+    if hosts_php_ext {
         let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_SHUTDOWN);
         abi::emit_call_label(ctx.emitter, &symbol);
     }
@@ -774,6 +778,10 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     // still reach C code that calls a callback.
     if module_binds_extern_callbacks(ctx.module) {
         abi::emit_call_label(ctx.emitter, EXTERN_CALLBACK_RELEASE_LABEL);
+    }
+    if hosts_php_ext {
+        let symbol = ctx.emitter.target.extern_symbol(super::block_emit::HOSTED_REQUEST_DEACTIVATE);
+        abi::emit_call_label(ctx.emitter, &symbol);
     }
     if module_uses_resource_inventory_cleanup(ctx.module) {
         abi::emit_call_label(ctx.emitter, "__rt_resource_inventory_reset");
