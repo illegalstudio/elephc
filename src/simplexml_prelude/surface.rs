@@ -603,10 +603,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
                     $value = elephc_xml_sx_int($raw, 6) !== 0 ? elephc_xml_sx_string($raw, 0)
                         : __elephc_simplexml_wrap(elephc_xml_sx_alias($raw), get_class($this));
                     if (array_key_exists($name, $result)) {
-                        $old = $result[$name];
-                        if (!is_array($old)) { $old = [$old]; }
-                        $old[] = $value;
-                        $result[$name] = $old;
+                        if (is_array($result[$name])) { $result[$name][] = $value; }
+                        else {
+                            $result[$name] = [$result[$name], $value];
+                        }
                     } else { $result[$name] = $value; }
                 }
                 return $result;

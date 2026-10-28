@@ -133,3 +133,80 @@ unset($value, $original, $copy);
     assert_eq!(out.stdout, expected.repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Repeated names preserve first-key order, mixed child groups, debug shape, and copied arrays.
+#[test]
+fn test_simplexml_repeated_projection_shape_and_cow_bundle() {
+    if skip_without_xml_native("test_simplexml_repeated_projection_shape_and_cow_bundle") { return; }
+    let body = r###"$xml = new SimpleXMLElement('<r a="1"><i>1</i><b>x</b><i><c/></i><i>3</i><b>y</b><z/></r>');
+echo json_encode($xml), "\n";
+$properties = (array)$xml;
+echo implode(',', array_keys($properties)), "\n";
+echo json_encode($properties), "\n", json_encode($xml->__debugInfo()), "\n";
+echo print_r($xml, true);
+$properties['i'][] = 'copy';
+echo count($properties['i']), ':', count(((array)$xml)['i']), "\n";
+unset($properties, $xml);
+"###;
+    let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php\n{body}\n$source = $argc > 0 ? '{quoted_body}' : ''; eval($source);");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    let expected = r###"{"@attributes":{"a":"1"},"i":["1",{"c":{}},"3"],"b":["x","y"],"z":{}}
+@attributes,i,b,z
+{"@attributes":{"a":"1"},"i":["1",{"c":{}},"3"],"b":["x","y"],"z":{}}
+{"@attributes":{"a":"1"},"i":["1",{"c":{}},"3"],"b":["x","y"],"z":{}}
+SimpleXMLElement Object
+(
+    [@attributes] => Array
+        (
+            [a] => 1
+        )
+
+    [i] => Array
+        (
+            [0] => 1
+            [1] => SimpleXMLElement Object
+                (
+                    [c] => SimpleXMLElement Object
+                        (
+                        )
+
+                )
+
+            [2] => 3
+        )
+
+    [b] => Array
+        (
+            [0] => x
+            [1] => y
+        )
+
+    [z] => SimpleXMLElement Object
+        (
+        )
+
+)
+4:3
+"###;
+    assert_eq!(out.stdout, expected.repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A feed-sized group must project within the ordinary CI timeout in both AOT and opaque eval.
+#[test]
+fn test_simplexml_large_repeated_projection_bundle() {
+    if skip_without_xml_native("test_simplexml_large_repeated_projection_bundle") { return; }
+    let body = r###"$big = new SimpleXMLElement('<r>' . str_repeat('<i>v</i>', 200000) . '</r>');
+$properties = (array)$big;
+echo count($properties['i']), ':';
+unset($properties);
+echo strlen(json_encode($big)), "\n";
+unset($big);
+"###;
+    let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php\n{body}\n$source = $argc > 0 ? '{quoted_body}' : ''; eval($source);");
+    let out = compile_and_run_with_heap_size(&source, 134_217_728);
+    assert_eq!(out, "200000:800007\n".repeat(2));
+}
