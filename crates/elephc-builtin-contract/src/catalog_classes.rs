@@ -133,6 +133,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("DOMComment", "domcomment", Class, Dom, Prelude),
     class!("DOMDocument", "domdocument", Class, Dom, Prelude),
     class!("DOMElement", "domelement", Class, Dom, Prelude),
+    class!("DOMException", "domexception", Class, Dom, Prelude),
     class!("DOMNode", "domnode", Class, Dom, Prelude),
     class!("DOMNodeList", "domnodelist", Class, Dom, Prelude),
     class!("DOMProcessingInstruction", "domprocessinginstruction", Class, Dom, Prelude),

@@ -18,8 +18,10 @@
 //!   flag and no `elephc-dom` crate.
 //! - Delivered as parsed PHP (like mysqli), not a native builtin, so every
 //!   supported target gets the same walk with no new assembly.
+//! - Attribute-name validation and DOMException remain available without libxml2.
 
 mod detect;
+mod attributes;
 mod entities;
 mod surface;
 
@@ -41,7 +43,7 @@ pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> boo
 fn parsed_prelude() -> Program {
     PARSED_PRELUDE
         .get_or_init(|| {
-            let source = format!("<?php\n{}\n{}", entities::SRC, surface::SRC);
+            let source = format!("<?php\n{}\n{}\n{}", entities::SRC, attributes::SRC, surface::SRC);
             let tokens = crate::lexer::tokenize(&source).expect("dom html prelude must tokenize");
             crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
         })
@@ -161,6 +163,7 @@ mod tests {
         assert_eq!(
             declared,
             vec![
+                "DOMException",
                 "DOMNode",
                 "__ElephcDOMNodeListIterator",
                 "DOMNodeList",

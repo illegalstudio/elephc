@@ -1562,6 +1562,24 @@
       "internal": false,
       "kind": "class",
       "module": "dom",
+      "name": "DOMException",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
       "name": "DOMNode",
       "php_manual": null,
       "since": null

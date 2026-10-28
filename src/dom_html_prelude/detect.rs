@@ -1,8 +1,8 @@
 //! Purpose:
 //! Decides whether a parsed program references the Termwind-facing DOM HTML
 //! surface: `DOMDocument`, `DOMNode`, `DOMElement`, `DOMText`, `DOMComment`,
-//! `DOMCharacterData`, `DOMProcessingInstruction`, or `DOMNodeList`, so the prelude is injected only
-//! for programs that actually walk a loaded HTML tree.
+//! `DOMCharacterData`, `DOMProcessingInstruction`, `DOMNodeList`, or `DOMException`,
+//! so the prelude is injected for programs using these DOM types.
 //!
 //! Called from:
 //! - `crate::dom_html_prelude::inject_if_used`.
@@ -33,6 +33,7 @@ use crate::parser::ast::{
 
 /// Global class fallbacks offered by the prelude, behind user-owned declarations.
 const DOM_HTML_CLASSES: &[&str] = &[
+    "DOMException",
     "DOMDocument",
     "DOMNode",
     "DOMElement",
@@ -603,6 +604,9 @@ mod tests {
     /// Global document and PI constructor references inject the prelude independently.
     #[test]
     fn detects_new_dom_document() {
+        assert!(program_uses_dom_html(&parse(
+            "<?php throw new DOMException('Invalid Character Error', 5);"
+        )));
         assert!(program_uses_dom_html(&parse(
             "<?php $dom = new DOMDocument();"
         )));

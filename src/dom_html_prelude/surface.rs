@@ -1060,6 +1060,12 @@ class DOMNode {
     }
 
     public function setAttribute(string $qualifiedName, string $value): bool {
+        if ($qualifiedName === '') {
+            throw new ValueError('DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty');
+        }
+        $nul = strpos($qualifiedName, "\0");
+        if ($nul !== false) { $qualifiedName = substr($qualifiedName, 0, $nul); }
+        if (!__elephc_dom_valid_attribute_name($qualifiedName)) { throw new DOMException('Invalid Character Error', 5); }
         $bound = $this->__elephc_simplexml;
         if (is_object($bound)) { return $bound->__elephc_dom_set_attribute($qualifiedName, $value); }
         $attrs = $this->__attrs;

@@ -18,6 +18,7 @@ mod dimension_writes;
 mod dimension_owners;
 mod diagnostics;
 mod dom_and_iterator;
+mod dom_activation;
 mod comparisons_and_files;
 mod stream_urls;
 mod projections;

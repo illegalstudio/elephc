@@ -624,7 +624,7 @@ mod tests {
         assert!(version.retained_headers.contains(&"include/libxml/xmlversion.h"));
         assert!(version.retained_headers.contains(&"include/libxml/xmlwriter.h"));
         assert!(version.retained_headers.iter().all(|header| header.starts_with("include/libxml/") && header.ends_with(".h")));
-        assert_eq!(version.recipe_revision, 6);
+        assert_eq!(version.recipe_revision, 9);
         assert!(version.dependencies.is_empty());
         assert_eq!(version.supported_targets, TARGETS);
     }

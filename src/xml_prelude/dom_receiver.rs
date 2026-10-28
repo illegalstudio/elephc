@@ -186,6 +186,19 @@ impl DomReceiver {
                 self.set_callable(name, sig);
             },
             StmtKind::TypedAssign { name, type_expr, .. } => self.assign(name, type_classes(type_expr)),
+            StmtKind::ListUnpack { vars, .. } => {
+                for name in vars { self.assign(name, None); }
+            }
+            StmtKind::StaticVar { name, .. } => {
+                // Binding static storage replaces the local reference rather than writing its old cell.
+                let mut aliases = self.aliases.borrow_mut();
+                aliases.remove(name);
+                for group in aliases.values_mut() { group.remove(name); }
+                drop(aliases);
+                self.uncertain_aliases.borrow_mut().remove(name);
+                self.assign(name, None);
+                self.escaped_refs.borrow_mut().insert(name.clone());
+            }
             StmtKind::RefAssign { target, source } => self.bind_reference(target, source),
             StmtKind::Foreach { key_var, value_var, .. } => {
                 self.assign(value_var, None);

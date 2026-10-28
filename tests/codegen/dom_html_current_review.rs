@@ -9,6 +9,25 @@
 
 use crate::support::*;
 
+/// HTML-only writes validate names and throw without loading the native XML bridge.
+#[test]
+fn dom_html_set_attribute_rejects_invalid_names() {
+    let out = compile_and_run(r#"<?php
+$document = new DOMDocument();
+$document->loadHTML('<html><body><p>value</p></body></html>');
+$element = $document->getElementsByTagName('p')->item(0);
+foreach (['', '1bad', 'a b', chr(255), chr(0), chr(192) . chr(175), chr(237) . chr(160) . chr(128), chr(244) . chr(144) . chr(128) . chr(128)] as $name) {
+    try { $element->setAttribute($name, 'wrong'); echo 'wrong|'; }
+    catch (ValueError $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    catch (DOMException $error) { echo get_class($error), ':', $error->getCode(), ':', $error->getMessage(), '|'; }
+}
+foreach (['é', '名', 'a' . chr(204) . chr(129), chr(240) . chr(144) . chr(128) . chr(128)] as $name) { $element->setAttribute($name, 'valid'); echo $element->getAttribute($name), '|'; }
+$element->setAttribute("nul\0tail", 'truncated');
+echo $element->getAttribute('nul'), '|', $document->saveXML($element);
+"#);
+    assert_eq!(out, "ValueError:DOMElement::setAttribute(): Argument #1 ($qualifiedName) must not be empty|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|DOMException:5:Invalid Character Error|valid|valid|valid|valid|truncated|<p é=\"valid\" 名=\"valid\" á=\"valid\" 𐀀=\"valid\" nul=\"truncated\">value</p>");
+}
+
 /// HTML-only attribute writes replace existing values and append new literal names.
 #[test]
 fn dom_html_set_attribute_updates_unbound_tree() {

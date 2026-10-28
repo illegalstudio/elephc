@@ -874,6 +874,10 @@ mod tests {
     fn detects_dom_load_xml_receivers() {
         for source in [
             "(new DOMDocument())->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); [$doc] = [new DOMDocument()]; $doc->loadXML('<r/>');",
+            "class Config {} $doc = new Config(); foreach ([[new DOMDocument()]] as [$doc]) {} $doc->loadXML('<r/>');",
+            "class Config {} function run(): void { $doc = new Config(); static $doc; $doc->loadXML('<r/>'); } new DOMDocument();",
+            "class Config {} function run(): void { $doc = new Config(); $alias =& $doc; static $doc; $alias = new Config(); $doc->loadXML('<r/>'); } new DOMDocument();",
             "$doc = new DOMDocument(); $alias = $doc; $alias->loadXML('<r/>');",
             "function run(DOMDocument $doc): void { $doc->loadXML('<r/>'); }",
             "class Feed extends DOMDocument { public function run(): bool { return parent::loadXML('<r/>'); } } (new Feed())->run();",

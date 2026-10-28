@@ -40,6 +40,8 @@ $targetQualifiedRoot->setAttribute('p:a', '3');
 $targetQualifiedRoot->setAttribute('xml:lang', 'en');
 echo $targetQualifiedRoot->getAttribute('p:a'), $targetQualifiedRoot->getAttribute('xml:lang');
 echo $targetMetadataDocument->getElementsByTagName('c')->length;
+try { $targetQualifiedRoot->setAttribute('', 'bad'); } catch (ValueError $error) { echo $error->getMessage(); }
+try { $targetQualifiedRoot->setAttribute('1bad', 'bad'); } catch (DOMException $error) { echo $error->getCode(); }
 interface TargetGuardedXmlView {}
 class TargetGuardedXml extends SimpleXMLElement implements TargetGuardedXmlView {
     public string $label = 'before';
