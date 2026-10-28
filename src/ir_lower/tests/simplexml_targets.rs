@@ -12,6 +12,13 @@ fn verify_simplexml_target(target: &str) {
     let module = super::lower_source_at_for_target(r###"<?php
 debug_backtrace();
 $counterXml = new SimpleXMLElement('<r>2</r>');
+$targetXPathXml = new SimpleXMLElement('<r xmlns:p="urn:p" a="1"><p:c>yes</p:c><!--r--></r>');
+echo count($targetXPathXml['a']->xpath('../p:c'));
+echo count($targetXPathXml->xpath('//comment()')[0]->xpath('../p:c'));
+var_dump($targetXPathXml->missing->registerXPathNamespace('q', 'urn:p'));
+$targetXPathXml->registerXPathNamespace('q', 'urn:p');
+$targetXPathClone = clone $targetXPathXml;
+echo count($targetXPathClone->xpath('//p:c'));
 class TargetXmlSaveDocument extends DOMDocument {
     public function saveXML(mixed $node = null, int $options = 0): string { return parent::saveXML($node, $options); }
 }

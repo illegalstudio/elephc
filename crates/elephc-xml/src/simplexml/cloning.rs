@@ -34,7 +34,7 @@ impl View {
         Some(self.remap_with(doc.clone(), None, &|node| self.map_node(&doc, node, &copies)))
     }
 
-    /// Rebuilds selectors using the root-document or bounded-subtree correspondence map.
+    /// Remaps selectors while giving cloned PHP objects fresh XPath registration contexts.
     fn remap_with(&self, doc: Rc<Document>, clone_owner: Option<Rc<CloneOwner>>, map: &impl Fn(Node) -> Node) -> Self {
         let scope = match &self.scope {
             Scope::Node(node) => Scope::Node(map(*node)),
@@ -45,7 +45,7 @@ impl View {
             Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), *index),
         };
         let identity = map(self.identity);
-        Self::new(doc, scope, identity, self.ns.clone(), clone_owner, Rc::new(RefCell::new(self.xpath_ns.borrow().clone())))
+        Self::new(doc, scope, identity, self.ns.clone(), clone_owner, Rc::new(RefCell::new(BTreeMap::new())))
     }
 
     /// Finds one node in the live copy before searching independently copied detached subtrees.

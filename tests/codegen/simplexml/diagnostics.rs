@@ -9,7 +9,7 @@
 
 use crate::support::*;
 
-/// XPath results, iteration and addChild return objects with independent XPath namespace contexts.
+/// Derived and cloned objects have independent XPath registration contexts; aliases share one.
 #[test]
 fn test_simplexml_derived_xpath_namespace_bundle() {
     if skip_without_xml_native("test_simplexml_derived_xpath_namespace_bundle") { return; }
@@ -27,6 +27,12 @@ if ($derived instanceof SimpleXMLElement) { inspectDerivedXPath($root, $derived)
 foreach ($root as $node) { inspectDerivedXPath($root, $node); }
 $added = $root->addChild('d');
 if ($added instanceof SimpleXMLElement) { inspectDerivedXPath($root, $added); }
+$rootClone = clone $root;
+inspectDerivedXPath($root, $rootClone);
+$subtree = $root->c;
+$subtree->registerXPathNamespace('q', 'urn:p');
+$subtreeClone = clone $subtree;
+inspectDerivedXPath($root, $subtreeClone);
 $iterator = new SimpleXMLIterator('<r xmlns:p="urn:p"><p:v>one</p:v><c/></r>');
 $iterator->registerXPathNamespace('q', 'urn:p'); $iterator->rewind();
 $current = $iterator->current();
@@ -34,14 +40,14 @@ if ($current instanceof SimpleXMLElement) { inspectDerivedXPath($iterator, $curr
 $alias = $root;
 $alias->registerXPathNamespace('same', 'urn:p');
 echo count($root->xpath('//same:v')), '|';
-$source = $argc > 0 ? '$ev = new SimpleXMLElement("<r xmlns:p=\"urn:p\"><p:v>one</p:v><c/></r>"); $ev->registerXPathNamespace("q", "urn:p"); $derived = $ev->xpath("//c")[0]; var_dump($derived->xpath("//q:v")); $derived->registerXPathNamespace("q", "urn:other"); echo count($ev->xpath("//q:v")), "|";' : '';
+$source = $argc > 0 ? '$ev = new SimpleXMLElement("<r xmlns:p=\"urn:p\"><p:v>one</p:v><c/></r>"); $ev->registerXPathNamespace("q", "urn:p"); $derived = $ev->xpath("//c")[0]; var_dump($derived->xpath("//q:v")); $derived->registerXPathNamespace("q", "urn:other"); echo count($ev->xpath("//q:v")), "|"; $cloned = clone $ev; var_dump($cloned->xpath("//q:v")); $cloned->registerXPathNamespace("q", "urn:other"); echo count($ev->xpath("//q:v")), "|"; $subtree = $ev->c; $subtree->registerXPathNamespace("q", "urn:p"); $cloned = clone $subtree; var_dump($cloned->xpath("//q:v")); $cloned->registerXPathNamespace("q", "urn:other"); echo count($ev->xpath("//q:v")), "|";' : '';
 eval($source);
 restore_error_handler();
 "###);
     let warning = "2:SimpleXMLElement::xpath(): Undefined namespace prefix: q|bool(false)\n1|";
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
-    assert_eq!(out.stdout, format!("{}1|{}", warning.repeat(4), warning));
+    assert_eq!(out.stdout, format!("{}1|{}", warning.repeat(6), warning.repeat(3)));
 }
 
 /// Parse failures deliver all three warnings, preserve false/throw behavior, and tolerate reentry.

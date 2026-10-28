@@ -350,3 +350,6 @@ mod tests_dom_attributes;
 
 #[cfg(all(test, elephc_xml_native))]
 mod tests_add_and_text;
+
+#[cfg(all(test, elephc_xml_native))]
+mod tests_xpath_context;

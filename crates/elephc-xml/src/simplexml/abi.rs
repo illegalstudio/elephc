@@ -309,12 +309,12 @@ pub unsafe extern "C" fn elephc_xml_sx_mutate(handle: i64, operation: i64, key: 
         }
     })
 }
-/// Registers an explicit prefix binding for this element's future XPath queries.
+/// Registers a wrapper's XPath prefix even when its live selection currently has no nodes.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_char, uri: *const c_char) -> i64 {
     guard(|| {
         let Some(v) = view(handle) else { return 0; };
-        let Some(node) = v.first() else { return 0; };
+        let node = v.first().unwrap_or(std::ptr::null_mut());
         let context = ffi::xpath_context(v.doc.raw, node);
         if context.is_null() { return 0; }
         let status = ffi::xpath_register(context, prefix, uri);

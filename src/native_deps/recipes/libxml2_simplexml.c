@@ -274,7 +274,8 @@ void *elephc_libxml2_v1_sx_xpath_context(void *doc, void *node) {
     xmlXPathContextPtr ctx = xmlXPathNewContext(doc);
     if (ctx) {
         ctx->node = node;
-        for (xmlNodePtr p = node; p && p->type == XML_ELEMENT_NODE; p = p->parent) {
+        for (xmlNodePtr p = node; p; p = p->parent) {
+            if (p->type != XML_ELEMENT_NODE) continue;
             for (xmlNsPtr ns = p->nsDef; ns; ns = ns->next) {
                 if (ns->prefix && !xmlXPathNsLookup(ctx, ns->prefix))
                     xmlXPathRegisterNs(ctx, ns->prefix, ns->href);
