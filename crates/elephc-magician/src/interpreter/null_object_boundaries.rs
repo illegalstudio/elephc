@@ -62,18 +62,21 @@ pub(in crate::interpreter) fn eval_null_boundary_type_label(
 }
 
 /// Uses PHP accessor labels instead of their generated method names in boundary errors.
-pub(in crate::interpreter) fn eval_boundary_callable_label(callee: &str) -> String {
+pub(in crate::interpreter) fn eval_boundary_callable_label(callee: &str, context: &ElephcEvalContext) -> String {
     if let Some((class, method)) = callee.rsplit_once("::") {
         for (prefix, kind) in [("__propset_", "set"), ("__propget_", "get")] {
             if let Some(property) = method.strip_prefix(prefix) {
-                return format!("{class}::${property}::{kind}");
+                if context.class_property(class, property)
+                    .is_some_and(|(_, metadata)| metadata.matches_hook_method(method)) {
+                    return format!("{class}::${property}::{kind}");
+                }
             }
         }
     }
     callee.trim_start_matches('\\').to_string()
 }
 
-/// Refuses a null argument before binding can enter the callable or publish a collector entry.
+/// Refuses a null argument before bound arguments can enter the callable.
 pub(in crate::interpreter) fn eval_reject_null_object_argument(
     callee: &str,
     number: usize,
@@ -86,7 +89,7 @@ pub(in crate::interpreter) fn eval_reject_null_object_argument(
     if !eval_nonnull_object_boundary(ty) || values.type_tag(value)? != EVAL_TAG_NULL {
         return Ok(());
     }
-    let callee = eval_boundary_callable_label(callee);
+    let callee = eval_boundary_callable_label(callee, context);
     let parameter = parameter
         .map(|name| format!(" (${name})"))
         .unwrap_or_default();

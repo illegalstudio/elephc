@@ -139,7 +139,13 @@ pub(super) fn guard_return(
 /// Builds a late-static expected type from the called class only on the rejected branch.
 fn return_type_label(ctx: &LoweringContext<'_, '_>) -> Option<Expr> {
     let hint = ctx.owner_name().split_once("::").and_then(|(class, method)|
-        ctx.classes.get(class)?.late_static_method_returns.get(&crate::names::php_symbol_key(method)));
+        {
+            let class = ctx.classes.get(class)?;
+            let hints = if ctx.builder.function().flags.is_static {
+                &class.late_static_static_method_returns
+            } else { &class.late_static_method_returns };
+            hints.get(&crate::names::php_symbol_key(method))
+        });
     let hint = hint?;
     let ty = return_hint_type(ctx, crate::ir_lower::context::type_expr_to_php_type(hint));
     let label = crate::types::diagnostic_names::php_type_name(&ty);

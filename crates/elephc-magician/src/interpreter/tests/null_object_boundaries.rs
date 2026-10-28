@@ -20,6 +20,11 @@ fn assert_null_boundary_output(source: &[u8], expected: &str) {
         .expect("catch null boundary errors and continue");
     assert_eq!(values.output, expected);
     assert_eq!(values.get(result), FakeValue::Bool(true));
+    for (id, value) in &values.values {
+        if matches!(value, FakeValue::String(name) if name == "bad" || name == "good") {
+            assert_eq!(values.cell_owners.get(id).copied(), Some(0), "temporary named variadic key leaked");
+        }
+    }
 }
 
 /// Rejects null before entering typed functions, methods, constructors, or closures.
@@ -77,6 +82,7 @@ fn eval_null_object_variadic_errors_preserve_numbering() {
 class NullTail {}
 function nullTail(int $prefix, NullTail ...$nodes) { echo 'entered'; }
 function nullTailRef(NullTail &...$nodes) { echo 'entered'; }
+function nullTailOrder(NullTail $first, NullTail ...$nodes) { echo 'entered'; }
 $good = new NullTail();
 $missing = null;
 try { nullTail(1, $good, $missing); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
@@ -85,6 +91,10 @@ try { nullTail(1, ...$args); } catch (TypeError $e) { echo $e->getMessage(), "\n
 try { nullTail(1, good: $good, bad: $missing); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nullTail(1, $good, bad: $missing); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nullTailRef($missing); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { nullTailOrder(null, null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { nullTailOrder(null, bad: null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { nullTailOrder(bad: null, first: null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { nullTailOrder(null, 'invalid'); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 return true;
 "#, concat!(
         "nullTail(): Argument #3 must be of type NullTail, null given\n",
@@ -92,6 +102,10 @@ return true;
         "nullTail(): Argument #2 must be of type NullTail, null given\n",
         "nullTail(): Argument #3 must be of type NullTail, null given\n",
         "nullTailRef(): Argument #1 must be of type NullTail, null given\n",
+        "nullTailOrder(): Argument #1 ($first) must be of type NullTail, null given\n",
+        "nullTailOrder(): Argument #1 ($first) must be of type NullTail, null given\n",
+        "nullTailOrder(): Argument #1 ($first) must be of type NullTail, null given\n",
+        "nullTailOrder(): Argument #1 ($first) must be of type NullTail, null given\n",
     ));
 }
 
@@ -158,6 +172,9 @@ $alias =& NullPropertyBox::$shared;
 try { $box->node = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 $name = 'node';
 try { $box->{$name} = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$instance = new ReflectionProperty(NullPropertyBox::class, 'node');
+try { $instance->setValue($box, null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $instance->setRawValue($box, null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { $box->union = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { $box->items = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { NullPropertyBox::$shared = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
@@ -172,6 +189,8 @@ return true;
 "#, concat!(
         "Cannot assign null to property NullPropertyBox::$node of type NullPropertyNode\n",
         "Cannot assign null to property NullPropertyBox::$node of type NullPropertyNode\n",
+        "Cannot assign null to property NullPropertyBox::$node of type NullPropertyNode\n",
+        "Cannot assign null to property NullPropertyBox::$node of type NullPropertyNode\n",
         "Cannot assign null to property NullPropertyBox::$union of type NullPropertyNode|int\n",
         "Cannot assign null to property NullPropertyBox::$items of type Traversable|array\n",
         "Cannot assign null to property NullPropertyBox::$shared of type NullPropertyNode\n",
@@ -179,5 +198,23 @@ return true;
         "Cannot assign null to property NullPropertyBox::$plainShared of type NullPropertyNode\n",
         "NullPropertyBox::$hooked::set(): Argument #1 ($value) must be of type NullPropertyNode, null given\n",
         "preserved|",
+    ));
+}
+
+/// Keeps ordinary methods with hook-like names distinct from actual property accessors.
+#[test]
+fn eval_null_object_errors_preserve_ordinary_method_names() {
+    assert_null_boundary_output(br#"
+class NullOrdinaryMethods {
+    public function __propset_node(object $node) { echo 'entered'; }
+    public function __propget_node(): object { return null; }
+}
+$methods = new NullOrdinaryMethods();
+try { $methods->__propset_node(null); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { $methods->__propget_node(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+return true;
+"#, concat!(
+        "NullOrdinaryMethods::__propset_node(): Argument #1 ($node) must be of type object, null given\n",
+        "NullOrdinaryMethods::__propget_node(): Return value must be of type object, null returned\n",
     ));
 }

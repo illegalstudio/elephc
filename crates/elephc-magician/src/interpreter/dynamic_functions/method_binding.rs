@@ -204,9 +204,7 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
         for arg in evaluated_args {
             if let Some(name) = arg.name {
                 bind_dynamic_named_method_arg(
-                    callee,
                     params,
-                    parameter_types,
                     parameter_is_by_ref,
                     variadic_index,
                     next_variadic_index,
@@ -216,15 +214,12 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     arg.ref_target,
                     by_ref_mode,
                     &mut variadic_named_args,
-                    context,
                     values,
                 )?;
             } else {
                 bind_dynamic_positional_method_arg(
-                    callee,
                     params,
                     &mut bound_args,
-                    parameter_types,
                     parameter_is_by_ref,
                     variadic_index,
                     &mut next_positional,
@@ -232,7 +227,6 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     arg.value,
                     arg.ref_target,
                     by_ref_mode,
-                    context,
                     values,
                 )?;
             }
@@ -269,6 +263,12 @@ pub(in crate::interpreter) fn bind_evaluated_method_args_with_ref_mode(
                     param_type, previous, context, values)?;
                 bound.value = eval_method_parameter_value(param_type, previous, context, values)?;
                 if bound.value != previous { release_expr_result(previous, context, values)?; }
+            }
+        }
+        if let Some(index) = variadic_index {
+            if let Some(ty) = parameter_types.get(index).and_then(Option::as_ref) {
+                let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
+                apply_dynamic_variadic_arg_type(callee, index + 1, ty, bound, context, values)?;
             }
         }
 
@@ -336,10 +336,8 @@ fn evaluated_args_contain_named_variadic_values(
 
 /// Binds one positional method argument to a fixed parameter or variadic array.
 fn bind_dynamic_positional_method_arg(
-    callee: &str,
     params: &[String],
     bound_args: &mut [Option<BoundMethodArg>],
-    parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
     variadic_index: Option<usize>,
     next_positional: &mut usize,
@@ -347,7 +345,6 @@ fn bind_dynamic_positional_method_arg(
     value: RuntimeCellHandle,
     ref_target: Option<EvalReferenceTarget>,
     by_ref_mode: EvalByRefBindingMode<'_>,
-    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if variadic_index.is_some_and(|index| *next_positional >= index) {
@@ -359,20 +356,9 @@ fn bind_dynamic_positional_method_arg(
             })
             .and_then(|index| index.checked_add(1))
             .ok_or(EvalStatus::RuntimeFatal)?;
-        if let Some(ty) = variadic_index.and_then(|index| parameter_types.get(index).and_then(Option::as_ref)) {
-            eval_reject_null_object_argument(callee, argument_number, None, ty, value, context, values)?;
-        }
-        let key = values.int(*next_variadic_index)?;
-        *next_variadic_index = next_variadic_index
+        let following_index = next_variadic_index
             .checked_add(1)
             .ok_or(EvalStatus::RuntimeFatal)?;
-        let value = eval_variadic_method_parameter_value(
-            parameter_types,
-            variadic_index,
-            value,
-            context,
-            values,
-        )?;
         let ref_target = method_parameter_ref_target(
             params,
             parameter_is_by_ref,
@@ -382,6 +368,8 @@ fn bind_dynamic_positional_method_arg(
             by_ref_mode,
             values,
         )?;
+        let key = values.int(*next_variadic_index)?;
+        *next_variadic_index = following_index;
         return bind_dynamic_variadic_arg(
             bound_args,
             variadic_index,
@@ -421,9 +409,7 @@ fn bind_dynamic_positional_method_arg(
 
 /// Binds one named method argument to a fixed parameter or variadic array.
 fn bind_dynamic_named_method_arg(
-    callee: &str,
     params: &[String],
-    parameter_types: &[Option<EvalParameterType>],
     parameter_is_by_ref: &[bool],
     variadic_index: Option<usize>,
     next_variadic_index: i64,
@@ -433,7 +419,6 @@ fn bind_dynamic_named_method_arg(
     ref_target: Option<EvalReferenceTarget>,
     by_ref_mode: EvalByRefBindingMode<'_>,
     variadic_named_args: &mut std::collections::HashSet<String>,
-    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if let Some(param_index) = regular_method_param_index(params, variadic_index, name) {
@@ -462,17 +447,6 @@ fn bind_dynamic_named_method_arg(
     let argument_number = variadic_index
         .and_then(|index| usize::try_from(next_variadic_index).ok().and_then(|tail| index.checked_add(tail)))
         .and_then(|index| index.checked_add(1)).ok_or(EvalStatus::RuntimeFatal)?;
-    if let Some(ty) = variadic_index.and_then(|index| parameter_types.get(index).and_then(Option::as_ref)) {
-        eval_reject_null_object_argument(callee, argument_number, None, ty, value, context, values)?;
-    }
-    let key = values.string(name)?;
-    let value = eval_variadic_method_parameter_value(
-        parameter_types,
-        variadic_index,
-        value,
-        context,
-        values,
-    )?;
     let ref_target = method_parameter_ref_target(
         params,
         parameter_is_by_ref,
@@ -482,6 +456,7 @@ fn bind_dynamic_named_method_arg(
         by_ref_mode,
         values,
     )?;
+    let key = values.string(name)?;
     bind_dynamic_variadic_arg(bound_args, variadic_index, key, value, ref_target, values)
 }
 
@@ -545,20 +520,40 @@ pub(in crate::interpreter) fn method_scope_parameter_ref_flags(
         .collect()
 }
 
-/// Applies a variadic parameter type to one captured argument value.
-fn eval_variadic_method_parameter_value(
-    parameter_types: &[Option<EvalParameterType>],
-    variadic_index: Option<usize>,
-    value: RuntimeCellHandle,
+/// Validates each collected tail after fixed parameters, preserving entry order and owners.
+fn apply_dynamic_variadic_arg_type(
+    callee: &str,
+    first_argument: usize,
+    param_type: &EvalParameterType,
+    bound: &mut BoundMethodArg,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(param_type) =
-        variadic_index.and_then(|index| parameter_types.get(index).and_then(Option::as_ref))
-    else {
-        return Ok(value);
-    };
-    eval_method_parameter_value(param_type, value, context, values)
+) -> Result<(), EvalStatus> {
+    let len = values.array_len(bound.value)?;
+    let mut number = first_argument;
+    for position in 0..len {
+        let key = values.array_iter_key(bound.value, position)?;
+        let updated = (|| {
+            let positional = values.type_tag(key)? == EVAL_TAG_INT;
+            let original = values.array_get(bound.value, key)?;
+            let coerced = eval_reject_null_object_argument(
+                callee, number, None, param_type, original, context, values,
+            ).and_then(|()| eval_method_parameter_value(param_type, original, context, values));
+            let inserted = coerced.and_then(|value| {
+                let inserted = values.array_set(bound.value, key, value);
+                if value != original { release_expr_result(value, context, values)?; }
+                inserted
+            });
+            let released = release_expr_result(original, context, values);
+            inserted.and_then(|array| released.map(|()| (array, positional)))
+        })();
+        let released = release_expr_result(key, context, values);
+        let (array, positional) = updated?;
+        bound.value = array;
+        released?;
+        if positional { number = number.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?; }
+    }
+    Ok(())
 }
 
 /// Returns the matching non-variadic parameter index for one PHP named argument.
@@ -584,7 +579,9 @@ fn bind_dynamic_variadic_arg(
 ) -> Result<(), EvalStatus> {
     let index = variadic_index.ok_or(EvalStatus::RuntimeFatal)?;
     let bound = bound_args[index].as_mut().ok_or(EvalStatus::RuntimeFatal)?;
-    bound.value = values.array_set(bound.value, key, value)?;
+    let inserted = values.array_set(bound.value, key, value);
+    if ref_target.is_none() || inserted.is_err() { values.release(key)?; }
+    bound.value = inserted?;
     if let Some(ref_target) = ref_target {
         bound.variadic_ref_targets.push((key, ref_target));
     }

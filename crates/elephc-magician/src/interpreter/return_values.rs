@@ -148,7 +148,7 @@ fn eval_declared_explicit_return_value(
     }
     if eval_nonnull_object_boundary(return_type) && values.type_tag(value)? == EVAL_TAG_NULL {
         let expected = eval_null_boundary_type_label(return_type, return_owner, called_class_name, context)?;
-        let callee = eval_boundary_callable_label(callee);
+        let callee = eval_boundary_callable_label(callee, context);
         return eval_throw_type_error(&format!("{callee}(): Return value must be of type {expected}, null returned"), context, values);
     }
     eval_declared_return_value(

@@ -19,6 +19,7 @@ function acceptNullableUnionBoundaryXml(SimpleXMLElement|SimpleXMLIterator|null 
 function acceptRefBoundaryXml(SimpleXMLElement &$node): void { echo 'reference|'; }
 function acceptIterableBoundaryXml(iterable $nodes): void { echo 'iterable|'; }
 function variadicBoundaryXml(int $prefix, SimpleXMLElement ...$nodes): void { echo 'variadic|'; }
+function orderedVariadicBoundaryXml(SimpleXMLElement $first, SimpleXMLElement ...$nodes): void { echo 'entered|'; }
 function referenceVariadicBoundaryXml(SimpleXMLElement &...$nodes): void { echo 'reference_variadic|'; }
 function returnIterableBoundaryXml(SimpleXMLElement $root): iterable { return $root->missing->child; }
 function returnBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
@@ -79,6 +80,8 @@ function reflectionStateProbeBoundaryXml(SimpleXMLElement $root): void {
 class BoundaryXmlMethods {
     public function accept(SimpleXMLElement $node): void { echo 'method|'; }
     public static function acceptStatic(SimpleXMLElement $node): void { echo 'static|'; }
+    public function __propset_node(SimpleXMLElement $node): void { echo 'entered|'; }
+    public function __propget_node(SimpleXMLElement $root): SimpleXMLElement { return $root->missing->child; }
 }
 class BoundaryXmlHook {
     public SimpleXMLElement $node {
@@ -101,6 +104,9 @@ $arguments = [$root, $missing];
 try { variadicBoundaryXml(1, ...$arguments); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { variadicBoundaryXml(1, good: $root, bad: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { referenceVariadicBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { orderedVariadicBoundaryXml($missing, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { orderedVariadicBoundaryXml($missing, bad: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { orderedVariadicBoundaryXml(bad: $missing, first: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnUnionBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnIterableBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
@@ -110,6 +116,9 @@ $box->node = $root->present;
 try { $box->node = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 $property = 'node';
 try { $box->{$property} = $missing; } catch (TypeError $error) { reportBoundaryXml($error); }
+$instanceProperty = new ReflectionProperty(BoundaryXmlBox::class, 'node');
+try { $instanceProperty->setValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $instanceProperty->setRawValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 echo $box->node->getName(), "\n";
 try { $box->union = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 var_dump($box->union);
@@ -133,6 +142,8 @@ try { $lateReturn->missingSelf(); } catch (TypeError $error) { reportBoundaryXml
 try { BoundaryXmlReturnChild::missingStaticCall($lateReturn); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { new BoundaryXmlConstructor($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $methods = new BoundaryXmlMethods();
+try { $methods->__propset_node($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $methods->__propget_node($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { $methods->accept($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { BoundaryXmlMethods::acceptStatic($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { $root->relativeVariadic($missing); } catch (TypeError $error) { reportBoundaryXml($error); }

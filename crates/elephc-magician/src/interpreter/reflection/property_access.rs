@@ -106,6 +106,7 @@ pub(super) fn eval_reflection_instance_property_set_value(
     } else if property.has_get_hook() {
         return Err(EvalStatus::RuntimeFatal);
     }
+    eval_reject_null_object_property(declaring_class, &property, value, context, values)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
     values.property_set(object, &storage_property_name, value)?;
     let identity = values.object_identity(object)?;
@@ -292,6 +293,7 @@ pub(super) fn eval_reflection_instance_property_set_raw_value(
         return Err(EvalStatus::RuntimeFatal);
     }
     validate_eval_reflection_property_write(declaring_class, &property, context)?;
+    eval_reject_null_object_property(declaring_class, &property, value, context, values)?;
     let storage_property_name = eval_instance_property_storage_name(declaring_class, &property);
     values.property_set(object, &storage_property_name, value)?;
     let identity = values.object_identity(object)?;
