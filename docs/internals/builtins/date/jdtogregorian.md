@@ -2,7 +2,7 @@
 title: "jdtogregorian() - internals"
 description: "Compiler internals for jdtogregorian(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 232
+  order: 234
 ---
 
 ## `jdtogregorian()` - internals

@@ -2,7 +2,7 @@
 title: "ptr_get()"
 description: "Reads one machine word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 749
+  order: 751
 ---
 
 ## ptr_get()

@@ -2,7 +2,7 @@
 title: "timezone_version_get() - internals"
 description: "Compiler internals for timezone_version_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 253
+  order: 255
 ---
 
 ## `timezone_version_get()` - internals

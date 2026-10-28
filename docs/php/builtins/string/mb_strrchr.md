@@ -2,7 +2,7 @@
 title: "mb_strrchr()"
 description: "Returns text before or from the last matching substring, or false."
 sidebar:
-  order: 902
+  order: 904
 ---
 
 ## mb_strrchr()

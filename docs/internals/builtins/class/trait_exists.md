@@ -2,7 +2,7 @@
 title: "trait_exists() - internals"
 description: "Compiler internals for trait_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 101
 ---
 
 ## `trait_exists()` - internals

@@ -2,7 +2,7 @@
 title: "session_reset()"
 description: "Reloads the session data from storage, discarding this request's changes."
 sidebar:
-  order: 1020
+  order: 1022
 ---
 
 ## session_reset()

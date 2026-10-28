@@ -2,7 +2,7 @@
 title: "pcntl_getcpu()"
 description: "Returns the logical CPU on which the calling thread is executing."
 sidebar:
-  order: 670
+  order: 672
 ---
 
 ## pcntl_getcpu()

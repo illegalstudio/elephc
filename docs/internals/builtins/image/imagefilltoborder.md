@@ -2,7 +2,7 @@
 title: "imagefilltoborder() - internals"
 description: "Compiler internals for imagefilltoborder(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 512
+  order: 514
 ---
 
 ## `imagefilltoborder()` - internals

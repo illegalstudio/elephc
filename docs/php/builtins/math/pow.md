@@ -2,7 +2,7 @@
 title: "pow()"
 description: "Exponential expression."
 sidebar:
-  order: 604
+  order: 606
 ---
 
 ## pow()

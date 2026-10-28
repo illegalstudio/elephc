@@ -2,7 +2,7 @@
 title: "imagecolorsforindex()"
 description: "Returns the red, green, blue, and alpha channels of a palette index."
 sidebar:
-  order: 484
+  order: 486
 ---
 
 ## imagecolorsforindex()

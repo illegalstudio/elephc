@@ -2,7 +2,7 @@
 title: "__elephc_curl_adapter_addr() - internals"
 description: "Compiler internals for __elephc_curl_adapter_addr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1118
+  order: 1120
 ---
 
 ## `__elephc_curl_adapter_addr()` - internals

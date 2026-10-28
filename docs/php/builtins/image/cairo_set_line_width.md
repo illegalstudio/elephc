@@ -2,7 +2,7 @@
 title: "cairo_set_line_width()"
 description: "Sets the stroke width in user-space units."
 sidebar:
-  order: 444
+  order: 446
 ---
 
 ## cairo_set_line_width()

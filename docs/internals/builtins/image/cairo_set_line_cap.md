@@ -2,7 +2,7 @@
 title: "cairo_set_line_cap() - internals"
 description: "Compiler internals for cairo_set_line_cap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 444
 ---
 
 ## `cairo_set_line_cap()` - internals

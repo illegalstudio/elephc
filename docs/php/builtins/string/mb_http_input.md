@@ -2,7 +2,7 @@
 title: "mb_http_input()"
 description: "Returns recorded HTTP input encoding identification or the configured input encoding list."
 sidebar:
-  order: 877
+  order: 879
 ---
 
 ## mb_http_input()

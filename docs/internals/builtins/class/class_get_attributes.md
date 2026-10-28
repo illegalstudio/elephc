@@ -2,7 +2,7 @@
 title: "class_get_attributes() - internals"
 description: "Compiler internals for class_get_attributes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 79
+  order: 81
 ---
 
 ## `class_get_attributes()` - internals

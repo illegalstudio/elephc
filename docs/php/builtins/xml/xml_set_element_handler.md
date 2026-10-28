@@ -2,7 +2,7 @@
 title: "xml_set_element_handler()"
 description: "Sets the start and end element handlers."
 sidebar:
-  order: 1047
+  order: 1049
 ---
 
 ## xml_set_element_handler()

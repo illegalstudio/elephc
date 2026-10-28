@@ -2,7 +2,7 @@
 title: "imagetypes() - internals"
 description: "Compiler internals for imagetypes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 543
+  order: 545
 ---
 
 ## `imagetypes()` - internals

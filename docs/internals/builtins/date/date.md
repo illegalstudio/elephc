@@ -2,7 +2,7 @@
 title: "date() - internals"
 description: "Compiler internals for date(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 190
+  order: 192
 ---
 
 ## `date()` - internals

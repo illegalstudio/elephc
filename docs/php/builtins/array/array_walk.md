@@ -2,7 +2,7 @@
 title: "array_walk()"
 description: "Applies a user function to every member of an array. AOT boxed arrays pass a writable value reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
 sidebar:
-  order: 46
+  order: 48
 ---
 
 ## array_walk()

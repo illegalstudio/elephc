@@ -2,7 +2,7 @@
 title: "lstat()"
 description: "Gives information about a file or symbolic link."
 sidebar:
-  order: 290
+  order: 292
 ---
 
 ## lstat()

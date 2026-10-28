@@ -2,7 +2,7 @@
 title: "posix_setpgid() - internals"
 description: "Compiler internals for posix_setpgid(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 699
+  order: 701
 ---
 
 ## `posix_setpgid()` - internals

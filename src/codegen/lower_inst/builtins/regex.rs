@@ -9,6 +9,8 @@
 //! - `preg_match()` and `preg_match_all()` captures support raw locals and local
 //!   reference cells. `preg_match_all()` also accepts `PREG_PATTERN_ORDER`,
 //!   `PREG_SET_ORDER`, `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
+//! - `preg_match()` returns PHP `int|false`. The runtime uses `-1` for an invalid
+//!   pattern or the removed `/e` modifier; that path leaves `$matches` untouched.
 //! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
 //!   literal names whose PHP array parameter has boxed storage.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
@@ -596,12 +598,12 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
     Ok(slot)
 }
 
-/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
 /// Boxes the count returned by `preg_match`/`preg_match_all` as PHP `int|false`.
 ///
-/// The runtime returns `-1` when compilation or flag validation fails; every real
-/// count is non-negative. The EIR result is a union, so its representation is a
-/// Mixed cell and the raw count must be boxed before storage.
+/// The runtime returns `-1` when compilation or flag validation fails, and when
+/// `preg_match()` sees the removed `/e` modifier. Every real count is non-negative.
+/// The EIR result is a union, so its representation is a Mixed cell and the raw
+/// count must be boxed before storage.
 fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let false_label = ctx.next_label("preg_count_false");
     let done_label = ctx.next_label("preg_count_done");
@@ -679,9 +681,9 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Stores the capture array only when the regex call succeeded, releasing the failure array otherwise.
 ///
-/// PHP leaves a caller-supplied `$matches` variable untouched when pattern compilation fails.
-/// The runtime reports that path with a `-1` count and a fresh empty array, so the lowering must
-/// drop the array instead of writing it into the by-reference slot.
+/// PHP leaves a caller-supplied `$matches` variable untouched when pattern compilation fails
+/// or `preg_match()` sees the removed `/e` modifier. The runtime reports that path with a `-1`
+/// count and a fresh empty array, so the lowering drops the array instead of writing it.
 fn store_matches_array_on_success(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
@@ -717,6 +719,7 @@ fn store_matches_array_on_success(
     Ok(())
 }
 
+/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
 fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let array = match ctx.emitter.target.arch {

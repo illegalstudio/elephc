@@ -2,7 +2,7 @@
 title: "mime_content_type()"
 description: "Detects a file or stream resource MIME content type."
 sidebar:
-  order: 347
+  order: 349
 ---
 
 ## mime_content_type()

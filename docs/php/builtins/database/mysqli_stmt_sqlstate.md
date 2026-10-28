@@ -2,7 +2,7 @@
 title: "mysqli_stmt_sqlstate()"
 description: "Returns the SQLSTATE of the last call on a statement."
 sidebar:
-  order: 177
+  order: 179
 ---
 
 ## mysqli_stmt_sqlstate()

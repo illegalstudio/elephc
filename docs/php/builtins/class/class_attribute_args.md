@@ -2,7 +2,7 @@
 title: "class_attribute_args()"
 description: "Returns the constructor arguments of a named attribute applied to a class."
 sidebar:
-  order: 76
+  order: 78
 ---
 
 ## class_attribute_args()

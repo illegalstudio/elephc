@@ -2,7 +2,7 @@
 title: "imagebmp()"
 description: "Writes an image as BMP, to a file or to the output buffer."
 sidebar:
-  order: 468
+  order: 470
 ---
 
 ## imagebmp()

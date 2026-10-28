@@ -2,7 +2,7 @@
 title: "ini_restore()"
 description: "Restores a configuration directive to its startup value."
 sidebar:
-  order: 648
+  order: 650
 ---
 
 ## ini_restore()

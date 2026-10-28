@@ -2,7 +2,7 @@
 title: "imagerectangle() - internals"
 description: "Compiler internals for imagerectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 530
+  order: 532
 ---
 
 ## `imagerectangle()` - internals

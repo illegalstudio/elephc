@@ -2,7 +2,7 @@
 title: "atan2() - internals"
 description: "Compiler internals for atan2(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 557
+  order: 559
 ---
 
 ## `atan2()` - internals

@@ -24,6 +24,7 @@ mod buffer_element_updates;
 mod ref_local_append;
 mod string_offset_lifetime;
 mod arrays;
+mod array_edge_guards;
 mod assoc_push;
 mod append_writes;
 mod nullable_array_merges;

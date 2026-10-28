@@ -2,7 +2,7 @@
 title: "spl_object_id()"
 description: "Return the integer object handle for given object."
 sidebar:
-  order: 799
+  order: 801
 ---
 
 ## spl_object_id()

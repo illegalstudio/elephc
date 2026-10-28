@@ -2,7 +2,7 @@
 title: "buffer_len()"
 description: "Returns the logical element count of a buffer<T>."
 sidebar:
-  order: 73
+  order: 75
 ---
 
 ## buffer_len()

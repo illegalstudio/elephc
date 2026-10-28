@@ -2,7 +2,7 @@
 title: "mysqli_execute() - internals"
 description: "Compiler internals for mysqli_execute(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 114
+  order: 116
 ---
 
 ## `mysqli_execute()` - internals

@@ -2,7 +2,7 @@
 title: "gc_mem_caches() - internals"
 description: "Compiler internals for gc_mem_caches(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 632
+  order: 634
 ---
 
 ## `gc_mem_caches()` - internals

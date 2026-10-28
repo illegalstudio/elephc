@@ -2,7 +2,7 @@
 title: "atan2()"
 description: "Returns the arc tangent of two variables."
 sidebar:
-  order: 557
+  order: 559
 ---
 
 ## atan2()

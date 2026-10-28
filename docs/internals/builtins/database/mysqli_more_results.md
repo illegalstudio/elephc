@@ -2,7 +2,7 @@
 title: "mysqli_more_results() - internals"
 description: "Compiler internals for mysqli_more_results(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 140
+  order: 142
 ---
 
 ## `mysqli_more_results()` - internals

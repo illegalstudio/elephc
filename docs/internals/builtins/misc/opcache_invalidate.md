@@ -2,7 +2,7 @@
 title: "opcache_invalidate() - internals"
 description: "Compiler internals for opcache_invalidate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 658
+  order: 660
 ---
 
 ## `opcache_invalidate()` - internals

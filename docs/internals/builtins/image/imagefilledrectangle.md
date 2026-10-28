@@ -2,7 +2,7 @@
 title: "imagefilledrectangle() - internals"
 description: "Compiler internals for imagefilledrectangle(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 511
+  order: 513
 ---
 
 ## `imagefilledrectangle()` - internals

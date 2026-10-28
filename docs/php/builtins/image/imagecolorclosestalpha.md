@@ -2,7 +2,7 @@
 title: "imagecolorclosestalpha()"
 description: "Returns the palette index closest to the requested color with alpha."
 sidebar:
-  order: 475
+  order: 477
 ---
 
 ## imagecolorclosestalpha()

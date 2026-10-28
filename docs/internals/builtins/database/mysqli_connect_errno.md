@@ -2,7 +2,7 @@
 title: "mysqli_connect_errno() - internals"
 description: "Compiler internals for mysqli_connect_errno(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 107
+  order: 109
 ---
 
 ## `mysqli_connect_errno()` - internals

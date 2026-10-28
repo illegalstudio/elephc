@@ -2,7 +2,7 @@
 title: "date_sunrise() - internals"
 description: "Compiler internals for date_sunrise(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 211
+  order: 213
 ---
 
 ## `date_sunrise()` - internals

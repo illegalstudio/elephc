@@ -2,7 +2,7 @@
 title: "spl_classes()"
 description: "Return available SPL classes."
 sidebar:
-  order: 797
+  order: 799
 ---
 
 ## spl_classes()

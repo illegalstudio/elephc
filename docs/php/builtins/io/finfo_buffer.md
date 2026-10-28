@@ -2,7 +2,7 @@
 title: "finfo_buffer()"
 description: "Identifies the type and encoding of binary string contents."
 sidebar:
-  order: 321
+  order: 323
 ---
 
 ## finfo_buffer()

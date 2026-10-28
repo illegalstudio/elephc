@@ -2,7 +2,7 @@
 title: "file()"
 description: "Reads an entire file into an array."
 sidebar:
-  order: 318
+  order: 320
 ---
 
 ## file()

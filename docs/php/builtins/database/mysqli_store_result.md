@@ -2,7 +2,7 @@
 title: "mysqli_store_result()"
 description: "Buffers a query's whole result on the client."
 sidebar:
-  order: 179
+  order: 181
 ---
 
 ## mysqli_store_result()

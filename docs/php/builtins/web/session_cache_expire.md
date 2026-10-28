@@ -2,7 +2,7 @@
 title: "session_cache_expire()"
 description: "Reads or sets the cache expiry, in minutes, of the session cache limiter."
 sidebar:
-  order: 1006
+  order: 1008
 ---
 
 ## session_cache_expire()

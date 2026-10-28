@@ -2,7 +2,7 @@
 title: "class_parents() - internals"
 description: "Compiler internals for class_parents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 81
+  order: 83
 ---
 
 ## `class_parents()` - internals

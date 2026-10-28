@@ -2,7 +2,7 @@
 title: "cairo_new_path()"
 description: "Discards the current path."
 sidebar:
-  order: 427
+  order: 429
 ---
 
 ## cairo_new_path()

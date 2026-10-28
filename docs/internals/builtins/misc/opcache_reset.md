@@ -2,7 +2,7 @@
 title: "opcache_reset() - internals"
 description: "Compiler internals for opcache_reset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 662
+  order: 664
 ---
 
 ## `opcache_reset()` - internals

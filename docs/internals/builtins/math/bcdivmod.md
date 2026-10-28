@@ -2,7 +2,7 @@
 title: "bcdivmod() - internals"
 description: "Compiler internals for bcdivmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 563
+  order: 565
 ---
 
 ## `bcdivmod()` - internals

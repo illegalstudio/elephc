@@ -2,7 +2,7 @@
 title: "image_type_to_extension()"
 description: "Returns the filename extension for an IMAGETYPE_* constant."
 sidebar:
-  order: 461
+  order: 463
 ---
 
 ## image_type_to_extension()

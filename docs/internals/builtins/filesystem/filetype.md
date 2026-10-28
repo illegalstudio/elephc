@@ -2,7 +2,7 @@
 title: "filetype() - internals"
 description: "Compiler internals for filetype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 274
+  order: 276
 ---
 
 ## `filetype()` - internals

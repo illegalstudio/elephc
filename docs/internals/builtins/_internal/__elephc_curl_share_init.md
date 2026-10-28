@@ -2,7 +2,7 @@
 title: "__elephc_curl_share_init() - internals"
 description: "Compiler internals for __elephc_curl_share_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1155
+  order: 1157
 ---
 
 ## `__elephc_curl_share_init()` - internals

@@ -2,7 +2,7 @@
 title: "file_exists()"
 description: "Checks whether a file or directory exists."
 sidebar:
-  order: 265
+  order: 267
 ---
 
 ## file_exists()

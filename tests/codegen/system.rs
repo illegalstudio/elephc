@@ -1967,6 +1967,34 @@ echo $ok . "|" . count($matches);
     assert_eq!(out, "0|0");
 }
 
+/// Verifies `preg_match()` returns PHP `false` for the removed `/e` modifier and for an
+/// invalid pattern, with and without a capture destination, and that a real match still fills `$matches`.
+///
+/// PHP leaves a supplied destination unchanged on those failures. The ARM64 capture helper
+/// must reject `/e` before compilation; the same sentinel keeps x86_64 behavior aligned.
+#[test]
+fn test_preg_match_e_modifier_preserves_capture_destination() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+$result = @preg_match("/a/e", "a", $matches);
+var_dump($result, $matches);
+$none = @preg_match("/a/e", "a");
+var_dump($none);
+$bad = ["stale"];
+$invalid = @preg_match("/[/", "a", $bad);
+var_dump($invalid, $bad);
+$ok = [];
+$hit = preg_match("/(a)/", "a", $ok);
+var_dump($hit, $ok);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\narray(1) {\n  [0]=>\n  string(5) \"stale\"\n}\nbool(false)\nbool(false)\narray(1) {\n  [0]=>\n  string(5) \"stale\"\n}\nint(1)\narray(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"a\"\n}\n"
+    );
+}
+
 /// Verifies unmatched optional captures before later captures materialize as empty strings.
 #[test]
 fn test_preg_match_unmatched_interior_capture_is_empty() {
@@ -2162,6 +2190,9 @@ echo preg_match_all("/(/", "subject", $matches) . ":" . count($matches);
 
 /// Verifies every shim-backed regex family handles an invalid pattern without exposing a
 /// partial handle, invoking callbacks, or returning partially initialized capture data.
+///
+/// `preg_match()` returns PHP `false` and leaves the supplied `$matches` array in place.
+/// The other family members keep their existing failure results.
 #[test]
 fn test_regex_families_reject_invalid_patterns_safely() {
     let out = compile_and_run(

@@ -2,7 +2,7 @@
 title: "cairo_get_current_point() - internals"
 description: "Compiler internals for cairo_get_current_point(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 413
+  order: 415
 ---
 
 ## `cairo_get_current_point()` - internals

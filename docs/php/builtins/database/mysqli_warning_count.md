@@ -2,7 +2,7 @@
 title: "mysqli_warning_count()"
 description: "Returns how many warnings the last query raised."
 sidebar:
-  order: 183
+  order: 185
 ---
 
 ## mysqli_warning_count()

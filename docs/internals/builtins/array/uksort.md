@@ -2,7 +2,7 @@
 title: "uksort() - internals"
 description: "Compiler internals for uksort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 70
+  order: 72
 ---
 
 ## `uksort()` - internals

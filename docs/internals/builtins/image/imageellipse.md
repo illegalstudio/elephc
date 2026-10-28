@@ -2,7 +2,7 @@
 title: "imageellipse() - internals"
 description: "Compiler internals for imageellipse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 506
+  order: 508
 ---
 
 ## `imageellipse()` - internals

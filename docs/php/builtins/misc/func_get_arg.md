@@ -2,7 +2,7 @@
 title: "func_get_arg()"
 description: "Returns one argument from the current function call."
 sidebar:
-  order: 625
+  order: 627
 ---
 
 ## func_get_arg()

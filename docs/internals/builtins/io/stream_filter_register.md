@@ -2,7 +2,7 @@
 title: "stream_filter_register() - internals"
 description: "Compiler internals for stream_filter_register(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 375
+  order: 377
 ---
 
 ## `stream_filter_register()` - internals

@@ -2,7 +2,7 @@
 title: "imagedestroy() - internals"
 description: "Compiler internals for imagedestroy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 505
+  order: 507
 ---
 
 ## `imagedestroy()` - internals

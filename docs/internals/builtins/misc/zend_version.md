@@ -2,7 +2,7 @@
 title: "zend_version() - internals"
 description: "Compiler internals for zend_version(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 712
+  order: 714
 ---
 
 ## `zend_version()` - internals

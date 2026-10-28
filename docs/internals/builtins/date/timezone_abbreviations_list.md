@@ -2,7 +2,7 @@
 title: "timezone_abbreviations_list() - internals"
 description: "Compiler internals for timezone_abbreviations_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 245
+  order: 247
 ---
 
 ## `timezone_abbreviations_list()` - internals

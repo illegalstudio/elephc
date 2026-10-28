@@ -2,7 +2,7 @@
 title: "mysqli_character_set_name()"
 description: "Returns the connection's current character set."
 sidebar:
-  order: 103
+  order: 105
 ---
 
 ## mysqli_character_set_name()

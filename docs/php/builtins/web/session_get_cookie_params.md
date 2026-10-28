@@ -2,7 +2,7 @@
 title: "session_get_cookie_params()"
 description: "Returns the session cookie's lifetime, path, domain, and flags."
 sidebar:
-  order: 1014
+  order: 1016
 ---
 
 ## session_get_cookie_params()

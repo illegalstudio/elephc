@@ -2,7 +2,7 @@
 title: "date_create_from_format() - internals"
 description: "Compiler internals for date_create_from_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 193
+  order: 195
 ---
 
 ## `date_create_from_format()` - internals

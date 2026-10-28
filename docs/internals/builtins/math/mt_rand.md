@@ -2,7 +2,7 @@
 title: "mt_rand() - internals"
 description: "Compiler internals for mt_rand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 600
+  order: 602
 ---
 
 ## `mt_rand()` - internals

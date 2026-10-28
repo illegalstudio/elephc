@@ -2,7 +2,7 @@
 title: "fgetcsv() - internals"
 description: "Compiler internals for fgetcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 316
+  order: 318
 ---
 
 ## `fgetcsv()` - internals

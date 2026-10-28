@@ -2,7 +2,7 @@
 title: "imagebmp() - internals"
 description: "Compiler internals for imagebmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 470
 ---
 
 ## `imagebmp()` - internals

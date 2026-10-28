@@ -2,7 +2,7 @@
 title: "memory_get_frees() - internals"
 description: "Compiler internals for memory_get_frees(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 651
+  order: 653
 ---
 
 ## `memory_get_frees()` - internals

@@ -2,7 +2,7 @@
 title: "array_splice()"
 description: "Removes a portion of the array and replaces it with something else."
 sidebar:
-  order: 39
+  order: 41
 ---
 
 ## array_splice()

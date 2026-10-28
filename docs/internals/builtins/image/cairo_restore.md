@@ -2,7 +2,7 @@
 title: "cairo_restore() - internals"
 description: "Compiler internals for cairo_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 437
+  order: 439
 ---
 
 ## `cairo_restore()` - internals

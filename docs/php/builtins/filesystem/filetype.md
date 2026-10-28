@@ -2,7 +2,7 @@
 title: "filetype()"
 description: "Gets file type."
 sidebar:
-  order: 274
+  order: 276
 ---
 
 ## filetype()

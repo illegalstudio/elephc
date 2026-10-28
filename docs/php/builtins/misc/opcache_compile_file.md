@@ -2,7 +2,7 @@
 title: "opcache_compile_file()"
 description: "Compiles a script into the opcode cache without executing it."
 sidebar:
-  order: 655
+  order: 657
 ---
 
 ## opcache_compile_file()

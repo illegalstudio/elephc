@@ -2,7 +2,7 @@
 title: "fstat()"
 description: "Gets information about a file using an open file pointer."
 sidebar:
-  order: 334
+  order: 336
 ---
 
 ## fstat()

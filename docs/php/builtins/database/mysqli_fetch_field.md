@@ -2,7 +2,7 @@
 title: "mysqli_fetch_field()"
 description: "Returns metadata for the next column of a result."
 sidebar:
-  order: 120
+  order: 122
 ---
 
 ## mysqli_fetch_field()

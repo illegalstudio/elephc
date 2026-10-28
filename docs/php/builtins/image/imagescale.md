@@ -2,7 +2,7 @@
 title: "imagescale()"
 description: "Returns a copy of an image scaled to a new size."
 sidebar:
-  order: 534
+  order: 536
 ---
 
 ## imagescale()

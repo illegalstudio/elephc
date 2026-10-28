@@ -2,7 +2,7 @@
 title: "mysqli_multi_query() - internals"
 description: "Compiler internals for mysqli_multi_query(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 141
+  order: 143
 ---
 
 ## `mysqli_multi_query()` - internals

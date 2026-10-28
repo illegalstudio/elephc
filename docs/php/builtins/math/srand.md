@@ -2,7 +2,7 @@
 title: "srand()"
 description: "Seed the random number generator."
 sidebar:
-  order: 613
+  order: 615
 ---
 
 ## srand()

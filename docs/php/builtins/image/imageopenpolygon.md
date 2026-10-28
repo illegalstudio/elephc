@@ -2,7 +2,7 @@
 title: "imageopenpolygon()"
 description: "Draws an unclosed polyline."
 sidebar:
-  order: 525
+  order: 527
 ---
 
 ## imageopenpolygon()

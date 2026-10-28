@@ -2,7 +2,7 @@
 title: "pcntl_get_last_error() - internals"
 description: "Compiler internals for pcntl_get_last_error(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 669
+  order: 671
 ---
 
 ## `pcntl_get_last_error()` - internals

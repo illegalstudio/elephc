@@ -2,7 +2,7 @@
 title: "ob_end_flush()"
 description: "Flushes (sends) the contents of the active output buffer and turns it off."
 sidebar:
-  order: 350
+  order: 352
 ---
 
 ## ob_end_flush()

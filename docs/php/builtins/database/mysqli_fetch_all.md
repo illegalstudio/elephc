@@ -2,7 +2,7 @@
 title: "mysqli_fetch_all()"
 description: "Returns every remaining row of a result at once."
 sidebar:
-  order: 116
+  order: 118
 ---
 
 ## mysqli_fetch_all()

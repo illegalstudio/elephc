@@ -2,7 +2,7 @@
 title: "is_readable() - internals"
 description: "Compiler internals for is_readable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 283
+  order: 285
 ---
 
 ## `is_readable()` - internals

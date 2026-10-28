@@ -2,7 +2,7 @@
 title: "mysqli_select_db() - internals"
 description: "Compiler internals for mysqli_select_db(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 158
 ---
 
 ## `mysqli_select_db()` - internals

@@ -2,7 +2,7 @@
 title: "pcntl_setpriority()"
 description: "Changes a process, process-group, or user scheduling priority."
 sidebar:
-  order: 676
+  order: 678
 ---
 
 ## pcntl_setpriority()

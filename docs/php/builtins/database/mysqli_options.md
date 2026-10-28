@@ -2,7 +2,7 @@
 title: "mysqli_options()"
 description: "Sets a connection option before connecting."
 sidebar:
-  order: 145
+  order: 147
 ---
 
 ## mysqli_options()

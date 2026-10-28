@@ -2,7 +2,7 @@
 title: "imagelayereffect()"
 description: "Selects the alpha blending effect used by subsequent drawing."
 sidebar:
-  order: 523
+  order: 525
 ---
 
 ## imagelayereffect()

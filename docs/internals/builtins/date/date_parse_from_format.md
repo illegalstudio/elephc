@@ -2,7 +2,7 @@
 title: "date_parse_from_format() - internals"
 description: "Compiler internals for date_parse_from_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 208
+  order: 210
 ---
 
 ## `date_parse_from_format()` - internals

@@ -2,7 +2,7 @@
 title: "fsockopen() - internals"
 description: "Compiler internals for fsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 800
+  order: 802
 ---
 
 ## `fsockopen()` - internals

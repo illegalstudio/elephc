@@ -2,7 +2,7 @@
 title: "ptr_read_f64() - internals"
 description: "Compiler internals for ptr_read_f64(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 757
+  order: 759
 ---
 
 ## `ptr_read_f64()` - internals

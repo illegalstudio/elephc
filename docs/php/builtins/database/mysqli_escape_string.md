@@ -2,7 +2,7 @@
 title: "mysqli_escape_string()"
 description: "Alias of mysqli_real_escape_string()."
 sidebar:
-  order: 113
+  order: 115
 ---
 
 ## mysqli_escape_string()

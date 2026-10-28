@@ -2,7 +2,7 @@
 title: "imagearc()"
 description: "Draws an arc of an ellipse."
 sidebar:
-  order: 467
+  order: 469
 ---
 
 ## imagearc()

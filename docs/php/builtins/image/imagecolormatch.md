@@ -2,7 +2,7 @@
 title: "imagecolormatch()"
 description: "Adjusts a palette image's colors to better match a truecolor original."
 sidebar:
-  order: 480
+  order: 482
 ---
 
 ## imagecolormatch()

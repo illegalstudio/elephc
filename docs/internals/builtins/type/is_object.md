@@ -2,7 +2,7 @@
 title: "is_object() - internals"
 description: "Compiler internals for is_object(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 993
+  order: 995
 ---
 
 ## `is_object()` - internals

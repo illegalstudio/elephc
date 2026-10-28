@@ -12,7 +12,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// __rt_preg_match: check if a PCRE regex matches a subject string.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=subject ptr, x4=subject len
-/// Output: x0=1 if match found, 0 if not
+/// Output: x0=1 if a match is found, 0 if not, -1 when the pattern is invalid or uses `/e`
 pub(crate) fn emit_preg_match(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_match_linux_x86_64(emitter);
@@ -147,6 +147,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip delimiters and expose regex flags
+    emitter.instruction("tbnz x3, #30, __rt_preg_match_capture_compile_fail");  // the removed /e modifier is invalid in PHP 8
     emitter.instruction(&format!("str x3, [sp, #{}]", flags_off));              // save stripped regex flags
     emitter.instruction("bl __rt_pcre_to_posix");                               // materialize PCRE pattern as a C string
     emitter.instruction(&format!("str x0, [sp, #{}]", pattern_cstr_off));       // save null-terminated PCRE pattern
@@ -258,7 +259,7 @@ fn emit_preg_match_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // failure sentinel: PHP false
     emitter.instruction("b __rt_preg_match_capture_ret");                       // return the false sentinel and empty matches
     emitter.label("__rt_preg_match_capture_empty");
-    emitter.instruction("mov x0, #0");                                          // empty array capacity for no-match or compile-failure paths
+    emitter.instruction("mov x0, #0");                                          // empty array capacity for the no-match path
     emitter.instruction("mov x1, #16");                                         // empty matches array still has string slot metadata
     emitter.instruction("bl __rt_array_new");                                   // allocate empty indexed string matches array
     emitter.instruction("mov x1, x0");                                          // return empty matches array in x1
@@ -488,7 +489,7 @@ fn emit_preg_match_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
     emitter.instruction("jmp __rt_preg_match_capture_ret_linux_x86_64");        // return the false sentinel and empty matches
     emitter.label("__rt_preg_match_capture_empty_linux_x86_64");
-    emitter.instruction("xor edi, edi");                                        // empty array capacity for no-match or compile-failure paths
+    emitter.instruction("xor edi, edi");                                        // empty array capacity for the no-match path
     emitter.instruction("mov esi, 16");                                         // empty matches array still uses string slot metadata
     emitter.instruction("call __rt_array_new");                                 // allocate empty indexed string matches array
     emitter.instruction("mov rdx, rax");                                        // return empty matches array pointer in rdx

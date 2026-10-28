@@ -2,7 +2,7 @@
 title: "imagecolorexact()"
 description: "Returns the palette index of an exact color, or -1."
 sidebar:
-  order: 478
+  order: 480
 ---
 
 ## imagecolorexact()

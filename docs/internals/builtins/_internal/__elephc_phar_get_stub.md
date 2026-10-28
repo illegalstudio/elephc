@@ -2,7 +2,7 @@
 title: "__elephc_phar_get_stub() - internals"
 description: "Compiler internals for __elephc_phar_get_stub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1195
+  order: 1197
 ---
 
 ## `__elephc_phar_get_stub()` - internals

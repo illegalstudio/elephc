@@ -2,7 +2,7 @@
 title: "token_get_all()"
 description: "Split PHP source into tokens while preserving its original bytes."
 sidebar:
-  order: 961
+  order: 963
 ---
 
 ## token_get_all()

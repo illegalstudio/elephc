@@ -2,7 +2,7 @@
 title: "is_file() - internals"
 description: "Compiler internals for is_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 281
+  order: 283
 ---
 
 ## `is_file()` - internals

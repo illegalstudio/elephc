@@ -2,7 +2,7 @@
 title: "imagestring() - internals"
 description: "Compiler internals for imagestring(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 538
+  order: 540
 ---
 
 ## `imagestring()` - internals

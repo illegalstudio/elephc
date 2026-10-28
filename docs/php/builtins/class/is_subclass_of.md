@@ -2,7 +2,7 @@
 title: "is_subclass_of()"
 description: "Checks if the object has a given class as one of its parents or implements it."
 sidebar:
-  order: 96
+  order: 98
 ---
 
 ## is_subclass_of()

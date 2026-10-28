@@ -2,7 +2,7 @@
 title: "__elephc_curl_easy_pause() - internals"
 description: "Compiler internals for __elephc_curl_easy_pause(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1127
+  order: 1129
 ---
 
 ## `__elephc_curl_easy_pause()` - internals

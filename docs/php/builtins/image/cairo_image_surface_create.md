@@ -2,7 +2,7 @@
 title: "cairo_image_surface_create()"
 description: "Creates an in-memory image surface of the given pixel format and size."
 sidebar:
-  order: 415
+  order: 417
 ---
 
 ## cairo_image_surface_create()

@@ -2,7 +2,7 @@
 title: "imagerectangle()"
 description: "Draws the outline of a rectangle."
 sidebar:
-  order: 530
+  order: 532
 ---
 
 ## imagerectangle()

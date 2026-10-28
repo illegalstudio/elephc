@@ -2,7 +2,7 @@
 title: "cairo_line_to()"
 description: "Adds a straight line from the current point to the given point."
 sidebar:
-  order: 419
+  order: 421
 ---
 
 ## cairo_line_to()

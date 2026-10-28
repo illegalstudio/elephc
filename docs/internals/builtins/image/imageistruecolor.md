@@ -2,7 +2,7 @@
 title: "imageistruecolor() - internals"
 description: "Compiler internals for imageistruecolor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 521
+  order: 523
 ---
 
 ## `imageistruecolor()` - internals

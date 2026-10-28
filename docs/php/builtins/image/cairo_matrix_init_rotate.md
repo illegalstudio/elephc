@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_rotate()"
 description: "Creates a matrix that rotates by the given angle in radians."
 sidebar:
-  order: 421
+  order: 423
 ---
 
 ## cairo_matrix_init_rotate()

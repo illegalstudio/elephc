@@ -2,7 +2,7 @@
 title: "filegroup() - internals"
 description: "Compiler internals for filegroup(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 268
+  order: 270
 ---
 
 ## `filegroup()` - internals

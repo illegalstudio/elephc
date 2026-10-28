@@ -2,7 +2,7 @@
 title: "date_interval_format() - internals"
 description: "Compiler internals for date_interval_format(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 205
 ---
 
 ## `date_interval_format()` - internals

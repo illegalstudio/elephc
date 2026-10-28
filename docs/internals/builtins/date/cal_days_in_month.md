@@ -2,7 +2,7 @@
 title: "cal_days_in_month() - internals"
 description: "Compiler internals for cal_days_in_month(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 187
 ---
 
 ## `cal_days_in_month()` - internals

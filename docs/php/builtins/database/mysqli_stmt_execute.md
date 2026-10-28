@@ -2,7 +2,7 @@
 title: "mysqli_stmt_execute()"
 description: "Executes a prepared statement."
 sidebar:
-  order: 167
+  order: 169
 ---
 
 ## mysqli_stmt_execute()

@@ -2,7 +2,7 @@
 title: "http_response_code()"
 description: "Gets or sets the HTTP response code."
 sidebar:
-  order: 647
+  order: 649
 ---
 
 ## http_response_code()

@@ -2,7 +2,7 @@
 title: "date_default_timezone_get() - internals"
 description: "Compiler internals for date_default_timezone_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 197
+  order: 199
 ---
 
 ## `date_default_timezone_get()` - internals

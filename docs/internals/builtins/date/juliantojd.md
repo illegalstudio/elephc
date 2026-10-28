@@ -2,7 +2,7 @@
 title: "juliantojd() - internals"
 description: "Compiler internals for juliantojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 237
+  order: 239
 ---
 
 ## `juliantojd()` - internals

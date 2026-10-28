@@ -2,7 +2,7 @@
 title: "imagejpeg()"
 description: "Writes an image as JPEG, to a file or to the output buffer."
 sidebar:
-  order: 522
+  order: 524
 ---
 
 ## imagejpeg()

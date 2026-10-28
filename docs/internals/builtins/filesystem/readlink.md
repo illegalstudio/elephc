@@ -2,7 +2,7 @@
 title: "readlink() - internals"
 description: "Compiler internals for readlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 295
+  order: 297
 ---
 
 ## `readlink()` - internals

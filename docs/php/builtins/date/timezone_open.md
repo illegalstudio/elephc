@@ -2,7 +2,7 @@
 title: "timezone_open()"
 description: "Creates a DateTimeZone from an identifier."
 sidebar:
-  order: 251
+  order: 253
 ---
 
 ## timezone_open()

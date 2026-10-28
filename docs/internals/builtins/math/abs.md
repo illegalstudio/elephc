@@ -2,7 +2,7 @@
 title: "abs() - internals"
 description: "Compiler internals for abs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 553
+  order: 555
 ---
 
 ## `abs()` - internals

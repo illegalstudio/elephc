@@ -2,7 +2,7 @@
 title: "imagestringup() - internals"
 description: "Compiler internals for imagestringup(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 539
+  order: 541
 ---
 
 ## `imagestringup()` - internals

@@ -2,7 +2,7 @@
 title: "imagesetinterpolation() - internals"
 description: "Compiler internals for imagesetinterpolation(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 535
+  order: 537
 ---
 
 ## `imagesetinterpolation()` - internals

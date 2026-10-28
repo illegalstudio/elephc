@@ -2,7 +2,7 @@
 title: "mysqli_field_seek()"
 description: "Moves a result's column cursor to an offset."
 sidebar:
-  order: 127
+  order: 129
 ---
 
 ## mysqli_field_seek()

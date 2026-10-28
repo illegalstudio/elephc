@@ -2,7 +2,7 @@
 title: "mysqli_fetch_row() - internals"
 description: "Compiler internals for mysqli_fetch_row(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 125
+  order: 127
 ---
 
 ## `mysqli_fetch_row()` - internals

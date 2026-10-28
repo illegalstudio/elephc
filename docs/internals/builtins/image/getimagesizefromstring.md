@@ -2,7 +2,7 @@
 title: "getimagesizefromstring() - internals"
 description: "Compiler internals for getimagesizefromstring(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 460
+  order: 462
 ---
 
 ## `getimagesizefromstring()` - internals

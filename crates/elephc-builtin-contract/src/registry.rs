@@ -164,9 +164,22 @@ mod tests {
         // +5: native heap usage, peak reset, and allocation/free counters.
         // +8: FileInfo procedures and shared warning/deprecation helpers.
         // +4: internal pointer/zval aliases used by extension hosting.
-        assert_eq!(contracts().len(), 1199 + curl_surface);
+        // +2: PHP 8.5 array value-edge functions.
+        assert_eq!(contracts().len(), 1201 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
+    }
+
+    /// Array value-edge functions became available in PHP 8.5, after the find/any/all family.
+    #[test]
+    fn array_edge_value_contracts_match_php_85() {
+        for name in ["array_first", "array_last"] {
+            let contract = lookup(name).expect("array value-edge contract");
+            assert_eq!(contract.since, Some(crate::PhpVersion::Php85), "{name}");
+            assert_eq!(contract.signature().required_param_count(), 1, "{name}");
+            assert!(!contract.params[0].by_ref, "{name}");
+            assert_eq!(contract.returns, crate::TypeSpec::Mixed, "{name}");
+        }
     }
 
     /// Verifies the PHP 8.5 clone function keeps its object and override-array contract.

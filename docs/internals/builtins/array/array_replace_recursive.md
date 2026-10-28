@@ -2,7 +2,7 @@
 title: "array_replace_recursive() - internals"
 description: "Compiler internals for array_replace_recursive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 34
+  order: 36
 ---
 
 ## `array_replace_recursive()` - internals

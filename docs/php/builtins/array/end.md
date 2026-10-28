@@ -2,7 +2,7 @@
 title: "end()"
 description: "Moves the array's internal pointer to the last element and returns it."
 sidebar:
-  order: 54
+  order: 56
 ---
 
 ## end()

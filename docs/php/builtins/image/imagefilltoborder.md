@@ -2,7 +2,7 @@
 title: "imagefilltoborder()"
 description: "Flood-fills from a point until it reaches a border color."
 sidebar:
-  order: 512
+  order: 514
 ---
 
 ## imagefilltoborder()

@@ -2,7 +2,7 @@
 title: "cos() - internals"
 description: "Compiler internals for cos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 576
+  order: 578
 ---
 
 ## `cos()` - internals

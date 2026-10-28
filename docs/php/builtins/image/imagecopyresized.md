@@ -2,7 +2,7 @@
 title: "imagecopyresized()"
 description: "Copies and resizes a rectangle without interpolation."
 sidebar:
-  order: 492
+  order: 494
 ---
 
 ## imagecopyresized()

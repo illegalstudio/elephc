@@ -2,7 +2,7 @@
 title: "base64_decode()"
 description: "Decodes a Base64-encoded string back into its original data."
 sidebar:
-  order: 807
+  order: 809
 ---
 
 ## base64_decode()

@@ -2,7 +2,7 @@
 title: "mysqli_ping()"
 description: "Checks the connection and reconnects when that is enabled."
 sidebar:
-  order: 146
+  order: 148
 ---
 
 ## mysqli_ping()

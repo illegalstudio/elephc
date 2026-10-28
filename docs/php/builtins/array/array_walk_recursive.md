@@ -2,7 +2,7 @@
 title: "array_walk_recursive()"
 description: "Applies a user function recursively to array leaf values. AOT boxed arrays pass a writable leaf reference and key to visible native callbacks. Escaping element references and opaque callback descriptors are unsupported."
 sidebar:
-  order: 47
+  order: 49
 ---
 
 ## array_walk_recursive()

@@ -2,7 +2,7 @@
 title: "mt_srand()"
 description: "Seed the Mersenne Twister random number generator."
 sidebar:
-  order: 601
+  order: 603
 ---
 
 ## mt_srand()

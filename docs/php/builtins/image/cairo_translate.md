@@ -2,7 +2,7 @@
 title: "cairo_translate()"
 description: "Translates the context's transformation by the given x and y offsets."
 sidebar:
-  order: 453
+  order: 455
 ---
 
 ## cairo_translate()

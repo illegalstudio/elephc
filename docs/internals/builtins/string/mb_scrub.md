@@ -2,7 +2,7 @@
 title: "mb_scrub() - internals"
 description: "Compiler internals for mb_scrub(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 891
+  order: 893
 ---
 
 ## `mb_scrub()` - internals

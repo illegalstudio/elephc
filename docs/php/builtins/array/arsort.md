@@ -2,7 +2,7 @@
 title: "arsort()"
 description: "Sorts an array in descending order and maintains index association."
 sidebar:
-  order: 48
+  order: 50
 ---
 
 ## arsort()

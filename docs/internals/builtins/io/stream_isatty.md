@@ -2,7 +2,7 @@
 title: "stream_isatty() - internals"
 description: "Compiler internals for stream_isatty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 384
+  order: 386
 ---
 
 ## `stream_isatty()` - internals

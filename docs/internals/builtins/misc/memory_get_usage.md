@@ -2,7 +2,7 @@
 title: "memory_get_usage() - internals"
 description: "Compiler internals for memory_get_usage(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 653
+  order: 655
 ---
 
 ## `memory_get_usage()` - internals

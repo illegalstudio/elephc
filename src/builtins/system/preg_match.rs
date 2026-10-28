@@ -36,6 +36,8 @@ builtin! {
 /// effects, but deliberately skips inference of args[2] (`$matches`) because it is a
 /// write-only output parameter that is undefined before the call. Passing a non-variable
 /// (such as a literal or function call) to `$matches` is a compile-time error.
+/// The result is PHP `int|false`: `1` or `0` for a completed search, and `false` when
+/// the pattern is invalid or uses the removed `/e` modifier.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
@@ -45,5 +47,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "preg_match() parameter $matches must be passed a variable",
         ));
     }
-    Ok(PhpType::Mixed)
+    Ok(PhpType::Union(vec![PhpType::Int, PhpType::False]))
 }

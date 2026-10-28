@@ -2,7 +2,7 @@
 title: "mb_strripos()"
 description: "Finds the last character position using simple case folding, or returns false."
 sidebar:
-  order: 904
+  order: 906
 ---
 
 ## mb_strripos()

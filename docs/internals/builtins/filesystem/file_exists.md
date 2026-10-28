@@ -2,7 +2,7 @@
 title: "file_exists() - internals"
 description: "Compiler internals for file_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 265
+  order: 267
 ---
 
 ## `file_exists()` - internals

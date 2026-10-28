@@ -2,7 +2,7 @@
 title: "imagecolordeallocate() - internals"
 description: "Compiler internals for imagecolordeallocate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 477
+  order: 479
 ---
 
 ## `imagecolordeallocate()` - internals

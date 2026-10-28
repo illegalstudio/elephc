@@ -2,7 +2,7 @@
 title: "array_rand()"
 description: "Pick one or more random keys out of an array."
 sidebar:
-  order: 31
+  order: 33
 ---
 
 ## array_rand()

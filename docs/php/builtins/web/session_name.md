@@ -2,7 +2,7 @@
 title: "session_name()"
 description: "Reads or sets the session name, which is also the cookie name."
 sidebar:
-  order: 1017
+  order: 1019
 ---
 
 ## session_name()

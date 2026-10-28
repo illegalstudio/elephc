@@ -2,7 +2,7 @@
 title: "mysqli_thread_id() - internals"
 description: "Compiler internals for mysqli_thread_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 180
+  order: 182
 ---
 
 ## `mysqli_thread_id()` - internals

@@ -2,7 +2,7 @@
 title: "mt_srand() - internals"
 description: "Compiler internals for mt_srand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 601
+  order: 603
 ---
 
 ## `mt_srand()` - internals

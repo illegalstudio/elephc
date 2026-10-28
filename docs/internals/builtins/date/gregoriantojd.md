@@ -2,7 +2,7 @@
 title: "gregoriantojd() - internals"
 description: "Compiler internals for gregoriantojd(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 226
+  order: 228
 ---
 
 ## `gregoriantojd()` - internals

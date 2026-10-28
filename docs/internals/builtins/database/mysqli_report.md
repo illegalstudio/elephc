@@ -2,7 +2,7 @@
 title: "mysqli_report() - internals"
 description: "Compiler internals for mysqli_report(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 153
+  order: 155
 ---
 
 ## `mysqli_report()` - internals

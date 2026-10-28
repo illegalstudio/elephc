@@ -2,7 +2,7 @@
 title: "imageellipse()"
 description: "Draws the outline of an ellipse."
 sidebar:
-  order: 506
+  order: 508
 ---
 
 ## imageellipse()

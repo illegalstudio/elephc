@@ -2,7 +2,7 @@
 title: "imagefontheight() - internals"
 description: "Compiler internals for imagefontheight(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 515
+  order: 517
 ---
 
 ## `imagefontheight()` - internals

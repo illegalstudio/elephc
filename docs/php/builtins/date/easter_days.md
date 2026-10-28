@@ -2,7 +2,7 @@
 title: "easter_days()"
 description: "Returns the number of days from March 21 to Easter Sunday of a year."
 sidebar:
-  order: 219
+  order: 221
 ---
 
 ## easter_days()

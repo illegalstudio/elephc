@@ -2,7 +2,7 @@
 title: "file() - internals"
 description: "Compiler internals for file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 318
+  order: 320
 ---
 
 ## `file()` - internals

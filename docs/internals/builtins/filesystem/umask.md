@@ -2,7 +2,7 @@
 title: "umask() - internals"
 description: "Compiler internals for umask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 308
+  order: 310
 ---
 
 ## `umask()` - internals

@@ -2,7 +2,7 @@
 title: "xml_parser_create_ns() - internals"
 description: "Compiler internals for xml_parser_create_ns(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1041
+  order: 1043
 ---
 
 ## `xml_parser_create_ns()` - internals

@@ -2,7 +2,7 @@
 title: "imagegif() - internals"
 description: "Compiler internals for imagegif(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 519
+  order: 521
 ---
 
 ## `imagegif()` - internals

@@ -2,7 +2,7 @@
 title: "finfo_close() - internals"
 description: "Compiler internals for finfo_close(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 322
+  order: 324
 ---
 
 ## `finfo_close()` - internals

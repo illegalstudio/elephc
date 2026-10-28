@@ -2,7 +2,7 @@
 title: "rmdir() - internals"
 description: "Compiler internals for rmdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 300
+  order: 302
 ---
 
 ## `rmdir()` - internals

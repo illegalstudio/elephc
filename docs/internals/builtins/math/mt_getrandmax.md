@@ -2,7 +2,7 @@
 title: "mt_getrandmax() - internals"
 description: "Compiler internals for mt_getrandmax(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 599
+  order: 601
 ---
 
 ## `mt_getrandmax()` - internals

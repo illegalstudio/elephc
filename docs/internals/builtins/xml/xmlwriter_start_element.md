@@ -2,7 +2,7 @@
 title: "xmlwriter_start_element() - internals"
 description: "Compiler internals for xmlwriter_start_element(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1081
+  order: 1083
 ---
 
 ## `xmlwriter_start_element()` - internals

@@ -2,7 +2,7 @@
 title: "imageinterlace() - internals"
 description: "Compiler internals for imageinterlace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 520
+  order: 522
 ---
 
 ## `imageinterlace()` - internals

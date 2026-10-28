@@ -2,7 +2,7 @@
 title: "imagecolorallocate()"
 description: "Allocates an opaque color in a palette image."
 sidebar:
-  order: 471
+  order: 473
 ---
 
 ## imagecolorallocate()

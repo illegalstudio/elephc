@@ -2,7 +2,7 @@
 title: "buffer_ptr() - internals"
 description: "Compiler internals for buffer_ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 74
+  order: 76
 ---
 
 ## `buffer_ptr()` - internals

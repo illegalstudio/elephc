@@ -2,7 +2,7 @@
 title: "preg_match_all()"
 description: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends."
 sidebar:
-  order: 784
+  order: 786
 ---
 
 ## preg_match_all()

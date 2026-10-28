@@ -2,7 +2,7 @@
 title: "imagecolorallocatealpha()"
 description: "Allocates a color with alpha in a palette image."
 sidebar:
-  order: 472
+  order: 474
 ---
 
 ## imagecolorallocatealpha()

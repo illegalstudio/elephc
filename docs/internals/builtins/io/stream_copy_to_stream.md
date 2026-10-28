@@ -2,7 +2,7 @@
 title: "stream_copy_to_stream() - internals"
 description: "Compiler internals for stream_copy_to_stream(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 374
+  order: 376
 ---
 
 ## `stream_copy_to_stream()` - internals

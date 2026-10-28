@@ -2,7 +2,7 @@
 title: "mysqli_real_query()"
 description: "Runs one statement without fetching its result."
 sidebar:
-  order: 151
+  order: 153
 ---
 
 ## mysqli_real_query()

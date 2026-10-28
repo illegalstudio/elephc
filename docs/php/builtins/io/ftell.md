@@ -2,7 +2,7 @@
 title: "ftell()"
 description: "Returns the current position of the file read/write pointer."
 sidebar:
-  order: 336
+  order: 338
 ---
 
 ## ftell()

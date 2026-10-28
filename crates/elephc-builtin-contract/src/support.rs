@@ -304,10 +304,12 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "array_any",
     "array_diff_assoc",
     "array_find",
+    "array_first",
     "array_intersect_assoc",
     "array_is_list",
     "array_key_first",
     "array_key_last",
+    "array_last",
     "array_merge_recursive",
     "array_multisort",
     "array_replace",
@@ -398,9 +400,9 @@ mod tests {
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
         // Also includes SimpleXML allocation/diagnostics and its abstract-class probe.
         assert_eq!(eval_internal, 135);
-        // 28 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
+        // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 359);
+        assert_eq!(eval_pending, 361);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -409,7 +411,8 @@ mod tests {
         // The tokenizer location helper is a typed ordinary registry operation.
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
-        assert_eq!(aot_registry, 772);
+        // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
+        assert_eq!(aot_registry, 774);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 427 + curl_surface);

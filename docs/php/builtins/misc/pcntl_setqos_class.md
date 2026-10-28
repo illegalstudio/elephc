@@ -2,7 +2,7 @@
 title: "pcntl_setqos_class()"
 description: "Changes the current macOS thread quality-of-service class."
 sidebar:
-  order: 677
+  order: 679
 ---
 
 ## pcntl_setqos_class()

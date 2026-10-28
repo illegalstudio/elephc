@@ -50,6 +50,23 @@ fn test_unused_user_function_program_still_runs() {
     assert_eq!(out, "1");
 }
 
+/// A terminal exit cannot prune generic class bodies used by preceding executable code.
+#[test]
+fn test_generic_class_specialization_survives_terminal_exit() {
+    let out = compile_and_run(
+        r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function get(): T { return $this->value; }
+}
+$box = new Box<int>($argc + 4);
+echo $box->get();
+exit(0);
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
 /// Verifies exception-aware DCE removes a disjoint catch before declaration reachability scans it.
 #[test]
 fn test_exception_dce_exposes_catch_only_function_to_reachability() {

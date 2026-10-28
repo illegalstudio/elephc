@@ -2,7 +2,7 @@
 title: "buffer_ptr()"
 description: "Returns the payload address of a buffer<T>, valid until the buffer is freed."
 sidebar:
-  order: 74
+  order: 76
 ---
 
 ## buffer_ptr()

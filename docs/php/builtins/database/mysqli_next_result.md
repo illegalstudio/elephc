@@ -2,7 +2,7 @@
 title: "mysqli_next_result()"
 description: "Advances a multi-query to its next result set."
 sidebar:
-  order: 142
+  order: 144
 ---
 
 ## mysqli_next_result()

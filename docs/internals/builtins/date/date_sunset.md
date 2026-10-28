@@ -2,7 +2,7 @@
 title: "date_sunset() - internals"
 description: "Compiler internals for date_sunset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 212
+  order: 214
 ---
 
 ## `date_sunset()` - internals

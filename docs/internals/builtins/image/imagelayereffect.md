@@ -2,7 +2,7 @@
 title: "imagelayereffect() - internals"
 description: "Compiler internals for imagelayereffect(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 523
+  order: 525
 ---
 
 ## `imagelayereffect()` - internals

@@ -2,7 +2,7 @@
 title: "rand() - internals"
 description: "Compiler internals for rand(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 606
+  order: 608
 ---
 
 ## `rand()` - internals

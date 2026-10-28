@@ -2,7 +2,7 @@
 title: "mysqli_get_server_version() - internals"
 description: "Compiler internals for mysqli_get_server_version(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 136
+  order: 138
 ---
 
 ## `mysqli_get_server_version()` - internals

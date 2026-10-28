@@ -2,7 +2,7 @@
 title: "imagecolorset()"
 description: "Changes the color a palette index stands for."
 sidebar:
-  order: 483
+  order: 485
 ---
 
 ## imagecolorset()

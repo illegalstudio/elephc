@@ -2,7 +2,7 @@
 title: "end() - internals"
 description: "Compiler internals for end(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 54
+  order: 56
 ---
 
 ## `end()` - internals

@@ -2,7 +2,7 @@
 title: "fprintf() - internals"
 description: "Compiler internals for fprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 329
+  order: 331
 ---
 
 ## `fprintf()` - internals

@@ -433,7 +433,8 @@ error[app.php:3:5]: this program needs PHP 8.4 (property hooks), but --php-versi
 
 Detected today: the pipe operator `|>` (8.5), property hooks and asymmetric
 property visibility (8.4), typed class constants (8.3), and calls to functions
-introduced after 8.2 (`json_validate`, `array_find`, `array_any`, `array_all`).
+introduced after 8.2 (`json_validate`, `array_find`, `array_any`, `array_all`,
+`array_first`, `array_last`).
 
 Two properties worth knowing:
 

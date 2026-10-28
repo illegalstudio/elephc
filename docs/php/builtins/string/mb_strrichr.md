@@ -2,7 +2,7 @@
 title: "mb_strrichr()"
 description: "Returns text before or from the last case-insensitive substring match, or false."
 sidebar:
-  order: 903
+  order: 905
 ---
 
 ## mb_strrichr()

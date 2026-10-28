@@ -2,7 +2,7 @@
 title: "gc_status() - internals"
 description: "Compiler internals for gc_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 633
+  order: 635
 ---
 
 ## `gc_status()` - internals

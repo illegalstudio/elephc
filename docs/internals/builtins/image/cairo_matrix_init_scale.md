@@ -2,7 +2,7 @@
 title: "cairo_matrix_init_scale() - internals"
 description: "Compiler internals for cairo_matrix_init_scale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 422
+  order: 424
 ---
 
 ## `cairo_matrix_init_scale()` - internals

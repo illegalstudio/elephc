@@ -85,6 +85,12 @@ again. Generic traits are instantiated before trait flattening. Templates are
 removed before downstream optimization and EIR lowering, which receive ordinary
 concrete declarations such as `Box<int>` and `identity<int>`.
 
+Generated class, interface, and trait declarations precede executable statements.
+This keeps specializations available when the program ends with a terminating
+statement, including the `exit()` appended by the native test driver. A generic
+class reached only from a test method uses the same specialization path as an
+ordinary program.
+
 The checker validates bounds and variance, and records resolved call, construction,
 and method sites in `CheckResult`. Site keys include the enclosing body scope and
 source span, so one template coordinate can select different instantiations.

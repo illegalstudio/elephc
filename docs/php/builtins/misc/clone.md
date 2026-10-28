@@ -2,7 +2,7 @@
 title: "clone()"
 description: "Creates a shallow clone, then initializes selected properties on the clone."
 sidebar:
-  order: 616
+  order: 618
 ---
 
 ## clone()

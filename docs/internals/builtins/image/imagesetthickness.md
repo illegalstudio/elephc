@@ -2,7 +2,7 @@
 title: "imagesetthickness() - internals"
 description: "Compiler internals for imagesetthickness(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 537
+  order: 539
 ---
 
 ## `imagesetthickness()` - internals

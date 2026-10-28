@@ -2,7 +2,7 @@
 title: "imagecolortransparent()"
 description: "Reads or sets an image's transparent color index."
 sidebar:
-  order: 486
+  order: 488
 ---
 
 ## imagecolortransparent()

@@ -2,7 +2,7 @@
 title: "class_exists()"
 description: "Checks whether the given class has been defined."
 sidebar:
-  order: 78
+  order: 80
 ---
 
 ## class_exists()

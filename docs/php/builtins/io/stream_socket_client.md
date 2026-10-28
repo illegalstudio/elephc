@@ -2,7 +2,7 @@
 title: "stream_socket_client()"
 description: "Open Internet or Unix domain socket connection."
 sidebar:
-  order: 393
+  order: 395
 ---
 
 ## stream_socket_client()

@@ -2,7 +2,7 @@
 title: "stream_context_set_params() - internals"
 description: "Compiler internals for stream_context_set_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 373
+  order: 375
 ---
 
 ## `stream_context_set_params()` - internals
