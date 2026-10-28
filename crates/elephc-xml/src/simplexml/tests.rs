@@ -274,12 +274,12 @@ fn simplexml_non_root_clone_is_detached_and_shares_only_document_ownership() {
     assert!(unsafe { ffi::parent(copied.first().unwrap()).is_null() });
     assert!(copied.xpath("..").unwrap().is_empty());
     assert_eq!(copied.write(2, "b", 0, "copy"), 1);
-    assert_eq!(unsafe { owned_string(ffi::text(selected.first().unwrap())) }, "original");
+    assert_eq!(unsafe { owned_string(ffi::text(selected.select(2, "b", "", false, 0).first().unwrap())) }, "original");
     let group_copy = named.deep_clone().unwrap();
     assert!(!Rc::ptr_eq(&root.doc, &group_copy.doc));
     assert_eq!(group_copy.xpath("..").unwrap().len(), 1);
     drop(selected); drop(named); drop(root);
-    assert_eq!(unsafe { owned_string(ffi::text(copied.first().unwrap())) }, "copy");
+    assert_eq!(unsafe { owned_string(ffi::text(copied.select(2, "b", "", false, 0).first().unwrap())) }, "copy");
 }
 
 /// Temporary clones and their derived views do not accumulate in the source document's list.
@@ -314,7 +314,7 @@ fn simplexml_removed_clone_subtree_transfers_to_document_ownership() {
     assert_eq!(unsafe { owned_string(ffi::text(document_alias.first().unwrap())) }, "kept");
 }
 
-/// Newly materialized wrappers own independent prefix maps while aliases and clones preserve theirs.
+/// Materialized wrappers and clones start empty while aliases preserve their shared prefix map.
 #[test]
 fn simplexml_derived_xpath_registrations_are_isolated() {
     let root = parse(b"<r xmlns:p='urn:p'><p:v>one</p:v><c/></r>", 0, "", false).unwrap();
@@ -334,7 +334,12 @@ fn simplexml_derived_xpath_registrations_are_isolated() {
     }
     alias.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:other".to_vec());
     assert!(root.xpath("//q:v").unwrap().is_empty());
+    assert_eq!(copied.xpath("//q:v"), Err(query::XPathError::Invalid));
+    assert!(String::from_utf8(diagnostics::take()).expect("UTF-8 clone namespace diagnostic")
+        .contains("Undefined namespace prefix"));
+    copied.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"urn:p".to_vec());
     assert_eq!(copied.xpath("//q:v").unwrap().len(), 1);
+    assert!(root.xpath("//q:v").unwrap().is_empty());
 }
 
 /// Parser diagnostics retain source/caret lines, respect options, and clear between operations.

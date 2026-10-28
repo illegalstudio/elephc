@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Detached clone appends own their namespace after every source wrapper has been released.
+#[test]
+fn test_simplexml_detached_clone_append_owners_bundle() {
+    if skip_without_xml_native("test_simplexml_detached_clone_append_owners_bundle") { return; }
+    let source = r#"<?php
+$root = new SimpleXMLElement('<r xmlns:p="urn:p"><p:a>one</p:a></r>');
+$original = $root->children('urn:p')->a[0];
+$orphan = clone $original;
+$orphan[] = 'two';
+echo (string)$original, ':', (string)$orphan, "\n";
+unset($original, $root);
+echo $orphan->asXML(), "\n";
+$orphan[0] = 'kept';
+echo (string)$orphan, "\n";
+unset($orphan);
+"#;
+    let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "one:two\n<p:a xmlns:p=\"urn:p\">two</p:a>\nkept\n";
+    assert_bundle_with(&[
+        BundleCase { name: "detached_append_aot", source, expected },
+        BundleCase { name: "detached_append_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
 /// A caught dimension Error retires the unboxed receiver without consuming its live local.
 #[test]
 fn test_simplexml_nullable_property_receiver_survives_caught_dimension_error() {

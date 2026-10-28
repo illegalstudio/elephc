@@ -31,13 +31,15 @@ function nullableBoundaryXml(SimpleXMLElement $root): ?SimpleXMLElement {
 function returnUnionBoundaryXml(SimpleXMLElement $root): SimpleXMLElement|SimpleXMLIterator {
     return $root->missing->child;
 }
-function &referenceReturnBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
+function aliasedReturnBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
     $node = $root->missing->child;
-    return $node;
+    $alias =& $node;
+    return $alias;
 }
-function &presentReferenceBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
+function presentAliasedBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
     $node = $root->present;
-    return $node;
+    $alias =& $node;
+    return $alias;
 }
 class BoundaryXmlBox {
     public SimpleXMLElement $node;
@@ -110,7 +112,7 @@ try { orderedVariadicBoundaryXml(bad: $missing, first: $missing); } catch (TypeE
 try { returnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnUnionBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnIterableBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { $returned =& referenceReturnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { aliasedReturnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 $box = new BoundaryXmlBox();
 $box->node = $root->present;
 try { $box->node = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
@@ -157,7 +159,7 @@ $hook = new BoundaryXmlHook();
 try { $hook->node = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 $box->nullable = $root->missing->child;
 var_dump($box->nullable, nullableBoundaryXml($root));
-$returned =& presentReferenceBoundaryXml($root);
+$returned = presentAliasedBoundaryXml($root);
 echo $returned->getName(), "\n";
 acceptBoundaryXml($root->missing);
 $present = $root->present;

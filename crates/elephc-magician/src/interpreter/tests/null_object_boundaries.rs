@@ -134,7 +134,7 @@ return true;
     ));
 }
 
-/// Resolves late static returns to the called class while lexical self retains its owner.
+/// Resolves relative returns and checks null read through an aliased local before returning.
 #[test]
 fn eval_null_object_return_errors_are_catchable() {
     assert_null_boundary_output(br#"
@@ -148,7 +148,7 @@ function nullReturnObject(): object { return null; }
 function nullReturnUnion(): NullReturnBase|int { return null; }
 function nullReturnIterable(): iterable { return null; }
 function nullReturnNullable(): ?object { return null; }
-function &nullReturnRef(): object { $missing = null; return $missing; }
+function nullReturnAliased(): object { $missing = null; $alias =& $missing; return $alias; }
 $child = new NullReturnChild();
 try { $child->late(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { $child->lexical(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
@@ -156,7 +156,7 @@ try { NullReturnChild::lateCall(); } catch (TypeError $e) { echo $e->getMessage(
 try { nullReturnObject(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nullReturnUnion(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 try { nullReturnIterable(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
-try { $ref =& nullReturnRef(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { nullReturnAliased(); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 $closure = function (): object { return null; };
 try { $closure(); } catch (TypeError $e) { echo substr($e->getMessage(), strpos($e->getMessage(), 'Return value')), "\n"; }
 echo nullReturnNullable() === null ? 'nullable|' : 'bad';
@@ -168,7 +168,7 @@ return true;
         "nullReturnObject(): Return value must be of type object, null returned\n",
         "nullReturnUnion(): Return value must be of type NullReturnBase|int, null returned\n",
         "nullReturnIterable(): Return value must be of type Traversable|array, null returned\n",
-        "nullReturnRef(): Return value must be of type object, null returned\n",
+        "nullReturnAliased(): Return value must be of type object, null returned\n",
         "Return value must be of type object, null returned\nnullable|",
     ));
 }
@@ -193,7 +193,8 @@ $box->node = $good;
 $box->items = [];
 NullPropertyBox::$shared = $good;
 NullPropertyBox::$plainShared = $good;
-$alias =& NullPropertyBox::$shared;
+$alias = $good;
+NullPropertyBox::$shared =& $alias;
 try { $box->node = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
 $name = 'node';
 try { $box->{$name} = null; } catch (TypeError $e) { echo $e->getMessage(), "\n"; }

@@ -17,7 +17,9 @@
 void *elephc_libxml2_v1_sx_append_sibling(void *raw) {
     xmlNodePtr node = raw;
     if (!node || node->type != XML_ELEMENT_NODE) return NULL;
-    xmlNodePtr added = xmlNewTextChild(node->parent, node->ns, node->name, NULL);
+    xmlNodePtr added = node->parent
+        ? xmlNewTextChild(node->parent, node->ns, node->name, NULL)
+        : xmlNewDocNode(node->doc, node->ns, node->name, NULL);
     if (added && !added->parent && node->doc) {
         xmlSetTreeDoc(added, node->doc);
         if (xmlReconciliateNs(node->doc, added) < 0) {

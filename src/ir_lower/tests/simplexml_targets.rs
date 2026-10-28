@@ -251,6 +251,7 @@ echo $doc->saveXML();
 "###,
         include_str!("../../../tests/fixtures/simplexml/iterator_arithmetic.php").trim_start_matches("<?php"),
         include_str!("../../../tests/fixtures/simplexml/typed_object_boundaries.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php").trim_start_matches("<?php"),
         include_str!("../../../tests/fixtures/simplexml/generator_object_boundaries.php").trim_start_matches("<?php"),
     ].concat();
     let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"), std::path::Path::new("."),
@@ -321,6 +322,7 @@ echo $doc->saveXML();
     for message in [
         "acceptBoundaryXml(): Argument #1 ($node) must be of type SimpleXMLElement, null given",
         "returnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
+        "referenceReturnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
         "Cannot assign null to property BoundaryXmlBox::$node of type SimpleXMLElement",
     ] {
         assert!(assembly.contains(message), "{target}: missing native object boundary: {message}");
