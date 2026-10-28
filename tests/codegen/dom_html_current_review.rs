@@ -9,6 +9,28 @@
 
 use crate::support::*;
 
+/// Default declarations are immutable and serialize before literal HTML attributes.
+#[test]
+fn dom_html_default_namespace_declaration_survives_repeated_writes() {
+    let out = compile_and_run(r#"<?php
+foreach (['urn:q', '', 'urn:é&"', 'urn:' . chr(255), "urn:nul\0tail"] as $uri) {
+    $document = new DOMDocument();
+    $document->loadHTML('<p class="c">x</p>');
+    $element = $document->getElementsByTagName('p')->item(0);
+    var_dump($element->setAttribute('xmlns', $uri), $element->setAttribute('xmlns', 'ignored'));
+    echo bin2hex($element->getAttribute("xmlns\0tail")), ':', bin2hex($document->saveXML($element)), '|';
+}
+$document = new DOMDocument();
+$document->loadHTML('<p xmlns="urn:raw" xmlns:p="urn:raw:p" class="c">x</p>');
+$element = $document->getElementsByTagName('p')->item(0);
+echo '[', $element->getAttribute('xmlns'), ']:[', $element->getAttribute('xmlns:p'), ']|';
+$element->setAttribute('xmlns', 'urn:decl');
+$element->setAttribute('data-nul', "a\0b");
+echo $element->getAttribute("data-nul\0tail"), ':', $document->saveXML($element);
+"#);
+    assert_eq!(out, "bool(true)\nbool(false)\n75726e3a71:3c7020786d6c6e733d2275726e3a712220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n:3c7020786d6c6e733d222220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n75726e3ac3a92622:3c7020786d6c6e733d2275726e3ac3a926616d703b2671756f743b2220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n75726e3aff:3c7020786d6c6e733d2275726e3aff2220636c6173733d2263223e783c2f703e|bool(true)\nbool(false)\n75726e3a6e756c:3c7020786d6c6e733d2275726e3a6e756c2220636c6173733d2263223e783c2f703e|[]:[]|a:<p xmlns=\"urn:decl\" xmlns=\"urn:raw\" xmlns:p=\"urn:raw:p\" class=\"c\" data-nul=\"a\">x</p>");
+}
+
 /// HTML-only writes validate names and throw without loading the native XML bridge.
 #[test]
 fn dom_html_set_attribute_rejects_invalid_names() {

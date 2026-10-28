@@ -925,6 +925,10 @@ function __elephc_simplexml_import_child(int $parent, DOMNode $node): void {
     if ($handle === 0) { throw new Error('Could not import DOM node'); }
     try {
         if ($kind === 1) {
+            $xmlns = $node->__elephc_dom_xmlns;
+            if ($xmlns !== null && elephc_xml_sx_mutate($handle, 25, 'xmlns', (string)$xmlns, '', 0, 0) === 0) {
+                throw new Error('Could not import DOM namespace declaration');
+            }
             foreach ($node->__attrs as $pair) {
                 $attribute = elephc_xml_sx_html_append($handle, 2, (string)$pair[0], (string)$pair[1]);
                 if ($attribute === 0) { throw new Error('Could not import DOM attribute'); }

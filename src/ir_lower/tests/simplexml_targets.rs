@@ -18,7 +18,10 @@ class TargetXmlSaveDocument extends DOMDocument {
 $saveDocument = new TargetXmlSaveDocument();
 $saveDocument->loadHTML('<html><body>target</body></html>');
 echo $saveDocument->saveXML();
+$targetHtmlBody = $saveDocument->getElementsByTagName('body')->item(0);
+var_dump($targetHtmlBody->setAttribute('xmlns', 'urn:target'), $targetHtmlBody->setAttribute('xmlns', 'ignored'));
 $targetHtmlXml = simplexml_import_dom($saveDocument);
+echo $targetHtmlBody->getAttribute('xmlns');
 echo count($targetHtmlXml->xpath('//body'));
 $targetXmlChildren = $saveDocument->documentElement->childNodes;
 echo $targetXmlChildren->item(0)->nodeName;

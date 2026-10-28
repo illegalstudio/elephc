@@ -12,6 +12,16 @@
 pub(super) const SRC: &str = r###"
 class DOMException extends Exception {}
 
+function __elephc_dom_escape_namespace(string $value): string {
+    $value = str_replace('&', '&amp;', $value);
+    $value = str_replace('<', '&lt;', $value);
+    $value = str_replace('>', '&gt;', $value);
+    $value = str_replace('"', '&quot;', $value);
+    $value = str_replace("\r", '&#13;', $value);
+    $value = str_replace("\n", '&#10;', $value);
+    return str_replace("\t", '&#9;', $value);
+}
+
 function __elephc_dom_valid_attribute_name(string $name): bool {
     $length = strlen($name);
     if ($length === 0) { return false; }

@@ -52,6 +52,12 @@ foreach ($body->childNodes as $node) {
 | `DOMProcessingInstruction` | Extends `DOMNode`; parsed instructions preserve target case, `target`, `data`, `nodeName`, `nodeValue`, and ordinary node links. Serialization emits `<?target data?>`. Legacy HTML consumes through `>`, retaining a preceding `?` in the data. |
 | `saveXML(?DOMNode $node = null, int $options = 0): string` | Serializes a node or the whole document. Text escapes `&`, `<`, `>`, and CR; double-quoted attributes also escape `"`, LF, and TAB, but not `'`. Non-ASCII attribute code points use uppercase hexadecimal references, while text stays UTF-8. Script/style raw text serializes as safely split CDATA. Options are accepted for PHP signature compatibility and ignored: `LIBXML_NOEMPTYTAG` formatting is unavailable. HTML-backed documents have no XML declaration. For XML-backed documents, the whole-document form uses the declared encoding; passing a node, including the document itself, writes UTF-8 bytes. |
 
+On HTML nodes, `setAttribute('xmlns', $uri)` creates a default namespace declaration
+and returns `false` on subsequent writes. It serializes before ordinary attributes,
+preserves UTF-8 URI bytes, and survives `simplexml_import_dom()`. An `xmlns` attribute
+present in HTML source remains a literal attribute, separate from this declaration.
+Legacy DOM namespace queries read declarations; SimpleXML offsets read the literal attributes.
+
 Leading comments and processing instructions remain document-level siblings before
 `html`. After an explicit `</html>`, trailing comments and instructions remain
 document-level siblings after it; trailing whitespace is ignored without adding

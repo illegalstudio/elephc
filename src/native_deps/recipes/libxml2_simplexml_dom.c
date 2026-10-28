@@ -54,19 +54,20 @@ void *elephc_libxml2_v1_sx_dom_attribute_target(void *raw, const char *name,
         *status = xmlNewNs(node, BAD_CAST value, NULL) != NULL;
         return NULL;
     }
-    if (!attr || attr->type != XML_ATTRIBUTE_NODE) {
-        attr = (xmlNodePtr)xmlSetProp(node, BAD_CAST name, NULL);
-    } else {
-        int length;
-        const xmlChar *local = xmlSplitQName3(BAD_CAST name, &length);
-        if (local) {
-            xmlChar *prefix = xmlStrndup(BAD_CAST name, length);
-            if (!prefix) return NULL;
-            xmlNsPtr ns = xmlSearchNs(node->doc, node, prefix);
-            xmlFree(prefix);
-            if (ns) attr->ns = ns;
-        }
+    /* Resolve the write as xmlSetProp does, including literal xmlns: attributes
+     * that dom1 reading deliberately hides. Never let xmlSetProp free exposed text. */
+    int length;
+    xmlNsPtr ns = NULL;
+    const xmlChar *local = xmlSplitQName3(BAD_CAST name, &length);
+    if (local) {
+        xmlChar *prefix = xmlStrndup(BAD_CAST name, length);
+        if (!prefix) return NULL;
+        ns = xmlSearchNs(node->doc, node, prefix);
+        xmlFree(prefix);
     }
+    attr = (xmlNodePtr)xmlHasNsProp(node, ns ? local : BAD_CAST name, ns ? ns->href : NULL);
+    if (attr && attr->type == XML_ATTRIBUTE_NODE) attr->ns = ns;
+    else attr = (xmlNodePtr)xmlSetProp(node, BAD_CAST name, NULL);
     *status = attr != NULL;
     return attr;
 }

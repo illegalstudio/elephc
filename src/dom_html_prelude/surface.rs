@@ -865,6 +865,8 @@ function __elephc_dom_serialize_node(mixed $node): string {
         return $_out;
     }
     $_out = "<" . $node->nodeName;
+    $_xmlns = $node->__elephc_dom_xmlns;
+    if ($_xmlns !== null) { $_out = $_out . ' xmlns="' . __elephc_dom_escape_namespace((string)$_xmlns) . '"'; }
     $_attrs = $node->__attrs;
     if (is_array($_attrs)) {
         foreach ($_attrs as $_pair) {
@@ -1052,10 +1054,15 @@ class DOMNode {
     public mixed $parentNode = null;
     public mixed $ownerDocument = null;
     public mixed $__attrs = [];
+    public ?string $__elephc_dom_xmlns = null;
 
     public function getAttribute(string $name): string {
+        $nul = strpos($name, "\0");
+        if ($nul !== false) { $name = substr($name, 0, $nul); }
         $bound = $this->__elephc_simplexml;
         if (is_object($bound)) { return $bound->__elephc_dom_attribute($name); }
+        if ($name === 'xmlns') { return $this->__elephc_dom_xmlns ?? ''; }
+        if (str_starts_with($name, 'xmlns:')) { return ''; }
         return __elephc_dom_attr_get($this->__attrs, $name);
     }
 
@@ -1066,8 +1073,15 @@ class DOMNode {
         $nul = strpos($qualifiedName, "\0");
         if ($nul !== false) { $qualifiedName = substr($qualifiedName, 0, $nul); }
         if (!__elephc_dom_valid_attribute_name($qualifiedName)) { throw new DOMException('Invalid Character Error', 5); }
+        $nul = strpos($value, "\0");
+        if ($nul !== false) { $value = substr($value, 0, $nul); }
         $bound = $this->__elephc_simplexml;
         if (is_object($bound)) { return $bound->__elephc_dom_set_attribute($qualifiedName, $value); }
+        if ($qualifiedName === 'xmlns') {
+            if ($this->__elephc_dom_xmlns !== null) { return false; }
+            $this->__elephc_dom_xmlns = $value;
+            return true;
+        }
         $attrs = $this->__attrs;
         $updated = [];
         $found = false;

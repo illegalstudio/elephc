@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Hidden literal xmlns attributes still keep their old text alive through DOM writes.
+#[test]
+fn simplexml_dom_literal_namespace_attribute_preparation_preserves_child_owners() {
+    crate::ffi::init_library();
+    unsafe {
+        let raw = ffi::html_document();
+        let empty = cstring("");
+        let node = ffi::html_append(raw, std::ptr::null_mut(), 1, cstring("p").as_ptr(), empty.as_ptr());
+        let name = cstring("xmlns:p");
+        let attr = ffi::html_append(raw, node, 2, name.as_ptr(), cstring("old").as_ptr());
+        let root = from_document(raw, "", false).unwrap();
+        let text = ffi::child(attr);
+        let retained = root.with_scope(Scope::Node(text));
+        let mut status = 0;
+        let target = ffi::dom_attribute_target(node, name.as_ptr(), cstring("new").as_ptr(), &mut status);
+        assert_eq!(status, 1);
+        assert_eq!(target, attr);
+        assert_eq!(ffi::child(target), text);
+        root.assign_node(target, "new");
+        assert_eq!(owned_bytes(ffi::full_text(retained.first().unwrap())), b"old");
+        assert_eq!(owned_bytes(ffi::text(attr)), b"new");
+        assert_eq!(owned_bytes(ffi::dom_attribute_text(node, name.as_ptr())), b"");
+    }
+}
+
 /// Namespace aliases address one attribute while its previous text stays independently pinned.
 #[test]
 fn simplexml_dom_attribute_alias_replaces_without_duplicate_or_retiring_live_text() {
