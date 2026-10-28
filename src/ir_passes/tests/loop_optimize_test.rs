@@ -166,13 +166,39 @@ fn merges_single_predecessor_update_into_body() {
 #[test]
 fn shared_update_block_is_preserved() {
     let mut f = counters(0, 1, Op::IAdd);
+    f.blocks[2].terminator = None;
+    let (condition, alternate);
+    {
+        let mut b = Builder::new(&mut f);
+        b.position_at_end(BlockId::from_raw(2));
+        condition = emit_unknown_int(&mut b, "continue_path");
+        alternate = b.create_named_block("alternate_continue", vec![]);
+        b.position_at_end(alternate);
+        let first = b.block_param(BlockId::from_raw(1), 0);
+        b.emit(Op::EchoValue, vec![first], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        b.terminate(Terminator::Br { target: BlockId::from_raw(3), args: vec![] });
+    }
+    f.blocks[2].terminator = Some(Terminator::CondBr {
+        cond: condition, then_target: BlockId::from_raw(3), then_args: vec![],
+        else_target: alternate, else_args: vec![],
+    });
+    run(&BranchSimplify, &mut f);
+    assert!(!matches!(f.blocks[3].terminator, Some(Terminator::Unreachable)));
+    assert_eq!(crate::ir_passes::cfg::predecessors(&f)[3], vec![BlockId::from_raw(2), alternate]);
+}
+
+/// Repeating the header's proven condition allows the now-unique update block to merge.
+#[test]
+fn proven_header_condition_allows_update_merge() {
+    let mut f = counters(0, 1, Op::IAdd);
     let condition = f.instructions.iter().find(|inst| inst.op == Op::ICmp).unwrap().result.unwrap();
     f.blocks[2].terminator = Some(Terminator::CondBr {
         cond: condition, then_target: BlockId::from_raw(3), then_args: vec![],
         else_target: BlockId::from_raw(3), else_args: vec![],
     });
-    run(&BranchSimplify, &mut f);
-    assert!(!matches!(f.blocks[3].terminator, Some(Terminator::Unreachable)));
+    assert!(run(&BranchSimplify, &mut f));
+    assert_eq!(f.blocks[3].terminator, Some(Terminator::Unreachable));
+    assert!(matches!(f.blocks[2].terminator, Some(Terminator::Br { target, .. }) if target == BlockId::from_raw(1)));
 }
 
 /// Exception-handler functions keep both induction state and loop blocks unchanged.

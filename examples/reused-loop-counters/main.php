@@ -21,3 +21,20 @@ function smooth(array $samples): array {
 
 // Prints: 6 9 8 9 10 6 5 4
 echo implode(' ', smooth([8, 16, 4, 12, 20, 0, 6, 10])), "\n";
+
+// A grid scan reuses the row name in nested passes with different loop shapes.
+function countGridVisits(int $rows, int $columns): int {
+    $visits = 0;
+    for ($column = 0; $column < $columns; $column++) {
+        for ($row = $rows - 1; $row >= 0; $row--) {
+            $visits += 1;
+        }
+        for ($row = 0; $row <= $rows - 1; $row++) {
+            $visits += 1;
+        }
+    }
+    return $visits;
+}
+
+// Prints: 24
+echo countGridVisits(3, 4), "\n";

@@ -35,6 +35,8 @@ pub(super) fn check_property_assign(
     compound_property_update: bool,
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    // Capture the checked receiver view before RHS inference can invalidate property guards.
+    checker.record_member_receiver_type(span, &obj_ty);
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     if let PhpType::Object(class_name) = &obj_ty {
         check_object_property_write(checker, object, class_name, property, value, &val_ty, span, compound_property_update)?;

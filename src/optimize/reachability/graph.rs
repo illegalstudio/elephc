@@ -172,7 +172,7 @@ fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &Check
         let crate::types::PhpType::Pointer(Some(inner)) = ty else {
             continue;
         };
-        let inner_key = php_symbol_key(inner);
+        let inner_key = php_symbol_key(crate::names::pointer_target_leaf(inner));
         if packed.contains_key(&inner_key) && reach.classes.insert(inner_key.clone()) {
             pending.push(inner_key);
         }
@@ -187,7 +187,7 @@ fn retain_embedded_packed_classes(reach: &mut Reachability, check_result: &Check
             else {
                 continue;
             };
-            let inner_key = php_symbol_key(inner);
+            let inner_key = php_symbol_key(crate::names::pointer_target_leaf(inner));
             if packed.contains_key(&inner_key) && reach.classes.insert(inner_key.clone()) {
                 pending.push(inner_key);
             }

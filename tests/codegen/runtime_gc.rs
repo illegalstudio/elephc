@@ -46,6 +46,7 @@ mod branch_conditions;
 mod conditional_assignment_owners;
 #[path = "runtime_gc/receiver_parameter_owners.rs"]
 mod receiver_parameter_owners;
+mod guarded_interface_mutations;
 #[path = "runtime_gc/large_unary_string_results.rs"]
 mod large_unary_string_results;
 #[path = "runtime_gc/static_local_initializers.rs"]
@@ -238,3 +239,5 @@ mod gc_incoming_cache;
 mod unshift_reference_cow;
 mod native_callback_results;
 mod entity_slot_owners;
+#[path = "runtime_gc/counter_regions.rs"]
+mod counter_regions;

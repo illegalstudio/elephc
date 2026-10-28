@@ -46,7 +46,7 @@ pub enum PhpType {
     Callable,                      // closures and function references
     Object(String),                // class instance, e.g., Object("Point") or Object("App\\Point")
     Packed(String),
-    Pointer(Option<String>),       // opaque ptr or typed ptr<Class>
+    Pointer(Option<String>),       // opaque ptr or pointer tagged with a target type
     Resource(Option<String>),      // generic resource or typed resource such as resource<stream>
     Union(Vec<PhpType>),
     TaggedScalar,                  // codegen-internal inline nullable scalar: {payload, tag} pair
@@ -72,7 +72,7 @@ widths in their metadata instead, as `PackedFieldInfo::width` beside the field's
 
 `Object(String)` represents a class instance. The string carries the canonical class name after name resolution (for example `"Point"` or `"App\\Point"`). Objects are heap-allocated pointers (8 bytes on the stack).
 
-`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just an address in `x0`.
+`Pointer(Option<String>)` represents a raw 64-bit address. `Pointer(None)` is an opaque pointer, while `Pointer(Some("Point"))` is a pointer tagged with a checked pointee type. The tag affects static checking, but the runtime value is still just a native address. A target tag can name a class, a C width, or a nested pointer such as `ptr<App\\Node>`. C widths use a reserved internal prefix so they cannot collide with a class of the same name; `PhpType` display removes that prefix. Class-name consumers must unwrap nested targets using `names::pointer_target_leaf` or `pointer_target_leaf_name`.
 
 `Resource(Option<String>)` represents PHP resource handles. `Resource(None)` is a generic resource, while `Resource(Some("stream"))` is the stream-handle shape used by successful `fopen()` calls and the `STDIN` / `STDOUT` / `STDERR` constants. Resource values are stored as one 8-byte native payload in codegen, but the type checker keeps them distinct from integers so stream built-ins can reject plain numeric descriptors.
 
@@ -181,6 +181,19 @@ Type error: cannot reassign $a from int to string
 Shape 1 (`unset()` kill) is unaffected in either mode.
 
 Every parsed file instance (each include execution and each autoloaded class file) lexes with its own source identity packed into its spans (see [the lexer](the-lexer.md)), so two statements at the same line and column of DIFFERENT files are distinct decision keys. A key can still name more than one node of one parsed source, and when such a collision lands on a retype/kill/mixed-storage decision, `binding_decision_ambiguity.rs` rejects it with `Cannot re-bind $a here: …` instead of silently mis-lowering one of the two sites. It also checks the mixed-storage keys a later scan REMOVED (`retired_mixed_storage_store_sites`): a re-decision drops the decisions filed against the sites it is about to re-decide, matching by `(span, name)`, so one body's scan can strip another body's decision and leave nothing behind to reject. The kill and retype maps are deliberately not given the same treatment: a stripped decision there falls back to the pre-feature lowering path, which is correct, whereas a stripped mixed-storage decision removes the name from `CheckResult::mixed_storage_local_names()` while the checker still types the local `Mixed`.
+
+Nested numeric locals can also split at the starts found by
+`src/types/checker/numeric_regions.rs`. This syntactic scan requires every use of a
+name to lie inside a maximal initialized region: a `for` initializer through its
+loop exit, or an assignment through the end of its statement list. A read before
+an initializer or after its region vetoes that name. Incoming names, captures,
+possible reference arguments and scope-observing constructs are excluded. Every
+assignment must remain numeric. Checked arithmetic can depend on other region
+locals; a later nonnumeric writer retracts the complete transitive dependency
+graph of region decisions. `numeric_region_retypes` records decisions justified only
+by this scan, so retraction preserves independently valid straight-line numeric
+splits. The original assignment spans enter `local_retype_sites`, so
+existing ambiguity and AST-duplication guards apply to these decisions too.
 
 `eval()`'d code — whether interpreted by the optional Magician bridge or AOT-lowered from a literal fragment into an EIR scope function — reads and writes its locals through a boxed `Mixed` scope cell rather than a compiled, typed frame slot (see [eval() scope behavior](../php/eval.md#scope-behavior)), so it was never subject to this rule to begin with: `--strict-locals` has no effect inside `eval()` fragments. The body that CALLS `eval()` is the reverse case: because the scope cell is addressed by NAME, shapes 1 and 2 would hand the fragment a slot the rest of the body no longer uses, so `mixed_storage_scan` records a per-body "contains eval" flag (`Checker::body_contains_eval`) and `local_binding_is_killable` refuses both there — body-scoped rather than point-in-time, since `eval_barrier_active` only rises once the walk has PASSED an `eval` and the hazard includes an `eval` below the site. See [`--strict-locals`](../compiling/cli-reference.md#strict-locals-mode) for the CLI flag.
 
@@ -742,6 +755,12 @@ function set($x): void {                 // $x inferred int|Foo from the call si
 ```
 
 Narrowing preserves the variable's runtime storage. Codegen coerces boxed `Mixed` values where the narrowed type is required, unboxing scalar uses and dispatching methods on `Mixed`/union receivers by runtime class id. For an interface receiver already stored as an object pointer, the checker carries the receiver type at each property read or method call into EIR. A guarded read can therefore select a concrete class's property or a derived interface's method while the local slot keeps its original interface type and ownership. The shared local-load storage predicate accepts these different object names as the same pointer representation, so codegen performs no conversion and cleanup treats the refined load as a borrowed slot view. These facts are keyed by body scope and source node; conflicting flow-sensitive checks disable the refinement for that use. Preliminary loop-storage inference omits guards and narrowed capture types, so it cannot publish receiver facts for the queried body or its lexical closures. Independently checked callees retain their own facts; the named-function context distinguishes a user function called `main` from the program entry scope. Receiver observations are retained when a property result is already narrowed and when `isset()` bypasses ordinary read inference. Silent probes choose their class and initialization check from the checked receiver view before any property read; ordinary reads still raise for uninitialized typed properties. Named, literal dynamic and runtime-name property reads, including their nullsafe forms, consume the same checked receiver view. Dynamic probes carry a nullable result and their shared slot-state guard yields null for an uninitialized typed property. Buffer probes retain their element type and use a raw missing-handle sentinel, since boxing a buffer discards the layout required by later element access. Reassigning a narrowed variable inside a branch replaces the narrowed binding with the assigned type, and it invalidates any property narrowings rooted at that variable.
+
+Property assignments and `unset()` record the same checked receiver view. A write records its receiver before inferring the RHS, and lowering applies that view before choosing the destination type or evaluating the RHS. Runtime-name writes also refine the receiver before evaluating the name. Removal selects its supported storage shape and magic behavior from the checked view before lowering the receiver once. These operations retain the existing receiver leases, readonly checks and exception cleanup; they do not read a property's value just to remove it.
+
+Silent classification resolves instance and static property receiver types from class metadata before applying the checked view. Dynamic unset names use declared user/extern return types and retain existing builtin string hints, because a generic builtin contract may be wider than a checked string result.
+
+Static write chains fetch their receiver after evaluating the RHS and runtime name. Those effects can replace the object after an `instanceof` guard, so delayed interface receivers use a temporary boxed runtime view instead of applying the earlier concrete-class fact. The static slot keeps its declared interface type. Each selected child transfers the receiver lease to the next view, preserving cleanup on both normal and exceptional paths.
 
 #### Assigning inside a guarded region
 

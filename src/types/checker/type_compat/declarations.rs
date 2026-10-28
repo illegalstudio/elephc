@@ -705,6 +705,9 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let (sites, dependents) = super::super::numeric_regions::find(body, &pre_bound_own_storage);
+        self.numeric_region_sites = sites;
+        self.numeric_region_dependents = dependents;
 
         let result = f(self);
 

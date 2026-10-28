@@ -321,7 +321,7 @@ fn collect_instantiated_signature_types<'a>(
 /// rather than diagnosed later.
 fn collect_instantiated_type_names(ty: &TypeExpr, names: &mut HashSet<String>) {
     for name in ty.named_classes() {
-        let name = name.as_str();
+        let name = crate::names::pointer_target_leaf(name.as_str());
         if name.contains('<') {
             names.insert(name.to_string());
         }

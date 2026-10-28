@@ -2,7 +2,7 @@
 //! Carry flow-sensitive member receiver types from checking into native EIR lowering.
 //!
 //! Called from:
-//! - Property-access and method-call inference.
+//! - Member inference and property write/unset checks.
 //!
 //! Key details:
 //! - Scope and source identity distinguish copied method bodies and included files.

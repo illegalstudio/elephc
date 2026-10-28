@@ -23,6 +23,9 @@ use crate::ir::{
 use crate::types::PhpType;
 
 mod storage;
+mod consumers;
+mod versioning;
+pub(super) use versioning::LoopCounterVersioning;
 pub(crate) use storage::prove_integer_slots;
 
 /// Narrows only counters for which the existing range analysis proves all updates safe.
@@ -362,6 +365,13 @@ impl CounterProof {
         }) {
             return None;
         }
+        // Relowering can rebuild representation conversions, but comparison dispatch still
+        // depends on the counter's type. Check after closing the graph so jointly proven
+        // counters do not look like unrelated Mixed partners merely due to traversal order.
+        if function.instructions.iter().any(|inst| {
+            inst.operands.iter().any(|value| proof.scalar_values.contains(value))
+                && !consumers::comparison_preserves_integer(function, inst, &proof.scalar_values)
+        }) { return None; }
         Some(proof)
     }
 

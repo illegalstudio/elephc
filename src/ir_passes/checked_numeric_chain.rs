@@ -6,8 +6,9 @@
 //! - The fixed-point EIR pass driver after single-operation checked-int sinking.
 //!
 //! Key details:
-//! - Only add/sub/mul chains in one basic block are accepted, and every boxed intermediate
-//!   may be used only by the next chain operation plus removable release bookkeeping.
+//! - Direct add/sub/mul chains stay in one block; private locals can connect blocks when
+//!   each rewritten read has a unique reaching writer and only integer casts observe it.
+//! - Every boxed intermediate feeds only its next chain operation or removable bookkeeping.
 //! - A scalar left operand may join a right-hand chain for commutative add/mul only.
 //! - The fused opcode retains the ordered operation list so codegen can switch to PHP float
 //!   semantics at the first overflowing operation and evaluate the remaining suffix exactly.
@@ -23,6 +24,8 @@ use crate::types::PhpType;
 use super::driver::IrPass;
 use super::rewrite::neutralize_to_nop;
 
+mod locals;
+
 /// Fuses a checked numeric region whose sole observable result is an integer cast.
 pub struct CheckedNumericChain;
 
@@ -32,7 +35,7 @@ impl IrPass for CheckedNumericChain {
         "checked_numeric_chain"
     }
 
-    /// Skips functions that contain no integer cast fed by dynamic numeric arithmetic.
+    /// Requires an integer cast fed by dynamic numeric arithmetic or a candidate private-local load.
     fn is_applicable(&self, function: &Function) -> bool {
         function.instructions.iter().any(|inst| {
             inst.op == Op::Cast
@@ -40,13 +43,14 @@ impl IrPass for CheckedNumericChain {
                 && matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64)))
                 && inst.operands.first().is_some_and(|value| {
                     defining_instruction(function, *value)
-                        .is_some_and(|(_, definition)| definition.op == Op::MixedNumericBinop)
+                        .is_some_and(|(_, definition)| matches!(definition.op, Op::MixedNumericBinop | Op::LoadLocal))
                 })
         })
     }
 
-    /// Finds and commits every independent checked numeric chain in the function.
+    /// Fuses private-local chains across blocks first, then independent direct arithmetic chains.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
+        let locals_changed = locals::run(function);
         let uses = instruction_uses(function);
         let terminator_uses = terminator_used_values(function);
         let candidates: Vec<InstId> = function
@@ -60,7 +64,7 @@ impl IrPass for CheckedNumericChain {
                 .then_some(InstId::from_raw(raw as u32))
             })
             .collect();
-        let mut changed = false;
+        let mut changed = locals_changed;
 
         for sink in candidates {
             let Some(rewrite) = analyze_candidate(function, sink, &uses, &terminator_uses) else {

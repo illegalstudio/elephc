@@ -3164,21 +3164,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.clear_fiber_start_sig(name);
         self.reset_array_pointer_cursor(name);
         let storage = self.builder.local_php_type(slot);
+        let function = self.builder.function();
+        let has_store_owner = slot.as_raw() as usize >= function.params.len()
+            && function.instructions.iter().any(|inst| {
+                inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+            });
         // The same liveness test `store_local` applies before overwriting a slot: release the
         // occupant when this path definitely wrote it, and also when a loop back-edge can carry a
         // previous iteration's value into a slot straight-line flow has not initialized yet.
-        let released = (self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty())
+        // A conditional arm may also have written the owner. Non-parameter cleanup slots start
+        // at zero, so retiring that owner is safe on the path where the arm never ran.
+        let released = (self.initialized_slots.contains(&slot) || !self.loop_stack.is_empty() || has_store_owner)
             && self.release_stored_local_value_before_overwrite(name, slot, span);
         // The zero also carries the frame's OWNERSHIP claim on a slot no `store_local` writes
         // (`codegen::local_analysis` counts it as a store, so an incoming parameter's prologue
         // retains what the release drops). Only a released slot an ordinary store already
         // claims may go without it.
-        let function = self.builder.function();
-        let released_store_owner = released
-            && slot.as_raw() as usize >= function.params.len()
-            && function.instructions.iter().any(|inst| {
-                inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
-            });
+        let released_store_owner = released && has_store_owner;
         if abandoned_slot_needs_zeroing(&storage, released_store_owner) {
             self.emit_void(
                 Op::ZeroLocalSlot,
@@ -5676,7 +5678,13 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
             value: Box::new(type_expr_to_php_type(value)),
         },
         TypeExpr::Ptr(name) => {
-            PhpType::Pointer(name.as_ref().map(|name| name.as_str().to_string()))
+            PhpType::Pointer(name.as_ref().map(|name| {
+                if name.is_unqualified() {
+                    crate::names::resolved_pointer_target_tag(name.as_str())
+                } else {
+                    name.as_str().to_string()
+                }
+            }))
         }
         TypeExpr::Buffer(inner) => PhpType::Buffer(Box::new(
             crate::types::width_type_from_type_expr(inner)

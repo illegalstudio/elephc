@@ -139,6 +139,7 @@ impl Checker {
         env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.record_member_receiver_type(span, &obj_ty);
         if !matches!(
             obj_ty,
             PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed

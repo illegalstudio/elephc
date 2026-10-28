@@ -41,6 +41,10 @@ $q = ptr_offset($p, 8);   // advance by 8 bytes
 
 ## Typed pointers and casting
 
+A declared pointer target may be a C width such as `ptr<u8>` or another pointer such as
+`ptr<ptr<u8>>`. Width and nested pointer targets are not accepted by `ptr_cast<T>()` or
+`ptr_sizeof()`.
+
 ```php
 <?php
 $typed = ptr_cast<MyClass>($p);   // change type tag, same address

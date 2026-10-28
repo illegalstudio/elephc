@@ -1,12 +1,12 @@
 //! Purpose:
-//! Removes redundant method receiver leases backed by unchanged concrete object parameters.
+//! Removes redundant method receiver leases backed by unchanged concrete object owners.
 //!
 //! Called from:
 //! - The EIR driver's preparation phase, before cross-function inlining.
 //!
 //! Key details:
-//! - The parameter's frame owner survives the call, including exceptional exits.
-//! - Only direct parameter loads used by a method receiver and its root store qualify.
+//! - The parameter or proven local frame owner survives the call, including exceptional exits.
+//! - Only direct stable slot loads used by a method receiver and its root store qualify.
 //! - Eval, reference aliases, rebinding and non-object storage retain their original guards.
 
 use std::collections::{HashMap, HashSet};
@@ -18,7 +18,7 @@ use crate::types::PhpType;
 use super::driver::IrPass;
 use super::rewrite::{neutralize_to_nop, replace_all_uses};
 
-/// Canonicalizes proven parameter borrows before the inliner creates new receiver bindings.
+/// Canonicalizes proven frame-owner borrows before the inliner creates new receiver bindings.
 pub(super) struct BorrowedReceiverRoots {
     /// Dynamic scope operations can write parameters without a visible local-slot operation.
     enabled: bool,
@@ -48,7 +48,8 @@ impl IrPass for BorrowedReceiverRoots {
     /// Replaces only the receiver's extra retain and its matching publication/retirement.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         if !self.enabled { return false; }
-        let roots = borrowed_parameter_roots(function);
+        let mut roots = borrowed_parameter_roots(function);
+        roots.extend(super::receiver_local_roots::owned_local_roots(function));
         let mut removed_slots = HashSet::new();
         let mut acquires = Vec::new();
         let mut replacements = HashMap::new();

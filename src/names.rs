@@ -12,6 +12,54 @@
 //!   is ambiguous because mangled fragments contain `_`, which silently merged unrelated PHP
 //!   declarations onto one storage cell.
 
+/// Prefix reserved for pointer targets that are C widths rather than class names.
+pub(crate) const POINTER_WIDTH_PREFIX: &str = "\0elephc-pointer-width:";
+
+/// Encodes a width target without colliding with a PHP class name.
+pub(crate) fn pointer_width_tag(width: &str) -> String {
+    format!("{}{}", POINTER_WIDTH_PREFIX, width)
+}
+
+/// Converts a resolved pointer target spelling to its non-colliding internal tag.
+pub(crate) fn resolved_pointer_target_tag(target: &str) -> String {
+    if let Some(inner) = target.strip_prefix("ptr<").and_then(|s| s.strip_suffix('>')) {
+        return format!("ptr<{}>", resolved_pointer_target_tag(inner));
+    }
+    if let Some(rooted) = target.strip_prefix('\\') {
+        return rooted.to_string();
+    }
+    if crate::parser::ast::is_c_width_type_name(target) {
+        return pointer_width_tag(target);
+    }
+    target.to_string()
+}
+
+/// Renders internal width tags with their source spelling.
+pub(crate) fn display_pointer_target(target: &str) -> String {
+    target.replace(POINTER_WIDTH_PREFIX, "")
+}
+
+/// Returns the innermost target named by a nested pointer type.
+pub(crate) fn pointer_target_leaf(mut target: &str) -> &str {
+    while let Some(inner) = target.strip_prefix("ptr<").and_then(|s| s.strip_suffix('>')) {
+        target = inner;
+    }
+    target
+}
+
+/// Reconstructs the leaf class name stored inside a nested pointer target.
+pub(crate) fn pointer_target_leaf_name(name: &Name) -> Name {
+    let leaf = pointer_target_leaf(name.as_str());
+    if leaf == name.as_str() {
+        return name.clone();
+    }
+    let (kind, bare) = match leaf.strip_prefix('\\') {
+        Some(bare) => (NameKind::FullyQualified, bare),
+        None => (NameKind::Qualified, leaf),
+    };
+    Name::from_parts(kind, bare.split('\\').map(str::to_string).collect())
+}
+
 /// Encodes a canonical class name as PHP literal text without confusing private-use characters.
 pub(crate) fn class_name_literal(name: &str) -> String {
     let mut literal = String::new();

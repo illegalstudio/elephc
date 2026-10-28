@@ -8,8 +8,8 @@
 //! Key details:
 //! - A `method_call` is bound statically only when codegen itself would not dispatch through
 //!   the vtable to a different body: the receiver's static class is final, the method is final,
-//!   or the class has no vtable slot for it. Instantiated generic receivers with a vtable slot
-//!   keep a real call, since variance can change the actual instantiation without inheritance.
+//!   or the class has no vtable slot for it. Generic receivers with object arguments keep
+//!   a real call, since variance can change the actual instantiation without inheritance.
 //!   The selected body is the one
 //!   `method_resolution::resolve_method_call_target` would call directly.
 //! - A spliced body loses its own frame, so only bodies whose lowering cannot observe that are
@@ -89,7 +89,7 @@ impl MethodTargets {
                 }
                 // Variance can widen an instantiated receiver without an inheritance edge.
                 let dispatches_dynamically = class_info.vtable_slots.contains_key(method_key)
-                    && (class_name.contains('<')
+                    && (!crate::generics::dispatch::has_fixed_instantiation(class_name)
                         || (!class_info.final_methods.contains(method_key) && !class_info.is_final));
                 if dispatches_dynamically {
                     continue;
@@ -293,7 +293,8 @@ pub(super) fn bound_method_name(module: &Module, function: &Function, inst: &Ins
     if info.is_internal || module.interface_infos.contains_key(class) { return None; }
     let key = php_symbol_key(method);
     if info.vtable_slots.contains_key(&key)
-        && (class.contains('<') || (!info.is_final && !info.final_methods.contains(&key)))
+        && (!crate::generics::dispatch::has_fixed_instantiation(class)
+            || (!info.is_final && !info.final_methods.contains(&key)))
     {
         return None;
     }
@@ -403,6 +404,7 @@ fn op_is_frame_independent(op: Op) -> bool {
             | Op::Move
             | Op::Borrow
             | Op::BufferGet
+            | Op::BufferSet
             | Op::BufferLen
             | Op::PropGet
             | Op::PropGetForWrite

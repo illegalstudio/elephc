@@ -89,13 +89,20 @@ pub(super) fn parse_function_decl(
 /// lex as `>>` then `>`, and four as `>>` then `>>`, which this handles by construction: every
 /// `>>` is consumed by the inner of the two lists it closes.
 #[derive(Default)]
-struct AngleCloses {
+pub(super) struct AngleCloses {
     /// Number of type argument lists already closed by an earlier `>>` token.
     pending: u32,
 }
 
+impl AngleCloses {
+    /// Returns the number of unmatched closing angle brackets.
+    pub(super) fn pending_count(&self) -> u32 {
+        self.pending
+    }
+}
+
 /// Consumes the `>` that closes a type argument list, splitting a `>>` token when needed.
-fn expect_type_list_close(
+pub(super) fn expect_type_list_close(
     tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
@@ -454,6 +461,25 @@ fn normalize_union_members(members: Vec<TypeExpr>) -> TypeExpr {
     }
 }
 
+/// Parses a pointer target and its closing bracket, preserving nested pointer targets.
+fn parse_pointer_type_target(
+    tokens: &[SpannedToken], pos: &mut usize, span: Span, closes: &mut AngleCloses,
+) -> Result<Name, CompileError> {
+    let target = parse_name(tokens, pos, span, "Expected pointer target type inside ptr<...>")?;
+    let target = if target.is_unqualified() && matches!(target.as_str(), "ptr" | "pointer")
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Less))
+    {
+        *pos += 1;
+        let inner = parse_pointer_type_target(tokens, pos, span, closes)?;
+        let prefix = if inner.kind == crate::names::NameKind::FullyQualified { "\\" } else { "" };
+        Name::unqualified(format!("ptr<{}{}>", prefix, inner.as_str()))
+    } else {
+        target
+    };
+    expect_type_list_close(tokens, pos, span, closes, "Expected '>' after ptr target type")?;
+    Ok(target)
+}
+
 /// Parses a single (non-union) type expression: builtin keyword, `ptr<T>`, `buffer<T>`,
 /// or a qualified/unqualified name. Does not handle `?T` (nullable) — that is handled by
 /// the caller `parse_type_expr`. Advances `*pos` past the consumed token(s).
@@ -564,18 +590,7 @@ fn parse_atomic_type_expr(
             }
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
                 *pos += 1;
-                let target = parse_name(
-                    tokens,
-                    pos,
-                    span,
-                    "Expected pointer target type inside ptr<...>",
-                )?;
-                expect_token(
-                    tokens,
-                    pos,
-                    &Token::Greater,
-                    "Expected '>' after ptr target type",
-                )?;
+                let target = parse_pointer_type_target(tokens, pos, span, closes)?;
                 Ok(TypeExpr::Ptr(Some(target)))
             } else {
                 Ok(TypeExpr::Ptr(None))

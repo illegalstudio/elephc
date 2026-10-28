@@ -40,6 +40,21 @@ $targetQualifiedRoot->setAttribute('p:a', '3');
 $targetQualifiedRoot->setAttribute('xml:lang', 'en');
 echo $targetQualifiedRoot->getAttribute('p:a'), $targetQualifiedRoot->getAttribute('xml:lang');
 echo $targetMetadataDocument->getElementsByTagName('c')->length;
+interface TargetGuardedXmlView {}
+class TargetGuardedXml extends SimpleXMLElement implements TargetGuardedXmlView {
+    public string $label = 'before';
+}
+function targetGuardedXmlWrites(TargetGuardedXmlView $node): void {
+    if ($node instanceof TargetGuardedXml) {
+        $node->label = 'after';
+        $name = 'label'; $node->{$name} = 'dynamic';
+        unset($node->label); var_dump(isset($node->label));
+        $node->value = 'changed';
+        $name = 'value'; unset($node->{$name});
+        echo count($node->value);
+    }
+}
+targetGuardedXmlWrites(new TargetGuardedXml('<r><value>old</value></r>'));
 $targetNamespaceXml = new SimpleXMLElement('<r><a><b xmlns:p="urn:p"><p:c p:k="v"/></b></a></r>');
 $targetNamespaceXml->registerXPathNamespace('q', 'urn:p');
 $targetNamespaceChild = $targetNamespaceXml->xpath('//q:c')[0];

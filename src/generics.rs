@@ -28,6 +28,7 @@ mod shared;
 mod site_scope;
 mod splice;
 pub mod variance;
+pub(crate) mod dispatch;
 
 pub use report::report as instantiation_report;
 pub use splice::{
@@ -662,7 +663,10 @@ fn describe(ty: &TypeExpr) -> String {
             args.iter().map(describe).collect::<Vec<_>>().join(", ")
         ),
         TypeExpr::Nullable(inner) => format!("?{}", describe(inner)),
-        TypeExpr::Ptr(Some(name)) => format!("ptr<{}>", name.as_str()),
+        TypeExpr::Ptr(Some(name)) => {
+            let root = if !name.is_unqualified() && crate::parser::ast::is_c_width_type_name(name.as_str()) { "\\" } else { "" };
+            format!("ptr<{}{}>", root, name.as_str())
+        },
         TypeExpr::Ptr(None) => "ptr".to_string(),
         TypeExpr::Union(members) => members
             .iter()

@@ -107,15 +107,6 @@ fn test_error_width_buffer_element_cannot_be_nullable_or_union() {
     expect_error("<?php buffer<u8|int> $b = buffer_new<u8|int>(2);", "Unknown type: u8");
 }
 
-/// Verifies a width is not a pointer target.
-#[test]
-fn test_error_width_is_not_a_pointer_target() {
-    expect_error(
-        "<?php packed class P { public ptr<u8> $p; }",
-        "Unknown pointer target type: u8",
-    );
-}
-
 /// Verifies a misspelled width in a packed field or buffer element names the accepted
 /// spellings, inside and outside a namespace, instead of pointing at a missing class.
 #[test]

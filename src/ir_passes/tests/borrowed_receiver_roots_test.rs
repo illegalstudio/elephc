@@ -22,6 +22,19 @@ final class ParameterReceiver {
     public function read(int $value): int { return $value; }
 }
 function stable(ParameterReceiver $receiver): int { return $receiver->read(1); }
+function stableLocal(): int {
+    $receiver = new ParameterReceiver();
+    return $receiver->read(1);
+}
+function reboundLocal(): int {
+    $receiver = new ParameterReceiver();
+    return $receiver->read(($receiver = new ParameterReceiver()) instanceof ParameterReceiver ? 1 : 0);
+}
+function aliasedLocal(): int {
+    $receiver = new ParameterReceiver();
+    $alias = &$receiver;
+    return $receiver->read(1);
+}
 function reassigned(ParameterReceiver $receiver): int {
     return $receiver->read(($receiver = new ParameterReceiver()) instanceof ParameterReceiver ? 1 : 0);
 }
@@ -79,4 +92,22 @@ fn borrowed_receiver_roots_keep_eval_scope_owners() {
     assert!(!pass.is_applicable(function));
     assert!(!pass.run(function, &mut module.data));
     assert_eq!(receiver_op(function), Op::Acquire);
+}
+
+/// A single owning entry store protects receiver borrows; rebinding and aliases retain leases.
+#[test]
+fn checked_managed_buffer_local_receiver_roots_on_all_targets() {
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut module = fixture(target);
+        let pass = BorrowedReceiverRoots::new(&module);
+        for function in &mut module.functions {
+            if !["stableLocal", "reboundLocal", "aliasedLocal"].contains(&function.name.as_str()) { continue; }
+            let before = receiver_op(function);
+            let stable = function.name == "stableLocal";
+            assert_eq!(pass.run(function, &mut module.data), stable, "{target}: {}", function.name);
+            assert_eq!(receiver_op(function), if stable { Op::LoadLocal } else { before }, "{target}: {}", function.name);
+            crate::ir::validate_function(function).unwrap();
+            assert!(!pass.run(function, &mut module.data), "{target}: preparation must converge");
+        }
+    }
 }

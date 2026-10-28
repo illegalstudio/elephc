@@ -31,7 +31,7 @@ pub(super) fn lower_property_assign(
     // Readonly errors depend on runtime initialization, after receiver and RHS effects.
     let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
-            Some((format!("Cannot modify readonly property {}::${}", class_name, property),
+            Some((class_name.clone(), format!("Cannot modify readonly property {}::${}", class_name, property),
                 initialization_error.clone()))
         } else {
             None
@@ -66,6 +66,7 @@ pub(super) fn lower_property_assign(
         (receiver, rhs)
     } else {
         let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+        let object = crate::ir_lower::expr::refine_member_receiver_at_span(ctx, object, span);
         let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let rhs = match object_property_type(ctx, object.value, property) {
             Some(property_ty) => {
@@ -98,12 +99,21 @@ pub(super) fn lower_property_assign(
         lower_reflection_property_write_exception(ctx, receiver, lowered_value, &property, span);
         return;
     }
-    if let Some((overwrite_message, initialization_error)) = readonly_write {
+    if let Some((class_name, overwrite_message, initialization_error)) = readonly_write {
         super::readonly_receiver_guard::guard_readonly_write_receiver(
             ctx, &receiver, lowered_value, property, span,
         );
+        // The static receiver's runtime view is boxed. Preserve that representation while
+        // lending the initialization probe the class established by this readonly site.
+        let probe = if ctx.builder.value_php_type(receiver.value.value).codegen_repr() == PhpType::Mixed {
+            let ty = PhpType::Union(vec![PhpType::Object(class_name), PhpType::Void]);
+            let probe = ctx.emit_value(Op::Borrow, vec![receiver.value.value], None, ty,
+                Op::Borrow.default_effects(), Some(span));
+            ctx.builder.set_value_ownership(probe.value, Ownership::Borrowed);
+            probe
+        } else { receiver.value };
         let data = ctx.intern_string(property);
-        let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value.value],
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![probe.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
         let overwrite = ctx.builder.create_named_block("readonly.write.initialized", Vec::new());
         let initialize = ctx.builder.create_named_block("readonly.write.uninitialized", Vec::new());
@@ -115,7 +125,11 @@ pub(super) fn lower_property_assign(
         lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &overwrite_message, span);
         ctx.builder.position_at_end(initialize);
         if let Some(message) = initialization_error {
-            lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &message, span);
+            if ctx.expression_depth > 0 {
+                lower_readonly_write_error_with_result(ctx, receiver.clone(), lowered_value, &message, span);
+            } else {
+                lower_readonly_write_error(ctx, receiver.clone(), lowered_value, &message, span);
+            }
             return;
         }
     }
@@ -175,6 +189,21 @@ pub(super) fn lower_readonly_write_error(
     message: &str, span: Span,
 ) {
     lower_property_write_exception(ctx, receiver, value, "Error", message, span);
+}
+
+/// Emits a rejected write whose assignment expression still lowers an unreachable RHS result.
+fn lower_readonly_write_error_with_result(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: property_write_receiver::PropertyWriteReceiver,
+    value: LoweredValue,
+    message: &str,
+    span: Span,
+) {
+    receiver.finish(ctx, span);
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    lower_throw_access_error_expr(ctx, message, span);
 }
 
 /// Releases independently evaluated operands before a property write raises an exception.

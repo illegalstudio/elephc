@@ -111,7 +111,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
             | LooseNotEq | PhpRelCmp | Spaceship
             // Scalar predicates and type queries.
-            | IsNull | IsTruthy | IsEmpty | MixedTagOf
+            | IsNull | IsTruthy | IsEmpty | MixedTagOf | TypePredicate
             // Numeric/string/mixed conversions.
             | IToF | FToI | IToStr | FToStr | BoolToStr | StrToI | StrToF | StrToNumber
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt

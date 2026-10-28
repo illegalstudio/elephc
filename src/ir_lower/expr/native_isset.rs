@@ -242,10 +242,7 @@ pub(super) fn property_isset_action(
     property: &str,
     member: &Expr,
 ) -> Option<IssetPropertyAction> {
-    let object_ty = isset_object_expr_type(ctx, object)?;
-    let object_ty = checked_member_receiver_type(ctx, &object_ty, member).unwrap_or(object_ty);
-    let (class_name, _) = singular_object_class(&object_ty)?;
-    let class_name = normalized_class_name(class_name)?;
+    let (class_name, _) = checked_object_expr_class(ctx, object, member)?;
     if is_builtin_stdclass_name(&class_name) {
         return Some(IssetPropertyAction::Fallback);
     }
@@ -281,6 +278,18 @@ pub(super) fn isset_object_expr_class(ctx: &LoweringContext<'_, '_>, object: &Ex
     normalized_class_name(class_name).map(|name| (name, nullable))
 }
 
+/// Resolves a silent mutation/probe's receiver class before selecting its storage behavior.
+pub(super) fn checked_object_expr_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    member: &Expr,
+) -> Option<(String, bool)> {
+    let ty = isset_object_expr_type(ctx, object)?;
+    let ty = checked_member_receiver_type(ctx, &ty, member).unwrap_or(ty);
+    let (class_name, nullable) = singular_object_class(&ty)?;
+    normalized_class_name(class_name).map(|name| (name, nullable))
+}
+
 /// Resolves the receiver type without evaluating a property probe's source expression.
 fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Option<PhpType> {
     Some(match &object.kind {
@@ -289,6 +298,12 @@ fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Optio
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.to_string()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
             PhpType::Object(fallback_class.to_string())
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)?
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, object)
         }
         ExprKind::FunctionCall { name, .. } => ctx
             .functions

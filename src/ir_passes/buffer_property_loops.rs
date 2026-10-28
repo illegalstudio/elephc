@@ -9,6 +9,7 @@
 //! - A body read needs a duplicated scalar entry condition, preserving zero-trip behavior.
 //! - Foreign reads keep a first checked access before the header can be re-evaluated.
 //! - Inlined receiver bindings and null guards retain their original lexical and error contracts.
+//! - A bounded checked accessor prefix can cache stable fields after its first taken entry.
 //! - Effectful loops retain receiver guards and their per-iteration statement resets.
 //! - Conditional reads, faulting prefixes and header values used after the loop fail closed.
 //! - Property instructions are relocated with their original ids, spans and lexical metadata.
@@ -36,7 +37,10 @@ pub(super) fn hoist_property_reads(function: &mut Function) -> bool {
         let predecessors = super::cfg::predecessors(function);
         let mut order: Vec<_> = loops.loops().iter().collect();
         order.sort_by_key(|loop_ref| loop_ref.depth);
-        let moved = order.into_iter().any(|loop_ref| hoist_one(function, loop_ref, &predecessors));
+        let moved = order.into_iter().any(|loop_ref| {
+            super::guarded_buffer_prefix::hoist(function, loop_ref)
+                || hoist_one(function, loop_ref, &predecessors)
+        });
         if !moved { return changed; }
         changed = true;
         // Merge before resolving descriptors, so later body accesses still reach loop hoisting.
@@ -154,7 +158,7 @@ fn header_values_escape(function: &Function, loop_ref: &NaturalLoop) -> bool {
 }
 
 /// Clones the first scalar condition into the preheader and inserts a taken-only property block.
-fn guard_entry(
+pub(super) fn guard_entry(
     function: &mut Function, loop_ref: &NaturalLoop, preheader: BlockId, body: BlockId,
 ) -> Option<(BlockId, HashMap<ValueId, ValueId>)> {
     let header = function.blocks[loop_ref.header.as_raw() as usize].clone();
@@ -260,7 +264,7 @@ fn clone_with_replacements(function: &mut Function, target: BlockId, id: InstId,
 }
 
 /// Repairs placement metadata after relocating existing instructions between blocks.
-fn repair_definitions(function: &mut Function) {
+pub(super) fn repair_definitions(function: &mut Function) {
     for block in &function.blocks {
         for (index, &id) in block.instructions.iter().enumerate() {
             if let Some(result) = function.instructions[id.as_raw() as usize].result {
@@ -330,7 +334,7 @@ fn hoist_receiver_guard(function: &mut Function, loop_ref: &NaturalLoop, prehead
 }
 
 /// Appends an exact instruction clone with a fresh result value and updated definition position.
-fn append_clone(function: &mut Function, block: BlockId, mut inst: Instruction) -> Option<ValueId> {
+pub(super) fn append_clone(function: &mut Function, block: BlockId, mut inst: Instruction) -> Option<ValueId> {
     let id = InstId::from_raw(function.instructions.len() as u32);
     let result = inst.result.map(|original| {
         let result = ValueId::from_raw(function.values.len() as u32);

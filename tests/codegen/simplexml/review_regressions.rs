@@ -630,8 +630,25 @@ var_dump($saveXml->asXML('/__simplexml_review_absent_2060__/out.xml'));
 restore_error_handler();
 $saveAliasXml = new ReviewSaveXmlAlias('<r/>');
 echo (int)str_contains((string)$saveAliasXml->saveXML(), '<r/>'), '|';
+reviewGuardedXmlWrites(new ReviewGuardedXml('<r><value>old</value></r>'));
 "####;
     let declarations = r####"<?php
+interface ReviewGuardedXmlView {}
+class ReviewGuardedXml extends SimpleXMLElement implements ReviewGuardedXmlView {
+    public string $label = 'before';
+}
+function reviewGuardedXmlWrites(ReviewGuardedXmlView $node): void {
+    if ($node instanceof ReviewGuardedXml) {
+        $node->label = 'after';
+        $name = 'label'; $node->{$name} = 'dynamic';
+        echo $node->label, '|';
+        unset($node->label); var_dump(isset($node->label));
+        $node->value = 'changed';
+        echo $node->value, '|';
+        $name = 'value'; unset($node->{$name});
+        echo count($node->value), '|';
+    }
+}
 class ReviewBitwiseXml extends SimpleXMLElement {}
 function reviewBitwiseArguments(mixed $left, mixed $right): void { var_dump($left | $right, $left & $right); }
 function reviewBitwiseNullable(?ReviewBitwiseXml $value): int { return $value | 4; }
@@ -794,7 +811,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let quiet_expected = "s|bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nNULL\nm|bool(true)\nbool(true)\nbool(true)\nbool(true)\nfb|c|xD||e|bool(false)\nbool(false)\nbool(false)\nu|D|D|end|fallback|v|self-fb|nullable-fb|nullable-fb|";
     let projection_expected = "J|{\"@attributes\":{\"id\":\"1\"},\"a\":\"x\",\"b\":{\"c\":{}}}|P|D:c|D:b|1:0|V|1:1|A|D:b|D:c|ReviewProjectionXml|O|D:b|ReviewProjectionXml|B|ReviewProjectionXml|D:b|R|D:r|D:b|end|ReviewProjectionXml|D:html|nodes|done|";
     let dom_expected = "i:p|1:0:http://www.w3.org/1999/xhtml|#a:go:active|A & B|<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><!-- ---- --><p xlink:href=\"#a\" x-on:click=\"go\" :class=\"active\">A &amp; B</p><i>I</i></body></html>|p:#comment:i:p|#changed|b:a|bool(true)\n1:1:1:1:1|#cdata-section:raw|work:data|changed|again:<?work again?>|#cdata-section|#cdata-section|5:#comment,first,r,last,#comment,|first:last|bool(false)\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!--before-->\n<?first one?>\n<r><a/></r>\n<?last two?>\n<!--after-->\n|3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166e93c2f723e0a:3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d2249534f2d383835392d31223f3e0a3c723e636166c3a93c2f723e0a|<p:c p:k=\"v\"/>:{\"p\":\"urn:p\"}|<p:i><p:v>two</p:v></p:i>:{\"p\":\"urn:p\"}|<p:c p:k=\"v\"/>:{\"p\":\"urn:p\"}|r:2|p:r:p:c|1:1:0|1:1:it:urn:p|3&:3&:added:en:3&|bool(false)\n<?xml version=\"1.0\"?>\n<p:r xmlns:p=\"urn:p\" xmlns:q=\"urn:p\" q:a=\"3&amp;\" xml:lang=\"en\" p:new=\"added\"><p:c/></p:r>\n|";
-    let contract_expected = "7:3:6:8:24|int(6)\nint(7)\nint(16)\nint(14)\nint(2)\nint(7)\nint(3)\n7|int(7)\nint(3)\nint(7)\nint(4)\n636166e9:fffe:78e9:62e9|75726e3ae9|SimpleXMLElement::asXML(): Argument #1 ($filename) must not contain any null bytes|SimpleXMLElement::saveXML(): Argument #1 ($filename) must not contain any null bytes|Path must not be empty|Path must not be empty|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::saveXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::asXML(.): Failed to open stream: Is a directory|bool(false)\n2:SimpleXMLElement::saveXML(.): Failed to open stream: Is a directory|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n1|";
+    let contract_expected = "7:3:6:8:24|int(6)\nint(7)\nint(16)\nint(14)\nint(2)\nint(7)\nint(3)\n7|int(7)\nint(3)\nint(7)\nint(4)\n636166e9:fffe:78e9:62e9|75726e3ae9|SimpleXMLElement::asXML(): Argument #1 ($filename) must not contain any null bytes|SimpleXMLElement::saveXML(): Argument #1 ($filename) must not contain any null bytes|Path must not be empty|Path must not be empty|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::saveXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n2:SimpleXMLElement::asXML(.): Failed to open stream: Is a directory|bool(false)\n2:SimpleXMLElement::saveXML(.): Failed to open stream: Is a directory|bool(false)\n2:SimpleXMLElement::asXML(/__simplexml_review_absent_2060__/out.xml): Failed to open stream: No such file or directory|bool(false)\n1|dynamic|bool(false)\nchanged|0|";
     let expected = [names_expected, names_expected, factory, constructor, factory, constructor, semantics_expected, semantics_expected, updates_expected, eval_updates_expected, quiet_expected, quiet_expected, projection_expected, projection_expected, dom_expected, dom_expected, contract_expected, contract_expected];
     assert_eq!(runs.len(), expected.len());
     for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {

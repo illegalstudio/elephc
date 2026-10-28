@@ -89,7 +89,7 @@ pub fn ctype_to_php_type(ct: &CType) -> PhpType {
         CType::Bool => PhpType::Bool,
         CType::Void => PhpType::Void,
         CType::Ptr => PhpType::Pointer(None),
-        CType::TypedPtr(name) => PhpType::Pointer(Some(name.clone())),
+        CType::TypedPtr(name) => PhpType::Pointer(Some(crate::names::resolved_pointer_target_tag(name))),
         CType::Callable => PhpType::Callable,
     }
 }
@@ -230,8 +230,8 @@ pub fn width_spelling_hint(name: &str) -> Option<&'static str> {
 /// Resolves a packed field or buffer element type expression spelled as a C width name.
 ///
 /// Only a bare, unqualified name qualifies: `buffer<i32>` and `public u8 $flags;` name a
-/// width, while `ptr<i32>` or `?i32` are ordinary (invalid) type expressions. The name
-/// resolver leaves a width name unqualified and marks every class it resolved as fully
+/// width. `ptr<i32>` is a pointer target resolved separately by the checker, and `?i32` is
+/// not a width type. The name resolver leaves a width name unqualified and marks every class it resolved as fully
 /// qualified, so `buffer<\u8>`, `use Lib\u8;` and a class named `u8` visible in the current
 /// namespace keep naming that class.
 pub fn width_type_from_type_expr(type_expr: &TypeExpr) -> Option<PhpType> {

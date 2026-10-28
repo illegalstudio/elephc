@@ -1691,3 +1691,54 @@ fn test_error_nullable_pointer_by_ref_parameter_rejects_array_element() {
         "a pointer by-reference parameter writes a pointer word back through its argument, so pass a variable",
     );
 }
+
+/// Rejects an unknown class nested inside a pointer declaration.
+#[test]
+fn test_error_nested_pointer_unknown_target() {
+    expect_error("<?php function f(ptr<ptr<Missing>> $p): void {}", "Unknown pointer target type: ptr<Missing>");
+}
+
+/// Preserves the diagnostic for sizeof targets that have no supported storage layout.
+#[test]
+fn test_error_pointer_sizeof_width_or_nested_target() {
+    expect_error("<?php echo ptr_sizeof(\"u8\");", "Unknown type for ptr_sizeof(): u8");
+    expect_error("<?php echo ptr_sizeof(\"ptr<u8>\");", "Unknown type for ptr_sizeof(): ptr<u8>");
+}
+
+/// A rooted width spelling names a class, not an unqualified C width.
+#[test]
+fn test_error_rooted_width_pointer_target() {
+    expect_error(r"<?php function f(ptr<\u8> $p): void {}", "Unknown pointer target type: u8");
+    expect_error(r"<?php function f(ptr<ptr<\u8>> $p): void {}", r"Unknown pointer target type: ptr<\u8>");
+}
+
+/// Generic binding preserves a rooted width spelling as a class name.
+#[test]
+fn test_error_generic_rooted_width_pointer_target() {
+    expect_error(r"<?php function id<T>(T $x): T { return $x; } $p = id<ptr<\u8>>(ptr_null());", "Unknown pointer target type: u8");
+}
+
+/// A width pointer cannot access a same-named global class's fields.
+#[test]
+fn test_error_width_pointer_does_not_alias_global_class() {
+    expect_error(r"<?php namespace { packed class u8 { public i32 $value; } } namespace App { function f(ptr<u8> $p): int { return $p->value; } }", "Property access requires an object or typed pointer");
+}
+
+/// Pointer width tags stay out of diagnostics for extern field writes and missing returns.
+#[test]
+fn test_error_pointer_width_tag_is_not_exposed() {
+    expect_error(r#"<?php extern class Blob { public ptr<u8> $data; } $b = ptr_cast<Blob>(ptr_null()); $b->data = "x";"#, "Pointer(Some(\"u8\"))");
+    expect_error("<?php function f(): ptr<u8> { return; }", "Pointer(Some(\"u8\"))");
+}
+
+/// A namespaced cast does not fall back to a same-named global class.
+#[test]
+fn test_error_ptr_cast_width_name_does_not_fallback_to_global_class() {
+    expect_error(r"<?php namespace { packed class u8 { public i32 $value; } } namespace App { function f(ptr $p): int { return ptr_cast<u8>($p)->value; } }", r"Unknown ptr_cast target type: App\u8");
+}
+
+/// Builtin diagnostics do not expose a pointer's internal width marker.
+#[test]
+fn test_error_pointer_width_tag_not_exposed_by_builtin() {
+    expect_error("<?php function f(ptr<u8> $p): void { pcntl_exec($p); }", "Pointer(Some(\"u8\"))");
+}

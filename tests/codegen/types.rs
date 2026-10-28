@@ -38,6 +38,7 @@ mod narrowing;
 #[path = "types/narrowed_object_arguments.rs"]
 mod narrowed_object_arguments;
 mod guarded_interface_receivers;
+mod guarded_interface_mutations;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
 #[path = "types/declare_groups.rs"]

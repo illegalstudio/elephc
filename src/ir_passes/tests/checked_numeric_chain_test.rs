@@ -80,6 +80,50 @@ fn emit_release(builder: &mut Builder<'_>, value: ValueId) {
     );
 }
 
+/// A dominating numeric store cannot replace a join read also reached by a conditional write or clear.
+#[test]
+fn cast_local_ambiguous_overwrite_keeps_boxed_join() {
+    use crate::ir::{FunctionParam, LocalKind};
+    for overwrite in [false, true] {
+        let mut function = Function::new("ambiguous_local".into(), IrType::I64, PhpType::Int);
+        function.params.push(FunctionParam { name: "choose".into(), ir_type: IrType::I64,
+            php_type: PhpType::Bool, by_ref: false, variadic: false });
+        let choose = function.add_local(Some("choose".into()), IrType::I64, PhpType::Bool, LocalKind::PhpLocal);
+        let cell = function.add_local(Some("cell".into()), IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, LocalKind::PhpLocal);
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        let replace = builder.create_named_block("replace", vec![]);
+        let keep = builder.create_named_block("keep", vec![]);
+        let join = builder.create_named_block("join", vec![]);
+        builder.set_entry(entry); builder.position_at_end(entry);
+        let seven = builder.emit_const_i64(7);
+        let initial = emit_checked(&mut builder, Op::ICheckedMul, seven, seven);
+        builder.emit_store_local(cell, initial);
+        let condition = builder.emit_load_local(choose, IrType::I64, PhpType::Bool);
+        builder.terminate(Terminator::CondBr { cond: condition, then_target: replace,
+            then_args: vec![], else_target: keep, else_args: vec![] });
+        builder.position_at_end(replace);
+        builder.emit(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(cell)),
+            IrType::Void, PhpType::Void, Ownership::NonHeap);
+        if overwrite {
+            let replacement = emit_checked(&mut builder, Op::ICheckedAdd, seven, seven);
+            builder.emit_store_local(cell, replacement);
+        }
+        builder.terminate(Terminator::Br { target: join, args: vec![] });
+        builder.position_at_end(keep);
+        builder.terminate(Terminator::Br { target: join, args: vec![] });
+        builder.position_at_end(join);
+        let value = builder.emit_load_local(cell, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        let result = emit_int_cast(&mut builder, value);
+        builder.terminate(Terminator::Return { value: Some(result) });
+        validate_function(&function).unwrap();
+        let before = crate::ir::print_function(&function);
+        assert!(!fuse(&mut function), "overwrite={overwrite}: {before}");
+        assert_eq!(crate::ir::print_function(&function), before);
+        validate_function(&function).unwrap();
+    }
+}
+
 /// Boolean normalization cannot be replaced by a chain returning an arbitrary integer.
 #[test]
 fn boolean_cast_is_not_a_numeric_chain_sink() {

@@ -82,10 +82,10 @@ fn test_reused_numeric_counter_compiles_under_strict_locals() {
 }
 
 /// No re-bind where the value may still borrow the old cell, where both bindings are already
-/// boxed, where the reassignment is conditional, or for a parameter, whose argument value
+/// boxed, where a conditional binding remains live at the join, or for a parameter, whose argument value
 /// backtrace frames read from its first slot.
 #[test]
-fn test_numeric_storage_rebind_requires_a_fresh_value_and_straight_line_code() {
+fn test_numeric_storage_rebind_preserves_incoming_and_live_bindings() {
     for source in [
         // A parameter keeps one slot, so `debug_backtrace()` reports its current value.
         "<?php function f(int $n): int { $n = $n - 1; return (int) $n; } echo f($argc);",
@@ -95,9 +95,9 @@ fn test_numeric_storage_rebind_requires_a_fresh_value_and_straight_line_code() {
         // Both bindings are `mixed`: they share a representation anyway.
         "<?php function f(int $n): int { for ($i = $n - 1; $i >= 0; $i--) {} \
          for ($i = $n - 2; $i >= 0; $i--) {} return (int) $i; } echo f($argc);",
-        // Inside a branch the second loop may never run.
+        // A read after the conditional keeps both loop bindings shared at the join.
         "<?php function f(int $n): int { if ($n > 0) { for ($i = 0; $i < $n; $i++) {} \
-         for ($i = $n - 1; $i >= 0; $i--) {} } return 0; } echo f($argc);",
+         for ($i = $n - 1; $i >= 0; $i--) {} } return (int) $i; } echo f($argc);",
     ] {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{source}", error.message));
@@ -107,4 +107,14 @@ fn test_numeric_storage_rebind_requires_a_fresh_value_and_straight_line_code() {
             result.local_retype_sites
         );
     }
+}
+
+/// Dead numeric regions inside a conditional may use separate storage without escaping the join.
+#[test]
+fn test_numeric_storage_rebind_accepts_dead_conditional_regions() {
+    let result = check_source_full(
+        "<?php function f(int $n): int { if ($n > 0) { for ($i = 0; $i < $n; $i++) {} \
+         for ($i = $n - 1; $i >= 0; $i--) {} } return 0; } echo f($argc);",
+    ).expect("dead conditional regions must type-check");
+    assert_eq!(rebound_names(&result), vec!["i".to_owned()]);
 }

@@ -907,6 +907,7 @@ fn merge_local_assignment_type(
     // that unrelated assignment — a `$x = …` in the main file would otherwise silently disarm
     // the retype of a `$w = …` at the same position in a library. Exactly ONE name leaves the
     // span's set of re-bound locals; the key itself goes only once the set is empty.
+    checker.numeric_region_retypes.remove(&(span, name.to_owned()));
     if checker
         .local_retype_sites
         .get(&span)
@@ -940,6 +941,25 @@ fn merge_local_assignment_type(
     // Everything above still runs (the retype-site re-decision, and the callable/reflection
     // metadata updates `check_assign` performed before calling in), so only the type merge is
     // short-circuited.
+    // All stores of a region-split name must remain numeric. A later nonnumeric store
+    // retracts earlier region decisions as well, before any lowering can consume them.
+    let numeric_region_value = super::super::super::numeric_regions::numeric_assignment(
+        checker, value, ty, env);
+    if !numeric_region_value {
+        let mut pending = vec![name.to_owned()];
+        let mut rejected = std::collections::HashSet::new();
+        while let Some(name) = pending.pop() {
+            if !rejected.insert(name.clone()) { continue; }
+            pending.extend(checker.numeric_region_dependents.get(&name).into_iter().flatten().cloned());
+            for (site, names) in &mut checker.numeric_region_sites {
+                if names.remove(&name) && checker.numeric_region_retypes.remove(&(*site, name.clone())) {
+                    if let Some(names) = checker.local_retype_sites.get_mut(site) { names.remove(&name); }
+                }
+            }
+        }
+        checker.local_retype_sites.retain(|_, names| !names.is_empty());
+        checker.numeric_region_sites.retain(|_, names| !names.is_empty());
+    }
     if checker.mixed_storage_locals.contains(name)
         || checker.boxed_ref_aliased_locals.contains(name)
     {
@@ -1081,10 +1101,14 @@ fn merge_local_assignment_type(
             // store writes. `--strict-locals` does not veto it for the same reason. A parameter
             // keeps its one slot: backtrace frames read its current argument value by name from
             // the first slot of that name (`debug_backtrace()[0]["args"]`).
+            let independent_split = splits_numeric_binding(existing, ty, value)
+                && checker.local_binding_is_killable(name);
+            let region_split = checker.numeric_region_sites.get(&span).is_some_and(|names| names.contains(name))
+                && (matches!(existing, PhpType::Int | PhpType::Float | PhpType::Mixed) || existing.is_int_float_union())
+                && numeric_region_value;
             if stmt_form
                 && span.identifies_a_node()
-                && splits_numeric_binding(existing, ty, value)
-                && checker.local_binding_is_killable(name)
+                && (independent_split || region_split)
                 && !checker.local_parameter_names.contains(name)
                 && !checker.top_level_binding_is_program_global(name)
             {
@@ -1093,6 +1117,9 @@ fn merge_local_assignment_type(
                     .entry(span)
                     .or_default()
                     .insert(name.to_string());
+                if !independent_split {
+                    checker.numeric_region_retypes.insert((span, name.to_owned()));
+                }
             }
             if &merged_ty != existing {
                 env.insert(name.to_string(), merged_ty);

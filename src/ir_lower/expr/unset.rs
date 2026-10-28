@@ -53,7 +53,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
-            unset_property_access_has_direct_lowering(ctx, object, property)
+            unset_property_access_has_direct_lowering(ctx, object, property, arg)
         }
         // `unset($o->{$k})` lowers to `Op::DynamicPropUnset`, whose backend ladder compares the
         // runtime name against the receiver's declared names and then takes php's answer for the
@@ -266,10 +266,11 @@ pub(super) fn unset_property_access_has_direct_lowering(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
     property: &str,
+    member: &Expr,
 ) -> bool {
     if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
     matches!(
-        property_unset_action(ctx, object, property),
+        property_unset_action(ctx, object, property, member),
         Some(
             UnsetPropertyAction::Magic
                 | UnsetPropertyAction::Noop
@@ -288,18 +289,18 @@ pub(super) fn lower_unset_property_access(
     expr: &Expr,
 ) {
     if needs_native_xml_property_dispatch(ctx, object, property) {
-        let object = lower_expr(ctx, object);
+        let object = lower_member_receiver(ctx, object, expr);
         lower_boxed_xml_property_unset(ctx, object, property, expr);
         return;
     }
-    let action = property_unset_action(ctx, object, property);
+    let action = property_unset_action(ctx, object, property, expr);
     match action {
         Some(UnsetPropertyAction::Magic) => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, expr);
             lower_magic_property_unset(ctx, object, property, expr);
         }
         Some(UnsetPropertyAction::Noop) => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, expr);
             // A runtime SUBCLASS can declare `__unset` where the static class does not, and php
             // calls it on such an instance instead of doing nothing. The receiver is lowered once,
             // before the guard, so php's evaluation order is unchanged either way.
@@ -309,7 +310,7 @@ pub(super) fn lower_unset_property_access(
         // receiver's property storage, so it picks the fixed-slot marker or the
         // dynamic-hash removal from the same instruction.
         Some(UnsetPropertyAction::ClearSlot | UnsetPropertyAction::RemoveDynamic) => {
-            let object = lower_expr(ctx, object);
+            let object = lower_member_receiver(ctx, object, expr);
             lower_guarded_magic_property_unset(ctx, object, property, expr, |ctx, object| {
                 let data = ctx.intern_string(property);
                 ctx.emit_void(
@@ -353,9 +354,19 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
     )
 }
 
-/// Predicts an unset operand's materialized type, including function and property results.
+/// Predicts unset receiver/member results while preserving narrow builtin name hints.
 fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
-    super::array_cast_source::array_cast_source_type_for_ir(ctx, expr)
+    match &expr.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned()
+            .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
+        ExprKind::FunctionCall { name, .. }
+            if ctx.functions.contains_key(name.as_str()) || ctx.extern_functions.contains_key(name.as_str()) =>
+        {
+            call_return_type(ctx, name.as_str(), &[])
+        }
+        ExprKind::FunctionCall { .. } => infer_expr_type_syntactic(expr),
+        _ => super::array_cast_source::array_cast_source_type_for_ir(ctx, expr),
+    }
 }
 
 /// Lowers `unset($object->{$name})` for a property name only known at run time.
@@ -369,7 +380,7 @@ pub(super) fn lower_unset_dynamic_property_access(
     property: &Expr,
     expr: &Expr,
 ) {
-    let object = lower_expr(ctx, object);
+    let object = lower_member_receiver(ctx, object, expr);
     let property = lower_expr(ctx, property);
     let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
         ctx, property, expr.span,
@@ -426,6 +437,7 @@ fn stabilize_unset_receiver(
 /// The receiver is already lowered, so the guard adds no evaluation and every branch converges on
 /// one merge block. When no subclass adds the accessor the chain is empty and `lower_ordinary`
 /// runs exactly where it ran before, with no extra block at all.
+/// An owned receiver stays unwind-visible across removal or magic callbacks and is retired once.
 fn lower_guarded_magic_property_unset(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
@@ -433,10 +445,13 @@ fn lower_guarded_magic_property_unset(
     expr: &Expr,
     lower_ordinary: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
+    let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
     let magic_classes =
         crate::ir_lower::stmt::magic_accessor_subclasses(ctx, object.value, property, "__unset");
     if magic_classes.is_empty() {
         lower_ordinary(ctx, object);
+        unpin_in_flight_owners(ctx, pins, expr.span);
+        stabilize_unset_receiver(ctx, object, expr.span);
         return;
     }
     let merge = ctx
@@ -475,6 +490,8 @@ fn lower_guarded_magic_property_unset(
     lower_ordinary(ctx, object);
     branch_to(ctx, merge);
     ctx.builder.position_at_end(merge);
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    stabilize_unset_receiver(ctx, object, expr.span);
 }
 
 /// Describes how `unset($object->property)` should be lowered for a known receiver class.
@@ -497,8 +514,9 @@ pub(super) fn property_unset_action(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
     property: &str,
+    member: &Expr,
 ) -> Option<UnsetPropertyAction> {
-    let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    let (class_name, _) = checked_object_expr_class(ctx, object, member)?;
     // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
     // `stdClass` declares no magic methods that could intercept it.
     if is_builtin_stdclass_name(&class_name) {

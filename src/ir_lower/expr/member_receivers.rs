@@ -2,7 +2,7 @@
 //! Preserve checked class/interface views on native interface receiver values.
 //!
 //! Called from:
-//! - Property-read and method-call lowering.
+//! - Property reads, writes, unset probes and method-call lowering.
 //!
 //! Key details:
 //! - Only raw object pointers are refined; boxed receivers keep their existing dispatch.
@@ -16,8 +16,17 @@ pub(super) fn lower_member_receiver(
     object: &Expr,
     member: &Expr,
 ) -> LoweredValue {
+    lower_member_receiver_at_span(ctx, object, member.span)
+}
+
+/// Applies a statement mutation's checked view before its RHS or runtime name is evaluated.
+pub(crate) fn lower_member_receiver_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    span: Span,
+) -> LoweredValue {
     let value = lower_expr(ctx, object);
-    refine_member_receiver(ctx, value, member)
+    refine_member_receiver_at_span(ctx, value, span)
 }
 
 /// Applies the same view to a receiver already evaluated by a lazy postfix chain.
@@ -26,8 +35,17 @@ pub(super) fn refine_member_receiver(
     value: LoweredValue,
     member: &Expr,
 ) -> LoweredValue {
+    refine_member_receiver_at_span(ctx, value, member.span)
+}
+
+/// Refines a freshly evaluated receiver using the checked member's source identity.
+pub(crate) fn refine_member_receiver_at_span(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
     let original = ctx.builder.value_php_type(value.value);
-    let Some(PhpType::Object(class)) = checked_member_receiver_type(ctx, &original, member) else {
+    let Some(PhpType::Object(class)) = checked_member_receiver_type_at_span(ctx, &original, span) else {
         return value;
     };
     if original != PhpType::Object(class.clone()) {
@@ -42,10 +60,19 @@ pub(super) fn checked_member_receiver_type(
     original: &PhpType,
     member: &Expr,
 ) -> Option<PhpType> {
+    checked_member_receiver_type_at_span(ctx, original, member.span)
+}
+
+/// Looks up a raw-object receiver view shared by expression and statement mutation sites.
+fn checked_member_receiver_type_at_span(
+    ctx: &LoweringContext<'_, '_>,
+    original: &PhpType,
+    span: Span,
+) -> Option<PhpType> {
     let PhpType::Object(original) = original else { return None; };
     if !ctx.interfaces.contains_key(original) { return None; }
     let Some(Some(PhpType::Object(class))) = ctx.member_receiver_types
-        .get(&(ctx.loop_storage_scope.clone(), member.span))
+        .get(&(ctx.loop_storage_scope.clone(), span))
     else {
         return None;
     };

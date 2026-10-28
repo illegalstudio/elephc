@@ -35,7 +35,8 @@
 //!   observable operation or branch. A null receiver can warn and run an error handler, even with
 //!   a non-nullable static type, but that read returns handle zero and the access cannot return.
 //!   Relocated reads keep this first check before header re-evaluation. Other foreign property
-//!   reads still end the region. Modules with `__get` or eval skip the phase entirely.
+//!   reads still end the region, apart from guarded scalar reads spliced from `$this`.
+//!   Modules with `__get` or eval skip the phase entirely.
 //! - Only handles read from a property are rewritten. Local buffer handles in straight-line code
 //!   keep their per-access form.
 
@@ -171,10 +172,11 @@ pub(super) fn reuse_property_reads_and_records(function: &mut Function) -> bool 
     changed
 }
 
-/// Replaces each buffer-typed property read that a dominating read of the same property on the
-/// same receiver already made, across a clean region.
+/// Reuses buffer and guarded scalar property reads already made on the same stable receiver.
 fn merge_property_reads(function: &mut Function, facts: &Facts) -> bool {
-    let reads = facts.ordered(function, |inst| is_buffer_property_read(function, inst));
+    let reads = facts.ordered(function, |inst| {
+        is_buffer_property_read(function, inst) || is_inlined_scalar_property_read(function, inst)
+    });
     let mut kept: Vec<InstId> = Vec::new();
     let mut replacements = HashMap::new();
     let mut redundant = Vec::new();
@@ -624,7 +626,8 @@ pub(super) fn keeps_reads_stable(function: &Function, inst: &Instruction) -> boo
         Op::Acquire | Op::Release => is_buffer_refcount_no_op(function, inst),
         Op::PropGet if !function.is_packed_field_access(inst) => {
             is_plain_property_read(inst)
-                && (reads_the_method_receiver(function, inst) || is_buffer_property_read(function, inst))
+                && (reads_the_method_receiver(function, inst) || is_buffer_property_read(function, inst)
+                    || is_inlined_scalar_property_read(function, inst))
         }
         op if may_run_user_code(op) => false,
         _ => instruction_preserves_buffers(function, inst),
@@ -676,6 +679,17 @@ fn is_buffer_refcount_no_op(function: &Function, inst: &Instruction) -> bool {
 fn is_plain_property_read(inst: &Instruction) -> bool {
     matches!(inst.immediate, Some(Immediate::Data(_)))
         && inst.effects.difference(Effects::READS_HEAP | Effects::MAY_THROW).is_empty()
+}
+
+/// An inlined object-property read retains its receiver guard; packed fields remain mutable.
+pub(super) fn is_inlined_scalar_property_read(function: &Function, inst: &Instruction) -> bool {
+    inst.op == Op::PropGet && is_plain_property_read(inst)
+        && !function.is_packed_field_access(inst)
+        && inst.result_ownership == crate::ir::Ownership::NonHeap
+        && matches!(inst.result_php_type, PhpType::Int | PhpType::Float | PhpType::Bool)
+        && inst.result.and_then(|value| function.value(value))
+            .is_some_and(|value| matches!(value.def,
+                ValueDef::Instruction { inst, .. } if function.inlined_scopes.contains_key(&inst)))
 }
 
 /// Returns whether a property read's receiver is the method's own `$this`, which PHP never lets

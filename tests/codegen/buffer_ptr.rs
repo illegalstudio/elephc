@@ -216,3 +216,147 @@ echo ptr_is_null(buffer_ptr($alias)) ? "null" : "live";
     );
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
+
+/// Verifies native pointer output writes and reads use pointer-sized buffer slots.
+#[test]
+fn test_buffer_ptr_native_pointer_output_round_trip() {
+    let out = compile_and_run_with_c_fixture(
+        r#"<?php
+extern function elephc_test_pointer_output(ptr<ptr<u8>> $out, ptr<u32> $length): void;
+function pointer_output_slot(ptr<ptr<u8>> $out): ptr<ptr<u8>> { return $out; }
+buffer<ptr<u8>> $slots = buffer_new<ptr<u8>>(2);
+buffer<u32> $length = buffer_new<u32>(1);
+elephc_test_pointer_output(pointer_output_slot(buffer_ptr($slots)), buffer_ptr($length));
+echo ptr_read8($slots[0]), " ", $length[0], " ", ptr_is_null($slots[1]) ? "null" : "set", "\n";
+buffer_free($slots);
+buffer_free($length);
+"#,
+        r#"#include <stdint.h>
+static uint8_t bytes[] = { 73, 74 };
+void elephc_test_pointer_output(uint8_t **out, uint32_t *length) {
+    *out = bytes;
+    *length = 2;
+}
+"#,
+    );
+    assert_eq!(out, "73 2 null\n");
+}
+
+/// Autoloads a class mentioned only in a nested pointer signature.
+#[test]
+fn test_nested_pointer_autoloads_target_class() {
+    let out = compile_and_run_files(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            ("src/Node.php", "<?php namespace App; class Node {}"),
+            ("main.php", "<?php namespace App; function out(ptr<ptr<Node>> $p): void { echo 42; } out(ptr_null());"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "42");
+}
+
+/// Keeps a namespaced packed pointer target when a native function writes it through a slot.
+#[test]
+fn test_nested_pointer_preserves_packed_target() {
+    let out = compile_and_run_with_c_fixture(
+        r#"<?php
+namespace App;
+packed class Pair { public i32 $value; }
+extern function elephc_test_pair_output(ptr<ptr<Pair>> $out): void;
+buffer<ptr<Pair>> $slot = buffer_new<ptr<Pair>>(1);
+elephc_test_pair_output(buffer_ptr($slot));
+echo $slot[0]->value;
+buffer_free($slot);
+"#,
+        r#"#include <stdint.h>
+struct Pair { int32_t value; };
+static struct Pair pair = { 71 };
+void elephc_test_pair_output(struct Pair **out) { *out = &pair; }
+"#,
+    );
+    assert_eq!(out, "71");
+}
+
+/// Accepts a width pointer in a packed field, formerly rejected as an unknown target.
+#[test]
+fn test_packed_field_accepts_width_pointer() {
+    let out = compile_and_run(r#"<?php
+packed class ByteSlot { public ptr<u8> $value; }
+$slots = buffer_new<ByteSlot>(1);
+echo ptr_is_null($slots[0]->value) ? "null" : "set";
+buffer_free($slots);
+"#);
+    assert_eq!(out, "null");
+}
+
+/// Resolves width pointer targets in a namespace, including nested declarations.
+#[test]
+fn test_namespaced_width_pointer_targets() {
+    let out = compile_and_run(r#"<?php
+namespace App;
+packed class Slot { public ptr<u8> $value; }
+function accept(ptr<ptr<u8>> $value): void { echo "ok"; }
+accept(ptr_null());
+"#);
+    assert_eq!(out, "ok");
+}
+
+/// A class named like a width remains the pointee of a namespaced pointer type.
+#[test]
+fn test_namespaced_pointer_target_width_shadowed_by_class() {
+    let out = compile_and_run(r#"<?php
+namespace App;
+packed class u8 { public i32 $value; }
+function read(ptr<u8> $p): int { return $p->value; }
+$items = buffer_new<u8>(1);
+$items[0]->value = 5;
+echo read(buffer_ptr($items));
+buffer_free($items);
+"#);
+    assert_eq!(out, "5");
+}
+
+/// A rooted width spelling still resolves to a declared global class of that name.
+#[test]
+fn test_rooted_width_pointer_target_declared_class() {
+    let out = compile_and_run(r#"<?php
+packed class u8 { public i32 $value; }
+function read_rooted(ptr<\u8> $p): int { return $p->value; }
+function accept_rooted_nested(ptr<ptr<\u8>> $p): void {}
+$items = buffer_new<u8>(1);
+$items[0]->value = 9;
+accept_rooted_nested(ptr_null());
+echo read_rooted(buffer_ptr($items));
+buffer_free($items);
+"#);
+    assert_eq!(out, "9");
+}
+
+/// Generic pointer arguments preserve a rooted global class whose name is a C width.
+#[test]
+fn test_generic_rooted_width_pointer_target_declared_class() {
+    let out = compile_and_run(r#"<?php
+packed class u8 { public i32 $value; }
+function id<T>(T $x): T { return $x; }
+$items = buffer_new<u8>(1);
+$items[0]->value = 17;
+$p = id<ptr<\u8>>(buffer_ptr($items));
+echo $p->value;
+buffer_free($items);
+"#);
+    assert_eq!(out, "17");
+}
+
+/// Casting to a global class named like a width accepts both rooted and bare names.
+#[test]
+fn test_ptr_cast_width_named_global_class() {
+    let out = compile_and_run(r#"<?php
+packed class u8 { public i32 $value; }
+$items = buffer_new<u8>(1);
+$items[0]->value = 3;
+echo ptr_cast<u8>(buffer_ptr($items))->value, ptr_cast<\u8>(buffer_ptr($items))->value;
+buffer_free($items);
+"#);
+    assert_eq!(out, "33");
+}

@@ -804,7 +804,7 @@ impl Scanner<'_> {
                 }
             }
             TypeExpr::Ptr(Some(name)) => {
-                self.record_class(name.as_str());
+                self.record_class(crate::names::pointer_target_leaf(name.as_str()));
             }
             TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => self.scan_type(inner),
             // Both halves reach the class recorder: `array<string, Foo>` keeps `Foo` alive, and

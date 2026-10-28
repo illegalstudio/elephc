@@ -25,8 +25,8 @@ pub(crate) struct ProvenSlots {
     pub(crate) seeded: HashSet<LocalSlotId>,
 }
 
-/// Finds counters whose entire recurrence remains integer, independently of their observers,
-/// and reports which of those proofs needed a checked seed.
+/// Finds counters whose recurrence and comparison observers permit integer storage,
+/// and reports which proofs also needed a checked seed.
 pub(crate) fn prove_integer_slots(
     function: &Function,
     data: &mut DataPool,
@@ -143,7 +143,7 @@ fn seed_dependencies(
 }
 
 /// Follows acquire, clone, move and borrow wrappers back to the instruction that made a value.
-fn owner_source(function: &Function, mut value: ValueId) -> Option<&Instruction> {
+pub(super) fn owner_source(function: &Function, mut value: ValueId) -> Option<&Instruction> {
     for _ in 0..8 {
         let inst = super::defining_instruction(function, value)?;
         match inst.op {

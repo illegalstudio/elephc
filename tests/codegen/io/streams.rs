@@ -5193,11 +5193,9 @@ fclose($m);
 /// Verifies compiled PHP output for stream context create returns resource.
 #[test]
 fn test_stream_context_create_returns_resource() {
-    // v1 stub: stream_context_create/get_default return a resource so PHP
-    // code that constructs or consults stream contexts compiles. The options
-    // are not yet persisted on the resource.
-    let out = compile_and_run(
-        r#"<?php
+    // The first ternary introduces a join before the default context is tested.
+    // Integer storage must preserve the context's logical resource type there.
+    let source = r#"<?php
 $c = stream_context_create(["http" => ["method" => "POST"]]);
 $d = stream_context_get_default();
 echo is_resource($c) ? "ok" : "FAIL";
@@ -5205,9 +5203,10 @@ echo "|";
 echo is_resource($d) ? "ok" : "FAIL";
 echo "|";
 echo stream_context_set_option($c, "http", "method", "GET") ? "set-ok" : "FAIL";
-"#,
-    );
-    assert_eq!(out, "ok|ok|set-ok");
+"#;
+    for out in [compile_and_run(source), without_ir_opt(|| compile_and_run(source))] {
+        assert_eq!(out, "ok|ok|set-ok");
+    }
 }
 
 /// Verifies compiled PHP output for stream context get options returns array.

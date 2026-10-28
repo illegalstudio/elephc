@@ -498,8 +498,8 @@ published operand-owner slot: an argument can replace that payload before the
 method instruction consumes the earlier load. The source borrow is preserved;
 only the acquired lease is retired after the call or during exceptional cleanup.
 Persistent values and proven concrete `$this` borrows keep their existing
-lifetime. Parameter receiver roots are removed before inlining only under the
-unchanged-storage proof described below.
+lifetime. Receiver roots backed by unchanged concrete parameters or proven owned
+locals are removed before inlining only under the storage proofs described below.
 
 Before lowering releases an owning call-argument temporary, the checker provides
 a conservative return-to-parameter alias summary for each source function and
@@ -1434,12 +1434,16 @@ debug-build post-pass validation. Passes that opt into `run_before_inlining` or
 Preparation removes redundant method receiver roots before their lowering shape
 is changed by inlining. `borrowed_receiver_roots` accepts only direct concrete
 object parameter loads whose by-value frame binding is never written, aliased or
-used as iterator storage. The acquired value must feed only its hidden root and
+used as iterator storage. `receiver_local_roots` also admits an ordinary object
+local with exactly one owned, matching-type store in the entry block, dominating
+every read. Parameters, main, exception handlers, entry-block re-execution,
+address escapes and every other operation naming that local fail this local-owner
+proof. The acquired value must feed only its hidden root and
 ordinary method receiver operands. The pass removes that extra retain together
 with its root store, publication and retirement, and forwards the method call to
-the parameter load. Eval-capable modules keep the original roots. The proof in
-`src/ir/parameter_roots.rs` is shared with caller-visible effect summaries;
-remaining cleanup instructions keep their full effects.
+the original frame-owner load. Eval-capable modules keep the original roots. The
+parameter proof in `src/ir/parameter_roots.rs` is shared with caller-visible effect
+summaries; remaining cleanup instructions keep their full effects.
 
 The representation-changing pipeline runs to a **module-level fixed point**:
 `optimize_module` runs preparation and partitions post-fixed-point passes out, then
@@ -1650,11 +1654,48 @@ The analysis is capped at 16 candidate locals in functions of at most 4096
 instructions. It runs only with IR optimization enabled and uses the existing
 scalar and call-argument backends for every supported target.
 
+### Guarded Loop Counter Versions
+
+`loop_counter_versioning` follows the static bounded-counter proof. For a small
+innermost loop with an entry-tested counter and a stable integer or Mixed bound,
+it guards the seed and bound tags, plus inclusive integer extrema, before entering
+a private integer copy. The original boxed loop remains the fallback; each fast
+entry unboxes the guarded integer payloads without PHP cast effects, and each fast
+exit publishes the exact final counter to the original slot. Post-test loops and
+conditions computed outside the header cannot justify unchecked counter updates.
+Committed copies accept only consumers whose existing opcode handles raw integers;
+coercing stores and operations requiring a boxed input retain the generic loop.
+Cast targets must be scalar, and ordering partners must preserve PHP numeric or
+boxed comparison rules; boolean/null ordering partners retain the generic loop.
+Strict identity with raw pointer, buffer or packed partners also keeps its original
+boxed counter input, preserving the runtime boxing semantics.
+Loose equality with external Mixed-representation partners keeps a boxed counter
+so objects still use PHP's complete comparison rules.
+The broader value-only inventory remains available to discarded storage trials,
+whose later AST lowering rebuilds representation conversions.
+Comparison partner rules also constrain those trials: relowering a numeric binding
+can otherwise change PHP coercion or identity dispatch before IR optimization runs.
+
+A preceding seed guard can skip a dead-at-exit loop when a checked directional
+seed overflow makes its first comparison false. This also requires an innermost
+loop, so one header comparison cannot authorize repeated nested updates. All eligible
+seed guards are exhausted before the separate loop-copy budget is spent. Integer
+and boolean preheader constants and retired bookkeeping are accepted only when the resulting
+CFG still validates. Both
+rewrites operate on EIR and preserve the original AST binding decisions and
+source metadata. See [the optimizer](the-optimizer.md) for the complete eligibility
+and code-growth limits.
+
 ### Boxed Numeric Chain Fusion
 
 `src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic
 chains that are consumed only as integers, avoiding intermediate Mixed boxes.
 It runs after checked integer sink specialization and before constant folding.
+Private index locals can connect a chain to its final integer casts when every
+rewritten read has the same unique reaching writer. An intervening store or
+retirement rejects that rewrite. Float promotion remains part of the complete
+chain through the final cast; a generic loop copy retains any boxed storage and
+cleanup that it still uses.
 
 ### Constant Folding
 
@@ -1847,13 +1888,18 @@ instruction elimination on a later driver sweep.
 ### Branch Simplification
 
 The branch simplification transform (`src/ir_passes/branch_simplify.rs`) simplifies
-the CFG in four ways:
+the CFG in five ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a
   constant (`const_bool`, `const_i64` via PHP truthiness, or `const_null`) becomes
   an unconditional `br` to the taken edge. A `switch` on a `const_i64`/`const_bool`
   scrutinee folds to a `br` to the matching case (or the default). A `while (true)`
   loop, for example, lowers to a constant `cond_br` that this fold collapses.
+- **Repeated-guard folding**: `guard_facts` reuses a tested boolean SSA condition
+  when the selected edge's target has only that branch as predecessor, the branch
+  strictly dominates the target, and the target dominates the later test. Joins
+  and entry re-execution cannot supply facts; fresh mutable-storage reads are
+  distinct SSA conditions and keep their own tests.
 - **Empty-block jump threading**: compose each incoming edge's arguments through
   non-entry blocks containing only unused Nops and an unconditional branch.
   Parameters must not escape the forwarding terminator, and cyclic forwarding
@@ -1955,9 +2001,12 @@ the current AST-to-EIR path.
 Small instance methods also participate through `src/ir_passes/inline/methods.rs`.
 Its `MethodTargets` snapshot resolves a `method_call` only for a plain non-nullable
 user-class receiver when the class or method is final, or the method has no vtable
-slot. An instantiated generic receiver with a vtable slot keeps a real call because
-variance can change its actual instantiation. The borrowed `$this` parameter is the
-only object exemption from the ordinary boundary rules. The body must be
+slot. Generic receivers also qualify when
+`generics::dispatch::has_fixed_instantiation` proves their arguments cannot widen,
+as for scalar specializations. Instantiations with potentially widening object
+arguments keep a real call because variance can change the actual instantiation.
+The borrowed `$this` parameter is the only object exemption from the ordinary
+boundary rules. The body must be
 frame-independent, and literal parameter guards, by-reference arguments, variadics
 and backtrace-visible method frames retain their calls. A splice checks the receiver
 for null after argument binding, except when it is the host method's own `$this`.
@@ -2404,9 +2453,13 @@ greatest fixed point, so a value written before a loop remains eligible when
 the back edge only reads it.
 
 Promotion requires ordinary integer, boolean, or float local storage with only
-plain load/store accesses. Address escapes, by-reference uses, global and static
-slots, refcounted values, nonstandard slot operations, eval scope access, and
-functions with implicit exception-handler edges stay slot-backed. This pass runs
+plain load/store accesses. Stored values and loads must match the slot's logical
+PHP type as well as its representation, with `false` values admitted into boolean
+storage. Resource payloads in integer storage cannot acquire integer semantics
+through SSA forwarding. Address escapes,
+by-reference uses, global and static slots, refcounted values, nonstandard slot
+operations, eval scope access, and functions with implicit exception-handler
+edges stay slot-backed. This pass runs
 in the fixed-point EIR optimizer before register allocation. Both `--ir-opt=off`
 and `--regalloc=stack` remain available for comparison.
 

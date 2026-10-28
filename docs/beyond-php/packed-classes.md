@@ -139,8 +139,8 @@ reads and writes the C struct in place. Scalar buffers take the same width names
 `buffer<u16>` index data, `buffer<u8>` pixels, `buffer<f32>` vertex streams; see
 [Buffers](buffers.md#element-widths).
 
-The width names are not reserved words: in a packed field type or inside `buffer<...>` they
-name the width, and everywhere else they resolve like class names. A program that declares
+The width names are not reserved words: in a packed field type, inside `buffer<...>`, or as
+a `ptr<...>` target they name the width, and elsewhere they resolve like class names. A program that declares
 or imports a class under one of these names (`class u8`, `use Lib\Byte as i32`) shadows the
 width wherever that class is visible, exactly as PHP resolves the name. A misspelled width
 (`I32`, `uint8_t`, `double`) is reported with the accepted spellings.

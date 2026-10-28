@@ -908,3 +908,41 @@ fn test_parses_word_variance_markers() {
 fn test_out_is_still_a_usable_type_parameter_name() {
     assert!(!parse_fails("<?php class Holder<out> { public function get(): out { return $this->v; } }"));
 }
+
+/// Preserves the pointer target through ordinary, buffer and extern type syntax.
+#[test]
+fn test_parse_nested_pointer_type_shapes() {
+    let stmts = parse_source("<?php ptr<ptr<u8>> $p = ptr_null(); buffer<ptr<u8>> $b = buffer_new<ptr<u8>>(1); extern function f(ptr<ptr<u8>> $out): void;");
+    match &stmts[0].kind {
+        StmtKind::TypedAssign { type_expr, .. } => assert_eq!(type_expr, &TypeExpr::Ptr(Some(Name::unqualified("ptr<u8>")))),
+        other => panic!("expected typed assignment, got {:?}", other),
+    }
+    match &stmts[1].kind {
+        StmtKind::TypedAssign { type_expr, .. } => assert_eq!(type_expr, &TypeExpr::Buffer(Box::new(TypeExpr::Ptr(Some(Name::unqualified("u8")))))),
+        other => panic!("expected typed assignment, got {:?}", other),
+    }
+    match &stmts[2].kind {
+        StmtKind::ExternFunctionDecl { params, .. } => assert_eq!(params[0].c_type, elephc::parser::ast::CType::TypedPtr("ptr<u8>".into())),
+        other => panic!("expected extern declaration, got {:?}", other),
+    }
+    parse_source("<?php function f(pointer<pointer<u8>> $p): void {} function g(ptr<pointer<u8>> $p): void {}");
+}
+
+/// Parses pointer elements when consecutive type argument closers form a shift token.
+#[test]
+fn test_buffer_pointer_type_closers() {
+    parse_source("<?php function f(buffer<ptr<u8>> $b, ptr<ptr<u8>> $p): buffer<ptr<u8>> { return buffer_new<ptr<u8>>(1); }");
+}
+
+/// Parses pointer-to-pointer parameters in native declarations.
+#[test]
+fn test_extern_nested_pointer_type() {
+    parse_source("<?php extern \"SDL3\" { function SDL_LoadWAV(string $path, ptr $spec, ptr<ptr<u8>> $data, ptr<u32> $length): bool; }");
+}
+
+/// Rejects an unmatched closing angle in a native pointer type.
+#[test]
+fn test_extern_nested_pointer_unbalanced_close() {
+    assert!(parse_fails("<?php extern function f(ptr<ptr<u8>>> $p): void;"));
+    assert!(parse_fails("<?php extern function f(ptr<ptr<u8> $p): void;"));
+}

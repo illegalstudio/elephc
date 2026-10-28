@@ -96,7 +96,7 @@ fn type_refs_testing(type_expr: &TypeExpr) -> bool {
         | TypeExpr::Void
         | TypeExpr::Never
         | TypeExpr::Iterable => false,
-        TypeExpr::Ptr(target) => target.as_ref().is_some_and(name_is_testing_class),
+        TypeExpr::Ptr(target) => target.as_ref().is_some_and(|name| name_is_testing_class(&crate::names::pointer_target_leaf_name(name))),
         TypeExpr::Array(inner) | TypeExpr::Buffer(inner) | TypeExpr::Nullable(inner) => {
             type_refs_testing(inner)
         }

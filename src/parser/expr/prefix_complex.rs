@@ -17,7 +17,7 @@ use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind, TypeExpr,
 };
 use crate::parser::stmt::{
-    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
+    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_arguments_only, parse_type_expr,
 };
 use crate::span::Span;
 
@@ -738,12 +738,11 @@ pub(super) fn parse_named_expr(
         && *pos < tokens.len()
         && tokens[*pos].0 == Token::Less
     {
-        *pos += 1;
-        let element_type = parse_type_expr(tokens, pos, span)?;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
-            return Err(CompileError::new(span, "Expected '>' after buffer_new<T"));
+        let mut args = parse_type_arguments_only(tokens, pos, span)?;
+        if args.len() != 1 {
+            return Err(CompileError::new(span, "Expected one buffer element type"));
         }
-        *pos += 1;
+        let element_type = args.remove(0);
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             return Err(CompileError::new(span, "Expected '(' after buffer_new<T>"));
         }

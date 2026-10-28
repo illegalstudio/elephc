@@ -41,6 +41,7 @@ extern "SDL2" {
 | `?string` | `char*` that may be `NULL` (parameters and returns only) | integer argument register |
 | `ptr` | `void*` | integer argument register |
 | `ptr<T>` | `T*` | integer argument register |
+| `ptr<ptr<T>>` | `T**` | integer argument register |
 | `void` | void (return only) | — |
 | `callable` | function pointer | integer argument register |
 

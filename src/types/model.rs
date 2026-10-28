@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt;
 use super::ScalarWidth;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 #[allow(dead_code)] // Callable used in match arms, constructed when closures are added
 /// PHP runtime type.
 pub enum PhpType {
@@ -51,6 +51,32 @@ pub enum PhpType {
     /// type; codegen funnels construct it from `int|null` unions only under
     /// `NullRepr::Tagged`. Under the legacy sentinel opt-out it never exists.
     TaggedScalar,
+}
+
+impl std::fmt::Debug for PhpType {
+    /// Formats the normal debug shape without exposing internal pointer width tags.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Int => f.write_str("Int"), Self::Float => f.write_str("Float"),
+            Self::Str => f.write_str("Str"), Self::Bool => f.write_str("Bool"),
+            Self::False => f.write_str("False"), Self::Void => f.write_str("Void"),
+            Self::Never => f.write_str("Never"), Self::Iterable => f.write_str("Iterable"),
+            Self::Mixed => f.write_str("Mixed"), Self::Callable => f.write_str("Callable"),
+            Self::TaggedScalar => f.write_str("TaggedScalar"),
+            Self::Array(inner) => f.debug_tuple("Array").field(inner).finish(),
+            Self::AssocArray { key, value } => f.debug_struct("AssocArray").field("key", key).field("value", value).finish(),
+            Self::Buffer(inner) => f.debug_tuple("Buffer").field(inner).finish(),
+            Self::Narrow(width) => f.debug_tuple("Narrow").field(width).finish(),
+            Self::Object(name) => f.debug_tuple("Object").field(name).finish(),
+            Self::Packed(name) => f.debug_tuple("Packed").field(name).finish(),
+            Self::Pointer(target) => {
+                let visible = target.as_ref().map(|name| crate::names::display_pointer_target(name));
+                f.debug_tuple("Pointer").field(&visible).finish()
+            }
+            Self::Resource(kind) => f.debug_tuple("Resource").field(kind).finish(),
+            Self::Union(members) => f.debug_tuple("Union").field(members).finish(),
+        }
+    }
 }
 
 impl PhpType {
@@ -525,7 +551,7 @@ impl fmt::Display for PhpType {
             PhpType::Object(name) if name.is_empty() => write!(f, "object"),
             PhpType::Object(name) => write!(f, "{}", name),
             PhpType::Packed(name) => write!(f, "packed {}", name),
-            PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", name),
+            PhpType::Pointer(Some(name)) => write!(f, "ptr<{}>", crate::names::display_pointer_target(name)),
             PhpType::Pointer(None) => write!(f, "ptr"),
             PhpType::Resource(Some(kind)) => write!(f, "resource<{}>", kind),
             PhpType::Resource(None) => write!(f, "resource"),

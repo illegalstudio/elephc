@@ -244,6 +244,10 @@ GenericClass { name, args }  CallableSig { params, ret }
 Nullable(Box<TypeExpr>)  Union(Vec<TypeExpr>)  Intersection(Vec<TypeExpr>)
 ```
 
+A nested pointer target is encoded in the `Ptr` name, for example
+`ptr<ptr<u8>>` becomes `Ptr(Some(Name::unqualified("ptr<u8>")))`. Class-name consumers
+unwrap nested target strings with `names::pointer_target_leaf` or `pointer_target_leaf_name`.
+
 `Iterable` represents PHP's `iterable` pseudo-type in parameter, return,
 property, and typed-local annotations. `False` is PHP's literal `false` type,
 kept distinct from `bool` for flow narrowing. `Array` carries the element

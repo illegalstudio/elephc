@@ -95,7 +95,7 @@ fn remap(value: &mut ValueId, map: &HashMap<ValueId, ValueId>) {
 
 /// Rewrites every value used by a terminator: branch arguments, conditions,
 /// switch scrutinees, returned/thrown values, and generator suspend operands.
-fn replace_in_terminator(terminator: &mut Terminator, map: &HashMap<ValueId, ValueId>) {
+pub(super) fn replace_in_terminator(terminator: &mut Terminator, map: &HashMap<ValueId, ValueId>) {
     match terminator {
         Terminator::Br { args, .. } => {
             for arg in args.iter_mut() {

@@ -510,7 +510,7 @@ fn instructions_name_slot(function: &Function, instructions: &[InstId], slot: Lo
 }
 
 /// Returns true when an instruction names `slot` through either slot-carrying immediate.
-fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
+pub(super) fn instruction_mentions_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
     match inst.immediate.as_ref() {
         Some(Immediate::LocalSlot(named)) => *named == slot,
         Some(Immediate::LocalSlotPair { first, second }) => *first == slot || *second == slot,

@@ -346,6 +346,13 @@ handle; their elements become stale aliases. A `mixed` view of such an array (`p
 echo buffer_len($data);   // 512
 ```
 
+## Pointer output parameters
+
+A `buffer<ptr<u8>>` stores pointer-sized slots. Pass its payload to a native
+function taking `ptr<ptr<u8>>`, then read the pointer that the function writes
+from the buffer. The native function defines the lifetime and ownership of that
+pointer. See `examples/native_pointer_output` for an allocation example.
+
 ## Payload pointer
 
 `buffer_ptr($buf)` returns the address of the buffer's payload, the memory `$buf[0]` lives

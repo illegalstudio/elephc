@@ -16,7 +16,10 @@ pub(super) fn to_shared(ty: &TypeExpr) -> Type {
     match ty {
         TypeExpr::Array(inner) => Type::Apply("array".into(), vec![to_shared(inner)]),
         TypeExpr::AssocArray { key, value } => Type::Apply("array".into(), vec![to_shared(key), to_shared(value)]),
-        TypeExpr::Ptr(Some(name)) => Type::Apply("ptr".into(), vec![Type::atom(name.as_str())]),
+        TypeExpr::Ptr(Some(name)) => {
+            let root = if !name.is_unqualified() && crate::parser::ast::is_c_width_type_name(name.as_str()) { "\\" } else { "" };
+            Type::Apply("ptr".into(), vec![Type::atom(format!("{}{}", root, name.as_str()))])
+        },
         TypeExpr::Buffer(inner) => Type::Apply("buffer".into(), vec![to_shared(inner)]),
         TypeExpr::GenericClass { name, args } => Type::Apply(name.as_str().into(), args.iter().map(to_shared).collect()),
         TypeExpr::Nullable(inner) => Type::Nullable(Box::new(to_shared(inner))),
@@ -39,7 +42,15 @@ pub(super) fn from_shared(ty: Type) -> TypeExpr {
         Type::Apply(name, mut args) => match (name.as_str(), args.len()) {
             ("array", 1) => TypeExpr::Array(Box::new(from_shared(args.remove(0)))),
             ("array", 2) => TypeExpr::AssocArray { key: Box::new(from_shared(args.remove(0))), value: Box::new(from_shared(args.remove(0))) },
-            ("ptr", 1) => TypeExpr::Ptr(Some(Name::unqualified(&args.remove(0).to_string()))),
+            ("ptr", 1) => {
+                let target = args.remove(0).to_string();
+                let name = if let Some(rooted) = target.strip_prefix('\\') {
+                    Name::from_parts(crate::names::NameKind::FullyQualified, rooted.split('\\').map(str::to_string).collect())
+                } else {
+                    Name::unqualified(target)
+                };
+                TypeExpr::Ptr(Some(name))
+            },
             ("buffer", 1) => TypeExpr::Buffer(Box::new(from_shared(args.remove(0)))),
             _ => TypeExpr::GenericClass { name: Name::unqualified(&name), args: args.into_iter().map(from_shared).collect() },
         },

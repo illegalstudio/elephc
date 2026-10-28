@@ -16,7 +16,7 @@ use crate::ir_passes::driver::IrPass;
 use crate::types::PhpType;
 
 /// Builds a boxed counter with the same increment ownership scaffold as closure loops.
-fn counter(predicate: CmpPredicate, delta: i64, seed: i64, escape: bool) -> Function {
+pub(super) fn counter(predicate: CmpPredicate, delta: i64, seed: i64, escape: bool) -> Function {
     let mut function = Function::new("counter".into(), IrType::I64, PhpType::Int);
     function.params.push(FunctionParam {
         name: "n".into(),
@@ -424,4 +424,46 @@ fn bounded_mixed_counter_storage_ignores_unrelated_reference_slots() {
         &std::collections::HashMap::new()).slots;
     assert!(slots.contains(&crate::ir::LocalSlotId::from_raw(1)));
     assert!(!slots.contains(&unrelated));
+}
+
+/// Constants and retired bookkeeping in an already optimized preheader do not block a seed guard.
+#[test]
+fn bounded_mixed_counter_seed_guard_accepts_pure_suffix() {
+    use crate::ir::{LocalSlotId, Module};
+    use crate::ir_passes::bounded_mixed_counter::LoopCounterVersioning;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut function = counter(CmpPredicate::Sge, -1, 0, false);
+        let entry = function.blocks[0].id;
+        let old_store = function.blocks[0].instructions.pop().unwrap();
+        assert_eq!(function.instructions[old_store.as_raw() as usize].op, Op::StoreLocal);
+        crate::ir_passes::rewrite::neutralize_to_nop(&mut function.instructions[old_store.as_raw() as usize]);
+        let bound = function.blocks[1].instructions[1];
+        let inst = &mut function.instructions[bound.as_raw() as usize];
+        assert_eq!(inst.op, Op::LoadLocal);
+        inst.op = Op::ConstI64;
+        inst.immediate = Some(Immediate::I64(0));
+        inst.effects = Op::ConstI64.default_effects();
+        let terminator = function.blocks[0].terminator.take().unwrap();
+        {
+            let mut b = Builder::new(&mut function);
+            b.position_at_end(entry);
+            let base = b.emit_load_local(LocalSlotId::from_raw(0), IrType::I64, PhpType::Int);
+            let one = b.emit_const_i64(1);
+            let seed = b.emit(Op::ICheckedSub, vec![base, one], None,
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+            b.emit_store_local(LocalSlotId::from_raw(1), seed);
+            b.emit(Op::Nop, vec![], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            b.emit_const_i64(17);
+            b.emit_const_bool(true);
+            b.terminate(terminator);
+        }
+        assert!(validate_function(&function).is_ok(), "{target}: {:?}", validate_function(&function));
+        let module = Module::new(crate::codegen::platform::Target::parse(target).unwrap());
+        let pass = LoopCounterVersioning::new(&module);
+        assert!(pass.run(&mut function, &mut DataPool::default()), "{target}");
+        assert!(function.blocks.iter().any(|block| block.name == "counter.seed.inrange"),
+            "{target}: {}", crate::ir::print_function(&function));
+        assert!(!function.blocks.iter().any(|block| block.name.contains(".counter.fast")), "{target}");
+        assert!(!pass.run(&mut function, &mut DataPool::default()), "{target}: guard converges");
+    }
 }

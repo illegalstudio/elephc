@@ -67,24 +67,11 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
                     }
                     // Check for ptr<TypeName>
                     if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
-                        *pos += 1; // consume <
-                        let type_name = match tokens.get(*pos).map(|(t, _)| t) {
-                            Some(Token::Identifier(t)) => {
-                                let t = t.clone();
-                                *pos += 1;
-                                t
-                            }
-                            _ => {
-                                return Err(CompileError::new(
-                                    span,
-                                    "Expected type name after 'ptr<'",
-                                ))
-                            }
-                        };
-                        if *pos >= tokens.len() || tokens[*pos].0 != Token::Greater {
-                            return Err(CompileError::new(span, "Expected '>' after ptr<T"));
+                        let mut closes = super::params::AngleCloses::default();
+                        let type_name = parse_pointer_target(tokens, pos, span, &mut closes)?;
+                        if closes.pending_count() != 0 {
+                            return Err(CompileError::new(span, "Unbalanced '>' in pointer type"));
                         }
-                        *pos += 1; // consume >
                         Ok(CType::TypedPtr(type_name))
                     } else {
                         Ok(CType::Ptr)
@@ -98,6 +85,34 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
         }
         _ => Err(CompileError::new(span, "Expected type name")),
     }
+}
+
+/// Parses a pointer target and its enclosing angle brackets, including nested pointer targets.
+fn parse_pointer_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closes: &mut super::params::AngleCloses,
+) -> Result<String, CompileError> {
+    *pos += 1; // consume <
+    let target = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::Identifier(name)) => {
+            *pos += 1;
+            name.clone()
+        }
+        _ => return Err(CompileError::new(span, "Expected type name after 'ptr<'")),
+    };
+    let target = if target == "ptr"
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Less))
+    {
+        format!("ptr<{}>", parse_pointer_target(tokens, pos, span, closes)?)
+    } else {
+        target
+    };
+    super::params::expect_type_list_close(
+        tokens, pos, span, closes, "Expected '>' after ptr<T",
+    )?;
+    Ok(target)
 }
 
 /// Parses extern function parameters inside parentheses: `($param1: CType, $param2: CType)`.

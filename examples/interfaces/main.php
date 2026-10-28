@@ -52,6 +52,19 @@ function printLabel(Named $item): void {
 
 printLabel($printer);
 
+// A concrete guard also permits writes and removal of the concrete property's storage.
+function renameProduct(Named $item, string $name): void {
+    if ($item instanceof ProductPrinter) {
+        $item->name = $name;
+        echo $item->name . "\n";
+        unset($item->name);
+        echo isset($item->name) ? "named\n" : "unnamed\n";
+        $item->name = $name;
+    }
+}
+
+renameProduct($printer, "gadget");
+
 class OneSlotMap implements ArrayAccess {
     private string $value = "";
 

@@ -370,7 +370,7 @@ fn scan_type(ty: &crate::parser::ast::TypeExpr, usage: &mut Usage) {
                 scan_type(member, usage);
             }
         }
-        TypeExpr::Ptr(Some(name)) => record_class(usage, &name.as_canonical()),
+        TypeExpr::Ptr(Some(name)) => record_class(usage, crate::names::pointer_target_leaf(&name.as_canonical())),
         _ => {}
     }
 }
@@ -824,7 +824,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 InstanceOfTarget::Name(name) => record_class(usage, &name.as_canonical()),
                 InstanceOfTarget::Generic(class_type) => {
                     for name in class_type.named_classes() {
-                        record_class(usage, &name.as_canonical());
+                        record_class(usage, crate::names::pointer_target_leaf(&name.as_canonical()));
                     }
                 }
             }
@@ -946,7 +946,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         // type arguments name classes of their own and are recorded the same way.
         ExprKind::NewGeneric { class_type, args } => {
             for name in class_type.named_classes() {
-                record_class(usage, &name.as_canonical());
+                record_class(usage, crate::names::pointer_target_leaf(&name.as_canonical()));
             }
             for arg in args {
                 scan_expr(arg, usage);

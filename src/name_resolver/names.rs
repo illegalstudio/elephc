@@ -117,7 +117,13 @@ pub(super) fn resolve_type_expr_with_type_params(
         TypeExpr::Ptr(None) => TypeExpr::Ptr(None),
         TypeExpr::Ptr(Some(name)) => {
             let raw = name.as_str();
-            if matches!(raw, "int" | "float" | "bool" | "string") {
+            if raw.starts_with("ptr<") {
+                TypeExpr::Ptr(Some(Name::unqualified(resolve_pointer_target(
+                    raw, current_namespace, imports, symbols,
+                ))))
+            } else if matches!(raw, "int" | "float" | "bool" | "string" | "ptr" | "pointer")
+                || is_unshadowed_width_name(name, current_namespace, imports, symbols)
+            {
                 TypeExpr::Ptr(Some(name.clone()))
             } else {
                 TypeExpr::Ptr(Some(resolved_name(resolve_special_or_class_name(
@@ -169,8 +175,8 @@ pub(super) fn resolve_type_expr_with_type_params(
 /// Returns whether an unqualified C width name (`u8`, `i32`, `f32`, ...) keeps its bare spelling
 /// in a type position.
 ///
-/// The width names are storage formats for packed class fields and `buffer<T>` elements, not
-/// classes, so they are not canonicalized into the current namespace. A program that really
+/// The width names are storage formats for packed fields, `buffer<T>` elements and pointer
+/// targets, so unshadowed widths are not canonicalized into the current namespace. A program that really
 /// declares a class with such a name, or imports one under it with `use ... as u8`, shadows the
 /// width wherever that class is visible, and the name then resolves exactly like any PHP class
 /// name (`new u8()` and a `u8` type hint agree).
@@ -251,14 +257,18 @@ pub(super) fn expand_qualified_namespace_alias(name: &Name, imports: &Imports) -
 /// `use` alias) exactly like `function f(ptr<Pair> $p)` does; otherwise a field access through
 /// it looks up a class that does not exist, or a same-named global one with another layout.
 /// The target spellings the checker treats as builtins (`int`, `float`, `bool`, `string`, `ptr`
-/// and their aliases) pass through unchanged. A leading `\` (kept by the `ptr_cast<T>` parser)
-/// marks a fully qualified target that the current namespace must not prefix.
+/// and their aliases) pass through unchanged. Unshadowed C width names also stay bare, and
+/// nested `ptr<...>` targets resolve recursively. A leading `\` (kept by the `ptr_cast<T>`
+/// parser) marks a fully qualified target that the current namespace must not prefix.
 pub(super) fn resolve_pointer_target(
     target: &str,
     current_namespace: Option<&str>,
     imports: &Imports,
     symbols: &Symbols,
 ) -> String {
+    if let Some(inner) = target.strip_prefix("ptr<").and_then(|s| s.strip_suffix('>')) {
+        return format!("ptr<{}>", resolve_pointer_target(inner, current_namespace, imports, symbols));
+    }
     let (rooted, bare) = match target.strip_prefix('\\') {
         Some(rest) => (true, rest),
         None => (false, target),
@@ -276,6 +286,32 @@ pub(super) fn resolve_pointer_target(
     } else {
         Name::qualified(parts)
     };
+    if is_unshadowed_width_name(&name, current_namespace, imports, symbols) {
+        return bare.to_string();
+    }
+    if rooted && crate::parser::ast::is_c_width_type_name(bare) {
+        return format!("\\{}", bare);
+    }
+    let resolved = resolve_special_or_class_name(&name, current_namespace, imports, symbols);
+    if crate::parser::ast::is_c_width_type_name(&resolved) && symbols.declares_class_like(&resolved) {
+        return format!("\\{}", resolved);
+    }
+    resolved
+}
+
+/// Resolves a `ptr_cast<T>` target without treating width names as scalar declarations.
+pub(super) fn resolve_pointer_cast_target(
+    target: &str, current_namespace: Option<&str>, imports: &Imports, symbols: &Symbols,
+) -> String {
+    let (rooted, bare) = match target.strip_prefix('\\') {
+        Some(rest) => (true, rest),
+        None => (false, target),
+    };
+    if matches!(bare, "int" | "integer" | "float" | "double" | "real" | "bool" | "boolean" | "string" | "ptr" | "pointer") {
+        return bare.to_string();
+    }
+    let kind = if rooted { NameKind::FullyQualified } else { NameKind::Qualified };
+    let name = Name::from_parts(kind, bare.split('\\').map(str::to_string).collect());
     resolve_special_or_class_name(&name, current_namespace, imports, symbols)
 }
 

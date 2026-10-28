@@ -46,16 +46,22 @@ final class VariantDispatch<+T> {
     public function kind(false $value): string { return self::class; }
     final public function finalKind(false $value): string { return self::class; }
 }
+final class ScalarDispatch<T> {
+    public function __construct(private T $value) {}
+    public function value(): T { return $this->value; }
+}
 function read_final(SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_inherited(SealedDispatch $object, int $value): int { return $object->inherited($value); }
 function read_nullable(?SealedDispatch $object, int $value): int { return $object->value($value); }
 function read_base(ParentDispatch $object, int $value): int { return $object->value($value); }
 function read_variant(VariantDispatch<DispatchAnimal> $object, mixed $value): string { return $object->kind($value); }
 function read_variant_final(VariantDispatch<DispatchAnimal> $object, mixed $value): string { return $object->finalKind($value); }
+function read_scalar(ScalarDispatch<int> $object): int { return $object->value(); }
 $object = new SealedDispatch();
 echo read_final($object, $argc), read_inherited($object, $argc), read_nullable($object, $argc), read_base($object, $argc);
 $variant = new VariantDispatch<DispatchDog>(new DispatchDog());
 echo read_variant($variant, false), read_variant_final($variant, false);
+echo read_scalar(new ScalarDispatch<int>($argc));
 "#).unwrap();
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let output = elephc_cli_command(&dir.0)
@@ -83,6 +89,11 @@ echo read_variant($variant, false), read_variant_final($variant, false);
                 assert!(body.contains("interface_literal_class"), "{target}: guard lost runtime declaring-class diagnostics: {body}");
             }
         }
+        let body = function_body(&assembly, "read_scalar");
+        let symbol = elephc::names::method_symbol("ScalarDispatch<int>", "value");
+        assert!(body.contains(&format!("{call} {symbol}")), "{target}: {body}");
+        assert!(!body.contains("_class_source_vtable_ptrs") && !body.contains("_class_vtable_ptrs"),
+            "{target}: scalar generic dispatch must be direct: {body}");
     }
 }
 

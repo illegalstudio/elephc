@@ -95,27 +95,34 @@ fn op_lines<'a>(body: &'a str, op: &str) -> Vec<&'a str> {
     body.lines().filter(|line| line.contains(&pattern)).collect()
 }
 
-/// Asserts that the ascending `<` loop is integer and only the descending loop stays boxed.
-fn assert_only_descending_loop_boxed(ir: &str, name: &str) {
+/// Requires integer paths for both loops and a generic fallback for an observable final counter.
+fn assert_integer_counter_paths(ir: &str, name: &str, live_exit: bool) {
     let body = function_body(ir, name);
     let increments = op_lines(body, "str_inc_dec");
     assert_eq!(
         increments.len(),
-        1,
-        "{name}: only the descending loop keeps a boxed update:\n{body}"
+        usize::from(live_exit),
+        "{name}: only a live descending exit needs a boxed fallback update:\n{body}"
     );
-    assert!(increments[0].contains(" -1 ;"), "{name}: the boxed update is the decrement:\n{body}");
     let comparisons = op_lines(body, "php_rel_cmp");
     assert_eq!(
         comparisons.len(),
-        1,
-        "{name}: only the descending loop keeps a boxed test:\n{body}"
+        usize::from(live_exit),
+        "{name}: only a live descending exit needs a boxed fallback test:\n{body}"
     );
-    assert!(comparisons[0].contains(" Sge ;"), "{name}: the boxed test is `>= 0`:\n{body}");
+    if live_exit {
+        assert!(increments[0].contains(" -1 ;"), "{name}: {body}");
+        assert!(comparisons[0].contains(" Sge ;"), "{name}: {body}");
+        assert!(body.contains(".counter.fast") && body.contains(".counter.slow"), "{name}: {body}");
+    } else {
+        assert!(body.contains("counter.seed.inrange"), "{name}: a dead seed uses a guard:\n{body}");
+    }
     assert!(
         op_lines(body, "icmp").iter().any(|line| line.contains(" Slt ;")),
         "{name}: the ascending loop compares a raw integer counter:\n{body}"
     );
+    assert!(op_lines(body, "icmp").iter().any(|line| line.contains(" Sge ;")),
+        "{name}: the descending loop has an integer comparison:\n{body}");
 }
 
 /// A counter reused by a later loop keeps its values in both IR modes, like PHP.
@@ -126,7 +133,7 @@ fn test_reused_loop_counters_match_php() {
     }
 }
 
-/// The ascending loop of every reuse shape lowers to an integer recurrence.
+/// Both loops acquire integer paths while an observable final counter retains its generic fallback.
 ///
 /// Before each assignment started its own binding, the checked `$n - 1` seed of the descending
 /// loop widened the one frame slot both loops shared, and the ascending loop compiled to
@@ -134,8 +141,8 @@ fn test_reused_loop_counters_match_php() {
 #[test]
 fn test_reused_loop_counters_keep_the_ascending_loop_integer() {
     let ir = optimized_ir(REUSED_COUNTERS);
-    for name in ["reusedCounter", "reversedCounter", "Boxes::sweep"] {
-        assert_only_descending_loop_boxed(&ir, name);
+    for (name, live_exit) in [("reusedCounter", false), ("reversedCounter", false), ("Boxes::sweep", true)] {
+        assert_integer_counter_paths(&ir, name, live_exit);
     }
 }
 

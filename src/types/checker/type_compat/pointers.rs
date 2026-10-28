@@ -66,6 +66,20 @@ impl Checker {
         }
     }
 
+    /// Resolves a declared pointer target, including nested pointers and C scalar widths.
+    fn normalize_declared_pointer_target(&self, target: &str) -> Option<String> {
+        if let Some(inner) = target.strip_prefix("ptr<").and_then(|s| s.strip_suffix('>')) {
+            return self.normalize_declared_pointer_target(inner).map(|name| format!("ptr<{}>", name));
+        }
+        if crate::parser::ast::is_c_width_type_name(target) {
+            return Some(crate::names::pointer_width_tag(target));
+        }
+        if let Some(rooted) = target.strip_prefix('\\') {
+            return self.normalize_pointer_target_type(rooted);
+        }
+        self.normalize_pointer_target_type(target)
+    }
+
     /// Resolves the element type of `buffer<T>` or `buffer_new<T>()`.
     ///
     /// A C width name (`buffer<i32>`, `buffer<u8>`, `buffer<f32>`) is the element's storage
@@ -198,8 +212,11 @@ impl Checker {
             }
             crate::parser::ast::TypeExpr::Ptr(target) => {
                 let normalized = match target {
-                    Some(name) => self
-                        .normalize_pointer_target_type(name.as_str())
+                    Some(name) => (if name.is_unqualified() {
+                        self.normalize_declared_pointer_target(name.as_str())
+                    } else {
+                        self.normalize_pointer_target_type(name.as_str())
+                    })
                         .ok_or_else(|| {
                             CompileError::new(
                                 span,

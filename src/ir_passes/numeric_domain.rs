@@ -275,6 +275,22 @@ mod tests {
         (function, loaded, nonnumeric, one)
     }
 
+    /// A tag-only predicate observes the value without exposing its private numeric slot.
+    #[test]
+    fn numeric_domain_type_predicate_preserves_private_slot() {
+        let (mut function, loaded, _, _) = shared_cycle();
+        let entry = function.entry;
+        let term = function.blocks[entry.as_raw() as usize].terminator.take().unwrap();
+        let mut builder = Builder::new(&mut function);
+        builder.position_at_end(entry);
+        builder.emit(Op::TypePredicate, vec![loaded],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Int)),
+            IrType::I64, PhpType::Bool, Ownership::NonHeap);
+        builder.terminate(term);
+        assert!(crate::ir::validate_function(&function).is_ok());
+        assert!(inputs(&function, &[loaded]));
+    }
+
     /// Shared local cycles validate accesses once while retaining all-writer checks.
     #[test]
     fn numeric_domain_reuses_prechecked_slot_eligibility() {
