@@ -36,7 +36,8 @@ fn test_error_bcmath_number_operator_contract_is_internal() {
 fn test_error_bcmath_number_union_arithmetic_has_no_definite_object_result() {
     for op in ["+", "-", "*", "/", "%", "**"] {
         for expression in [format!("$value {op} 1"), format!("1 {op} $value")] {
-            expect_error(&format!("<?php function unionNumber(BcMath\\Number|int $value): BcMath\\Number {{ return {expression}; }} unionNumber(5);"), "numeric operands");
+            let diagnostic = if matches!(op, "/" | "%") { "return type expects" } else { "numeric operands" };
+            expect_error(&format!("<?php function unionNumber(BcMath\\Number|int $value): BcMath\\Number {{ return {expression}; }} unionNumber(5);"), diagnostic);
         }
     }
     expect_error("<?php function unionNumber(BcMath\\Number|int $value): BcMath\\Number { return -$value; } unionNumber(5);", "Cannot negate a non-numeric value");

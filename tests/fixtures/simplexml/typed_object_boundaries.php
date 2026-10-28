@@ -1,6 +1,9 @@
 <?php
 interface BoundaryXmlPeer {}
-class BoundaryXmlElement extends SimpleXMLElement implements BoundaryXmlPeer {}
+class BoundaryXmlElement extends SimpleXMLElement implements BoundaryXmlPeer {
+    public function relativeGenerator(self $node): Generator { yield 6; }
+    public function relativeVariadic(self ...$nodes): void { echo 'relative_variadic|'; }
+}
 function reportBoundaryXml(TypeError $error): void {
     $message = explode(', called in ', $error->getMessage())[0];
     if (str_contains($message, '{closure')) {
@@ -15,6 +18,13 @@ function acceptPeerBoundaryXml(BoundaryXmlPeer $node): void { echo 'peer|'; }
 function acceptUnionBoundaryXml(SimpleXMLElement|SimpleXMLIterator $node): void { echo 'union|'; }
 function acceptNullableUnionBoundaryXml(SimpleXMLElement|SimpleXMLIterator|null $node): void { echo 'nullable|'; }
 function acceptRefBoundaryXml(SimpleXMLElement &$node): void { echo 'reference|'; }
+function acceptIterableBoundaryXml(iterable $nodes): void { echo 'iterable|'; }
+function variadicBoundaryXml(int $prefix, SimpleXMLElement ...$nodes): void { echo 'variadic|'; }
+function referenceVariadicBoundaryXml(SimpleXMLElement &...$nodes): void { echo 'reference_variadic|'; }
+function returnIterableBoundaryXml(SimpleXMLElement $root): iterable { return $root->missing->child; }
+function generatorBoundaryXml(SimpleXMLElement $node): Generator { echo 'generator_body|'; yield 1; }
+function variadicGeneratorBoundaryXml(SimpleXMLElement ...$nodes): Generator { echo 'variadic_generator_body|'; yield 2; }
+function iterableGeneratorBoundaryXml(iterable $nodes): Generator { echo 'iterable_generator_body|'; yield 3; }
 function returnBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
     return $root->missing->child;
 }
@@ -37,6 +47,9 @@ class BoundaryXmlBox {
     public ?SimpleXMLElement $nullable = null;
     public static SimpleXMLElement $staticNode;
     public SimpleXMLElement|int $union = 1;
+    public iterable $items;
+    public static iterable $staticItems;
+    public ?iterable $nullableItems = null;
 }
 class BoundaryXmlConstructor {
     public function __construct(SimpleXMLElement $node) { echo 'constructor|'; }
@@ -51,6 +64,7 @@ class BoundaryXmlStaticChild extends BoundaryXmlStaticBase {
 class BoundaryXmlMethods {
     public function accept(SimpleXMLElement $node): void { echo 'method|'; }
     public static function acceptStatic(SimpleXMLElement $node): void { echo 'static|'; }
+    public function generate(SimpleXMLElement $node): Generator { yield 4; }
 }
 class BoundaryXmlHook {
     public SimpleXMLElement $node {
@@ -67,8 +81,15 @@ try { acceptBoundaryXml(node: $root->missing->child); } catch (TypeError $error)
 $missing = $root->missing->child;
 try { acceptBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { acceptRefBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { acceptIterableBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { variadicBoundaryXml(1, $root, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+$arguments = [$root, $missing];
+try { variadicBoundaryXml(1, ...$arguments); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { variadicBoundaryXml(1, good: $root, bad: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { referenceVariadicBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnUnionBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { returnIterableBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { $returned =& referenceReturnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 $box = new BoundaryXmlBox();
 $box->node = $root->present;
@@ -78,6 +99,12 @@ try { $box->{$property} = $missing; } catch (TypeError $error) { reportBoundaryX
 echo $box->node->getName(), "\n";
 try { $box->union = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 var_dump($box->union);
+$box->items = $root;
+try { $box->items = $missing; } catch (TypeError $error) { reportBoundaryXml($error); }
+BoundaryXmlBox::$staticItems = $root;
+try { BoundaryXmlBox::$staticItems = $missing; } catch (TypeError $error) { reportBoundaryXml($error); }
+$box->nullableItems = $missing;
+var_dump($box->nullableItems);
 BoundaryXmlBox::$staticNode = $root->present;
 try { BoundaryXmlBox::$staticNode = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 echo BoundaryXmlBox::$staticNode->getName(), "\n";
@@ -88,6 +115,14 @@ try { new BoundaryXmlConstructor($root->missing->child); } catch (TypeError $err
 $methods = new BoundaryXmlMethods();
 try { $methods->accept($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { BoundaryXmlMethods::acceptStatic($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $generator = generatorBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $generator = variadicGeneratorBoundaryXml($root, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $generator = iterableGeneratorBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $generator = $methods->generate($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $generator = $root->relativeGenerator($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $root->relativeVariadic($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+$generatorClosure = function (SimpleXMLElement $node): Generator { yield 5; };
+try { $generator = $generatorClosure($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 $callback = acceptBoundaryXml(...);
 try { $callback($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $callback = $argc > 0 ? 'acceptBoundaryXml' : 'unusedBoundaryXml';
@@ -105,4 +140,10 @@ $present = $root->present;
 acceptRefBoundaryXml($present);
 acceptPeerBoundaryXml($present);
 acceptNullableUnionBoundaryXml($root->missing->child);
+acceptIterableBoundaryXml($root);
+variadicBoundaryXml(1, $root, named: $root);
+referenceVariadicBoundaryXml($root);
+$generator = generatorBoundaryXml($root);
+echo 'generator_created|';
+foreach ($generator as $number) { echo $number, '|'; }
 echo "done\n";

@@ -300,6 +300,15 @@ echo $doc->saveXML();
         }
     }
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let guard_name = crate::names::generator_parameter_guard_name("generatorBoundaryXml");
+    let guard = module.closures.iter().find(|function| function.name == guard_name)
+        .expect("generator parameters must have an ordinary eager EIR validator");
+    assert!(!guard.flags.is_generator && guard.flags.is_synthetic);
+    assert!(guard.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::IsNull));
+    let constructor = &assembly[assembly.find(&format!("{}:", crate::names::function_symbol("generatorBoundaryXml"))).unwrap()..];
+    let validation = constructor.find(&crate::names::function_symbol(&guard_name)).unwrap();
+    let allocation = constructor.find("__rt_fiber_construct").unwrap();
+    assert!(validation < allocation, "{target}: null validation must precede coroutine allocation");
     for message in [
         "acceptBoundaryXml(): Argument #1 ($node) must be of type SimpleXMLElement, null given",
         "returnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",

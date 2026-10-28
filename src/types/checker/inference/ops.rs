@@ -42,8 +42,8 @@ impl Checker {
         if matches!(op, BinOp::Div | BinOp::Mod)
             && (matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 || matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
-            && is_arithmetic_operand_type(self, &lt)
-            && is_arithmetic_operand_type(self, &rt)
+            && supports_dynamic_arithmetic_operand(self, &lt, op)
+            && supports_dynamic_arithmetic_operand(self, &rt, op)
             && self.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some()))
         {
             return Ok(PhpType::Mixed);
@@ -1645,6 +1645,18 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
 /// `Checker::check_arithmetic_string_operands`.
 fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)
+}
+
+/// Keeps boxed division/modulo dispatch for numeric scalars and internal operator objects.
+fn supports_dynamic_arithmetic_operand(checker: &Checker, ty: &PhpType, op: &BinOp) -> bool {
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| supports_dynamic_arithmetic_operand(checker, member, op)),
+        PhpType::Void => true,
+        PhpType::Object(_) => crate::types::object_operators::binary_plan_with_classes(
+            op, ty, &PhpType::Mixed, &checker.classes,
+        ).is_some(),
+        _ => is_arithmetic_operand_type(checker, ty),
+    }
 }
 
 /// PHP's `is_numeric_string` classification of a string literal used in arithmetic.
