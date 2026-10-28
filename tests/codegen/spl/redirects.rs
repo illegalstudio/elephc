@@ -2,7 +2,7 @@
 //! Codegen regressions for SPL-related builtins that redirect to compiler runtime helpers.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - Fixtures keep SPL builtin behavior covered without relying on autoload-specific setup.

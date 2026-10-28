@@ -3,7 +3,7 @@
 //! Covers Phase 8 metadata, file info/object behavior, directory snapshots, glob iteration, and recursive wrappers.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - Fixtures create and remove files under isolated codegen temp directories.

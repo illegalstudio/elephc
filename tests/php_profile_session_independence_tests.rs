@@ -3,7 +3,7 @@
 //! `php_profile::sensitivity`'s table that `php_profile_independence_tests` cannot reach.
 //!
 //! Called from:
-//! - `cargo test --test php_profile_session_independence_tests` through Rust's test harness.
+//! - `cargo test --test integration php_profile_session_independence_tests::` through Rust's test harness.
 //!
 //! Key details:
 //!
@@ -162,6 +162,7 @@ fn serve_once(dir: &Path, source: &str, profile: &str, case: &str) -> String {
 
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(dir)
         .args(["--web", "--php-version", profile])
         .arg(&php)

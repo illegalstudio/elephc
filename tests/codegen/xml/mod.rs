@@ -2,7 +2,7 @@
 //! Groups the end-to-end `ext/xml` / `ext/xmlwriter` codegen fixtures.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests xml` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext xml` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture links the `elephc_xml` bridge through the injected prelude, and with it

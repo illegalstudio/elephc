@@ -1008,6 +1008,7 @@ overrides. Native-package variables select the cache and target C toolchain:
 | `ELEPHC_REGALLOC` | `linear`, `stack` | `--regalloc=` |
 | `ELEPHC_NULL_REPR` | `tagged`, `sentinel` | `--null-repr=` |
 | `ELEPHC_NATIVE_CACHE` | absolute or invocation-relative directory | Native artifact/source cache root |
+| `ELEPHC_RUNTIME_CACHE_DIR` | absolute or invocation-relative directory | Prepared runtime objects only (default `$XDG_CACHE_HOME/elephc`); REPL hosts and `elephc test` outputs stay under the cache root |
 | `ELEPHC_NATIVE_CC` | executable | Host or explicit cross C compiler fallback |
 | `ELEPHC_NATIVE_AR` | executable | Host or explicit cross archiver fallback |
 | `ELEPHC_NATIVE_RANLIB` | executable | Host or explicit cross archive indexer fallback |

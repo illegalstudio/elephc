@@ -3,7 +3,7 @@
 //! optimization pipeline.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::branch_simplification`.
+//! - `cargo test --test codegen_tests_core optimizer::branch_simplification`.
 //!
 //! Key details:
 //! - A `while (true)` loop lowers to a constant-condition `cond_br` at EIR, which

@@ -5,7 +5,7 @@
 //! request against the local fixture works from inside `eval()`.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture here ALSO calls a real (non-`eval()`) curl function at the top level.

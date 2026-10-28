@@ -4,7 +4,7 @@
 //! return value above 1 MB.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext` through Rust's test harness.
 //!
 //! Key details:
 //! - Every integer key and value is converted by `__rt_itoa`, which hands out a 21-byte window of

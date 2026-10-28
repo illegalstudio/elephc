@@ -5,7 +5,7 @@
 //! on a bad setting rather than ignoring it.
 //!
 //! Called from:
-//! - `cargo test --test opcache_file_cache_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_file_cache_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here was VERIFIED against reference PHP 8.5.10 before being
@@ -79,6 +79,7 @@ fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
 fn compile_with_flags(dir: &Path, ini: &[&str], flags: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(dir.join("main.php"));
     for assignment in ini {
@@ -759,6 +760,7 @@ fn file_cache_operations_link_the_bridge_only_under_a_file_cache() {
         .unwrap();
         let mut cmd = Command::new(elephc_bin());
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+        cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
         cmd.current_dir(&dir);
         cmd.arg(dir.join("main.php")).arg("--emit-asm");
         cmd.arg("--ini").arg("opcache.enable_cli=1");
@@ -809,6 +811,7 @@ fn a_web_worker_survives_its_file_cache_directory_being_removed() {
     .unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(&dir);
     cmd.arg(dir.join("main.php")).arg("--web");
     for assignment in [

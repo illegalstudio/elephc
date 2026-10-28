@@ -2,7 +2,7 @@
 //! End-to-end surface and live-server tests for the optional FreeTDS PDO_DBLIB backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-dblib --test codegen_tests`.
+//! - `cargo test --features pdo-dblib --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests require FreeTDS at link time but no database server.

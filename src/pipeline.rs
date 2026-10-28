@@ -3,7 +3,7 @@
 //! Resolves typed managed dependencies only when the selected path performs a final link.
 //!
 //! Called from:
-//! - `crate::main()` after `crate::cli::parse_args()`.
+//! - `crate::entry::run()` after `crate::cli::parse_args()`.
 //!
 //! Key details:
 //! - Pass ordering is observable: magic constants and conditionals run before resolver/name resolution and type checking.

@@ -6,7 +6,7 @@
 //! the unfiltered surface).
 //!
 //! Called from:
-//! - `cargo test --test opcache_ini_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_ini_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated
@@ -71,7 +71,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
 
 /// Compiles `source` with the supplied `--ini KEY=VALUE` overrides, returning the executable
 /// path together with the compiler's STDERR — which is where the OPcache quantity diagnostics
-/// land (`crate::main::emit_ini_override_warnings`).
+/// land (`elephc::entry::emit_ini_override_warnings`).
 fn compile_with_ini(
     dir: &Path,
     source: &str,
@@ -83,6 +83,7 @@ fn compile_with_ini(
     let mut cmd = Command::new(elephc_bin());
     managed_pcre2::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     for (key, value) in ini {
         cmd.arg("--ini").arg(format!("{key}={value}"));
@@ -964,6 +965,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
         fs::write(&php, &probe).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
             .current_dir(&dir)
             .arg("--php-version")
             .arg(version)
@@ -989,6 +991,7 @@ fn jit_prof_threshold_is_an_int_in_the_82_profile() {
         fs::write(&php, &probe).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
             .current_dir(&dir)
             .arg("--php-version")
             .arg("8.2")

@@ -24,7 +24,7 @@
 //!   TypeError before touching the context.
 //!
 //! Called from:
-//! - `cargo test --test resource_id_and_hash_context_tests` through Rust's test harness.
+//! - `cargo test --test integration resource_id_and_hash_context_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/array_flip_assoc_tests.rs`: the elephc CLI
@@ -107,6 +107,7 @@ fn compile_raw(
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.args(extra_args);
     cmd.arg(&php);

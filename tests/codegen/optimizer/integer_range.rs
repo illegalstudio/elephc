@@ -2,7 +2,7 @@
 //! End-to-end coverage for EIR integer range and induction-variable analysis.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::integer_range`.
+//! - `cargo test --test codegen_tests_core optimizer::integer_range`.
 //!
 //! Key details:
 //! - Textual EIR proves bounded checked operations become scalar while unproven overflow stays.

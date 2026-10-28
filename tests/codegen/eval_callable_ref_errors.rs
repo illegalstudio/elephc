@@ -3,7 +3,7 @@
 //! Covers callable values crossing eval into generated/AOT and eval-declared methods.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_callable_ref_errors` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval eval_callable_ref_errors` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures verify caller-side by-reference values are written back before a

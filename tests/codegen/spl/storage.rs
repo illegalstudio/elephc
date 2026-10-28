@@ -3,7 +3,7 @@
 //! Covers EmptyIterator, ArrayIterator, and ArrayObject as Phase 5 storage foundations.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - ArrayIterator and ArrayObject preserve insertion-order keys through Mixed keys/values storage.

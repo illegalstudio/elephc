@@ -2,7 +2,7 @@
 //! End-to-end tests for `buffer_ptr()`, the payload address of a `buffer<T>`.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests buffer_ptr` through Rust's test harness.
+//! - `cargo test --test codegen_tests_runtime buffer_ptr` through Rust's test harness.
 //!
 //! Key details:
 //! - Scalar and width buffers are read and written through the raw pointer builtins at their

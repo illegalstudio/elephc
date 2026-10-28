@@ -75,6 +75,7 @@ fn emit_asm_once(
 ) -> String {
     let compile = Command::new(elephc_cli_bin())
         .env("XDG_CACHE_HOME", cache_root)
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(dir)
         .arg("--quiet")
         .arg("--emit-asm")

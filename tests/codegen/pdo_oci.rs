@@ -2,7 +2,7 @@
 //! End-to-end surface and live-server tests for the optional PDO_OCI backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-oci --test codegen_tests`.
+//! - `cargo test --features pdo-oci --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests do not load Oracle Instant Client or contact a database.

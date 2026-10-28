@@ -4,7 +4,7 @@
 //! storage, and the store used to move that pointer in instead of persisting it.
 //!
 //! Called from:
-//! - `cargo test --test static_property_string_ownership_tests` through Rust's test harness.
+//! - `cargo test --test integration static_property_string_ownership_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every probe writes the property, then runs an UNRELATED `str_repeat()` whose only job
@@ -54,6 +54,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(&probe);
     let output = cmd.output().expect("failed to spawn elephc");
@@ -85,6 +86,7 @@ fn static_store_producer(dir: &Path, source: &str) -> String {
     fs::write(&probe, source).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(dir)
         .arg("--emit-ir")
         .arg(&probe)
@@ -135,6 +137,7 @@ fn run_with_heap_debug(dir: &Path, name: &str, source: &str) -> String {
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg("--heap-debug");
     cmd.arg(&probe);

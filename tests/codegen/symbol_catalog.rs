@@ -3,7 +3,7 @@
 //! compiled program actually exposes, natively and inside `eval()`.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests symbol_catalog` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop symbol_catalog` through Rust's test harness.
 //!
 //! Key details:
 //! - One compiled program probes every checker-provided class-like with the PHP predicate of

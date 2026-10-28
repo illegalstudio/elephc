@@ -3,7 +3,7 @@
 //! `elephc_demo` fixture extension from source, and compiled programs call it.
 //!
 //! Called from:
-//! - `cargo test --test php_ext_tests`.
+//! - `cargo test --test integration php_ext_tests::`.
 //!
 //! Key details:
 //! - Nothing is downloaded: the fixture is built with the system C compiler

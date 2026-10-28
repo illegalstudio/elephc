@@ -2,7 +2,7 @@
 //! Diagnostic test root wiring and shared helpers for compile-time error reporting suites.
 //!
 //! Called from:
-//! - `cargo test` through Rust's test harness.
+//! - `cargo test --test integration error_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Helpers run frontend checks over inline or multi-file PHP fixtures and assert reported diagnostics.

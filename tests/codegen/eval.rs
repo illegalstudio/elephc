@@ -5,7 +5,7 @@
 //! builtin dispatch through end-to-end codegen.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval eval` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures exercise the native/EvalIR boundary rather than the frozen legacy

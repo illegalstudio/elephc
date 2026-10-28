@@ -6,7 +6,7 @@
 //! half is covered by `var_dump_nested_tests`.
 //!
 //! Called from:
-//! - `cargo test --test var_dump_object_tests` through Rust's test harness.
+//! - `cargo test --test integration var_dump_object_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - REGRESSION ANCHOR: `var_dump()` of an object used to print the bare class
@@ -117,6 +117,7 @@ fn run_php(stem: &str, source: &str) -> String {
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(&dir);
     cmd.arg(&php);
     let compile = cmd.output().expect("failed to spawn elephc");
@@ -160,6 +161,7 @@ fn run_php_heap_debug(stem: &str, source: &str) -> String {
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(&dir);
     cmd.arg("--heap-debug");
     cmd.arg(&php);

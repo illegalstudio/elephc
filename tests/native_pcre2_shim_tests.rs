@@ -2,7 +2,7 @@
 //! Host-platform ABI tests for Elephc's embedded opaque PCRE2 shim.
 //!
 //! Called from:
-//! - `cargo test --test native_pcre2_shim_tests` through Rust's integration-test harness.
+//! - `cargo test --test integration native_pcre2_shim_tests::` through Rust's integration-test harness.
 //!
 //! Key details:
 //! - Compiles and executes a C harness against one aligned, network-free system provider.

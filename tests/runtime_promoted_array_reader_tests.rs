@@ -3,7 +3,7 @@
 //! while its static type stayed `Array(Mixed)`.
 //!
 //! Called from:
-//! - `cargo test --test runtime_promoted_array_reader_tests` through Rust's test harness.
+//! - `cargo test --test integration runtime_promoted_array_reader_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - `__rt_array_set_mixed_key` promotes the destination to hash storage when a key does not
@@ -64,6 +64,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
     fs::write(&probe, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(&probe);
     let output = cmd.output().expect("failed to spawn elephc");

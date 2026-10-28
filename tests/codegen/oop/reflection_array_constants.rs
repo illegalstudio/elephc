@@ -2,7 +2,7 @@
 //! Regression coverage for array-valued Reflection constants and profile-dependent defaults.
 //!
 //! Called from:
-//! - The `codegen_tests` integration test binary.
+//! - The `codegen_tests_oop` integration test binary.
 //!
 //! Key details:
 //! - Exercises native/eval inventories, constant APIs, key normalization and value independence.

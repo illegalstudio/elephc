@@ -202,7 +202,7 @@ fn test_pipe_with_static_method_callable() {
             ExprKind::FirstClassCallable(target) => {
                 assert!(matches!(
                     target,
-                    crate::CallableTarget::StaticMethod { .. }
+                    elephc::parser::ast::CallableTarget::StaticMethod { .. }
                 ));
             }
             other => panic!("expected FirstClassCallable static method, got {:?}", other),

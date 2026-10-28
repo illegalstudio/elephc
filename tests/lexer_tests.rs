@@ -2,7 +2,7 @@
 //! Lexer test root wiring and shared token helper coverage for PHP tokenization suites.
 //!
 //! Called from:
-//! - `cargo test` through Rust's test harness.
+//! - `cargo test --test integration lexer_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Helpers tokenize inline PHP snippets while submodules assert source structure, keywords, literals, and operators.

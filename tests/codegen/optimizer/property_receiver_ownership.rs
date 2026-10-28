@@ -2,7 +2,7 @@
 //! Verifies property-receiver ownership cleanup with EIR optimization enabled and disabled.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::property_receiver_ownership`.
+//! - `cargo test --test codegen_tests_core optimizer::property_receiver_ownership`.
 //!
 //! Key details:
 //! - A concrete object loaded from a Mixed frame slot carries an owned unbox retain

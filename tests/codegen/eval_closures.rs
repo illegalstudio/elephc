@@ -2,7 +2,7 @@
 //! End-to-end regressions for closure literals executed inside runtime eval.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_closure` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval eval_closure` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures compile PHP to native code, enter the eval bridge, and execute

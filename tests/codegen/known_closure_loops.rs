@@ -2,7 +2,7 @@
 //! PHP and ownership regressions for known closure identities carried through loops.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests known_closure_loops`.
+//! - `cargo test --test codegen_tests_runtime known_closure_loops`.
 //!
 //! Key details:
 //! - Every fixture runs with IR optimization on/off and heap diagnostics.

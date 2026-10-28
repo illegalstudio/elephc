@@ -3,7 +3,7 @@
 //! members the way PHP does, which is not the way they were declared.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests reflection_union_type` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop reflection_union_type` through Rust's test harness.
 //!
 //! Key details:
 //! - PHP renders a union from its internal type mask, which has a fixed order, so `int|string`

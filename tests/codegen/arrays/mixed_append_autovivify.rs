@@ -7,7 +7,7 @@
 //! sentinel inline and segfaulted (exit 139).
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests arrays::mixed_append_autovivify`.
+//! - `cargo test --test codegen_tests_data arrays::mixed_append_autovivify`.
 //!
 //! Key details:
 //! - Before the fix, `lower_mixed_array_append` unboxed the receiver, accepted a

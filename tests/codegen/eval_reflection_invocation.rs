@@ -2,7 +2,7 @@
 //! End-to-end regressions for eval ReflectionFunction/ReflectionMethod invocation.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_reflection_invocation` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval eval_reflection_invocation` through Rust's test harness.
 //!
 //! Key details:
 //! - Fixtures distinguish PHP's by-value `invoke()` forwarding from by-reference

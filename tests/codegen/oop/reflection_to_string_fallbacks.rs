@@ -2,7 +2,7 @@
 //! Regression coverage for Reflection constant arithmetic and resolved default fallbacks.
 //!
 //! Called from:
-//! - `codegen_tests` through the `oop` module.
+//! - `codegen_tests_oop` through the `oop` module.
 //!
 //! Key details:
 //! - Supported constant expressions retain their values without executing constructors on dump.

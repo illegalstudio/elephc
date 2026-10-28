@@ -32,7 +32,7 @@
 //! the ID space shared, which is what PHP does.
 //!
 //! Called from:
-//! - `cargo test --test eval_resource_id_tests` through Rust's test harness.
+//! - `cargo test --test integration eval_resource_id_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - EVERY expected string here was captured from reference PHP 8.5.6 with
@@ -119,6 +119,7 @@ fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
     cmd.current_dir(dir);
     cmd.arg(&php);

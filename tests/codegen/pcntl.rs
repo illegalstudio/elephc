@@ -2,7 +2,7 @@
 //! End-to-end codegen coverage for target-aware PCNTL constants and process-control builtins.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests pcntl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext pcntl` through Rust's test harness.
 //!
 //! Key details:
 //! - Constant expectations are selected for the host target because signal and errno values follow libc.

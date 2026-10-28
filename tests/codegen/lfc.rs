@@ -2,7 +2,7 @@
 //! End-to-end CLI regressions for tagless `.lfc` source and mixed PHP/LFC projects.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests lfc` through the integration test harness.
+//! - `cargo test --test codegen_tests_core lfc` through the integration test harness.
 //!
 //! Key details:
 //! - The real CLI selects each physical file's mode and derives normal output paths from its stem.

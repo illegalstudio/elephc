@@ -3,7 +3,7 @@
 //! optimization pipeline.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::dead_instruction_elimination`.
+//! - `cargo test --test codegen_tests_core optimizer::dead_instruction_elimination`.
 //!
 //! Key details:
 //! - Uses `--emit-ir` so the test can compare optimized and `--no-ir-opt` EIR

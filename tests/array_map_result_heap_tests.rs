@@ -53,7 +53,7 @@
 //! shared by every callable call — so the cells below all use INT-valued sources.
 //!
 //! Called from:
-//! - `cargo test --test array_map_result_heap_tests` through Rust's test harness.
+//! - `cargo test --test integration array_map_result_heap_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - WHY EVERY TEST ASSERTS OUTPUT AS WELL AS `live_blocks=0`. The failure mode on the other side
@@ -135,6 +135,7 @@ fn assert_program_output_and_clean_heap(prefix: &str, source: &str, expected_std
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(&dir);
     cmd.arg("--heap-debug");
     cmd.arg(&php);

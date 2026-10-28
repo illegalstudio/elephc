@@ -132,3 +132,43 @@ pub mod var_export_prelude;
 pub mod version_prelude;
 /// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
 pub mod web_prelude;
+
+// The `elephc` command line. The binary only calls `entry::run`; these modules are
+// crate-private so the library's public surface stays the compiler API.
+
+/// Top-level command dispatch the `elephc` binary runs.
+pub mod entry;
+/// The elephc mark, inlined as a `data:` URI for self-contained generated pages.
+pub(crate) mod brand;
+/// Aggregated PHP-level call-graph rendering for `elephc monitor`.
+pub(crate) mod call_graph;
+/// Top-level command parsing, compiler options, and target selection.
+pub(crate) mod cli;
+/// DWARF debug information for generated user assembly (`--debug-info`).
+pub(crate) mod debug_info;
+/// Ordered typed final-link plans from compiler, runtime, user, and managed inputs.
+pub(crate) mod link_planning;
+/// Assembler/linker facade used by the compiler pipeline.
+pub(crate) mod linker;
+/// `elephc monitor`: sample a compiled program and render a PHP-level profile.
+pub(crate) mod monitor;
+/// Profiled request slices exported as OpenTelemetry spans over OTLP/HTTP.
+pub(crate) mod otlp;
+/// The full PHP source to native binary compilation flow.
+pub(crate) mod pipeline;
+/// Gzip-compressed pprof `Profile` protobuf encoder.
+pub(crate) mod pprof_encode;
+/// Compile-time build-key material for `--probe`.
+pub(crate) mod probe_key;
+/// The `[ini]` table of the project's `elephc.toml`.
+pub(crate) mod project_ini;
+/// `elephc repl`: an eval-backed PHP session from a cached native host.
+pub(crate) mod repl;
+/// The cached runtime object linked beside generated user code.
+pub(crate) mod runtime_cache;
+/// The v2 JSON source map for generated assembly.
+pub(crate) mod source_map;
+/// The `elephc test` subcommand.
+pub(crate) mod test_command;
+/// Compile-phase durations for CLI timing output.
+pub(crate) mod timings;

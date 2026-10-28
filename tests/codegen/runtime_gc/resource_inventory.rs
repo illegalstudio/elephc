@@ -2,7 +2,7 @@
 //! Verifies resource inventory aliases share ownership and close state.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_core_resource_inventory_`.
+//! - `cargo test --test codegen_tests_runtime test_core_resource_inventory_`.
 //!
 //! Key details:
 //! - Native streams exercise descriptor reuse and final-owner destruction.

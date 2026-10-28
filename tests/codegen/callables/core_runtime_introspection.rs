@@ -2,7 +2,7 @@
 //! End-to-end AOT tests for Core declaration, extension, and include introspection.
 //!
 //! Called from:
-//! - `cargo test` through the `codegen_tests` integration harness.
+//! - `cargo test` through the `codegen_tests_core` integration harness.
 //!
 //! Key details:
 //! - Multi-file fixtures verify canonical include order and the required-files alias.

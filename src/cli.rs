@@ -3,7 +3,7 @@
 //! Keeps `elephc native` isolated while preserving every legacy compile invocation.
 //!
 //! Called from:
-//! - `crate::main()` before invoking `crate::pipeline::compile()`.
+//! - `crate::entry::run()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
 //! - Only an exact `args[1]` of `native`, `repl`, `monitor`, or `test` selects a subcommand.
@@ -484,7 +484,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         } else if arg == "--quiet" || arg == "-q" {
             quiet = true;
         } else if arg == "--mascotte" {
-            // Already handled in main() before parse_args ran (so the banner
+            // Already handled in entry::run() before parse_args ran (so the banner
             // prints before --help/errors/compilation); recognized here only
             // so it isn't mistaken for an unknown flag.
         } else if let Some(value) = arg.strip_prefix("--null-repr=") {

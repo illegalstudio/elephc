@@ -4,7 +4,7 @@
 //! installed, archive-less capabilities stay skipped, and link failures fail.
 //!
 //! Called from:
-//! - `cargo test` through Rust's test harness (`cargo test --test verify_release_artifact`).
+//! - `cargo test` through Rust's test harness (`cargo test --test integration verify_release_artifact::`).
 //!
 //! Key details:
 //! - The script unpacks into an empty prefix on purpose, so these tests ship a

@@ -4,7 +4,7 @@
 //! compile-time manifest cannot contain.
 //!
 //! Called from:
-//! - `cargo test --test opcache_runtime_cache_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_runtime_cache_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - A runtime-dynamic include is a COMPILE ERROR at AOT top level, so every probe here
@@ -110,6 +110,7 @@ fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
 fn compile_with_flags(dir: &Path, ini: &[&str], flags: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(dir.join("main.php"));
     for flag in flags {
@@ -216,6 +217,7 @@ fn the_regex_note_is_only_for_programs_that_evaluate_code() {
         fs::write(dir.join("main.php"), source).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
             .current_dir(&dir)
             .arg(dir.join("main.php"))
             .arg("--ini")

@@ -1026,7 +1026,7 @@ mod bridge_staticlib_dir_tests {
         let resolved = bridge_staticlib_dir_for(
             None,
             Some(Path::new(
-                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests_core-hash",
             )),
             Path::new("/workspace/elephc"),
             true,
@@ -1041,7 +1041,7 @@ mod bridge_staticlib_dir_tests {
         let resolved = bridge_staticlib_dir_for(
             Some(std::ffi::OsStr::new("/shared/target")),
             Some(Path::new(
-                "/tmp/nextest-archive/target/debug/deps/codegen_tests-hash",
+                "/tmp/nextest-archive/target/debug/deps/codegen_tests_core-hash",
             )),
             Path::new("/workspace/elephc"),
             true,
@@ -1055,7 +1055,7 @@ mod bridge_staticlib_dir_tests {
     fn local_tests_use_workspace_target_debug_directory() {
         let resolved = bridge_staticlib_dir_for(
             None,
-            Some(Path::new("/workspace/target/debug/deps/codegen_tests-hash")),
+            Some(Path::new("/workspace/target/debug/deps/codegen_tests_core-hash")),
             Path::new("/workspace/elephc"),
             false,
         );

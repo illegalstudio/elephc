@@ -688,8 +688,9 @@ High-level map of the source tree. The codebase contains more focused helper sub
 
 ```
 src/
-├── lib.rs               # Public module exports
-├── main.rs              # CLI binary entry point
+├── lib.rs               # Module tree: compiler API plus crate-private CLI modules
+├── main.rs              # CLI binary entry point: calls entry::run, declares no modules
+├── entry.rs             # Top-level command dispatch
 ├── cli.rs               # Command-line argument parsing and options
 ├── pipeline.rs          # Frontend/backend compilation pipeline
 ├── link_plan.rs         # Ordered typed archives/libraries and Linux link mode

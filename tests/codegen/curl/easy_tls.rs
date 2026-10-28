@@ -4,7 +4,7 @@
 //! `CURLOPT_SSL_VERIFYPEER=true` rejection of the same self-signed certificate.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - THESE ARE THE PROOF THAT TLS IS WIRED, not just that an option was accepted. The

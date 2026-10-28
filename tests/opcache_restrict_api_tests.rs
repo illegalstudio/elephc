@@ -6,7 +6,7 @@
 //! prefix from a path-component match.
 //!
 //! Called from:
-//! - `cargo test --test opcache_restrict_api_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_restrict_api_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here is PINNED FROM REFERENCE PHP 8.5.6 (Homebrew, `Zend OPcache`
@@ -103,6 +103,7 @@ fn compile(dir: &Path, stem: &str, ini: &[&str]) -> PathBuf {
     fs::write(&php, PROBE).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(&php);
     for assignment in ini {
@@ -319,6 +320,7 @@ fn restriction_follows_the_entry_script_not_the_executing_file() {
         fs::write(&php, &entry_src).unwrap();
         let mut cmd = Command::new(elephc_bin());
         cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+        cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
         cmd.current_dir(&entrydir);
         cmd.arg(&php);
         cmd.arg("--ini").arg("opcache.enable_cli=1");
@@ -368,6 +370,7 @@ fn a_runtime_eval_source_is_refused_as_native_calls_are() {
         fs::write(dir.join(format!("{stem}.php")), source).unwrap();
         let output = Command::new(elephc_bin())
             .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
             .current_dir(&dir)
             .arg(dir.join(format!("{stem}.php")))
             .args(["--php-version", "8.5"])
@@ -429,6 +432,7 @@ fn a_refused_eval_call_takes_byte_paths_and_checks_its_closure() {
     fs::write(dir.join("main.php"), source).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .args(["--php-version", "8.5"])
@@ -476,6 +480,7 @@ fn a_refused_eval_call_still_evaluates_its_arguments_in_order() {
     fs::write(dir.join("main.php"), source).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(dir.join("main.php"))
         .args(["--php-version", "8.5"])

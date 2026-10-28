@@ -2,7 +2,7 @@
 //! Heap-debug regression coverage for the owned results of PHP's iconv builtins.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests runtime_gc::iconv` through the runtime-GC suite.
+//! - `cargo test --test codegen_tests_runtime runtime_gc::iconv` through the runtime-GC suite.
 //!
 //! Key details:
 //! - Each result kind is exercised: a boxed string, a boxed integer, a boxed associative

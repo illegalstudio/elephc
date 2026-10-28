@@ -2,7 +2,7 @@
 //! End-to-end web tests for PHP session support under `--web`.
 //!
 //! Called from:
-//! - `cargo test --test web_session_tests` through Rust's test harness.
+//! - `cargo test --test integration web_session_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests compile PHP with `--web`, spawn the server, drive HTTP requests,
@@ -54,6 +54,7 @@ fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) 
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");

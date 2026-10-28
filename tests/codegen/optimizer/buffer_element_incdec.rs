@@ -2,7 +2,7 @@
 //! End-to-end coverage for scalar `buffer<T>` element `++`/`--` lowered without Mixed staging.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::buffer_element_incdec`.
+//! - `cargo test --test codegen_tests_core optimizer::buffer_element_incdec`.
 //!
 //! Key details:
 //! - Every runtime fixture compiles through the CLI with the EIR optimizer on and off, heap

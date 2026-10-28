@@ -2,7 +2,7 @@
 //! End-to-end codegen tests for SPL helpers and AOT autoload behavior.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop` through Rust's test harness.
 //!
 //! Key details:
 //! - Multi-file fixtures exercise composer.json autoload sections and compile-time SPL rule extraction.

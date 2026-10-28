@@ -3,7 +3,7 @@
 //! Covers functions, methods, class construction, and constructor-local templates.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests generics_named_spreads`.
+//! - `cargo test --test codegen_tests_oop generics_named_spreads`.
 //!
 //! Key details:
 //! - Inference uses the shared spread expansion without changing source evaluation order.

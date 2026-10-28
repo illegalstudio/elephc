@@ -4,7 +4,7 @@
 //! per the scalar and owned-string contracts.
 //!
 //! Called from:
-//! - `cargo test --test cdylib_tests` through Rust's test harness.
+//! - `cargo test --test integration cdylib_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI binary as a subprocess (CARGO_BIN_EXE_elephc)
@@ -57,6 +57,7 @@ fn elephc_bin() -> String {
 fn elephc_command(dir: &Path) -> Command {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd
 }

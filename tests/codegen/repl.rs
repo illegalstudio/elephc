@@ -2,7 +2,7 @@
 //! Exercises the real cached REPL host through the public compiler command.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests codegen::repl` on supported desktop hosts.
+//! - `cargo test --test codegen_tests_core codegen::repl` on supported desktop hosts.
 //!
 //! Key details:
 //! - Each fixture owns its project and cache and removes both even after an assertion fails.

@@ -2,7 +2,7 @@
 //! Regression coverage for key sorting nested array values stored in heterogeneous parents.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through `tests/codegen/arrays/indexed.rs`.
+//! - `cargo test --test codegen_tests_data` through `tests/codegen/arrays/indexed.rs`.
 //!
 //! Key details:
 //! - Both key-sort directions must share runtime tag validation, COW separation, and write-back.

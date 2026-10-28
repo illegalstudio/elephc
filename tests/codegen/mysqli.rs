@@ -4,7 +4,7 @@
 //! escaping that need no live row.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the test harness.
+//! - `cargo test --test codegen_tests_ext` through the test harness.
 //!
 //! Key details:
 //! - Live query/fetch fixtures live in `mysqli_mysql.rs` and are `#[ignore]`d

@@ -3,7 +3,7 @@
 //! Covers forwarding, IteratorAggregate normalization, windows, no-rewind behavior, cycling, filters, cache, and multi-source decorators.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - Decorators compose over `Iterator` implementations and are consumed through `foreach`.

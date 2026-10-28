@@ -3,7 +3,7 @@
 //! Compares optimized and unoptimized EIR plus native heap-debug behavior.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::release_local_slot`.
+//! - `cargo test --test codegen_tests_core optimizer::release_local_slot`.
 //!
 //! Key details:
 //! - A promotion after a loop must not suppress releases inside that loop.

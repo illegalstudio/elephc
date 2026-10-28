@@ -6875,6 +6875,7 @@ fn compile_ir_backend_and_run_with_fixture(
 
     let mut command = Command::new(elephc_cli_bin());
     command.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    command.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     if managed_pcre2 {
         managed_pcre2_support::configure_host_managed_pcre2(&mut command, &dir);
     }
@@ -6914,6 +6915,7 @@ fn compile_ir_backend_and_run_with_stdin(name: &str, source: &str, stdin: &str) 
 
     let compile = Command::new(elephc_cli_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(&php_path)
         .output()
@@ -6982,6 +6984,7 @@ fn compile_ir_backend_files_and_run(
 
     let compile = Command::new(elephc_cli_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(&entry_path)
         .output()

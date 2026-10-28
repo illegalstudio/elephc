@@ -5,7 +5,7 @@
 //! process exit code.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests testing` through Rust's test harness.
+//! - `cargo test --test codegen_tests_core testing` through Rust's test harness.
 //!
 //! Key details:
 //! - The report lines (`ok   `, `FAIL `, `ERROR `, `OK (...)`, `Tests: ...`) are a stable

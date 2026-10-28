@@ -2,7 +2,7 @@
 //! Regression coverage for PHP Reflection dump details and eval-created reflector casts.
 //!
 //! Called from:
-//! - `codegen_tests` through the `oop` module.
+//! - `codegen_tests_oop` through the `oop` module.
 //!
 //! Key details:
 //! - Fixtures use PHP 8.5.11/8.5.12 oracles, excluding the source location line.

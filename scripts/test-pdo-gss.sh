@@ -194,4 +194,4 @@ export ELEPHC_PG_GSS_DSN="pgsql:host=pgsql.elephc.test;hostaddr=127.0.0.1;port=$
 export ELEPHC_PG_GSS_EMPTY_CACHE="FILE:$FIXTURE_DIR/missing.ccache"
 
 cargo build -p elephc-pdo --features libpq-gss
-cargo test --features pdo-libpq-gss --test codegen_tests pgsql_gss -- --ignored --test-threads=1
+cargo test --features pdo-libpq-gss --test codegen_tests_ext pgsql_gss -- --ignored --test-threads=1

@@ -3,7 +3,7 @@
 //! project sets once instead of passing `--ini` on every compile.
 //!
 //! Called from:
-//! - `cargo test --test project_ini_tests` through Rust's test harness.
+//! - `cargo test --test integration project_ini_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp
@@ -57,6 +57,7 @@ fn probe(keys: &[&str]) -> String {
 fn compile(root: &Path, source: &Path, extra: &[&str]) -> Output {
     Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", root.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(root)
         .args(extra)
         .arg(source)

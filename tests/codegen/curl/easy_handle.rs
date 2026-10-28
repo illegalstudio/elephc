@@ -5,7 +5,7 @@
 //! `curl_version()` reports the libcurl this binary actually linked.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - No fixture here touches the network. `curl_version()` reads

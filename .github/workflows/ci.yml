@@ -197,7 +197,7 @@ jobs:
 
       - name: Archive test binaries
         # Two archives from one build: the workspace archive for the non-codegen,
-        # CLI and web shards, and a codegen-only one (codegen_tests, the elephc
+        # CLI and web shards, and a codegen-only one (the codegen_tests_* binaries, the elephc
         # binary, and the bridge staticlibs from the include list) for the 40-odd
         # codegen/eval/pdo/curl shards, which never run the other 130 test
         # binaries and otherwise download and extract them anyway. The macOS
@@ -208,7 +208,8 @@ jobs:
           cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
           (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
           cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
 
@@ -387,7 +388,8 @@ jobs:
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
 
       - name: Run doctests
@@ -557,7 +559,8 @@ jobs:
         run: |
           cargo nextest archive --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
           mkdir -p "$RUNNER_TEMP/codegen-archive"
-          cargo nextest archive --profile ci -p elephc --test codegen_tests \
+          cargo nextest archive --profile ci -p elephc \
+            --test codegen_tests_core --test codegen_tests_data --test codegen_tests_oop --test codegen_tests_runtime --test codegen_tests_ext --test codegen_tests_eval \
             --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
 
       - name: Run doctests
@@ -691,7 +694,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            -E 'not binary(/^codegen_tests_/) and not (binary_id(elephc::integration) and test(/^(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -741,7 +744,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            -E 'not binary(/^codegen_tests_/) and not (binary_id(elephc::integration) and test(/^(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -791,7 +794,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'not binary(codegen_tests) and not binary(web_tests) and not binary(web_session_tests) and not (binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests))' \
+            -E 'not binary(/^codegen_tests_/) and not (binary_id(elephc::integration) and test(/^(web_tests|web_session_tests|opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/))' \
             --partition hash:${{ matrix.shard }}/4 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -865,7 +868,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -919,7 +922,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -973,7 +976,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(/^(opcache_|eval_|php_profile_)/) or binary(extension_loaded_tests) or binary(php_version_surface_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(opcache_\w+|eval_\w+|php_profile_\w+|extension_loaded_tests|php_version_surface_tests)::/)' \
             --partition hash:${{ matrix.shard }}/6 \
             --status-level pass \
             --no-fail-fast --retries 1 --flaky-result pass \
@@ -1043,7 +1046,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(web_tests) or binary(web_session_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -1092,7 +1095,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(web_tests) or binary(web_session_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -1141,7 +1144,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(web_tests) or binary(web_session_tests)' \
+            -E 'binary_id(elephc::integration) and test(/^(web_tests|web_session_tests)::/)' \
             --partition hash:${{ matrix.shard }}/2 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -1215,7 +1218,7 @@ jobs:
             libxml2-native-macos-aarch64-
 
       - name: Extract test archive
-        # The same nextest archive that carries the codegen_tests binary also carries
+        # The same nextest archive that carries the codegen_tests_* binaries also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
         # compiler is what materializes the managed package below.
         run: |
@@ -1225,7 +1228,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Materialize managed native libxml2
         # A no-op on the warm cache restored above; otherwise the pinned
@@ -1254,7 +1257,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
+            -E 'binary(/^codegen_tests_/) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 3
@@ -1308,7 +1311,7 @@ jobs:
             libxml2-native-linux-x86_64-
 
       - name: Extract test archive
-        # The same nextest archive that carries the codegen_tests binary also carries
+        # The same nextest archive that carries the codegen_tests_* binaries also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
         # compiler is what materializes the managed package below.
         run: |
@@ -1318,7 +1321,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Materialize managed native libxml2
         # A no-op on the warm cache restored above; otherwise the pinned
@@ -1347,7 +1350,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
+            -E 'binary(/^codegen_tests_/) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
@@ -1401,7 +1404,7 @@ jobs:
             libxml2-native-linux-aarch64-
 
       - name: Extract test archive
-        # The same nextest archive that carries the codegen_tests binary also carries
+        # The same nextest archive that carries the codegen_tests_* binaries also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
         # compiler is what materializes the managed package below.
         run: |
@@ -1411,7 +1414,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Materialize managed native libxml2
         # A no-op on the warm cache restored above; otherwise the pinned
@@ -1440,7 +1443,7 @@ jobs:
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" --extract-overwrite \
-            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
+            -E 'binary(/^codegen_tests_/) and not test(~codegen::eval) and not test(~codegen::pdo) and not test(~codegen::curl)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 4
@@ -1516,9 +1519,9 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_ext)'
           pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_ext-*' -perm -111 -print -quit)"
           test -n "$pdo_test_binary"
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
@@ -1558,9 +1561,9 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_ext)'
           pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_ext-*' -perm -111 -print -quit)"
           test -n "$pdo_test_binary"
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
@@ -1600,9 +1603,9 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_ext)'
           pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_ext-*' -perm -111 -print -quit)"
           test -n "$pdo_test_binary"
           bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
@@ -1659,7 +1662,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1722,7 +1725,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1785,7 +1788,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(/^codegen_tests_/)'
 
       - name: Cache managed native curl/libssh2/nghttp2/openssl/zlib
         # Cross-run cache keyed on the committed lock plus the recipe sources that
@@ -1886,7 +1889,7 @@ jobs:
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
         # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
-        # codegen_tests binary also carries target/debug/elephc (see the archive
+        # codegen_tests_* binaries also carries target/debug/elephc (see the archive
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
@@ -1895,7 +1898,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_ext)'
 
       - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
@@ -1921,7 +1924,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_ext-*' -perm -111 -print -quit)"
           test -n "$curl_test_binary"
           bash scripts/ci/run_curl_codegen_shard.sh \
             "$curl_test_binary" "${{ matrix.shard }}" 4
@@ -1965,7 +1968,7 @@ jobs:
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
         # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
-        # codegen_tests binary also carries target/debug/elephc (see the archive
+        # codegen_tests_* binaries also carries target/debug/elephc (see the archive
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
@@ -1974,7 +1977,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_ext)'
 
       - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
@@ -2000,7 +2003,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_ext-*' -perm -111 -print -quit)"
           test -n "$curl_test_binary"
           bash scripts/ci/run_curl_codegen_shard.sh \
             "$curl_test_binary" "${{ matrix.shard }}" 4
@@ -2044,7 +2047,7 @@ jobs:
       - name: Extract test archive
         # `elephc` is a build dependency of other integration tests that invoke it via
         # CARGO_BIN_EXE_elephc, so the same nextest archive that carries the
-        # codegen_tests binary also carries target/debug/elephc (see the archive
+        # codegen_tests_* binaries also carries target/debug/elephc (see the archive
         # notes in .config/nextest.toml) -- one extraction gives us both.
         run: |
           mkdir -p "$RUNNER_TEMP/nextest"
@@ -2053,7 +2056,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_ext)'
 
       - name: Materialize managed native curl (curl, libssh2, nghttp2, openssl, zlib)
         # `install --locked` reproduces exactly the versions pinned in the committed
@@ -2079,7 +2082,7 @@ jobs:
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
           curl_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_ext-*' -perm -111 -print -quit)"
           test -n "$curl_test_binary"
           bash scripts/ci/run_curl_codegen_shard.sh \
             "$curl_test_binary" "${{ matrix.shard }}" 4
@@ -2361,7 +2364,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_eval)'
 
       - name: Run eval codegen test shard
         env:
@@ -2375,7 +2378,7 @@ jobs:
           EVAL_SHARD_NEXTEST_BIN: ${{ runner.temp }}/cargo-nextest
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_eval-*' -perm -111 -print -quit)"
           test -n "$eval_test_binary"
           bash scripts/ci/run_eval_codegen_shard.sh \
             "$eval_test_binary" "${{ matrix.shard }}" 16
@@ -2425,7 +2428,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_eval)'
 
       - name: Run eval codegen test shard
         env:
@@ -2436,7 +2439,7 @@ jobs:
           EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_eval-*' -perm -111 -print -quit)"
           test -n "$eval_test_binary"
           bash scripts/ci/run_eval_codegen_shard.sh \
             "$eval_test_binary" "${{ matrix.shard }}" 16
@@ -2486,7 +2489,7 @@ jobs:
             --workspace-remap . \
             --extract-to "$RUNNER_TEMP/nextest" \
             --extract-overwrite --no-run \
-            -E 'binary(codegen_tests)'
+            -E 'binary(codegen_tests_eval)'
 
       - name: Run eval codegen test shard
         env:
@@ -2497,7 +2500,7 @@ jobs:
           EVAL_SHARD_JUNIT_FILE: target/nextest/ci/junit-pass1.xml
         run: |
           eval_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
-            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+            -type f -name 'codegen_tests_eval-*' -perm -111 -print -quit)"
           test -n "$eval_test_binary"
           bash scripts/ci/run_eval_codegen_shard.sh \
             "$eval_test_binary" "${{ matrix.shard }}" 16
@@ -2718,9 +2721,9 @@ jobs:
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
       - name: Run focused native, eval and argument regressions
         run: |
-          cargo test --locked --test codegen_tests test_tokenizer_
-          cargo test --locked --test codegen_tests codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles -- --exact
-          cargo test --locked --test error_tests tokenizer_
+          cargo test --locked --test codegen_tests_ext test_tokenizer_
+          cargo test --locked --test codegen_tests_core codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles -- --exact
+          cargo test --locked --test integration error_tests::tokenizer::tokenizer_
           cargo test --locked -p elephc --lib ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target -- --exact
           cargo test --locked -p elephc --lib autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes -- --exact
           cargo test --locked -p elephc --lib ir_lower::tests::string_offset_lifetime::string_offset_lifetime_stabilizes_views_on_all_targets -- --exact
@@ -2835,7 +2838,7 @@ jobs:
       # per-contract assertions — name sets, signature shapes, eval coverage — to
       # the thirty-four `curl_*` surfaces instead of counting them and moving on.
       - name: Cross-backend parity with the curl surface published
-        run: cargo test --features curl --test builtin_parity_tests
+        run: cargo test --features curl --test integration builtin_parity_tests
 
       # The compiler-side half: `builtins::parity_tests` compares every
       # prelude-provided contract with the PHP declaration its injected prelude

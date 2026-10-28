@@ -8,7 +8,7 @@
 //! `curl_share_init_persistent()`.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - libcurl 8.21.0 REFCOUNTS a share (`crates/elephc-curl/src/share.rs`'s module doc):

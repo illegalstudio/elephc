@@ -8,7 +8,7 @@
 //! property — that an EXCLUDED directive's environment variable is ignored on both surfaces.
 //!
 //! Called from:
-//! - `cargo test --test opcache_env_override_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_env_override_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - THIS IS AN ELEPHC EXTENSION, NOT PHP PARITY. Reference PHP has no per-directive environment
@@ -122,6 +122,7 @@ fn compile(dir: &Path, source: &str, stem: &str, args: &[&str]) -> PathBuf {
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(&php);
     cmd.args(args);

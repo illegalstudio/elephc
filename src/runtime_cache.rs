@@ -110,7 +110,7 @@ fn prepare_runtime_object_with_mode(
     pic: bool,
     library_boundary: bool,
 ) -> Result<PreparedRuntimeObject, String> {
-    let cache_dir = runtime_cache_dir();
+    let cache_dir = runtime_object_cache_dir();
     fs::create_dir_all(&cache_dir)
         .map_err(|err| format!("failed to create runtime cache '{}': {}", cache_dir.display(), err))?;
     harden_runtime_cache_dir(&cache_dir)?;
@@ -226,7 +226,21 @@ fn prepare_runtime_object_with_mode(
     Ok(prepared)
 }
 
-/// Returns the platform-specific cache directory path for runtime objects.
+/// Returns the directory holding prepared runtime objects: `ELEPHC_RUNTIME_CACHE_DIR` when it
+/// is set and non-empty, else [`runtime_cache_dir`].
+///
+/// The override moves only the runtime objects, which are keyed by everything that shapes them
+/// and safe to share between concurrent compilers; REPL hosts and `elephc test` outputs stay
+/// under the cache root. Test suites that isolate `XDG_CACHE_HOME` per test use it to share
+/// one runtime object per shape instead of regenerating it on every compile.
+fn runtime_object_cache_dir() -> PathBuf {
+    match env::var_os("ELEPHC_RUNTIME_CACHE_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => runtime_cache_dir(),
+    }
+}
+
+/// Returns the platform-specific cache root for runtime objects, REPL hosts and test outputs.
 pub(crate) fn runtime_cache_dir() -> PathBuf {
     if let Some(path) = env::var_os("XDG_CACHE_HOME") {
         PathBuf::from(path).join("elephc")

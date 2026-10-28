@@ -2,7 +2,7 @@
 //! Regressions for error-handler suspension and nullable reporting state.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests test_core_error_regression_`.
+//! - `cargo test --test codegen_tests_core test_core_error_regression_`.
 //!
 //! Key details:
 //! - Opaque eval source exercises the native/Magician dispatch boundary.

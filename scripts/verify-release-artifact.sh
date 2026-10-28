@@ -21,7 +21,7 @@
 # Usage: scripts/verify-release-artifact.sh <tarball>
 #
 # Focused fixture (mock packaged binary, no cargo suite):
-#   cargo test --test verify_release_artifact
+#   cargo test --test integration verify_release_artifact::
 set -euo pipefail
 
 if [ $# -ne 1 ]; then

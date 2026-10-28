@@ -2,7 +2,7 @@
 //! End-to-end regressions for purity and may-throw v2 effect refinement.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::effects_v2`.
+//! - `cargo test --test codegen_tests_core optimizer::effects_v2`.
 //!
 //! Key details:
 //! - Fixtures keep runtime-selected instance dispatch and catchable typed-property errors

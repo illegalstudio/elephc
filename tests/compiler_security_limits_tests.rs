@@ -2,7 +2,7 @@
 //! Subprocess regressions for compiler and generated-program recursion limits.
 //!
 //! Called from:
-//! - `cargo test --test compiler_security_limits_tests` through Rust's test harness.
+//! - `cargo test --test integration compiler_security_limits_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Potential stack exhaustion always occurs in a child process, never in the test harness.
@@ -64,6 +64,7 @@ fn deeply_nested_source_reports_compiler_depth_limit() {
 
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg(&php)
         .output()
         .expect("spawn compiler depth probe");
@@ -101,6 +102,7 @@ echo descend(0);
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg(&php)
         .output()
         .expect("compile recursion fixture");
@@ -151,6 +153,7 @@ fn large_frames_report_runtime_recursion_limit_before_stack_overflow() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg(format!("--heap-size={LARGE_FRAME_TEST_HEAP_BYTES}"))
         .arg(&php)
         .output()
@@ -197,6 +200,7 @@ fn distinct_include_chain_reports_depth_limit() {
 
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg(dir.join("f0.php"))
         .output()
         .expect("spawn include-depth probe");
@@ -220,6 +224,7 @@ fn deeply_nested_unserialize_is_rejected_before_runtime_recursion() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg(&php)
         .output()
         .expect("compile nested unserialize fixture");
@@ -268,6 +273,7 @@ fn nesting_below_the_limit_compiles_and_runs() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .arg("-q")
         .arg(&php)
         .output()

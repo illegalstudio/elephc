@@ -62,7 +62,7 @@ Untrusted input reaches, in particular:
   sessions, streams) and `docs/beyond-php/`; runtime internals in `docs/internals/the-runtime.md`,
   `docs/internals/memory-model.md` and `docs/internals/eval-runtime.md`.
 - About 250 small programs in `examples/*/main.php` cover most features and are convenient starting drivers.
-- Tests: `cargo nextest run --test codegen_tests <filter>` runs end-to-end tests that compile PHP, run the binary and
+- Tests: `cargo nextest run --test codegen_tests_<domain> <filter>` (six binaries: core, data, oop, runtime, ext, eval) runs end-to-end tests that compile PHP, run the binary and
   check its output (`tests/codegen/`, ownership and GC cases in `tests/codegen/runtime_gc/`). Bridge crates have
   their own `cargo nextest run -p elephc-<name>` tests.
 - Everything is prebuilt offline: the compiler and bridge staticlibs in `target/debug/`, the managed native packages

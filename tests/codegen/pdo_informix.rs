@@ -2,7 +2,7 @@
 //! End-to-end surface and live-server tests for the optional PDO_INFORMIX backend.
 //!
 //! Called from:
-//! - `cargo test --features pdo-informix --test codegen_tests`.
+//! - `cargo test --features pdo-informix --test codegen_tests_ext`.
 //!
 //! Key details:
 //! - Surface tests need unixODBC at link time but no Informix installation.

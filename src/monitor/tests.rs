@@ -1212,7 +1212,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     /// any `_`, `\` or non-ASCII name produces. Only the compact shape used to
     /// demangle (#922): the escaped one printed `::_My_Class___run`.
     fn demangles_php_symbols() {
-        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        use crate::names::{function_symbol, method_symbol, static_method_symbol};
         assert_eq!(demangle("main"), "{main}");
         assert_eq!(demangle(&function_symbol("hot_leaf")), "hot_leaf");
         assert_eq!(demangle(&function_symbol("App\\run")), "App\\run");
@@ -1236,7 +1236,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     /// Generator labels decode their PHP owner without confusing user underscores with suffixes.
     #[test]
     fn demangles_generator_entry_symbols() {
-        use elephc::names::{function_symbol, method_symbol, static_method_symbol};
+        use crate::names::{function_symbol, method_symbol, static_method_symbol};
         for suffix in ["__genbody", "__gencb"] {
             for (class, method) in [
                 ("App\\Foo", "gen"), ("My_Class", "hot_gen"), ("Engine", "gen"),
@@ -1262,7 +1262,7 @@ elephc-instr-query: 200 INSERT INTO users (name) VALUES (?)
     /// Escaped method separators must not turn literal method names into generator suffixes.
     #[test]
     fn monitor_review_preserves_generator_named_methods() {
-        use elephc::names::{method_symbol, static_method_symbol};
+        use crate::names::{method_symbol, static_method_symbol};
         for class in ["App\\Foo", "My_Class", "Engine", "prop", "local"] {
             for method in ["genbody", "gencb"] {
                 for symbol in [method_symbol(class, method), static_method_symbol(class, method)] {

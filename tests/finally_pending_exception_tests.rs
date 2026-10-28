@@ -4,7 +4,7 @@
 //! discarded by a jump — and never leaked, never skipped.
 //!
 //! Called from:
-//! - `cargo test --test finally_pending_exception_tests` through Rust's test harness.
+//! - `cargo test --test integration finally_pending_exception_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The two places an exception is pending while `finally` code runs are the `finally` after no
@@ -78,6 +78,7 @@ fn assert_program(label: &str, body: &str, expected: &str) {
     fs::write(dir.join("main.php"), format!("<?php\n{PRELUDE}{body}")).unwrap();
     let output = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg("--heap-debug")
         .arg(dir.join("main.php"))

@@ -5,7 +5,7 @@
 //! program does about CA configuration still outranks it.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - `CURLINFO_CAINFO` CANNOT BE USED AS THE OBSERVABLE, and finding that out is what

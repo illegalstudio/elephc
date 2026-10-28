@@ -3,7 +3,7 @@
 //! Covers declarations, ordering behavior, ArrayAccess, iteration, and per-instance cleanup.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - Heap and priority-queue iterators are destructive, matching PHP SPL behavior.

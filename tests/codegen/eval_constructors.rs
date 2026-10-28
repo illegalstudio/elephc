@@ -2,8 +2,8 @@
 //! End-to-end regressions for runtime eval object construction through AOT classes.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests eval_constructor` through Rust's test harness.
-//! - `cargo test --test codegen_tests aot_throw` for eval-declared throwables.
+//! - `cargo test --test codegen_tests_eval eval_constructor` through Rust's test harness.
+//! - `cargo test --test codegen_tests_eval aot_throw` for eval-declared throwables.
 //!
 //! Key details:
 //! - Fixtures focus on constructor bridge argument binding and by-reference

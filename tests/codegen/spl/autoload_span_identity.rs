@@ -4,7 +4,7 @@
 //! a diagnostic raised inside an autoloaded file must name that file.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests autoload_span_identity` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop autoload_span_identity` through Rust's test harness.
 //!
 //! Key details:
 //! - Autoloaded files used to be lexed with the entry file's source identity, so span-keyed

@@ -251,7 +251,7 @@ jobs:
 
       - name: Live native PostgreSQL codegen tests
         if: matrix.suite == 'native-postgres'
-        run: cargo test --test codegen_tests -- --ignored pgsql --test-threads=4
+        run: cargo test --test codegen_tests_ext -- --ignored pgsql --test-threads=4
 
       - name: Build the libpq PDO bridge staticlib
         if: matrix.suite == 'libpq-postgres'
@@ -269,7 +269,7 @@ jobs:
         if: matrix.suite == 'libpq-postgres'
         env:
           ELEPHC_PDO_LIBPQ: '1'
-        run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored pgsql --test-threads=4
+        run: cargo test --features pdo-libpq-gss --test codegen_tests_ext -- --ignored pgsql --test-threads=4
 
       - name: Live libpq GSSAPI handshake
         if: matrix.suite == 'libpq-postgres'
@@ -279,7 +279,7 @@ jobs:
         if: matrix.suite == 'mysql'
         env:
           ELEPHC_PDO_LIBPQ: '1'
-        run: cargo test --features pdo-libpq-gss --test codegen_tests -- --ignored mysql --test-threads=4
+        run: cargo test --features pdo-libpq-gss --test codegen_tests_ext -- --ignored mysql --test-threads=4
 
   pdo-core-gate:
     name: PDO core live suites (PostgreSQL 16 + MySQL 8.4)
@@ -474,13 +474,13 @@ jobs:
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_SQLSRV: '1'
-        run: cargo test --features pdo-sqlsrv --test codegen_tests -- --ignored pdo_sqlsrv --test-threads=1
+        run: cargo test --features pdo-sqlsrv --test codegen_tests_ext -- --ignored pdo_sqlsrv --test-threads=1
 
       - name: PDO_SQLSRV compiled surface tests
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_SQLSRV: '1'
-        run: cargo test --features pdo-sqlsrv --test codegen_tests pdo_sqlsrv -- --test-threads=1
+        run: cargo test --features pdo-sqlsrv --test codegen_tests_ext pdo_sqlsrv -- --test-threads=1
 
       - name: Build the PDO_OCI bridge staticlib
         if: matrix.suite == 'sqlsrv-oci'
@@ -498,13 +498,13 @@ jobs:
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_OCI: '1'
-        run: cargo test --features pdo-oci --test codegen_tests -- --ignored pdo_oci --test-threads=1
+        run: cargo test --features pdo-oci --test codegen_tests_ext -- --ignored pdo_oci --test-threads=1
 
       - name: PDO_OCI compiled surface tests
         if: matrix.suite == 'sqlsrv-oci'
         env:
           ELEPHC_PDO_OCI: '1'
-        run: cargo test --features pdo-oci --test codegen_tests pdo_oci_surface -- --test-threads=1
+        run: cargo test --features pdo-oci --test codegen_tests_ext pdo_oci_surface -- --test-threads=1
 
       - name: Install the CUBRID CCI client from the service image
         if: matrix.suite == 'cubrid-dblib'
@@ -520,14 +520,14 @@ jobs:
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_CUBRID: '1'
-        run: cargo test --features pdo-cubrid --test codegen_tests pdo_cubrid_surface -- --test-threads=1
+        run: cargo test --features pdo-cubrid --test codegen_tests_ext pdo_cubrid_surface -- --test-threads=1
 
       - name: Live PDO_CUBRID codegen test
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_CUBRID: '1'
           CUBRID_CCI_LIBRARY: '${{ runner.temp }}/libcascci.so.11.2'
-        run: cargo test --features pdo-cubrid --test codegen_tests -- --ignored pdo_cubrid --test-threads=1
+        run: cargo test --features pdo-cubrid --test codegen_tests_ext -- --ignored pdo_cubrid --test-threads=1
 
       - name: Build the PDO_DBLIB bridge staticlib
         if: matrix.suite == 'cubrid-dblib'
@@ -545,13 +545,13 @@ jobs:
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_DBLIB: '1'
-        run: cargo test --features pdo-dblib --test codegen_tests -- --ignored pdo_dblib --test-threads=1
+        run: cargo test --features pdo-dblib --test codegen_tests_ext -- --ignored pdo_dblib --test-threads=1
 
       - name: PDO_DBLIB compiled surface tests
         if: matrix.suite == 'cubrid-dblib'
         env:
           ELEPHC_PDO_DBLIB: '1'
-        run: cargo test --features pdo-dblib --test codegen_tests pdo_dblib_surface -- --test-threads=1
+        run: cargo test --features pdo-dblib --test codegen_tests_ext pdo_dblib_surface -- --test-threads=1
 
       - name: Build the PDO_FIREBIRD bridge staticlib
         if: matrix.suite == 'firebird-odbc'
@@ -565,13 +565,13 @@ jobs:
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_FIREBIRD: '1'
-        run: cargo test --features pdo-firebird --test codegen_tests -- --ignored pdo_firebird --test-threads=1
+        run: cargo test --features pdo-firebird --test codegen_tests_ext -- --ignored pdo_firebird --test-threads=1
 
       - name: PDO_FIREBIRD compiled surface tests
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_FIREBIRD: '1'
-        run: cargo test --features pdo-firebird --test codegen_tests pdo_firebird_surface -- --test-threads=1
+        run: cargo test --features pdo-firebird --test codegen_tests_ext pdo_firebird_surface -- --test-threads=1
 
       - name: Build the PDO_ODBC bridge staticlib
         if: matrix.suite == 'firebird-odbc'
@@ -589,13 +589,13 @@ jobs:
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_ODBC: '1'
-        run: cargo test --features pdo-odbc --test codegen_tests -- --ignored pdo_odbc --test-threads=1
+        run: cargo test --features pdo-odbc --test codegen_tests_ext -- --ignored pdo_odbc --test-threads=1
 
       - name: PDO_ODBC compiled surface tests
         if: matrix.suite == 'firebird-odbc'
         env:
           ELEPHC_PDO_ODBC: '1'
-        run: cargo test --features pdo-odbc --test codegen_tests pdo_odbc_surface -- --test-threads=1
+        run: cargo test --features pdo-odbc --test codegen_tests_ext pdo_odbc_surface -- --test-threads=1
 
       - name: Build the PDO_INFORMIX Client SDK profile
         if: matrix.suite == 'informix-ibm'
@@ -609,7 +609,7 @@ jobs:
         if: matrix.suite == 'informix-ibm'
         env:
           ELEPHC_PDO_INFORMIX: '1'
-        run: cargo test --features pdo-informix --test codegen_tests pdo_informix -- --test-threads=1
+        run: cargo test --features pdo-informix --test codegen_tests_ext pdo_informix -- --test-threads=1
 
       - name: Build the PDO_IBM 1.7.0 CLI profile
         if: matrix.suite == 'informix-ibm'
@@ -623,7 +623,7 @@ jobs:
         if: matrix.suite == 'informix-ibm'
         env:
           ELEPHC_PDO_IBM: '1'
-        run: cargo test --features pdo-ibm --test codegen_tests pdo_ibm -- --test-threads=1
+        run: cargo test --features pdo-ibm --test codegen_tests_ext pdo_ibm -- --test-threads=1
 
   pdo-drivers-gate:
     name: PDO optional-driver live suites

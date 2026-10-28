@@ -3,7 +3,7 @@
 //! reference PHP RUNS but refuses to CACHE.
 //!
 //! Called from:
-//! - `cargo test --test opcache_blacklist_tests` through Rust's test harness.
+//! - `cargo test --test integration opcache_blacklist_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Every expectation here was VERIFIED against reference PHP 8.5.10 before being
@@ -65,6 +65,7 @@ fn elephc_bin() -> String {
 fn compile(dir: &Path, ini: &[&str]) -> PathBuf {
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(dir.join("main.php"));
     for assignment in ini {

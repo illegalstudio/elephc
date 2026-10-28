@@ -2,7 +2,7 @@
 //! End-to-end tests for SPL builtin interfaces and their PHP-compatible contracts.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through Rust's test harness.
+//! - `cargo test --test codegen_tests_oop` through Rust's test harness.
 //!
 //! Key details:
 //! - These fixtures exercise checker validation plus runtime `instanceof` metadata.

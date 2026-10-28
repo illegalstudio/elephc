@@ -2,7 +2,7 @@
 //! End-to-end regression coverage for issue #623 checked integer sink specialization.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests optimizer::checked_int_sink`.
+//! - `cargo test --test codegen_tests_core optimizer::checked_int_sink`.
 //!
 //! Key details:
 //! - CLI `--emit-ir` comparisons pin CSE and LICM structure with optimization on/off.

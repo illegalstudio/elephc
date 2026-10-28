@@ -4,7 +4,7 @@
 //! Closure values.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the serialize codegen test module.
+//! - `cargo test --test codegen_tests_ext` through the serialize codegen test module.
 //!
 //! Key details:
 //! - Expected output was measured on PHP 8.5.10 (Phar cases with `phar.readonly=0`), except the

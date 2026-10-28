@@ -2,7 +2,7 @@
 //! Groups the end-to-end `ext/curl` codegen fixtures.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - Every fixture here links the `elephc_curl` bridge, which in turn needs the managed

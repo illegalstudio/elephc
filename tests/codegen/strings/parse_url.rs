@@ -2,7 +2,7 @@
 //! End-to-end AOT tests for PHP-compatible `parse_url()` parsing and component selection.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests parse_url` through the strings integration module.
+//! - `cargo test --test codegen_tests_data parse_url` through the strings integration module.
 //!
 //! Key details:
 //! - The array and component corpus is shared with Magician; URL bytes are hex-encoded to preserve control characters.

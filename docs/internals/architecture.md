@@ -295,8 +295,9 @@ iOS device and Simulator, and Linux.
 
 ```
 src/
-├── lib.rs                     Public module exports
-├── main.rs                    CLI binary entry point
+├── lib.rs                     Module tree: the compiler API, plus the crate-private CLI modules
+├── main.rs                    CLI binary entry point: calls `entry::run`, declares no modules
+├── entry.rs                   Top-level command dispatch (compile, repl, native, monitor, test)
 ├── cli.rs                     Command-line option parsing
 ├── repl/                      Interactive `elephc repl` session: parsing, cached native host, and history
 ├── pipeline.rs                Frontend/backend compilation pipeline

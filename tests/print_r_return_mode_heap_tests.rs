@@ -21,7 +21,7 @@
 //!   box owns its copy.
 //!
 //! Called from:
-//! - `cargo test --test print_r_return_mode_heap_tests` through Rust's test harness.
+//! - `cargo test --test integration print_r_return_mode_heap_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Harness style mirrors `tests/null_coalesce_merge_tests.rs`: the elephc CLI
@@ -101,6 +101,7 @@ fn compile_with_heap_debug(dir: &Path, source: &str, stem: &str) -> PathBuf {
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(&php);
     cmd.arg("--heap-debug");

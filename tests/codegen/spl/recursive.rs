@@ -3,7 +3,7 @@
 //! Covers recursive array storage, recursive filters, parent filtering, and traversal modes.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the SPL test module.
+//! - `cargo test --test codegen_tests_oop` through the SPL test module.
 //!
 //! Key details:
 //! - RecursiveArrayIterator children are built from runtime mixed array values.

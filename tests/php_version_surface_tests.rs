@@ -4,7 +4,7 @@
 //! `ini_restore()` — across `--php-version` profiles and in both CLI and `--web` mode.
 //!
 //! Called from:
-//! - `cargo test --test php_version_surface_tests` through Rust's test harness.
+//! - `cargo test --test integration php_version_surface_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - Tests invoke the elephc CLI (CARGO_BIN_EXE_elephc) as a subprocess in an isolated temp dir,
@@ -79,6 +79,7 @@ fn compile_raw(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> std::pro
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.args(flags).arg(&php);
     cmd.output().expect("failed to spawn elephc")

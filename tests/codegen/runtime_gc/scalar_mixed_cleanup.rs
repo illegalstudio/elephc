@@ -2,7 +2,7 @@
 //! Checks scalar Mixed release alongside aliases and potentially throwing cleanup.
 //!
 //! Called from:
-//! - Focused `codegen_tests` runtime ownership regression runs.
+//! - Focused `codegen_tests_runtime` runtime ownership regression runs.
 //!
 //! Key details:
 //! - Both optimizer modes must match PHP and finish with balanced heap ownership.

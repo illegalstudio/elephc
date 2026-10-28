@@ -3,7 +3,7 @@
 //! Exercises the JSON implementation through end-to-end PHP compilation and execution.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//! - `cargo test --test codegen_tests_ext` through the JSON codegen test module.
 //!
 //! Key details:
 //! - The validator must accept RFC 8259 input and reject malformed syntax without decoding.

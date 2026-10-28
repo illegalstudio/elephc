@@ -6,7 +6,7 @@
 //! diagnostics for empty runs and refused flags.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests testing_command` through Rust's test harness.
+//! - `cargo test --test codegen_tests_core testing_command` through Rust's test harness.
 //!
 //! Key details:
 //! - Every test builds its own project directory and runs the CLI from inside it, with the

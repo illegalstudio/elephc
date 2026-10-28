@@ -3230,7 +3230,7 @@ fn test_concatenation_evidence_does_not_survive_a_disqualifying_write() {
 /// that the checker really marked each one.
 #[test]
 fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
-    for source in crate::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
+    for source in super::locals_retype_fixtures::MIXED_STORAGE_FIXTURES.iter().copied() {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -3282,7 +3282,7 @@ fn test_every_lowering_fixture_takes_the_mixed_storage_path() {
 ///   entry here.
 #[test]
 fn test_every_lowering_fixture_takes_the_retype_path() {
-    for &source in crate::locals_retype_fixtures::RETYPE_FIXTURES {
+    for &source in super::locals_retype_fixtures::RETYPE_FIXTURES {
         let result = check_source_full(source)
             .unwrap_or_else(|error| panic!("fixture must type-check: {}\n{}", error.message, source));
         assert!(
@@ -3317,7 +3317,7 @@ fn test_every_lowering_fixture_takes_the_retype_path() {
 /// honest about still taking the boxed path.
 #[test]
 fn test_the_capture_only_lowering_fixture_is_marked_silently() {
-    let source = crate::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
+    let source = super::locals_retype_fixtures::SILENT_MIXED_CAPTURE;
     let result = check_source_full(source).expect("fixture must type-check");
     assert!(
         result.mixed_storage_local_names().contains("m"),

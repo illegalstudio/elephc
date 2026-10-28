@@ -4,7 +4,7 @@
 //! the `__rt_json_ftoa` runtime helper.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests` through the JSON codegen test module.
+//! - `cargo test --test codegen_tests_ext` through the JSON codegen test module.
 //!
 //! Key details:
 //! - Each expected string is the exact output of `php -r 'echo json_encode(x);'`

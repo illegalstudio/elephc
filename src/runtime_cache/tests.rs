@@ -250,6 +250,66 @@ use super::*;
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Verifies `ELEPHC_RUNTIME_CACHE_DIR` moves only the runtime objects: they are prepared in
+    /// that directory, which is hardened like the default one, and nothing is written under
+    /// the `XDG_CACHE_HOME` root the same compile would otherwise use.
+    #[cfg(unix)]
+    #[test]
+    fn runtime_cache_dir_override_moves_only_runtime_objects() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const TEST_NAME: &str = "runtime_cache_dir_override_moves_only_runtime_objects";
+        if std::env::var("ELEPHC_RUNTIME_CACHE_OVERRIDE_PROBE").as_deref() != Ok(TEST_NAME) {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "elephc-runtime-cache-override-{}-{unique}",
+                std::process::id()
+            ));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([TEST_NAME, "--nocapture", "--test-threads=1"])
+                .env("ELEPHC_RUNTIME_CACHE_OVERRIDE_PROBE", TEST_NAME)
+                .env("XDG_CACHE_HOME", root.join("xdg"))
+                .env("ELEPHC_RUNTIME_CACHE_DIR", root.join("shared-runtime"))
+                .output()
+                .expect("spawn isolated runtime-cache override probe");
+            let _ = fs::remove_dir_all(&root);
+            assert!(
+                output.status.success(),
+                "isolated runtime-cache override probe failed:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        let shared = std::path::PathBuf::from(
+            std::env::var_os("ELEPHC_RUNTIME_CACHE_DIR").expect("probe sets the override"),
+        );
+        let xdg = std::path::PathBuf::from(
+            std::env::var_os("XDG_CACHE_HOME").expect("probe sets the cache root"),
+        );
+        let prepared = prepare_runtime_object(
+            8 * 1024 * 1024,
+            Target::detect_host(),
+            RuntimeFeatures::none(),
+            false,
+        )
+        .expect("prepare runtime in the overridden cache");
+        assert_eq!(
+            prepared.path.parent(),
+            Some(shared.as_path()),
+            "the runtime object must be prepared in ELEPHC_RUNTIME_CACHE_DIR"
+        );
+        let mode = fs::metadata(&shared).expect("stat overridden cache").permissions().mode();
+        assert_eq!(mode & 0o077, 0, "the overridden cache must be owner-only");
+        assert!(
+            !xdg.join("elephc").exists(),
+            "nothing may be written under XDG_CACHE_HOME/elephc"
+        );
+    }
+
     /// Guards the warm-cache architecture: lookup and integrity metadata must
     /// be resolved before the expensive full runtime generator is invoked.
     #[test]

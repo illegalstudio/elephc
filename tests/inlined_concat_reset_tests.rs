@@ -30,7 +30,7 @@
 //! the comparison alone.
 //!
 //! Called from:
-//! - `cargo test --test inlined_concat_reset_tests` through Rust's test harness.
+//! - `cargo test --test integration inlined_concat_reset_tests::` through Rust's test harness.
 //!
 //! Key details:
 //! - The callee must be small enough to be selected for inlining; `plain()` returning a
@@ -76,6 +76,7 @@ fn compile_and_run(dir: &Path, stem: &str, source: &str, flags: &[&str]) -> Stri
 
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    cmd.env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"));
     cmd.current_dir(dir);
     cmd.arg(&php);
     for flag in flags {
@@ -259,6 +260,7 @@ echo churn(2000000), "\nEND\n";
     fs::write(&php, CARRIER).unwrap();
     let out = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(&php)
         .arg("--emit-asm")
@@ -295,6 +297,7 @@ printf("B:%s|%s\n", "'$v'", var_export(plain(), true));
 
     let out = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache-root"))
+        .env("ELEPHC_RUNTIME_CACHE_DIR", concat!(env!("CARGO_TARGET_TMPDIR"), "/elephc-runtime-cache"))
         .current_dir(&dir)
         .arg(&php)
         .arg("--emit-asm")

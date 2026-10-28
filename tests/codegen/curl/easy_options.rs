@@ -4,7 +4,7 @@
 //! that is "accepted" is also PROVED to have changed the transfer.
 //!
 //! Called from:
-//! - `cargo test --test codegen_tests curl` through Rust's test harness.
+//! - `cargo test --test codegen_tests_ext curl` through Rust's test harness.
 //!
 //! Key details:
 //! - ACCEPTANCE IS NOT THE ASSERTION. `curl_setopt()` returning `true` only says libcurl

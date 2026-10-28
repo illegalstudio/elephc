@@ -2,7 +2,7 @@
 //! Checks ownership of fresh JSON containers, child cells, and source pins.
 //!
 //! Called from:
-//! - Focused `codegen_tests` runtime GC integration tests.
+//! - Focused `codegen_tests_runtime` runtime GC integration tests.
 //!
 //! Key details:
 //! - Every fixture requires a balanced heap with IR optimization enabled and disabled.
