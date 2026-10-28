@@ -7,6 +7,7 @@
 //! Key details:
 //! - Native node ids are compared only while their weak PHP wrappers remain alive.
 //! - Geometric sweeps bound stale weak entries with amortized linear cleanup.
+//! - A DOMDocument parameter lets EIR update the declared cache property directly.
 
 /// Looks up and remembers native-backed nodes in each document's weak wrapper cache.
 pub(super) const SRC: &str = r###"
@@ -20,7 +21,10 @@ function __elephc_dom_cached_node(mixed $document, int $identity): ?DOMNode {
     return null;
 }
 function __elephc_dom_remember_node(mixed $document, int $identity, DOMNode $node): void {
-    if (!($document instanceof DOMDocument) || $identity === 0) { return; }
+    if ($identity === 0) { return; }
+    if ($document instanceof DOMDocument) { __elephc_dom_remember_in($document, $identity, $node); }
+}
+function __elephc_dom_remember_in(DOMDocument $document, int $identity, DOMNode $node): void {
     $document->__elephc_dom_nodes[$identity] = WeakReference::create($node);
     if (count($document->__elephc_dom_nodes) < $document->__elephc_dom_sweep) { return; }
     $live = [];

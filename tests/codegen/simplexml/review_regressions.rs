@@ -570,6 +570,10 @@ if ($cacheXml instanceof SimpleXMLElement && $cacheRoot instanceof DOMElement) {
         $cacheRetained[] = $cacheXml->a[0];
         $cacheNode = $cacheRoot->childNodes->item(0);
         if ($cacheNode instanceof DOMNode) {
+            if ($cacheNode !== $cacheRoot->childNodes->item(0)) { $cacheReleased = false; }
+            if (property_exists($cacheDocument, '__elephc_dom_nodes')) {
+                if (count($cacheDocument->__elephc_dom_nodes) === 0) { $cacheReleased = false; }
+            }
             $cacheWeak = WeakReference::create($cacheNode);
             unset($cacheNode);
             if ($cacheWeak->get() !== null) { $cacheReleased = false; }

@@ -255,6 +255,14 @@ echo $doc->saveXML();
     ].concat();
     let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());
+    let cache = module.functions.iter().find(|function| function.name == "__elephc_dom_remember_in")
+        .expect("DOM cache writes must use a DOMDocument-typed helper");
+    assert!(cache.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::PropGetForWrite),
+        "{target}: cache insertion must target the document's attached array property");
+    assert!(!cache.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::RuntimeCall
+        && matches!(instruction.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings.get(id.as_raw() as usize).is_some_and(|name| name == "__elephc_dom_nodes"))),
+        "{target}: cache insertion must not use the stdClass-only mixed property fallback");
     let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
         .expect("mixed arithmetic fixture must remain reachable");
     for class in ["SimpleXMLElement", "BcMath\\Number"] {
