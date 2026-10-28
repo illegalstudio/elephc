@@ -343,14 +343,16 @@ fn test_computed_statement_capture_scope_does_not_escape_to_expressions() {
 #[test]
 fn test_computed_assignment_logic_does_not_leave_scoped_captures() {
     for operator in ["or", "and", "xor"] {
-        for assignment in ["+=", "??="] {
-            let source = format!("<?php $root->rows[k()]->value {assignment} 1 {operator} f();");
-            let statements = parse_source(&source);
-            let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected logic expression"); };
-            let ExprKind::BinaryOp { left, .. } = &expression.kind else { panic!("expected wrapping logic"); };
-            let ExprKind::Assignment { prelude, .. } = &left.kind else { panic!("expected nested assignment"); };
-            assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
-                if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))), "{source}");
+        for target in ["$root->rows[k()]->value", "f()->rows[k()]", "$this->registry()->hits[k()]"] {
+            for assignment in ["+=", ".=", "??="] {
+                let source = format!("<?php {target} {assignment} 1 {operator} f();");
+                let statements = parse_source(&source);
+                let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected logic expression"); };
+                let ExprKind::BinaryOp { left, .. } = &expression.kind else { panic!("expected wrapping logic"); };
+                let ExprKind::Assignment { prelude, .. } = &left.kind else { panic!("expected nested assignment"); };
+                assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+                    if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))), "{source}");
+            }
         }
     }
 }

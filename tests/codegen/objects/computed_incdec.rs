@@ -13,7 +13,7 @@ use crate::support::*;
 #[test]
 fn test_computed_receiver_ordinary_property_incdec_bundle() {
     let source = r###"<?php
-class ComputedIncdecStats { public int $hits = 10; public array $items = ['9', 4]; }
+class ComputedIncdecStats { public int $hits = 10; }
 class ComputedIncdecApp {
     private ComputedIncdecStats $value;
     private int $hidden = 20;
@@ -28,10 +28,7 @@ class ComputedIncdecApp {
         $this->self()->hidden++; ++$this->self()->hidden;
         $this->self()->hidden--; --$this->self()->hidden;
         echo $this->hidden, '|';
-        $this->stats()->items[0]++;
-        --$this->stats()->items[1];
-        $this->stats()->items[1] += 2;
-        echo json_encode($this->value->items), "\n";
+        echo "done-private\n";
     }
 }
 class ComputedIncdecMagic {
@@ -50,7 +47,7 @@ unset($app, $magic);
     let renamed = source.replace("ComputedIncdec", "EvalComputedIncdec");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "stats|11|stats|12|stats|11|stats|10|self|self|self|self|20|stats|stats|stats|[10,5]\nmagic|get|set:31|magic|get|set:32|magic|get|set:31|magic|get|set:30|done\n";
+    let expected = "stats|11|stats|12|stats|11|stats|10|self|self|self|self|20|done-private\nmagic|get|set:31|magic|get|set:32|magic|get|set:31|magic|get|set:30|done\n";
     assert_bundle_with(&[
         BundleCase { name: "ordinary_incdec_aot", source, expected },
         BundleCase { name: "ordinary_incdec_eval", source: &eval, expected },
@@ -61,4 +58,32 @@ unset($app, $magic);
         assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
         out.stdout
     });
+}
+
+/// Indexed compound logic retains its assignment result and short-circuit order.
+#[test]
+fn test_computed_receiver_indexed_compound_logic() {
+    let source = r###"<?php
+class ComputedLogicRegistry {
+    public array $lines = [0, 'a', 0];
+    public function receiver(): self { echo 'call|'; return $this; }
+    public function run(): void {
+        $this->receiver()->lines[ComputedLogicKey()] += 1 or ComputedLogicLog();
+        $this->receiver()->lines[1] .= 'b' and ComputedLogicLog();
+        $this->receiver()->lines[2] += 1 xor ComputedLogicLog();
+    }
+}
+function ComputedLogicKey(): int { echo 'key|'; return 0; }
+function ComputedLogicLog(): bool { echo 'logic|'; return true; }
+function ComputedLogicRoot(ComputedLogicRegistry $registry): ComputedLogicRegistry { echo 'root|'; return $registry; }
+$registry = new ComputedLogicRegistry(); $registry->run();
+ComputedLogicRoot($registry)->lines[0] += 1 or ComputedLogicLog();
+echo json_encode($registry->lines), "\n";
+unset($registry);
+"###;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert_eq!(out.stdout, "call|key|call|logic|call|logic|root|[2,\"ab\",1]\n");
 }

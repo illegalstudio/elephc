@@ -67,13 +67,15 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
+    let computed_indexed_update = !is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
+        && matches!(op, AssignmentOperator::Compound(_))
+        && computed_receiver_property_target(&lhs_expr);
+
     // Runtime-name writes need the expression lowerer's captured RHS and lazy ??= plan.
     // A handcrafted assignment without its result target evaluated the value twice.
     if !is_append && (matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. })
         || (op != AssignmentOperator::Assign && (computed_storage_property_target(&lhs_expr)
-            || (computed_receiver_property_target(&lhs_expr)
-                && !(matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
-                    && matches!(op, AssignmentOperator::Compound(_))))))) {
+            || (computed_receiver_property_target(&lhs_expr) && !computed_indexed_update)))) {
         let value = if matches!(lhs_expr.kind, ExprKind::DynamicPropertyAccess { .. }) {
             parse_expr(tokens, pos)?
         } else {
@@ -91,11 +93,16 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
 
     *pos = assign_pos + 1;
     let rhs = parse_assignment_value_expr(tokens, pos)?;
-    expect_semicolon(tokens, pos)?;
-    if !is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
-        && matches!(op, AssignmentOperator::Compound(_))
-        && computed_receiver_property_target(&lhs_expr)
+    if computed_indexed_update && matches!(tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::And | Token::Or | Token::Xor))
     {
+        *pos = start;
+        let expression = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return Ok(Some(Stmt::new(StmtKind::ExprStmt(expression), span)));
+    }
+    expect_semicolon(tokens, pos)?;
+    if computed_indexed_update {
         return lower_computed_property_element_update(lhs_expr, op, rhs, span).map(Some);
     }
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {

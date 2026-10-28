@@ -51,15 +51,18 @@ pub(super) fn ordinary(
     retire_property_write_roots(ctx, roots, span);
 }
 
-/// Keeps the selected value and the stepped result in one unwind-visible local slot.
+/// Preserves float arithmetic and keeps heap-bearing updates in an unwind-visible local slot.
 fn step(
     ctx: &mut LoweringContext<'_, '_>, selected: LoweredValue, increment: bool, span: Span,
     finish: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
 ) {
-    let name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let selected_type = ctx.builder.value_php_type(selected.value);
+    let temp_type = if selected_type.codegen_repr() == PhpType::Float { PhpType::Float } else { PhpType::Mixed };
+    let rooted = Ownership::php_type_needs_lifetime_tracking(&temp_type);
+    let name = ctx.declare_owned_hidden_temp(temp_type.clone());
     let slot = ctx.local_slots[&name];
-    crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span);
-    crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Mixed, selected, span);
+    if rooted { crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span); }
+    crate::ir_lower::expr::store_value_into_temp(ctx, &name, temp_type, selected, span);
     let expression = Expr::new(if increment { ExprKind::PreIncrement(name) } else { ExprKind::PreDecrement(name) }, span);
     let result = lower_expr(ctx, &expression);
     let ty = ctx.builder.value_php_type(result.value);
@@ -67,5 +70,7 @@ fn step(
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
     finish(ctx, borrowed);
-    crate::ir_lower::expr::retire_owned_call_operand(ctx, slot, span);
+    if rooted { crate::ir_lower::expr::unregister_owned_call_operand(ctx, slot, span); }
+    ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(), Some(span));
 }

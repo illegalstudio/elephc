@@ -320,17 +320,27 @@ $doc->children()[0]->mark[0]++;
 echo $doc->asXML();
 class XmlIndexedIncdecOrdinary {
     public array $values = ['9', 4];
+    public $weights = [1.5, 2.5];
+    private $totals = [0.0, 0.0];
+    public function stepFloats(): void {
+        $this->weights[0]++; --$this->weights[1];
+        ++$this->totals[0]; $this->totals[1]--;
+        echo json_encode($this->weights), ':', json_encode($this->totals), "\n";
+    }
     public function receiver(): mixed { echo 'ordinary|'; return $this; }
 }
 $ordinary = new XmlIndexedIncdecOrdinary();
 $ordinary->receiver()->values[0]++;
 --$ordinary->receiver()->values[1];
 echo json_encode($ordinary->values), "\n";
+$ordinary->stepFloats();
+$ordinary->weights[0]++; --$ordinary->weights[1];
+echo json_encode($ordinary->weights), "\n";
 unset($doc, $ordinary);
 "###;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
-    assert_eq!(out.stdout, "<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r><a><mark>7</mark><mark>A</mark></a></r>\nordinary|ordinary|[10,3]\n");
+    assert_eq!(out.stdout, "<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r><a><mark>7</mark><mark>A</mark></a></r>\nordinary|ordinary|[10,3]\n[2.5,1.5]:[1,-1]\n[3.5,0.5]\n");
 }
