@@ -57,6 +57,19 @@ class BoundaryXmlStaticBase {
 class BoundaryXmlStaticChild extends BoundaryXmlStaticBase {
     public static SimpleXMLElement $node;
 }
+function staticStateProbeBoundaryXml(SimpleXMLElement $root): void {
+    $missing = $root->missing->child;
+    $state = 0;
+    try { $state = 1; BoundaryXmlBox::$staticNode = $missing; $state = 2; }
+    catch (TypeError $error) { echo $state, ':'; reportBoundaryXml($error); }
+}
+function reflectionStateProbeBoundaryXml(SimpleXMLElement $root): void {
+    $property = new ReflectionProperty(BoundaryXmlBox::class, 'staticNode');
+    $missing = $root->missing->child;
+    $state = 0;
+    try { $state = 1; $property->setValue(null, $missing); $state = 2; }
+    catch (TypeError $error) { echo $state, ':'; reportBoundaryXml($error); }
+}
 class BoundaryXmlMethods {
     public function accept(SimpleXMLElement $node): void { echo 'method|'; }
     public static function acceptStatic(SimpleXMLElement $node): void { echo 'static|'; }
@@ -106,6 +119,8 @@ echo BoundaryXmlBox::$staticNode->getName(), "\n";
 BoundaryXmlStaticChild::$node = $root->present;
 try { BoundaryXmlStaticChild::store($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 echo BoundaryXmlStaticChild::$node->getName(), "\n";
+staticStateProbeBoundaryXml($root);
+reflectionStateProbeBoundaryXml($root);
 try { new BoundaryXmlConstructor($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $methods = new BoundaryXmlMethods();
 try { $methods->accept($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }

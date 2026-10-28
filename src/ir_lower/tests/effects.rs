@@ -28,6 +28,27 @@ guardXmlProbe(new SimpleXMLElement('<r/>'));
     assert!(named_call(probe, &module, "guardedXmlGenerator").effects.contains(Effects::MAY_THROW));
 }
 
+/// Both direct and visibility-bypassing static stores retain their catchable refusal effects.
+#[test]
+fn native_static_stores_keep_throw_effects() {
+    let module = lower_source(r#"<?php
+class XmlEffectBox { public static SimpleXMLElement $node; }
+function directXmlStore(SimpleXMLElement $root): void { XmlEffectBox::$node = $root->missing->child; }
+function reflectedXmlStore(SimpleXMLElement $root): void {
+    $property = new ReflectionProperty(XmlEffectBox::class, 'node');
+    $property->setValue(null, $root->missing->child);
+}
+$root = new SimpleXMLElement('<r/>');
+try { directXmlStore($root); } catch (TypeError $error) {}
+try { reflectedXmlStore($root); } catch (TypeError $error) {}
+"#);
+    for (name, op) in [("directXmlStore", Op::StoreStaticProperty), ("reflectedXmlStore", Op::StoreReflectionStaticProperty)] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let store = function.instructions.iter().find(|instruction| instruction.op == op).unwrap();
+        assert!(store.effects.contains(Effects::MAY_THROW | Effects::WRITES_GLOBAL));
+    }
+}
+
 /// Static calls use the inherited implementation's summary and keep visible side effects.
 #[test]
 fn static_calls_receive_inherited_effect_summaries() {

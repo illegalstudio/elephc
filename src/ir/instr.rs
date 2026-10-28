@@ -1377,10 +1377,10 @@ impl Op {
             // late-static visibility fatal before exposing the writable symbol slot.
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
+            // Declared slots can reject a value with a catchable TypeError before the write.
+            StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::MAY_THROW,
             StoreGlobal
             | StoreStaticLocal
-            | StoreStaticProperty
-            | StoreReflectionStaticProperty
             | InitStaticLocal
             | IncludeOnceMark
             | FunctionVariantMark
