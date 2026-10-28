@@ -64,10 +64,10 @@ fn test_simplexml_production_cli_prelude_typechecks() {
 fn test_simplexml_dom_loader_after_list_rebinding() {
     if skip_without_xml_native("test_simplexml_dom_loader_after_list_rebinding") { return; }
     let out = compile_and_run(r#"<?php
-class Config { public function loadXML(string $source): bool { return false; } }
+class Config { public function loadXML(string $source, int $options = 0): bool { return false; } }
 $doc = new Config();
 [$doc] = [new DOMDocument()];
-var_dump($doc->loadXML('<r/>'));
+var_dump($doc->loadXML('<r/>', 0));
 "#);
     assert_eq!(out, "bool(true)\n");
 }
@@ -77,10 +77,10 @@ var_dump($doc->loadXML('<r/>'));
 fn test_simplexml_dom_loader_after_foreach_list_rebinding() {
     if skip_without_xml_native("test_simplexml_dom_loader_after_foreach_list_rebinding") { return; }
     let out = compile_and_run(r#"<?php
-class Config { public function loadXML(string $source): bool { return false; } }
+class Config { public function loadXML(string $source, int $options = 0): bool { return false; } }
 $doc = new Config();
 foreach ([[new DOMDocument()]] as [$doc]) {}
-var_dump($doc->loadXML('<r/>'));
+var_dump($doc->loadXML('<r/>', 0));
 "#);
     assert_eq!(out, "bool(true)\n");
 }
@@ -90,13 +90,13 @@ var_dump($doc->loadXML('<r/>'));
 fn test_simplexml_dom_loader_after_static_rebinding() {
     if skip_without_xml_native("test_simplexml_dom_loader_after_static_rebinding") { return; }
     let out = compile_and_run(r#"<?php
-class Config { public function loadXML(string $source): bool { return false; } }
+class Config { public function loadXML(string $source, int $options = 0): bool { return false; } }
 function loadStaticDocument(bool $seed): void {
     $doc = new Config();
     $alias =& $doc;
     static $doc = null;
     $alias = new Config();
-    if (!$seed) { var_dump($doc->loadXML('<r/>')); }
+    if (!$seed) { var_dump($doc->loadXML('<r/>', 0)); }
     $doc = new DOMDocument();
 }
 loadStaticDocument(true);
@@ -111,9 +111,9 @@ fn test_simplexml_dom_loader_from_rebound_method_closures() {
     if skip_without_xml_native("test_simplexml_dom_loader_from_rebound_method_closures") { return; }
     let out = compile_and_run(r#"<?php
 class Config {
-    public function loadXML(string $source): bool { return false; }
-    public function loader(): Closure { return function (string $source): bool { return $this->loadXML($source); }; }
-    public function arrow(): Closure { return fn (string $source): bool => $this->loadXML($source); }
+    public function loadXML(string $source, int $options = 0): bool { return false; }
+    public function loader(): Closure { return function (string $source): bool { return $this->loadXML($source, 0); }; }
+    public function arrow(): Closure { return fn (string $source): bool => $this->loadXML($source, 0); }
 }
 $document = new DOMDocument();
 var_dump((new Config())->loader()->bindTo($document)('<r/>'));
