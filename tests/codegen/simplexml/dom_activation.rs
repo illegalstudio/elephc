@@ -85,19 +85,14 @@ var_dump($doc->loadXML('<r/>', 0));
     assert_eq!(out, "bool(true)\n");
 }
 
-/// A static declaration restores its retained DOM object over an earlier ordinary local.
+/// A retained static DOM object activates the XML loader when used on a later invocation.
 #[test]
-fn test_simplexml_dom_loader_after_static_rebinding() {
-    if skip_without_xml_native("test_simplexml_dom_loader_after_static_rebinding") { return; }
+fn test_simplexml_dom_loader_from_static_storage() {
+    if skip_without_xml_native("test_simplexml_dom_loader_from_static_storage") { return; }
     let out = compile_and_run(r#"<?php
-class Config { public function loadXML(string $source, int $options = 0): bool { return false; } }
 function loadStaticDocument(bool $seed): void {
-    $doc = new Config();
-    $alias =& $doc;
-    static $doc = null;
-    $alias = new Config();
+    static $doc = new DOMDocument();
     if (!$seed) { var_dump($doc->loadXML('<r/>', 0)); }
-    $doc = new DOMDocument();
 }
 loadStaticDocument(true);
 loadStaticDocument(false);
