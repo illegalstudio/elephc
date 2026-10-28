@@ -2,7 +2,7 @@
 //! Checks UTF-7 code units, malformed shifts, scalar encoders, and streaming byte-budget cuts.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test utf7`.
+//! - `cargo test -p elephc-mbstring --test engine utf7::`.
 //!
 //! Key details:
 //! - Every BMP code unit is tested with and without a terminator, including surrogates.
