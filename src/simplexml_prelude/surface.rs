@@ -545,12 +545,12 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     private function __elephc_namespaces(bool $declared, bool $recursive, bool $root): array {
         $handle = $this->__elephc_handle;
-        $length = (int)elephc_xml_sx_namespace($handle, (int)$declared, (int)$recursive, (int)$root, -1, 0);
+        $packed = elephc_xml_sx_namespace($handle, (int)$declared, (int)$recursive, (int)$root, -2, 0);
+        $parts = explode("\0", (string)hex2bin($packed));
+        $length = count($parts);
         $namespaces = [];
-        for ($i = 0; $i < $length; $i++) {
-            $prefix = elephc_xml_sx_namespace($handle, (int)$declared, (int)$recursive, (int)$root, $i, 0);
-            $uri = elephc_xml_sx_namespace($handle, (int)$declared, (int)$recursive, (int)$root, $i, 1);
-            $namespaces[$prefix] = $uri;
+        for ($i = 0; $i + 1 < $length; $i += 2) {
+            $namespaces[$parts[$i]] = $parts[$i + 1];
         }
         return $namespaces;
     }

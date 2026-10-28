@@ -39,3 +39,41 @@ fn simplexml_namespace_filters_keep_byte_exact_uris() {
     assert_eq!(selected.first(), Some(child));
     assert_eq!(root.namespaces(true, true, true), vec![(b"p".to_vec(), b"urn:\xe9".to_vec())]);
 }
+
+/// Copies and decodes the packed namespace result before another ABI string call replaces it.
+fn namespace_snapshot_bytes(handle: i64, declared: bool, recursive: bool, root: bool) -> Vec<u8> {
+    let hex = unsafe { bytes(abi::elephc_xml_sx_namespace(handle, i64::from(declared),
+        i64::from(recursive), i64::from(root), -2, 0)) };
+    assert_eq!(hex.len() % 2, 0, "namespace snapshot must contain complete hex bytes");
+    hex.chunks_exact(2).map(|pair| u8::from_str_radix(
+        std::str::from_utf8(pair).expect("ASCII namespace hex"), 16,
+    ).expect("valid namespace hex")).collect()
+}
+
+/// Packed namespace queries keep empty declarations, first-prefix order and owned byte snapshots.
+#[test]
+fn simplexml_namespace_snapshots_preserve_order_bytes_and_live_mutations() {
+    let empty = cstring("");
+    let source = cstring("<r xmlns='' xmlns:p='urn:first'><p:a/><c xmlns:p='urn:second'><p:b/></c></r>");
+    let root = unsafe { abi::elephc_xml_sx_load(source.as_ptr(), source.as_bytes().len() as i64,
+        0, empty.as_ptr(), 0, empty.as_ptr()) };
+    assert!(root > 0);
+    assert_eq!(namespace_snapshot_bytes(root, true, true, true).as_slice(), b"\0\0p\0urn:first\0");
+    assert!(namespace_snapshot_bytes(root, false, false, false).is_empty());
+    let before = namespace_snapshot_bytes(root, false, true, false);
+    assert_eq!(before.as_slice(), b"p\0urn:first\0");
+
+    let name = cstring("q:new");
+    let uri = cstring(b"urn:\xe9");
+    let child = unsafe { abi::elephc_xml_sx_mutate(root, 20, name.as_ptr(), empty.as_ptr(), uri.as_ptr(), 2, 0) };
+    assert!(child > 0);
+    assert_eq!(namespace_snapshot_bytes(root, false, true, false).as_slice(), b"p\0urn:first\0q\0urn:\xe9\0");
+    assert_eq!(namespace_snapshot_bytes(root, true, true, true).as_slice(), b"\0\0p\0urn:first\0q\0urn:\xe9\0");
+    assert_eq!(unsafe { bytes(abi::elephc_xml_sx_namespace(root, 1, 1, 1, -1, 0)) }.as_slice(), b"3");
+    assert_eq!(unsafe { bytes(abi::elephc_xml_sx_namespace(root, 1, 1, 1, 1, 1)) }.as_slice(), b"urn:first");
+    abi::elephc_xml_sx_free(child);
+    abi::elephc_xml_sx_free(root);
+    assert_eq!(before.as_slice(), b"p\0urn:first\0");
+    assert!(namespace_snapshot_bytes(root, true, true, true).is_empty());
+    assert!(namespace_snapshot_bytes(0, true, true, true).is_empty());
+}

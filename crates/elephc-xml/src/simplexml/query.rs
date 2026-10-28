@@ -8,6 +8,7 @@
 //! - XPath nodes remain document-owned; temporary XPath objects are always released.
 
 use super::*;
+use std::collections::HashSet;
 
 /// Distinguishes invalid XPath from a scalar result that requires PHP's typed warning.
 #[derive(Debug, Eq, PartialEq)]
@@ -56,25 +57,26 @@ impl View {
             else { self.first() };
         let Some(start) = start else { return vec![]; };
         let mut entries = Vec::new();
+        let mut seen = HashSet::new();
         let mut pending = vec![start];
         while let Some(node) = pending.pop() {
             unsafe {
                 if !declared && ffi::node_type(node) == 2 {
-                    insert_namespace(&mut entries, bytes(ffi::ns(node, 1)), bytes(ffi::ns(node, 0)), false);
+                    insert_namespace(&mut entries, &mut seen, bytes(ffi::ns(node, 1)), bytes(ffi::ns(node, 0)), false);
                     continue;
                 }
                 if ffi::node_type(node) != 1 { continue; }
                 if declared {
                     let mut ns = ffi::ns_defs(node);
                     while !ns.is_null() {
-                        insert_namespace(&mut entries, bytes(ffi::ns_value(ns, 1)), bytes(ffi::ns_value(ns, 0)), true);
+                        insert_namespace(&mut entries, &mut seen, bytes(ffi::ns_value(ns, 1)), bytes(ffi::ns_value(ns, 0)), true);
                         ns = ffi::ns_next(ns);
                     }
                 } else {
-                    insert_namespace(&mut entries, bytes(ffi::ns(node, 1)), bytes(ffi::ns(node, 0)), false);
+                    insert_namespace(&mut entries, &mut seen, bytes(ffi::ns(node, 1)), bytes(ffi::ns(node, 0)), false);
                     let mut attr = ffi::attrs(node);
                     while !attr.is_null() {
-                        insert_namespace(&mut entries, bytes(ffi::ns(attr, 1)), bytes(ffi::ns(attr, 0)), false);
+                        insert_namespace(&mut entries, &mut seen, bytes(ffi::ns(attr, 1)), bytes(ffi::ns(attr, 0)), false);
                         attr = ffi::next(attr);
                     }
                 }
@@ -91,6 +93,7 @@ impl View {
 }
 
 /// Preserves the first binding, including empty declarations but omitting unused no-namespace markers.
-fn insert_namespace(entries: &mut Vec<(Vec<u8>, Vec<u8>)>, prefix: Vec<u8>, uri: Vec<u8>, declared: bool) {
-    if (declared || !uri.is_empty()) && !entries.iter().any(|(name, _)| *name == prefix) { entries.push((prefix, uri)); }
+fn insert_namespace(entries: &mut Vec<(Vec<u8>, Vec<u8>)>, seen: &mut HashSet<Vec<u8>>,
+    prefix: Vec<u8>, uri: Vec<u8>, declared: bool) {
+    if (declared || !uri.is_empty()) && seen.insert(prefix.clone()) { entries.push((prefix, uri)); }
 }

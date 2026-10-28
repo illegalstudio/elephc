@@ -34,6 +34,13 @@ fn insert(value: View) -> i64 {
 fn output(value: impl AsRef<[u8]>) -> *const c_char {
     OUTPUT.with(|cell| { let mut out = cell.borrow_mut(); *out = cstring(value.as_ref()); out.as_ptr() })
 }
+/// Encodes arbitrary bytes for the NUL-terminated string boundary without changing their contents.
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(bytes.len().saturating_mul(2));
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes { hex.push(DIGITS[(byte >> 4) as usize] as char); hex.push(DIGITS[(byte & 15) as usize] as char); }
+    hex
+}
 /// Parses the full byte length, including embedded NULs, into a document-owned root.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_load(data: *const c_char, length: i64, options: i64, ns: *const c_char, prefix: i64, url: *const c_char) -> i64 {
@@ -342,10 +349,19 @@ pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_c
     }).unwrap_or(-1) })
 }
 /// Reads one namespace prefix/URI or the entry count (index -1), encoded as a C string.
+/// Index -2 returns one owned snapshot as hex-encoded NUL-separated prefix/URI pairs.
 #[no_mangle]
 pub extern "C" fn elephc_xml_sx_namespace(handle: i64, declared: i64, recursive: i64, root: i64, index: i64, field: i64) -> *const c_char {
     guard(|| output(view(handle).map(|v| {
         let entries = v.namespaces(declared != 0, recursive != 0, root != 0);
+        if index == -2 {
+            let mut packed = Vec::new();
+            for (prefix, uri) in entries {
+                packed.extend(prefix); packed.push(0);
+                packed.extend(uri); packed.push(0);
+            }
+            return encode_hex(&packed).into_bytes();
+        }
         if index < 0 { return entries.len().to_string().into_bytes(); }
         entries.get(index as usize).map(|(prefix, uri)| if field == 0 { prefix.clone() } else { uri.clone() }).unwrap_or_default()
     }).unwrap_or_default()))
@@ -382,9 +398,7 @@ pub extern "C" fn elephc_xml_sx_xml_hex(handle: i64, whole: i64) -> *const c_cha
         let raw = ffi::dump_bytes(v.doc.raw, node, mode, &mut length);
         if raw.is_null() { return String::new(); }
         let bytes = std::slice::from_raw_parts(raw.cast::<u8>(), length.max(0) as usize);
-        let mut hex = String::with_capacity(bytes.len().saturating_mul(2));
-        const DIGITS: &[u8; 16] = b"0123456789abcdef";
-        for byte in bytes { hex.push(DIGITS[(byte >> 4) as usize] as char); hex.push(DIGITS[(byte & 15) as usize] as char); }
+        let hex = encode_hex(bytes);
         ffi::string_free(raw.cast());
         hex
     })).unwrap_or_default()))

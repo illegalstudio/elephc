@@ -23,6 +23,7 @@ mod dom_activation;
 mod comparisons_and_files;
 mod stream_urls;
 mod projections;
+mod namespace_queries;
 mod debug;
 mod debug_owners;
 
