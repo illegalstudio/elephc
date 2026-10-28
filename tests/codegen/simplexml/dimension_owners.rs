@@ -253,6 +253,18 @@ catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
 echo $doc->asXML();
 try { XmlWriteTimingFresh()->children()[0]->mark = XmlWriteTimingBoom(); }
 catch (RuntimeException $error) { echo $error->getMessage(), "\n"; }
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark++;
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+++ $doc->children()[0]->mark;
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+$doc->children()[0]->mark--;
+echo $doc->asXML();
+$doc = new SimpleXMLElement('<r/>');
+-- $doc->children()[0]->mark;
+echo $doc->asXML();
 $ordinary = new XmlWriteTimingHolder();
 XmlWriteTimingOrdinary($ordinary)->receiver()->mark = XmlWriteTimingValue();
 echo $ordinary->mark, "\n";
@@ -261,7 +273,7 @@ unset($doc, $parent, $removed, $ordinary, $error);
     let renamed = source.replace("XmlWriteTiming", "EvalXmlWriteTiming");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<b><child/></b>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>27</mark></r>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nroot|key|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nfresh|rhs|rhs\nordinary|call|value|ok\n";
+    let expected = "rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<b><child/></b>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark>27</mark></r>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nroot|key|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nrhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\nfresh|rhs|rhs\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\n<?xml version=\"1.0\"?>\n<r/>\n<r><mark/></r>\nordinary|call|value|ok\n";
     assert_bundle_with(&[
         BundleCase { name: "computed_write_aot", source, expected },
         BundleCase { name: "computed_write_eval", source: &eval, expected },

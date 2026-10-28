@@ -112,7 +112,9 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         // afterwards. A child-property append must not retain the old static object chain.
         let target = hoisted.stabilize_array_base(lhs_expr);
         (target, hoisted.stabilize_unconditionally(rhs))
-    } else if op == AssignmentOperator::Assign && (computed_storage_property_target(&lhs_expr)
+    } else if op == AssignmentOperator::Assign
+        && !(is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }))
+        && (computed_storage_property_target(&lhs_expr)
         || computed_receiver_property_target(&lhs_expr)) {
         // Settle computed roots, names and keys before the RHS, retaining writable traversal.
         hoisted.scoped = true;
@@ -868,7 +870,9 @@ pub(crate) fn lower_postfix_incdec_assignment(
     };
     let one = Expr::new(ExprKind::IntLiteral(1), span);
 
-    if computed_storage_property_target(&lhs_expr) {
+    if computed_storage_property_target(&lhs_expr)
+        || (matches!(lhs_expr.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. })
+            && computed_receiver_property_target(&lhs_expr)) {
         if let Some(expression) = crate::parser::expr::desugar_scoped_lvalue_incdec(
             lhs_expr.clone(), is_increment, false, span,
         ) {

@@ -273,6 +273,47 @@ fn test_call_rooted_property_updates_keep_delayed_traversal() {
             if matches!(&array.kind, ExprKind::Variable(root) if root == name))));
 }
 
+/// Nested appends retain their planner's root and key captures before either is referenced.
+#[test]
+fn test_call_rooted_nested_append_defines_its_root_and_key() {
+    let statements = parse_source("<?php make()->items[k()][] = rhs();");
+    let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected nested append"); };
+    let StmtKind::Assign { name: root, value } = &body[0].kind else { panic!("expected root capture"); };
+    assert!(matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "make"));
+    let StmtKind::Assign { name: key, value } = &body[1].kind else { panic!("expected key capture"); };
+    assert!(matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "k"));
+    let StmtKind::Assign { name: bucket, value } = &body[2].kind else { panic!("expected bucket capture"); };
+    assert!(matches!(&value.kind, ExprKind::ArrayAccess { array, index }
+        if matches!(&array.kind, ExprKind::PropertyAccess { object, property }
+            if property == "items" && matches!(&object.kind, ExprKind::Variable(name) if name == root))
+        && matches!(&index.kind, ExprKind::Variable(name) if name == key)));
+    assert!(matches!(&body[3].kind, StmtKind::ArrayPush { array, value }
+        if array == bucket && matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "rhs")));
+    assert!(matches!(&body[4].kind, StmtKind::PropertyArrayAssign { object, index, value, .. }
+        if matches!(&object.kind, ExprKind::Variable(name) if name == root)
+            && matches!(&index.kind, ExprKind::Variable(name) if name == key)
+            && matches!(&value.kind, ExprKind::Variable(name) if name == bucket)));
+}
+
+/// Statement incdec captures the call root while retaining native write-context traversal.
+#[test]
+fn test_call_rooted_property_incdec_keeps_delayed_traversal() {
+    for source in [
+        "<?php $doc->children()[0]->mark++;", "<?php $doc->children()[0]->mark--;",
+        "<?php ++$doc->children()[0]->mark;", "<?php --$doc->children()[0]->mark;",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected scoped incdec: {source}"); };
+        let ExprKind::Assignment { target, prelude, .. } = &expression.kind else { panic!("expected assignment: {source}"); };
+        let StmtKind::Assign { name, value } = &prelude[0].kind else { panic!("expected root capture: {source}"); };
+        assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX), "{source}");
+        assert!(matches!(value.kind, ExprKind::MethodCall { .. }), "{source}");
+        assert!(matches!(&target.kind, ExprKind::PropertyAccess { object, .. }
+            if matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+                if matches!(&array.kind, ExprKind::Variable(root) if root == name))), "{source}");
+    }
+}
+
 /// Computed element increments keep the PHP incdec kernel instead of numeric arithmetic.
 #[test]
 fn test_computed_property_element_increment_retains_php_incdec() {
