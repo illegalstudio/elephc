@@ -50,7 +50,7 @@ impl View {
         }
     }
     /// Adds an element or attribute under the first selected element.
-    #[cfg(test)]
+    #[cfg(all(test, elephc_xml_native))]
     pub(super) fn add(&self, name: &str, value: Option<&str>, namespace: Option<&str>, attribute: bool) -> Option<Node> {
         self.add_checked(name.as_bytes(), value.map(str::as_bytes), namespace.map(str::as_bytes), attribute).ok()
     }

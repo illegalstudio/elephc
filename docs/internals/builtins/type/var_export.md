@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/var_export_prelude.rs`:402](https://github.com/illegalstudio/elephc/blob/main/src/var_export_prelude.rs#L402) (`var_export`)
+- **Lowering**: [`src/var_export_prelude.rs`:406](https://github.com/illegalstudio/elephc/blob/main/src/var_export_prelude.rs#L406) (`var_export`)
 - **Function symbol**: `var_export()`
 
 

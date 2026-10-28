@@ -806,22 +806,36 @@ fn materialized_value_cleanup_covers_success_and_failure() {
     }
 }
 
-/// A failed compound-assignment RHS releases the prior property read and the receiver lease.
+/// A failed compound RHS releases computed receivers without fetching property storage.
 #[test]
 fn failed_compound_property_rhs_releases_prior_operands() {
-    let mut values = FakeOps::default();
-    let mut context = ElephcEvalContext::new();
-    let mut scope = ElephcEvalScope::new();
-    let cell = values.int(5).unwrap();
-    let object = values.alloc(FakeValue::Object(vec![("n".into(), cell)]));
-    scope.set("box", object, ScopeCellOwnership::Owned);
-    let program = parse_fragment(b"$box->n += missing_compound_operand();").unwrap();
-    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-    assert_eq!(values.retains, vec![object]);
-    let operands = values.releases.iter().copied()
-        .filter(|released| *released == cell || *released == object).collect::<Vec<_>>();
-    assert_eq!(operands, vec![cell, object]);
-    assert_eq!(scope.visible_cell("box"), Some(object));
+    for computed in [false, true] {
+        for dynamic in [false, true] {
+            let mut values = FakeOps::default();
+            let mut context = ElephcEvalContext::new();
+            let mut scope = ElephcEvalScope::new();
+            let cell = values.int(5).unwrap();
+            let object = values.alloc(FakeValue::Object(vec![("n".into(), cell)]));
+            scope.set("box", object, ScopeCellOwnership::Owned);
+            let choose = values.int(1).unwrap();
+            scope.set("choose", choose, ScopeCellOwnership::Owned);
+            let receiver = if computed { "($choose ? $box : $box)" } else { "$box" };
+            let property = if dynamic { "{\"n\"}" } else { "n" };
+            let source = format!("{receiver}->{property} += missing_compound_operand();");
+            let program = parse_fragment(source.as_bytes()).unwrap();
+            assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+            assert_eq!(values.releases.iter().filter(|value| **value == cell).count(), 0);
+            assert_eq!(values.retains.iter().filter(|value| **value == object).count(), usize::from(computed));
+            assert_eq!(values.releases.iter().filter(|value| **value == object).count(), usize::from(computed));
+            assert_eq!(values.cell_owners[&(cell.as_ptr() as usize)], 1);
+            assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], 1);
+            let names = values.values.iter().filter(|(_, value)| matches!(value, FakeValue::String(name) if name == "n"))
+                .collect::<Vec<_>>();
+            assert_eq!(names.len(), usize::from(dynamic));
+            for (id, _) in names { assert_eq!(values.cell_owners[id], 0, "retire the staged name"); }
+            assert_eq!(scope.visible_cell("box"), Some(object));
+        }
+    }
 }
 
 /// A failed RHS retires its key and computed receiver without fetching property storage.

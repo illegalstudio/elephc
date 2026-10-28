@@ -73890,7 +73890,7 @@
       "checker_line": null,
       "codegen_file": "src/version_prelude.rs",
       "codegen_function": "ini_restore",
-      "codegen_line": 191,
+      "codegen_line": 56,
       "notes": [
         "Implemented by the compiler-injected version prelude."
       ],
@@ -143626,7 +143626,7 @@
       "checker_line": null,
       "codegen_file": "src/var_export_prelude.rs",
       "codegen_function": "var_export",
-      "codegen_line": 402,
+      "codegen_line": 406,
       "notes": [
         "Implemented by the compiler-injected var_export prelude."
       ],

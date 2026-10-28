@@ -32,7 +32,7 @@ pub(super) fn eval_inc_dec_value(
     }
 }
 
-/// Keeps the old property value alive through the RHS and balances every compound-assignment operand.
+/// Reads the property after the evaluated RHS and balances every compound-assignment operand.
 pub(super) fn eval_property_compound_assign_result(
     object: RuntimeCellHandle,
     property: &str,

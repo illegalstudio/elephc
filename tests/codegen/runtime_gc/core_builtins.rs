@@ -403,10 +403,21 @@ $box = new stdClass(); $box->n = 2;
 receiver($box)->{member()} += delta();
 echo ":", $box->n, "|";
 receiver($box)->{member()}++;
-echo ":", $box->n; return 42;' . ' // ' . $argc;
+echo ":", $box->n, "|";
+class FailedCompoundProperty {
+    public function __get($name) { echo "G"; return 5; }
+    public function __set($name, $value) { echo "S"; }
+}
+function failingDelta() { echo "F"; throw new Exception("stop"); }
+$failure = new FailedCompoundProperty();
+try { $failure->n += failingDelta(); } catch (Exception $error) { echo "!"; }
+try { $failure->{"n"} += failingDelta(); } catch (Exception $error) { echo "!"; }
+try { receiver($failure)->n += failingDelta(); } catch (Exception $error) { echo "!"; }
+try { receiver($failure)->{"n"} += failingDelta(); } catch (Exception $error) { echo "!"; }
+return 42;' . ' // ' . $argc;
 echo ":", eval($source);
 "#;
-    assert_eq!(compile_and_run(source), ":RNV:5|RN:642");
+    assert_eq!(compile_and_run(source), ":RNV:5|RN:6|F!F!RF!RF!42");
 }
 
 /// Indexed, appended, compound, and unset property writes release keys, clones, and read cells.
