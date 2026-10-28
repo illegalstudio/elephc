@@ -184,18 +184,15 @@ curl = ["elephc-magician/curl", "elephc-builtin-contract/curl"]
 # the six test binaries. `line-tables-only` keeps file:line in panic backtraces
 # (so test failures stay legible) while cutting the debug info the assembler and
 # linker chew through on every edit -> `cargo test` cycle.
-[profile.dev]
-debug = "line-tables-only"
-
 # The test suites compile and run thousands of PHP programs through the dev build, so the
 # compiler's own speed dominates test time. opt-level 1 cut CPU time per codegen test by about
 # 40% (control_flow: 52s -> 30s user; eval_undefined_functions: 82s -> 52s) for about 2s more
 # per incremental rebuild; a cold build takes longer. Optimizing only dependencies gained ~5%.
-# Only the compiler crate: the bridge libraries linked into compiled programs stay unoptimized,
-# because optimized ones crash some linux-x86_64 programs (eval SPL containers, fileinfo
-# stream wrappers) that pass unoptimized. For step-by-step debugging, build with
-# `cargo --config 'profile.dev.package.elephc.opt-level=0'`.
-[profile.dev.package.elephc]
+# The bridge libraries linked into compiled programs are optimized too: the eval interpreter
+# they carry is a large part of eval test time. For step-by-step debugging, build with
+# CARGO_PROFILE_DEV_OPT_LEVEL=0.
+[profile.dev]
+debug = "line-tables-only"
 opt-level = 1
 
 # build.rs runs before the crate compiles after every src/ edit: it hashes all of src/ into the
