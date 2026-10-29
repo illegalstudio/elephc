@@ -98,7 +98,7 @@ $rows = $scalarCases; $rows[0] = $foreignUnsetClosure;
 try { unset($rows[0][0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }
 $closureCases = $scalarCases;
-$closureCases[0] = $foreignUnsetClosure; $closureCases[1] = static fn(): int => 2;
+$closureCases[0] = $foreignUnsetClosure; $closureCases[1] = static function(): int { return 2; };
 for ($i = 0; $i < 2; $i++) {
     $closure = $closureCases[$i];
     $rows = $scalarCases; $rows[0] = $closure;
@@ -147,7 +147,7 @@ class EvalFinalUnsetAccess implements ArrayAccess {
     public function offsetSet(mixed $offset, mixed $value): void {}
     public function offsetUnset(mixed $offset): void { echo 'dynamic:', $offset, '|'; }
 }
-return [new EvalFinalUnsetAccess(), static fn(): int => 3];
+return [new EvalFinalUnsetAccess(), static function(): int { return 3; }];
 "#.replace('\\', "\\\\").replace('\'', "\\'");
     let dynamic = format!(r#"<?php
 $activate = new SimpleXMLElement('<activate/>'); unset($activate);

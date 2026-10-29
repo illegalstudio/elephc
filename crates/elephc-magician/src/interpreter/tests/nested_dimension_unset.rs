@@ -93,7 +93,7 @@ catch (Error $error) { echo $error->getMessage(), "\n"; }
 $plain = new stdClass();
 try { unset($plain[0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }
-$closure = static fn(): int => 1;
+$closure = static function(): int { return 1; };
 $rows = [$closure];
 try { unset($rows[0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }

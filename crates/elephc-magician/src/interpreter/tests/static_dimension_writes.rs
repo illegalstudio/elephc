@@ -81,6 +81,13 @@ fn static_array_value_aliases_survive_published_cell_replacement() {
         .unwrap();
     assert_ne!(first, second);
     assert_eq!(values.cell_owners[&(first.as_ptr() as usize)], 1);
+    // The live local $copy and the second static slot still share their old boxed cell.
+    assert_eq!(scope.entry("copy").unwrap().cell(), second);
+    assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 2);
+    let cleanup = parse_fragment(b"unset($copy);").unwrap();
+    let returned =
+        execute_program_with_context(&mut context, &cleanup, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
     assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 1);
 }
 
