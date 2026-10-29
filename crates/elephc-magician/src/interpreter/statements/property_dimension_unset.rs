@@ -10,7 +10,7 @@
 //! - Every captured owner is released in reverse order on success and failure.
 
 use super::*;
-use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver};
+use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver, finish_dimension_unset_receiver, require_unset_array_access};
 
 /// Captures nested keys before fetching live storage, preserving computed roots and quiet hops.
 pub(super) fn eval_nested_dimension_unset(
@@ -22,7 +22,7 @@ pub(super) fn eval_nested_dimension_unset(
         let receiver = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
         let index = eval_owned_expr(index, context, scope, values)?;
         owners.push(index);
-        let array = finish_property_unset_receiver(receiver, &mut owners, context, scope, values)?;
+        let array = finish_dimension_unset_receiver(receiver, &mut owners, context, scope, values)?;
         owners.push(array);
         if matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
             return eval_throw_error(
@@ -80,15 +80,8 @@ fn unset_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     match values.type_tag(array)? {
-        EVAL_TAG_OBJECT => {
-            if !eval_array_access_object_matches(array, context, values)? {
-                let identity = values.object_identity(array)?;
-                let class = match context.dynamic_object_class_name(identity) {
-                    Some(class) => class.to_string(),
-                    None => eval_runtime_object_class_name(array, values)?,
-                };
-                return eval_throw_error(&format!("Cannot use object of type {class} as array"), context, values);
-            }
+        EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE => {
+            require_unset_array_access(array, context, values)?;
             let result = match super::super::runtime_ops::simplexml_properties::dimension(
                 values, array, elephc_builtin_contract::ObjectDimension::Unset, vec![index.borrowed()],
             )? {

@@ -263,6 +263,8 @@ dimensions remain quiet. An array leaf requiring nested array writeback raises
 an explicit unsupported-storage `Error`.
 String and numeric intermediate containers throw PHP's offset errors; `false`
 emits its array-conversion deprecation and `null` remains quiet.
+The string-offset error distinguishes a following property from a following
+dimension. Non-indexable objects, including closures, raise a catchable `Error`.
 
 Supported binary operators are:
 

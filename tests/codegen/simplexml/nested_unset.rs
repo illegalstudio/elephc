@@ -80,16 +80,35 @@ try { unset($holder->field[0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }
 $rows = [$scalarCases[2]];
 unset($rows[0]->field[0]); echo "property-quiet\n";
-unset($scalarCases, $value, $rows, $holder, $error);
+$text = $scalarCases[0];
+try { unset($text[0]->field[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { unset($holder->field[0]->next[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$name = 'next';
+try { unset($holder->field[0]->{$name}[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$rows = $scalarCases;
+try { unset($rows[0][1]->next[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$plain = json_decode('{}');
+try { unset($plain[0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$rows = $scalarCases; $rows[0] = $foreignUnsetClosure;
+try { unset($rows[0][0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+unset($scalarCases, $value, $rows, $holder, $error, $text, $plain, $foreignUnsetClosure, $name);
 "#;
-    let activation = "<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); ";
+    let activation = "<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $foreignUnsetClosure = static fn(): int => 1; ";
     let scalar_aot = format!("{activation}{scalar_body}");
     let scalar_body = scalar_body.replace('\\', "\\\\").replace('\'', "\\'");
     let scalar_eval = format!("{activation}$source = $argc > 0 ? '{scalar_body}' : ''; eval($source); unset($source);");
     let string_error = "Cannot use string offset as an array";
     let scalar_error = "Cannot unset offset in a non-array variable";
+    let object_offset_error = "Cannot use string offset as an object";
     let scalar_expected = format!(
-        "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n");
+        "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n\
+         {object_offset_error}\n{object_offset_error}\n{object_offset_error}\n{object_offset_error}\nCannot use object of type stdClass as array\nCannot use object of type Closure as array\n");
     assert_bundle_with(&[
         BundleCase { name: "nested_unset_aot", source, expected },
         BundleCase { name: "nested_unset_eval", source: &eval, expected },

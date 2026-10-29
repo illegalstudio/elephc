@@ -62,7 +62,7 @@ pub(super) fn lower(
         .map(|name| ctx.local_slots[name]);
     if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, expr.span); }
     let (object, owner) = if let Some(staged) = staged_receiver {
-        let object = super::opaque_property_dimension::finish_receiver(ctx, &staged);
+        let object = super::opaque_property_dimension::finish_dimension_receiver(ctx, &staged);
         root_receiver(ctx, object, expr.span)
     } else { early_receiver.unwrap_or_else(|| capture_receiver(ctx, array, expr.span)) };
     let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, PhpType::Mixed,
@@ -186,8 +186,10 @@ pub(super) fn lower_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValu
 }
 
 /// Applies FETCH_DIM_UNSET diagnostics while traversing an intermediate scalar container.
-pub(super) fn lower_intermediate_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
-    lower_scalar_with_string_error(ctx, value, span, "Cannot use string offset as an array");
+pub(super) fn lower_intermediate_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span, as_object: bool) {
+    lower_scalar_with_string_error(ctx, value, span, if as_object {
+        "Cannot use string offset as an object"
+    } else { "Cannot use string offset as an array" });
 }
 
 /// Shares null and false handling while distinguishing intermediate and final string offsets.

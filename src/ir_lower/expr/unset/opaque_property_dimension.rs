@@ -162,29 +162,39 @@ pub(super) fn prepare_receiver(
 
 /// Resolves unset receiver properties with materialization but dimensions without creation.
 pub(super) fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredValue {
+    finish_receiver_in_context(ctx, source, true)
+}
+
+/// Resolves a receiver whose selected value will feed a dimension rather than a property.
+pub(super) fn finish_dimension_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredValue {
+    finish_receiver_in_context(ctx, source, false)
+}
+
+/// Threads the next fetch kind through recursion so string offsets use PHP's contextual Error.
+fn finish_receiver_in_context(ctx: &mut LoweringContext<'_, '_>, source: &Expr, as_object: bool) -> LoweredValue {
     match &source.kind {
         ExprKind::PropertyAccess { object, property } => {
-            let parent = finish_receiver(ctx, object);
+            let parent = finish_receiver_in_context(ctx, object, true);
             let name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(property.clone()), source.span));
             property_access::lower_dynamic_property_fetch_or_select(ctx, parent, name, PhpType::Mixed,
                 PropertyFetchMode::QuietRead, false, true, source)
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
-            let parent = finish_receiver(ctx, object);
+            let parent = finish_receiver_in_context(ctx, object, true);
             select_dynamic_property(ctx, parent, property, source)
         }
         ExprKind::ArrayAccess { array, index } => {
-            let parent = finish_receiver(ctx, array);
+            let parent = finish_receiver_in_context(ctx, array, false);
             let ty = ctx.builder.value_php_type(parent.value);
             if !property_access::may_have_native_xml_dimensions(ctx, &ty) {
-                return quiet_index(ctx, parent, index, source);
+                return quiet_index(ctx, parent, index, source, as_object);
             }
             property_access::native_xml_reads::dispatch(ctx, parent, source, PhpType::Mixed, false,
                 |ctx, parent| lower_method_call_with_receiver(ctx, parent, "__elephc_dimension_select", &[
                     index.as_ref().clone(), Expr::new(ExprKind::BoolLiteral(false), source.span),
                     Expr::new(ExprKind::BoolLiteral(false), source.span),
                 ], Op::MethodCall, source),
-                |ctx, parent| quiet_index(ctx, parent, index, source),
+                |ctx, parent| quiet_index(ctx, parent, index, source, as_object),
             )
         }
         _ => lower_expr(ctx, source),
@@ -193,10 +203,10 @@ pub(super) fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) 
 
 /// Keeps ordinary arrays and ArrayAccess receivers on their existing quiet read path.
 fn quiet_index(
-    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, index: &Expr, source: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, index: &Expr, source: &Expr, as_object: bool,
 ) -> LoweredValue {
     let pins = super::super::pin_in_flight_owners(ctx, &[parent.value], source.span);
-    guard_dimension_parent(ctx, parent, source.span);
+    guard_dimension_parent(ctx, parent, source.span, as_object);
     super::super::unpin_in_flight_owners(ctx, pins, source.span);
     let value = if value_is_nullable(ctx, parent.value) {
         lower_nullable_array_access(ctx, parent, index, source, false)
@@ -208,7 +218,19 @@ fn quiet_index(
 }
 
 /// Distinguishes quiet missing containers from scalar errors before an intermediate offset read.
-fn guard_dimension_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span) {
+fn guard_dimension_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span, as_object: bool) {
+    let closure_class = ctx.intern_class_name("Closure");
+    let closure = ctx.emit_value(Op::InstanceOf, vec![parent.value], Some(Immediate::Data(closure_class)),
+        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let closure_error = ctx.builder.create_named_block("unset.dimension.closure", Vec::new());
+    let ordinary = ctx.builder.create_named_block("unset.dimension.ordinary", Vec::new());
+    let closure_initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: closure.value,
+        then_target: closure_error, then_args: Vec::new(), else_target: ordinary, else_args: Vec::new() });
+    ctx.builder.position_at_end(closure_error);
+    crate::ir_lower::stmt::lower_throw_access_error(ctx, "Cannot use object of type Closure as array", span);
+    ctx.builder.position_at_end(ordinary);
+    ctx.restore_initialized_slots(closure_initial);
     let mut predicates = Vec::new();
     for predicate in [crate::ir::PhpTypePredicate::Array, crate::ir::PhpTypePredicate::Object] {
         predicates.push(ctx.emit_value(Op::TypePredicate, vec![parent.value],
@@ -223,7 +245,7 @@ fn guard_dimension_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValu
     ctx.builder.terminate(Terminator::CondBr { cond: container.value,
         then_target: done, then_args: Vec::new(), else_target: scalar, else_args: Vec::new() });
     ctx.builder.position_at_end(scalar);
-    mixed_dimension::lower_intermediate_scalar(ctx, parent, span);
+    mixed_dimension::lower_intermediate_scalar(ctx, parent, span, as_object);
     jump(ctx, done);
     let scalar_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(done);

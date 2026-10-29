@@ -79,7 +79,21 @@ $holder = new stdClass(); $holder->field = 'abc';
 try { unset($holder->field[0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }
 $rows = [5]; unset($rows[0]->field[0]); echo "property-quiet\n";
-unset($cases, $value, $rows, $holder, $error);
+$text = 'abc';
+try { unset($text[0]->field[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { unset($holder->field[0]->next[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$name = 'next';
+try { unset($holder->field[0]->{$name}[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$rows = ['abc'];
+try { unset($rows[0][1]->next[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$plain = new stdClass();
+try { unset($plain[0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+unset($cases, $value, $rows, $holder, $error, $text, $plain, $name);
 "#;
     let program = parse_fragment(source).unwrap();
     let mut values = FakeOps::default();
@@ -90,8 +104,10 @@ unset($cases, $value, $rows, $holder, $error);
     eval_release_value(&mut context, &mut values, result).unwrap();
     let string_error = "Cannot use string offset as an array";
     let scalar_error = "Cannot unset offset in a non-array variable";
+    let object_offset_error = "Cannot use string offset as an object";
     assert_eq!(values.output, format!(
-        "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n"));
+        "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n\
+         {object_offset_error}\n{object_offset_error}\n{object_offset_error}\n{object_offset_error}\nCannot use object of type stdClass as array\n"));
     assert_eq!(values.warnings,
         ["Deprecated: Automatic conversion of false to array is deprecated"]);
 }

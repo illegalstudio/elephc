@@ -494,6 +494,9 @@ order even when key evaluation or an unset handler throws.
 Dimension hops distinguish quiet nulls and deprecated false values from invalid
 scalar containers. The AOT unset traversal applies the same check before its quiet
 offset read, protecting a temporary parent across diagnostic callbacks and throws.
+Both traversals carry the next fetch kind to distinguish string offsets used as
+objects from those used as arrays. Eval validates object indexability before its
+read bridge, and compiled closure cells use the same catchable object-as-array Error.
 
 ## Runtime script cache
 
