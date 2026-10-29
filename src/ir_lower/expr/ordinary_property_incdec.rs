@@ -10,6 +10,7 @@
 //! - Native updates and non-canonical assignments stay on their original paths.
 
 use super::*;
+use super::array_cast_source::array_cast_source_type_for_ir;
 
 /// Finds canonical arithmetic whose old capture can prove that no overloaded owner is involved.
 pub(super) fn captured_arithmetic<'a>(
