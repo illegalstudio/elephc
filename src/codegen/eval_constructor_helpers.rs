@@ -1510,6 +1510,10 @@ fn emit_aarch64_cast_eval_array_arg(
     owner: ConstructorArgOwner,
 ) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) {
+        emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
+        return;
+    }
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
@@ -1674,6 +1678,10 @@ fn emit_x86_64_cast_eval_array_arg(
     owner: ConstructorArgOwner,
 ) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) {
+        emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
+        return;
+    }
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
     abi::emit_load_int_immediate(emitter, "r10", expected_tag);
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
@@ -2021,6 +2029,24 @@ mod argument_ownership_tests {
             }
         }
         emitter.output()
+    }
+
+    /// Layout-neutral Mixed arrays admit packed and hash payloads while typed arrays stay strict.
+    #[test]
+    fn mixed_array_constructor_arguments_accept_both_layouts_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            for (param, accepts_hash) in [
+                (PhpType::Array(Box::new(PhpType::Mixed)), true),
+                (PhpType::Array(Box::new(PhpType::Int)), false),
+                (PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Int) }, false),
+            ] {
+                let asm = constructor_argument_asm(target, param, false);
+                let range = if target.arch == Arch::AArch64 { "sub x0, x0, #4" } else { "sub rax, 4" };
+                assert_eq!(asm.contains(range), accepts_hash, "{name}: {asm}");
+                assert!(!asm.contains("__rt_incref"), "{name}: borrowed argument acquired an extra owner");
+            }
+        }
     }
 
     /// By-value refcounted constructor arguments stay borrowed on every target.

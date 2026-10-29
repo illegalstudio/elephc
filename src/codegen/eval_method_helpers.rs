@@ -2194,10 +2194,10 @@ fn emit_aarch64_cast_eval_arg(
             emit_aarch64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_aarch64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_aarch64_cast_eval_array_arg(emitter, 5, fail_label);
+            emit_aarch64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
         }
         PhpType::Iterable => {
             emit_aarch64_cast_eval_iterable_arg(module, emitter, label_prefix, fail_label);
@@ -2257,8 +2257,9 @@ fn emit_aarch64_cast_eval_object_arg(
 }
 
 /// Validates and unboxes one ARM64 array-typed eval argument for native method dispatch.
-fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, param_ty: &PhpType, expected_tag: i64, fail_label: &str) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) { return; }
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
@@ -2374,10 +2375,10 @@ fn emit_x86_64_cast_eval_arg(
             emit_x86_64_cast_eval_object_arg(module, emitter, data, &class_name, fail_label);
         }
         PhpType::Array(_) => {
-            emit_x86_64_cast_eval_array_arg(emitter, 4, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 4, fail_label);
         }
         PhpType::AssocArray { .. } => {
-            emit_x86_64_cast_eval_array_arg(emitter, 5, fail_label);
+            emit_x86_64_cast_eval_array_arg(emitter, param_ty, 5, fail_label);
         }
         PhpType::Iterable => {
             emit_x86_64_cast_eval_iterable_arg(module, emitter, label_prefix, fail_label);
@@ -2436,8 +2437,9 @@ fn emit_x86_64_cast_eval_object_arg(
 }
 
 /// Validates and unboxes one x86_64 array-typed eval argument for native method dispatch.
-fn emit_x86_64_cast_eval_array_arg(emitter: &mut Emitter, expected_tag: i64, fail_label: &str) {
+fn emit_x86_64_cast_eval_array_arg(emitter: &mut Emitter, param_ty: &PhpType, expected_tag: i64, fail_label: &str) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) { return; }
     emitter.instruction("call __rt_mixed_unbox");                               // expose the array payload for the native method call
     abi::emit_load_int_immediate(emitter, "r10", expected_tag);
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
@@ -3025,4 +3027,26 @@ mod source_entry_tests {
             }
         }
     }
+    /// Native method array parameters share the constructor bridge's layout-neutral contract.
+    #[test]
+    fn mixed_array_method_arguments_accept_both_layouts_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for (param, accepts_hash) in [
+                (PhpType::Array(Box::new(PhpType::Mixed)), true),
+                (PhpType::Array(Box::new(PhpType::Int)), false),
+            ] {
+                let mut emitter = Emitter::new(target);
+                match target.arch {
+                    Arch::AArch64 => emit_aarch64_cast_eval_array_arg(&mut emitter, &param, 4, "invalid"),
+                    Arch::X86_64 => emit_x86_64_cast_eval_array_arg(&mut emitter, &param, 4, "invalid"),
+                }
+                let asm = emitter.output();
+                let range = if target.arch == Arch::AArch64 { "sub x0, x0, #4" } else { "sub rax, 4" };
+                assert_eq!(asm.contains(range), accepts_hash, "{name}: {asm}");
+                assert!(!asm.contains("__rt_incref"), "{name}: borrowed argument acquired an extra owner");
+            }
+        }
+    }
+
 }
