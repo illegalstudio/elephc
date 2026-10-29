@@ -182,6 +182,38 @@ unset($page, $box, $holder, $marker, $missing, $uninitialized, $getter, $typed, 
     });
 }
 
+/// Isolates native ArrayObject construction, typed eval storage, unset dispatch and array return.
+#[test]
+fn test_simplexml_eval_arrayobject_unset_stages_bundle() {
+    if skip_without_xml_native("test_simplexml_eval_arrayobject_unset_stages_bundle") { return; }
+    let (runs, _) = compile_and_run_with_heap_debug_and_asm_per_argv(r###"<?php
+$keep = new ArrayObject(['k' => 1, 'j' => 2]);
+if ($argc < 0) { echo json_encode($keep->getArrayCopy()); }
+$xml = new SimpleXMLElement('<r/>');
+$source = '
+class StagedEvalUnsetBox {
+    public ArrayObject $bag;
+    public function __construct() { $this->bag = new ArrayObject(["k" => 1, "j" => 2]); }
+}
+function StagedEvalUnsetDrop(?StagedEvalUnsetBox $box): void { unset($box->bag["k"]); }
+';
+if ($argc === 1) { $source .= '$bag = new ArrayObject(["k" => 1, "j" => 2]); echo "constructed|"; unset($bag);'; }
+if ($argc === 2) { $source .= '$box = new StagedEvalUnsetBox(); echo "stored|"; unset($box);'; }
+if ($argc === 3) { $source .= '$box = new StagedEvalUnsetBox(); StagedEvalUnsetDrop($box); StagedEvalUnsetDrop(null); echo "removed|"; unset($box);'; }
+if ($argc === 4) { $source .= '$box = new StagedEvalUnsetBox(); StagedEvalUnsetDrop($box); echo json_encode($box->bag->getArrayCopy()), "|"; unset($box);'; }
+eval($source);
+unset($source, $xml, $keep);
+"###, &[&[], &["store"], &["unset", "null"], &["copy", "array", "return"]]);
+    for ((stage, expected), out) in [
+        ("native constructor", "constructed|"), ("typed eval property", "stored|"),
+        ("native offsetUnset", "removed|"), ("native getArrayCopy", "{\"j\":2}|"),
+    ].into_iter().zip(runs) {
+        assert!(out.success, "{stage}: stdout={} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "{stage}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{stage}: {}", out.stderr);
+    }
+}
+
 /// Unresolved reference-returning calls fail explicitly while object handles remain mutable.
 #[test]
 fn test_simplexml_opaque_unset_reference_calls() {
