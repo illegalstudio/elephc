@@ -155,11 +155,11 @@ pub(super) fn lower_declared_mixed_prop_get(
                 let property = candidate.candidate.slot.property.clone();
                 let base_reg = abi::int_result_reg(ctx.emitter);
                 // The arm matched a class that resolves the name to a strict ancestor's private
-                // slot, which is the one dynamic shape php DOES warn about on a value read.
+                // slot. An absent entry can still reach this runtime class's magic accessor.
                 let warn_on_miss = mode.is_read();
                 match dynamic_property_hash_offset_for_class(ctx, &class_name, &property)? {
-                    Some(hash_offset) => emit_scope_dynamic_property_hash_probe(
-                        ctx, &class_name, &property, base_reg, hash_offset, warn_on_miss,
+                    Some(hash_offset) => emit_hash_property_read(
+                        ctx, &class_name, &property, base_reg, hash_offset, mode, &done_label,
                     )?,
                     None => {
                         if warn_on_miss {
@@ -202,18 +202,19 @@ pub(super) fn lower_declared_mixed_prop_get(
     }
 
     // The class-only hash arms, in the same order their labels were appended above. Each answers
-    // from THIS class's hash at THIS class's offset, and a miss keeps the shared miss arm's
-    // answer, which is php's `Undefined property` warning on a value read and silence on a probe.
+    // from THIS class's hash at THIS class's offset. A missing entry uses that class's magic
+    // accessors before falling back to an undefined-property warning or a quiet probe.
     for (arm, label) in hash_arms.iter().zip(match_labels.iter().skip(candidates.len())) {
         ctx.emitter.label(label);
         let base_reg = abi::int_result_reg(ctx.emitter);
-        emit_scope_dynamic_property_hash_probe(
+        emit_hash_property_read(
             ctx,
             &arm.class_name,
             property,
             base_reg,
             arm.hash_offset,
-            mode.is_read(),
+            mode,
+            &done_label,
         )?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -242,6 +243,36 @@ pub(super) fn lower_declared_mixed_prop_get(
     ctx.emitter.label(&done_label);
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
+}
+
+/// Reads a real dynamic entry first, then uses magic accessors only when that key is absent.
+fn emit_hash_property_read(
+    ctx: &mut FunctionContext<'_>, class: &str, property: &str, object_reg: &str,
+    hash_offset: usize, mode: PropertyFetchMode, done_label: &str,
+) -> Result<()> {
+    let Some(magic) = magic_property_arm(ctx, class, mode)? else {
+        return emit_scope_dynamic_property_hash_probe(
+            ctx, class, property, object_reg, hash_offset, mode.is_read(),
+        );
+    };
+    let target = ctx.emitter.target;
+    let found = ctx.next_label("mixed_prop_hash_found");
+    let (name, len) = ctx.data.add_string(property.as_bytes());
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), object_reg, hash_offset);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(target, 1), &name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(target, 2), len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    emit_branch_if_hash_entry_found(ctx, &found);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    emit_magic_property_arm(ctx, &magic, property, done_label)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&found);
+    let payload = if target.arch == Arch::AArch64 { "x1" } else { "rdi" };
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// One class of a `Mixed` ladder that answers a name from its magic accessors.

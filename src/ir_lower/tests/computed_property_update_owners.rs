@@ -122,3 +122,27 @@ staticDimensionOwnerWrite();
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Eval-reserved dynamic storage still reaches a native getter after a missing hash entry.
+#[test]
+fn mixed_magic_hash_miss_emits_getter_on_every_target() {
+    let source = r#"<?php
+class MixedHashOwner { public function __get(string $name): int { return 30; } }
+function mixedHashOwnerRead(mixed $object): mixed { return $object->missing; }
+echo mixedHashOwnerRead(new MixedHashOwner());
+$source = $argc > 0 ? ';' : ''; eval($source);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        assert!(module.class_infos["MixedHashOwner"].dynamic_property_hash_is_name_addressable(),
+            "{target}: the fixture must include the overlapping hash candidate");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let call = if module.target.arch == crate::codegen::platform::Arch::AArch64 { "bl" } else { "call" };
+        let getter = crate::names::method_symbol("MixedHashOwner", "__get");
+        assert!(assembly.contains("mixed_prop_hash_found"), "{target}: distinguish an actual entry from a missing key");
+        assert!(assembly.contains(&format!("{call} {getter}")), "{target}: missing keys reach the normal magic getter");
+    }
+}
