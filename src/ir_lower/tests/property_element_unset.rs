@@ -240,6 +240,11 @@ function removeNullableXmlField(?NativeXmlUnsetHolder $holder): void { unset($ho
 removeOpaqueXmlField($holder); removeNullableXmlField($holder);
 $getter = new NativeXmlUnsetRefGetter(); $getter->payload = $xml; removeOpaqueXmlField($getter);
 $name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
+function typedNativeXmlUnsetLocal(): void {
+    $value = new SimpleXMLElement('<r><a/></r>');
+    unset($value->a->b[0], $value->absent[1], $value->a[2]->b[0]);
+}
+typedNativeXmlUnsetLocal();
 $callback = function (): mixed { return []; };
 try { unset($callback()['id']); } catch (Error $error) {}
 "#;

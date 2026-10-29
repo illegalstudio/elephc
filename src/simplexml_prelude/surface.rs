@@ -358,10 +358,10 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         elephc_xml_sx_free($selected);
         return $present;
     }
-    final public function __elephc_dimension_select(mixed $offset, bool $throwOnFailure = true): mixed {
+    final public function __elephc_dimension_select(mixed $offset, bool $throwOnFailure = true, bool $create = true): mixed {
         $selected = $this->__elephc_dimension_get($offset);
         if ($selected !== null) { return $selected; }
-        if (!is_int($offset)) {
+        if (!$create || !is_int($offset)) {
             __elephc_simplexml_warning("Notice: Indirect modification of overloaded element of " . get_class($this) . " has no effect\n");
             return null;
         }

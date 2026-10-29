@@ -10,7 +10,7 @@
 //! - Every captured owner is released in reverse order on success and failure.
 
 use super::*;
-use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName};
+use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver};
 
 /// Captures operands once and resolves the current property only after the key has run.
 pub(super) fn eval_property_dimension_unset(
@@ -28,7 +28,7 @@ pub(super) fn eval_property_dimension_unset(
         };
         let index = eval_owned_expr(index, context, scope, values)?;
         owners.push(index);
-        let object = finish_property_write_receiver(receiver, &mut owners, context, scope, values)?;
+        let object = finish_property_unset_receiver(receiver, &mut owners, context, scope, values)?;
         owners.push(object);
         if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(()); }
         let property = match property {

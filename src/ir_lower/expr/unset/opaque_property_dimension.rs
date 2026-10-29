@@ -18,9 +18,6 @@ pub(super) fn supports(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
         _ => return false,
     };
     let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
-    // Non-null typed handles retain their existing path; nullable bases still need quiet fetches.
-    if unset_array_access_has_object_receiver(ctx, array)
-        && !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) { return false; }
     ctx.classes.contains_key("SimpleXMLElement")
         && (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
             || matches!(ty.codegen_repr(), PhpType::Object(class)
@@ -46,7 +43,7 @@ pub(super) fn lower(
     // A variable key must also be snapshotted before name conversion can replace its cell.
     let key = lower_expr(ctx, index);
     let key = park_lowered_unset_operand(ctx, key, index.span, &mut owners);
-    let object = property_access::lower_property_write_receiver(ctx, &object);
+    let object = finish_receiver(ctx, &object);
     let object = park_lowered_unset_operand(ctx, object, array.span, &mut owners);
     let object = lower_expr(ctx, &object);
     let class = ctx.intern_class_name("SimpleXMLElement");
@@ -60,7 +57,7 @@ pub(super) fn lower(
         then_target: yes, then_args: Vec::new(), else_target: no, else_args: Vec::new() });
     ctx.builder.position_at_end(yes);
     let receiver = borrow_native_xml_property_receiver(ctx, object, expr.span);
-    remove_property_value(ctx, receiver, &property, &key, PropertyFetchMode::Probe,
+    remove_property_value(ctx, receiver, &property, &key, PropertyFetchMode::QuietRead,
         array, expr, &mut owners);
     jump(ctx, merge);
     let native_slots = ctx.initialized_slots_snapshot();
@@ -94,8 +91,8 @@ fn remove_property_value(
     let name = property_access::coerce_runtime_property_name(ctx, name, array.span);
     let name = park_lowered_unset_operand(ctx, name, array.span, owners);
     let name_value = lower_expr(ctx, &name);
-    let selected = property_access::lower_dynamic_property_fetch_from_operands(
-        ctx, receiver, name_value, PhpType::Mixed, mode, false, array,
+    let selected = property_access::lower_dynamic_property_fetch_or_select(
+        ctx, receiver, name_value, PhpType::Mixed, mode, false, true, array,
     );
     let ty = ctx.builder.value_php_type(selected.value);
     let selected = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) { selected }
@@ -146,6 +143,7 @@ fn prepare_receiver(
     ctx: &mut LoweringContext<'_, '_>, source: &Expr, owners: &mut Vec<crate::ir::LocalSlotId>,
 ) -> Expr {
     let kind = match &source.kind {
+        ExprKind::StaticPropertyAccess { .. } => return source.clone(),
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
             object: Box::new(prepare_receiver(ctx, object, owners)), property: property.clone(),
         },
@@ -160,6 +158,76 @@ fn prepare_receiver(
         _ => return park_unset_operand(ctx, source, owners),
     };
     Expr::new(kind, source.span)
+}
+
+/// Resolves unset receiver properties with materialization but dimensions without creation.
+fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredValue {
+    match &source.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            let parent = finish_receiver(ctx, object);
+            let name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(property.clone()), source.span));
+            property_access::lower_dynamic_property_fetch_or_select(ctx, parent, name, PhpType::Mixed,
+                PropertyFetchMode::QuietRead, false, true, source)
+        }
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            let parent = finish_receiver(ctx, object);
+            select_dynamic_property(ctx, parent, property, source)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let parent = finish_receiver(ctx, array);
+            property_access::native_xml_reads::dispatch(ctx, parent, source, PhpType::Mixed, false,
+                |ctx, parent| lower_method_call_with_receiver(ctx, parent, "__elephc_dimension_select", &[
+                    index.as_ref().clone(), Expr::new(ExprKind::BoolLiteral(false), source.span),
+                    Expr::new(ExprKind::BoolLiteral(false), source.span),
+                ], Op::MethodCall, source),
+                |ctx, parent| {
+                    if value_is_nullable(ctx, parent.value) {
+                        lower_nullable_array_access(ctx, parent, index, source, false)
+                    } else { lower_array_access_from_value(ctx, parent, index, source, false) }
+                },
+            )
+        }
+        _ => lower_expr(ctx, source),
+    }
+}
+
+/// Skips name conversion after a missing unset dimension, protecting the selected owner on unwind.
+fn select_dynamic_property(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, property: &Expr, source: &Expr,
+) -> LoweredValue {
+    let staging = prepublish_call_result(ctx, &PhpType::Mixed, source.span);
+    let (parent, owner) = root_owned_call_operand(ctx, parent, source.span);
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let present = ctx.builder.create_named_block("unset.receiver.property", Vec::new());
+    let absent = ctx.builder.create_named_block("unset.receiver.absent", Vec::new());
+    let merge = ctx.builder.create_named_block("unset.receiver.merge", Vec::new());
+    let object = ctx.emit_value(Op::TypePredicate, vec![parent.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+        Op::TypePredicate.default_effects(), Some(source.span));
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: object.value,
+        then_target: present, then_args: Vec::new(), else_target: absent, else_args: Vec::new() });
+    ctx.builder.position_at_end(present);
+    let name = lower_expr(ctx, property);
+    let name = property_access::coerce_runtime_property_name(ctx, name, source.span);
+    let value = property_access::lower_dynamic_property_fetch_or_select(ctx, parent, name, PhpType::Mixed,
+        PropertyFetchMode::QuietRead, false, true, source);
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, value, source.span);
+    jump(ctx, merge);
+    let present_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(absent);
+    ctx.restore_initialized_slots(initial.clone());
+    let value = lower_null(ctx, source);
+    let value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(source.span));
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, value, source.span);
+    jump(ctx, merge);
+    let absent_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial, present_slots, true, absent_slots, true));
+    let result = take_owned_temp(ctx, &temp, source.span);
+    stage_call_result(ctx, staging.as_ref(), result, source.span);
+    if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, source.span); }
+    take_prepublished_call_result(ctx, staging, result, source.span)
 }
 
 /// Joins an arm only when its preceding operation still has a normal continuation.

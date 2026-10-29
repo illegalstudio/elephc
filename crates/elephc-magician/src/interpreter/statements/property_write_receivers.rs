@@ -60,27 +60,52 @@ pub(super) fn finish_property_write_receiver(
     plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    finish_receiver(plan, owners, context, scope, values, false)
+}
+
+/// Fetches unset properties for write while keeping every dimension hop non-creating and quiet.
+pub(super) fn finish_property_unset_receiver(
+    plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    finish_receiver(plan, owners, context, scope, values, true)
+}
+
+/// Resolves prepared storage with distinct property and dimension behavior for unset.
+fn finish_receiver(
+    plan: PreparedWriteReceiver<'_>, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+    unset: bool,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let value = match plan {
         PreparedWriteReceiver::Late(expr) => return eval_owned_expr(expr, context, scope, values),
         PreparedWriteReceiver::Value(value) => return values.retain(value),
         PreparedWriteReceiver::Property(parent, property) => {
-            let parent = finish_property_write_receiver(*parent, owners, context, scope, values)?;
+            let parent = finish_receiver(*parent, owners, context, scope, values, unset)?;
             owners.push(parent);
-            eval_write_property_get_result(parent, &property, context, values)?
+            if unset && values.type_tag(parent)? != EVAL_TAG_OBJECT { values.null()? }
+            else if unset { eval_unset_property_get_result(parent, &property, context, values)? }
+            else { eval_write_property_get_result(parent, &property, context, values)? }
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
-            let early = if name_first { Some(finish_name(property, owners, context, scope, values)?) } else { None };
-            let parent = finish_property_write_receiver(*parent, owners, context, scope, values)?;
+            let early = if name_first && !unset { Some(finish_name(property, owners, context, scope, values)?) } else { None };
+            let parent = finish_receiver(*parent, owners, context, scope, values, unset)?;
             owners.push(parent);
+            if unset && values.type_tag(parent)? != EVAL_TAG_OBJECT { return values.null(); }
             let property = if let Some(property) = early { property } else {
                 finish_name(property, owners, context, scope, values)?
             };
-            eval_write_property_get_result(parent, &property, context, values)?
+            if unset { eval_unset_property_get_result(parent, &property, context, values)? }
+            else { eval_write_property_get_result(parent, &property, context, values)? }
         }
         PreparedWriteReceiver::Index(parent, index) => {
-            let parent = finish_property_write_receiver(*parent, owners, context, scope, values)?;
+            let parent = finish_receiver(*parent, owners, context, scope, values, unset)?;
             owners.push(parent);
             let index = finish_index(index, owners, context, scope, values)?;
+            if unset {
+                let value = unset_dimension(parent, index, owners, context, values)?;
+                return if value.is_borrowed() { values.retain(value) } else { Ok(value) };
+            }
             match super::super::runtime_ops::simplexml_properties::dimension(
                 values, parent.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect, vec![index.borrowed()],
             )? {
@@ -90,6 +115,32 @@ pub(super) fn finish_property_write_receiver(
         }
     };
     if value.is_borrowed() { values.retain(value) } else { Ok(value) }
+}
+
+/// Reads an unset dimension without inserting an XML sibling or warning on a missing array key.
+fn unset_dimension(
+    parent: RuntimeCellHandle, index: RuntimeCellHandle, owners: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if super::super::runtime_ops::simplexml_properties::is_native(values, parent, "")? {
+        let no_create = values.bool_value(false)?;
+        owners.push(no_create);
+        return super::super::runtime_ops::simplexml_properties::dimension(values, parent.borrowed(),
+            elephc_builtin_contract::ObjectDimension::WriteSelect,
+            vec![index.borrowed(), no_create.borrowed(), no_create.borrowed()],
+        )?.ok_or(EvalStatus::RuntimeFatal);
+    }
+    match values.type_tag(parent)? {
+        EVAL_TAG_OBJECT => eval_array_get_result(parent, index, context, values),
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => {
+            let exists = values.array_key_exists(index, parent)?;
+            let present = values.truthy(exists);
+            let released = values.release(exists);
+            if !present.and_then(|present| released.map(|()| present))? { return values.null(); }
+            eval_array_get_result(parent, index, context, values)
+        }
+        _ => values.null(),
+    }
 }
 
 /// Reads an update target as a lazy native selection, with the ordinary getter as fallback.

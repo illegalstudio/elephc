@@ -239,3 +239,73 @@ unset($handle, $ref, $data, $bag, $child, $xml, $error, $refXml, $refGetter, $ty
     let message = "Unsupported unset(): array result of an unresolved or overridable call has no attached removal path";
     assert_eq!(out.stdout, format!("{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|value|<?xml version=\"1.0\"?>\n<r b=\"2\"/>\n<?xml version=\"1.0\"?>\n<g b=\"2\"/>\n<?xml version=\"1.0\"?>\n<t b=\"2\"/>\n"));
 }
+
+/// Unset property fetches materialize XML names while dimension fetches never append siblings.
+#[test]
+fn test_simplexml_unset_traversal_modes_bundle() {
+    if skip_without_xml_native("test_simplexml_unset_traversal_modes_bundle") { return; }
+    let source = r###"<?php
+class UnsetTraversalStatic {
+    public static $xml;
+    public static SimpleXMLElement $typed;
+}
+class UnsetTraversalName {
+    public function __toString(): string { echo 'bad-conversion|'; return 'b'; }
+}
+function UnsetTraversalSwap(): int {
+    UnsetTraversalStatic::$xml = new SimpleXMLElement('<s><a>1</a><a>2</a></s>'); return 0;
+}
+function UnsetTraversalTypedSwap(): int {
+    UnsetTraversalStatic::$typed = new SimpleXMLElement('<new/>'); return 0;
+}
+function UnsetTraversalTypedLocal(): void {
+    $xml = new SimpleXMLElement('<local/>');
+    unset($xml->a->b[0]); echo $xml->asXML();
+    $final = new SimpleXMLElement('<final/>');
+    unset($final->m[1]); $name = 'k'; unset($final->{$name}['id']);
+    echo $final->asXML();
+}
+function UnsetTraversalDimensions(): void {
+    $xml = new SimpleXMLElement('<r><a/></r>');
+    unset($xml->a[1]->b[0]); echo $xml->asXML();
+    unset($xml->a[3]->b[0]); echo $xml->asXML();
+    $view = $xml->a; unset($view[2]->q[0]); echo $xml->asXML();
+    $name = new UnsetTraversalName();
+    unset($xml->a[1]->{$name}[0]); echo $xml->asXML();
+    unset($xml->a[1]->{$name}->q[0]); echo $xml->asXML();
+    $existing = new SimpleXMLElement('<existing><a><b>1</b><b>2</b></a></existing>');
+    unset($existing->a[0]->b[0]); echo $existing->asXML();
+    $rows = json_decode('[]', true); unset($rows['missing']->b[0]);
+    echo json_encode($rows), '|';
+}
+set_error_handler(function(int $level, string $message): bool {
+    echo $level, ':', $message, '|'; return true;
+});
+UnsetTraversalTypedLocal(); UnsetTraversalDimensions();
+restore_error_handler();
+UnsetTraversalStatic::$xml = new SimpleXMLElement('<r><a>1</a></r>');
+$old = UnsetTraversalStatic::$xml;
+unset(UnsetTraversalStatic::$xml->a[UnsetTraversalSwap()]);
+echo $old->asXML(), UnsetTraversalStatic::$xml->asXML();
+UnsetTraversalStatic::$typed = new SimpleXMLElement('<old/>');
+$typedOld = UnsetTraversalStatic::$typed; $name = 'b';
+unset(UnsetTraversalStatic::$typed->a->{$name}[UnsetTraversalTypedSwap()]);
+echo $typedOld->asXML(), UnsetTraversalStatic::$typed->asXML();
+UnsetTraversalStatic::$xml = null;
+unset($old, $typedOld, $name);
+"###;
+    let renamed = source.replace("UnsetTraversal", "EvalUnsetTraversal");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "<?xml version=\"1.0\"?>\n<local><a/></local>\n<?xml version=\"1.0\"?>\n<final><m/><k/></final>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n<?xml version=\"1.0\"?>\n<existing><a><b>2</b></a></existing>\n[]|<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n<?xml version=\"1.0\"?>\n<s><a>2</a></s>\n<?xml version=\"1.0\"?>\n<old/>\n<?xml version=\"1.0\"?>\n<new><a/></new>\n";
+    assert_bundle_with(&[
+        BundleCase { name: "unset_traversal_aot", source, expected },
+        BundleCase { name: "unset_traversal_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+        out.stdout
+    });
+}

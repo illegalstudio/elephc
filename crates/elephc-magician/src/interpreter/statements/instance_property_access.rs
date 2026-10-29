@@ -47,7 +47,7 @@ fn eval_property_read_result(
         return values.property_get(object, property_name);
     };
     if let Some(value) = super::super::runtime_ops::simplexml_properties::invoke(
-        values, object, property_name, if quiet { elephc_builtin_contract::ObjectProperty::Probe }
+        values, object, property_name, if quiet { elephc_builtin_contract::ObjectProperty::WriteSelect }
             else { elephc_builtin_contract::ObjectProperty::Get }, None,
     )? { return Ok(value); }
     let Some(class) = context.dynamic_object_class(identity) else {
