@@ -29,6 +29,14 @@ function updateOwnerExercise(UpdateOwnerCounter $counter): void {
 updateOwnerExercise(new UpdateOwnerCounter());
 function updateOwnerNumericMask(int|float $value): int { return $value & 7; }
 echo updateOwnerNumericMask($argc);
+class UpdateOwnerRegistry {
+    public array $handlers = [];
+    public function registry(): self { return $this; }
+}
+$registry = new UpdateOwnerRegistry();
+$registry->registry()->handlers['save'][] = 'first';
+$registry->registry()->handlers['save'][] = 'second';
+echo count($registry->handlers['save']);
 $xml = new SimpleXMLElement('<r><a>1</a></r>');
 $xml->a += 1;
 "#;
