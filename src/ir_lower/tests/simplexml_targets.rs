@@ -43,7 +43,10 @@ echo (string)nativeChildLiteral(new NativeChildReadXml('<r><item id="old">native
         for name in ["nativeNullableRead", "nativeNullableCoalesce"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
-            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::RuntimeCall), "{target}: {name}");
+            let fallback = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::RuntimeCall)
+                .expect("null reads retain their warning-aware fallback");
+            assert_eq!(function.value(fallback.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+                "{target}: {name}: null fallback must erase nullable interface dispatch metadata");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }

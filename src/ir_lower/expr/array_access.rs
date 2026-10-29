@@ -479,7 +479,12 @@ fn lower_native_dimension_read(
         then_target: absent, then_args: vec![], else_target: present, else_args: vec![] });
     ctx.builder.position_at_end(absent);
     let warning = emit_bool_literal(ctx, warn, Some(expr.span));
-    let value = ctx.emit_value(Op::RuntimeCall, vec![object.value, index.value, warning.value],
+    // Erase the nullable interface type on this proven-null branch so RuntimeCall cannot
+    // redispatch through an ArrayAccess vtable with a null object payload.
+    let null = ctx.emit_value(Op::Borrow, vec![object.value], None, PhpType::Mixed,
+        Op::Borrow.default_effects(), Some(expr.span));
+    ctx.builder.set_value_ownership(null.value, Ownership::Borrowed);
+    let value = ctx.emit_value(Op::RuntimeCall, vec![null.value, index.value, warning.value],
         None, result_type.clone(), Op::RuntimeCall.default_effects(), Some(expr.span));
     store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
     branch_to(ctx, merge);
