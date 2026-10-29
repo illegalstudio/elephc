@@ -21,17 +21,25 @@ class CapturedAppendApp {
     public function on(string $event, string $handler): void { $this->registry()->handlers[$event][] = $handler; }
 }
 function CapturedAppendKey(): string { echo 'key|'; return 'save'; }
+function CapturedAppendRhs(CapturedAppendRegistry $registry): string {
+    echo json_encode($registry->handlers), '|';
+    return 'd';
+}
 $app = new CapturedAppendApp();
 $app->on('save', 'a');
 $app->on('save', 'b');
 $app->registry()->handlers[CapturedAppendKey()][] = 'c';
+$captured = $app->registry();
+$snapshot = $captured->handlers;
+$captured->handlers['late'][] = CapturedAppendRhs($captured);
 echo json_encode($app->registry()->handlers);
-unset($app);
+echo '|snapshot:', json_encode($snapshot);
+unset($app, $captured, $snapshot);
 "###;
     let renamed = source.replace("CapturedAppend", "EvalCapturedAppend");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "registry|registry|registry|key|registry|{\"save\":[\"a\",\"b\",\"c\"]}";
+    let expected = "registry|registry|registry|key|registry|{\"save\":[\"a\",\"b\",\"c\"]}|registry|{\"save\":[\"a\",\"b\",\"c\"],\"late\":[\"d\"]}|snapshot:{\"save\":[\"a\",\"b\",\"c\"]}";
     assert_bundle_with(&[
         BundleCase { name: "nested_receiver_aot", source, expected },
         BundleCase { name: "nested_receiver_eval", source: &eval, expected },

@@ -37,6 +37,8 @@ use crate::parser::ast::{
 use crate::span::Span;
 use crate::types::PhpType;
 
+mod boxed;
+
 /// A `StmtKind::Synthetic` body proven to be a nested append this module can fuse.
 ///
 /// `prefix` holds the stabilization assignments the parser hoists when the key expression is
@@ -58,6 +60,7 @@ pub(super) struct NestedAppendGroup<'a> {
 /// into the property, leaving it stale. So a property base gets the auto-vivification (which is the
 /// data-loss fix) but NOT the detach (which is the O(n^2) fix). Correctness first; the property
 /// base stays quadratic until the detach can republish through a property store.
+#[derive(Clone, Copy)]
 enum BaseKind<'a> {
     Local(&'a str),
     Property {
@@ -254,9 +257,37 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         if crate::ir_lower::expr::lower_weak_map_append(ctx, target, value, span) { return; }
     }
 
+    if matches!(group.base, BaseKind::Property { .. }) {
+        let StmtKind::ArrayPush { array, value } = &group.push.kind else { unreachable!() };
+        let rhs = lower_expr(ctx, value);
+        if ctx.builder.insertion_block_is_terminated() { return; }
+        let mut sources = Vec::new();
+        let value = super::nested_write_sources::capture_lowered(ctx, rhs, value.span, &mut sources);
+        let push = Stmt::new(StmtKind::ArrayPush { array: array.clone(), value }, group.push.span);
+        let staged = NestedAppendGroup { prefix: &[], read: group.read, push: &push,
+            write_back: group.write_back, base: group.base, index: group.index };
+        let container = load_container(ctx, &staged, span);
+        lower_from_container(ctx, &staged, container, span);
+        if !ctx.builder.insertion_block_is_terminated() {
+            super::nested_write_sources::retire(ctx, sources, span);
+        }
+        return;
+    }
+    let container = load_container(ctx, group, span);
+    lower_from_container(ctx, group, container, span);
+}
+
+/// Probes a loaded container before the shared vivify, append and writeback sequence.
+fn lower_from_container(
+    ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup<'_>, container: LoweredValue, span: Span,
+) {
+    if container.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && matches!(group.base, BaseKind::Property { .. }) {
+        boxed::lower(ctx, group, container, span);
+        return;
+    }
     // Load the container and probe the key. For a local this is a `LoadLocal`; for a property it is
     // an ordinary property read, which is pure and can be replayed.
-    let container = load_container(ctx, group, span);
     let isset_op = match container.ir_type {
         IrType::Heap(IrHeapKind::Hash) => Op::HashIsset,
         IrType::Heap(IrHeapKind::Array) => Op::ArrayIsset,

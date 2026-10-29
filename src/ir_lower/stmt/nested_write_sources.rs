@@ -44,22 +44,29 @@ pub(super) fn capture(
     ctx: &mut LoweringContext<'_, '_>, expr: &Expr, sources: &mut Vec<WriteSource>,
 ) -> Expr {
     let value = lower_expr(ctx, expr);
+    capture_lowered(ctx, value, expr.span, sources)
+}
+
+/// Publishes an already evaluated source after its caller checks for a terminated RHS.
+pub(super) fn capture_lowered(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span, sources: &mut Vec<WriteSource>,
+) -> Expr {
     let ty = ctx.builder.value_php_type(value.value);
     let name = ctx.declare_synthetic_php_local(ty.clone());
-    let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(expr.span));
-    ctx.store_call_argument_local(&name, stored, ty.clone(), Some(expr.span));
+    let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    ctx.store_call_argument_local(&name, stored, ty.clone(), Some(span));
     if stored.value != value.value && ctx.value_is_owning_temporary(value) {
-        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
     let owns_heap = crate::ir::Ownership::php_type_needs_lifetime_tracking(&ty)
         && !matches!(ty.codegen_repr(), PhpType::Buffer(_));
     if owns_heap {
         let slot = ctx.local_slots[&name];
         ctx.emit_void(Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
-            Op::PushCallOperandOwner.default_effects(), Some(expr.span));
+            Op::PushCallOperandOwner.default_effects(), Some(span));
     }
     sources.push(WriteSource { name: name.clone(), owns_heap });
-    Expr::new(ExprKind::Variable(name), expr.span)
+    Expr::new(ExprKind::Variable(name), span)
 }
 
 /// Clears each captured owner before a possibly throwing destructor can leave its release.
