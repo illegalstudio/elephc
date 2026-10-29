@@ -427,6 +427,8 @@ Earlier format changes also invalidated stored parse errors for valid comparison
 The format guard covers the combined serialized IR and its corresponding type sources.
 Retained token streams distinguish reserved words used as qualified-name segments, so
 entries written before that token variant was introduced must also be rejected.
+Format 24 also retains method reference-return flags and generic dimension-write
+statements; older entries cannot describe that combined layout.
 
 Native callable defaults retain array-unpack operands through a private array-element marker.
 Registration validates and normalizes that marker before execution; it is not public PHP syntax.

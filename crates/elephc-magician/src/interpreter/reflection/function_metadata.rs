@@ -202,8 +202,8 @@ pub(super) fn eval_reflection_function_method_target(
     };
     let static_method =
         eval_reflection_eval_method_static_target(declaring_class, method_name, context);
-    // An eval method answers from its declaration, where only an `&get` hook (stored under its
-    // synthetic name) can return by reference, and an abstract or interface `&get` contract,
+    // An eval method answers from its declaration, including an `&get` hook stored under its
+    // synthetic name, and an abstract or interface `&get` contract,
     // which has no accessor, from the property declaring it; a generated AOT method from the
     // flag its metadata row carries.
     let eval_method_name = eval_reflection_property_hook_synthetic_method_name(method_name)

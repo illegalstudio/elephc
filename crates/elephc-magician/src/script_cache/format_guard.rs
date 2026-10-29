@@ -101,7 +101,8 @@ mod tests {
     /// setter contracts now share generic declarations and caller-scope access masks.
     /// BUMPED TO 22: retained token streams distinguish reserved qualified-name segments.
     /// BUMPED TO 23: array casts coexist with cached reserved-name tokens.
-    const RECORDED_FINGERPRINT: u64 = 12813228907664943865;
+    /// BUMPED TO 24: retained method reference-return flags and dimension-write statements.
+    const RECORDED_FINGERPRINT: u64 = 3427359242301516132;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///
