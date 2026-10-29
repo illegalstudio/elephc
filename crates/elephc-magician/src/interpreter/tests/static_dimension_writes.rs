@@ -19,7 +19,9 @@ fn static_array_writes_use_the_native_value_copy_contract() {
     let mut scope = ElephcEvalScope::new();
     let declarations =
         parse_fragment(b"class StaticCopyContract { public static array $items = []; }").unwrap();
-    execute_program_with_context(&mut context, &declarations, &mut scope, &mut values).unwrap();
+    let returned =
+        execute_program_with_context(&mut context, &declarations, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
     for source in [
         "for ($i = 0; $i < 64; $i++) { StaticCopyContract::$items[] = $i; }",
         "for ($i = 0; $i < 64; $i++) { StaticCopyContract::$items[$i] = $i + 1; }",
@@ -27,7 +29,9 @@ fn static_array_writes_use_the_native_value_copy_contract() {
     ] {
         let before = values.array_value_copy_calls;
         let program = parse_fragment(source.as_bytes()).unwrap();
-        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        let returned =
+            execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        eval_release_value(&mut context, &mut values, returned).unwrap();
         assert_eq!(values.array_value_copy_calls - before, 64, "{source}");
         let stored = context
             .static_property("StaticCopyContract", "items")
@@ -59,7 +63,9 @@ fn static_array_value_aliases_survive_published_cell_replacement() {
         StaticAliasFirst::$items['mark'] = 3;
         echo count(StaticAliasFirst::$items), ':', count(StaticAliasSecond::$items), ':', count($copy);";
     let program = parse_fragment(source).unwrap();
-    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    let returned =
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
     assert_eq!(values.output, "3:1:1");
     let first = context
         .static_property("StaticAliasFirst", "items")
@@ -82,7 +88,9 @@ fn static_array_replacement_cleanup_failure_keeps_the_published_owner() {
         let program =
             parse_fragment(b"class StaticCleanupCopy { public static array $items = []; }")
                 .unwrap();
-        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        let returned =
+            execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        eval_release_value(&mut context, &mut values, returned).unwrap();
         let original = context
             .static_property("StaticCleanupCopy", "items")
             .unwrap();
@@ -110,7 +118,9 @@ fn static_array_write_access_failure_preserves_the_slot() {
     let program =
         parse_fragment(b"class StaticDeniedCopy { public private(set) static array $items = []; }")
             .unwrap();
-    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    let returned =
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
     let original = context
         .static_property("StaticDeniedCopy", "items")
         .unwrap();
