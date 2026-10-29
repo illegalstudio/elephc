@@ -106,7 +106,8 @@ $arguments = [$root, $root->missing->child];
 try { variadicBoundaryXml(1, ...$arguments); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { variadicBoundaryXml(1, good: $root, bad: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $referenceMissing = [$root->missing->child];
-try { referenceVariadicBoundaryXml($referenceMissing[0]); } catch (TypeError $error) { reportBoundaryXml($error); }
+$referenceMissingElement =& $referenceMissing[0];
+try { referenceVariadicBoundaryXml($referenceMissingElement); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { orderedVariadicBoundaryXml($root->missing->child, $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { orderedVariadicBoundaryXml($root->missing->child, bad: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { orderedVariadicBoundaryXml(bad: $root->missing->child, first: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
@@ -123,6 +124,8 @@ $instanceProperty = new ReflectionProperty(BoundaryXmlBox::class, 'node');
 try { $instanceProperty->setValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 // Raw reflection is exposed through eval, including writes to generated instance storage.
 eval('try { $instanceProperty->setRawValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }');
+// Eval can replace visible locals; retain a checked root for the following typed boundaries.
+if ($root instanceof BoundaryXmlElement) {
 echo $box->node->getName(), "\n";
 try { $box->union = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 var_dump($box->union);
@@ -171,5 +174,7 @@ acceptNullableUnionBoundaryXml($root->missing->child);
 acceptIterableBoundaryXml($root);
 variadicBoundaryXml(1, $root, named: $root);
 $referencePresent = [$root];
-referenceVariadicBoundaryXml($referencePresent[0]);
+$referencePresentElement =& $referencePresent[0];
+referenceVariadicBoundaryXml($referencePresentElement);
 echo "done\n";
+} else { throw new Error("Expected the original boundary XML root"); }

@@ -57,7 +57,9 @@ foreach ([$nodeViewRoot->a['id'], $nodeViewRoot->xpath('//comment()')[0],
 }
 restore_error_handler();
 foreach ([$nodeViewRoot->missing, new stdClass()] as $nodeViewInvalid) {
-    if (is_object($nodeViewInvalid)) {
+    if ($nodeViewInvalid instanceof SimpleXMLElement) {
+        try { simplexml_import_dom($nodeViewInvalid); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    } elseif ($nodeViewInvalid instanceof stdClass) {
         try { simplexml_import_dom($nodeViewInvalid); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
     } else { throw new Error('Expected an invalid XML object'); }
 }
