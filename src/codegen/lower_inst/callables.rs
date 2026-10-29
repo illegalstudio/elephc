@@ -1727,7 +1727,8 @@ fn runtime_static_method_descriptor_cases(
                 .get(&method_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
-            if !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
+            if !class_method_already_emitted(ctx, &impl_class, &method_key, true)
+                && !super::super::intrinsic_static_descriptor_entry_supported(&impl_class, &method_key) {
                 continue;
             }
             methods.push((

@@ -17,15 +17,20 @@ fn concrete_descriptor_object_results_emit_on_all_targets() {
 $factory = SplFixedArray::fromArray(...);
 $values = $factory([1, 2, 3]);
 echo $values->count();
-unset($values, $factory);
+$method = $argc > 0 ? 'fromArray' : 'missing';
+$copy = call_user_func([SplFixedArray::class, $method], [2 => 'value'], false);
+echo $copy->getSize();
+unset($values, $factory, $copy);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        assert!(assembly.contains("callable_array_static_next"),
+            "{target}: a runtime factory selector must have a static descriptor case");
     }
 }
 

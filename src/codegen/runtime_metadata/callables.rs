@@ -111,6 +111,15 @@ pub(in crate::codegen) fn is_dynamic_callable_lookup_builtin(inst: &crate::ir::I
     typed_builtin_target(inst).is_some_and(|target| target.is_callable_lookup())
 }
 
+/// Returns whether a bodyless static intrinsic has an ordinary descriptor entry wrapper.
+///
+/// Static descriptor dispatch admits only factories whose ordinary wrapper ABI is reviewed.
+pub(in crate::codegen) fn intrinsic_static_descriptor_entry_supported(class: &str, method: &str) -> bool {
+    IntrinsicCall::static_method(class, method).is_some_and(|intrinsic|
+        intrinsic.kind() == crate::intrinsics::IntrinsicCallKind::SplFixedFromArray
+            && intrinsic.runtime_helper().is_some())
+}
+
 /// Emits method-symbol wrappers for runtime-backed intrinsic class methods.
 pub(in crate::codegen) fn emit_intrinsic_method_wrappers(module: &Module, emitter: &mut Emitter) {
     for wrapper in intrinsic_method_wrapper_specs(module) {
