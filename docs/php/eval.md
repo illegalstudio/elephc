@@ -357,6 +357,9 @@ satisfies PHP visibility. Generated AOT bridge dispatch can invoke
 object, and supported union/intersection object shapes, with by-reference method
 and constructor parameters limited to the staged scalar/nullable
 scalar/Mixed/array/iterable/object slice.
+Ordinary value reads from generated/AOT methods declared with `&` copy the
+referenced value, including scalar, array and object results. Binding that return
+to an eval reference remains unsupported.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier

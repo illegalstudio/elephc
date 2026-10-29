@@ -349,6 +349,13 @@ callable invocation. This mode is separate from the nested-write fetch, which
 COW-normalizes the outer container and detaches the selected zval before
 mutation.
 
+Native instance and static methods returning by reference publish a reference-cell
+address in the integer result register. The eval bridge copies the referenced
+value into an owned Mixed result before retiring the transferred cell lease,
+using the descriptor invoker's shared conversion. It does not read the by-value
+ownership marker for these returns. Eval receives a value copy rather than a
+binding to the native reference cell.
+
 ## Runtime generic specialization
 
 `crates/elephc-generics` owns structural type terms, conflict detection, written argument binding,

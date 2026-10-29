@@ -52,6 +52,7 @@ struct EvalMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    by_ref_return: bool,
     return_is_owned: bool,
     return_uses_marker: bool,
     is_hidden_shadow: bool,
@@ -71,6 +72,7 @@ struct EvalStaticMethodSlot {
     params: Vec<PhpType>,
     ref_params: Vec<bool>,
     return_ty: PhpType,
+    by_ref_return: bool,
     return_is_owned: bool,
     return_uses_marker: bool,
     entry_symbol: String,
@@ -307,6 +309,7 @@ fn collect_class_method_slots(
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: crate::types::mixed_box_php_type(&sig.return_type),
+            by_ref_return: sig.by_ref_return,
             return_is_owned: runtime_helper.is_none()
                 && native_method_returns_owned_value(module, impl_class, method, false),
             return_uses_marker: runtime_helper.is_none()
@@ -362,6 +365,7 @@ fn collect_hidden_private_ancestor_method_slots(
                 params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
                 ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
                 return_ty: crate::types::mixed_box_php_type(&sig.return_type),
+                by_ref_return: sig.by_ref_return,
                 return_is_owned: native_method_returns_owned_value(module, impl_class, method, false),
                 return_uses_marker: compiled_method_return_uses_marker(sig),
                 is_hidden_shadow: true,
@@ -428,6 +432,7 @@ fn collect_class_static_method_slots(
             params: sig.params.iter().map(|(_, ty)| super::eval_argument_helpers::bridge_storage_type(ty)).collect(),
             ref_params: eval_normalized_ref_params(sig.params.len(), &sig.ref_params),
             return_ty: crate::types::mixed_box_php_type(&sig.return_type),
+            by_ref_return: sig.by_ref_return,
             return_is_owned: native_method_returns_owned_value(module, impl_class, method, true),
             return_uses_marker: compiled_method_return_uses_marker(sig),
             entry_symbol: entry_symbol.clone(),
@@ -1492,6 +1497,7 @@ fn emit_aarch64_method_bodies(
             module,
             emitter,
             &slot.return_ty,
+            slot.by_ref_return,
             slot.return_is_owned,
             slot.return_uses_marker,
             result_source,
@@ -1562,6 +1568,7 @@ fn emit_x86_64_method_bodies(
             module,
             emitter,
             &slot.return_ty,
+            slot.by_ref_return,
             slot.return_is_owned,
             slot.return_uses_marker,
             result_source,
@@ -1624,6 +1631,7 @@ fn emit_aarch64_static_method_bodies(
             module,
             emitter,
             &slot.return_ty,
+            slot.by_ref_return,
             slot.return_is_owned,
             slot.return_uses_marker,
             EvalMethodResultSource::CompiledStatic,
@@ -1692,6 +1700,7 @@ fn emit_x86_64_static_method_bodies(
             module,
             emitter,
             &slot.return_ty,
+            slot.by_ref_return,
             slot.return_is_owned,
             slot.return_uses_marker,
             EvalMethodResultSource::CompiledStatic,
@@ -2507,6 +2516,7 @@ fn emit_box_method_result(
     module: &Module,
     emitter: &mut Emitter,
     return_ty: &PhpType,
+    by_ref_return: bool,
     owned: bool,
     return_uses_marker: bool,
     source: EvalMethodResultSource,
@@ -2515,6 +2525,8 @@ fn emit_box_method_result(
     if return_ty.codegen_repr() == PhpType::Void {
         let null_symbol = module.target.extern_symbol("__elephc_eval_value_null");
         abi::emit_call_label(emitter, &null_symbol);
+    } else if by_ref_return {
+        super::runtime_callable_invoker::reference_return::emit_boxed_reference_return(emitter, return_ty);
     } else if return_uses_marker
         && matches!(
             source,
@@ -2767,6 +2779,32 @@ mod catalog_tests {
         }
     }
 
+    /// Reference-returning method results acquire their value before retiring the cell lease.
+    #[test]
+    fn reference_method_results_copy_before_cell_release_on_every_target() {
+        for target in supported_targets() {
+            for return_ty in [PhpType::Int, PhpType::Float, PhpType::Str,
+                PhpType::Mixed, PhpType::Array(Box::new(PhpType::Mixed)),
+                PhpType::Object("stdClass".into())] {
+                for source in [EvalMethodResultSource::CompiledInstance,
+                    EvalMethodResultSource::CompiledStatic] {
+                    let mut emitter = Emitter::new(target);
+                    emit_box_method_result(&Module::new(target), &mut emitter, &return_ty,
+                        true, false, true, source, "reference_method");
+                    let asm = emitter.output();
+                    let copy = if return_ty == PhpType::Mixed {
+                        "__rt_mixed_clone"
+                    } else { "__rt_mixed_from_value" };
+                    assert!(asm.find(copy).unwrap() < asm.find("__rt_reference_cell_owner").unwrap(),
+                        "{target:?}: {return_ty:?}: {asm}");
+                    assert!(asm.find("__rt_reference_cell_owner").unwrap()
+                        < asm.find("__rt_reference_cell_release").unwrap(), "{target:?}: {asm}");
+                    assert!(!asm.contains("reference_method_return_owned"), "{target:?}: {asm}");
+                }
+            }
+        }
+    }
+
     /// Emits one isolated method-result boxing sequence for structural ABI assertions.
     fn method_result_asm(
         target: Target,
@@ -2781,6 +2819,7 @@ mod catalog_tests {
             &module,
             &mut emitter,
             return_ty,
+            false,
             false,
             return_uses_marker,
             source,

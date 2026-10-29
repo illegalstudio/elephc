@@ -41,6 +41,7 @@ mod lfc;
 mod benchmarks;
 mod echo_vars;
 mod eval;
+mod eval_reference_returns;
 mod eval_generics;
 mod symbol_catalog;
 mod core_classes;

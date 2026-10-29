@@ -26546,10 +26546,9 @@ echo ($static->isStatic() ? "S" : "s");');
 /// Verifies eval ReflectionFunction/Method `returnsReference()` reads the reflected declaration
 /// instead of a baked `false` (#1260).
 ///
-/// Eval cannot declare `function &f()` itself, so its functions, closures, and methods report
-/// `false`; the by-reference declarations it can see are a compiled `function &f()` or
-/// `function &m()`, and an eval-declared `&get` property hook. Expected output measured on
-/// PHP 8.5.10.
+/// Eval functions and closures cannot declare reference returns. Eval methods and `&get` hooks
+/// retain their declaration flags, as do compiled functions and methods. Expected output
+/// cross-checked against PHP 8.5.
 #[test]
 fn test_eval_reflection_returns_reference_reads_declarations() {
     let out = compile_and_run_capture(
@@ -26566,6 +26565,7 @@ eval('class EvalHooked {
     public array $items = [] { &get { return $this->items; } }
     public int $n { get => 1; }
     public function plain() { return 1; }
+    public function &refItems() { return $this->items; }
 }
 function eval_value() { return 1; }
 echo (new ReflectionFunction("aot_ref"))->returnsReference() ? "R" : "r";
@@ -26576,6 +26576,7 @@ echo ":";
 echo (new ReflectionMethod("AotStore", "items"))->returnsReference() ? "R" : "r";
 echo (new ReflectionMethod("AotStore", "count"))->returnsReference() ? "R" : "r";
 echo (new ReflectionMethod("EvalHooked", "plain"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("EvalHooked", "refItems"))->returnsReference() ? "R" : "r";
 echo ":";
 echo (new ReflectionProperty("EvalHooked", "items"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
 echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
@@ -26586,7 +26587,7 @@ echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
+    assert_eq!(out.stdout, "Rrrr:RrrR:Rr");
 }
 
 /// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which

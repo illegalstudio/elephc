@@ -37,7 +37,7 @@ mod mbstring;
 mod owned_value_args;
 mod public_args;
 mod reference_args;
-mod reference_return;
+pub(super) mod reference_return;
 mod string_return;
 mod tagged_args;
 
