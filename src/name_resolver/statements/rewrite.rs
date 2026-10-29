@@ -149,6 +149,10 @@ pub(super) fn resolve_regular_stmt(
             name: name.clone(),
             value: ctx.expr(value),
         },
+        StmtKind::StaticVar { name, init } => StmtKind::StaticVar {
+            name: name.clone(),
+            init: ctx.expr(init),
+        },
         StmtKind::Echo(expr) => StmtKind::Echo(ctx.expr(expr)),
         StmtKind::Throw(expr) => StmtKind::Throw(ctx.expr(expr)),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(ctx.expr(expr)),
