@@ -57,7 +57,7 @@ pub(super) fn eval_property_dimension_write(
 }
 
 /// Evaluates a computed key before the RHS and a variable key after it, each exactly once.
-fn stage_operands(
+pub(super) fn stage_operands(
     index: Option<&EvalExpr>, value: &EvalExpr, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(Option<RuntimeCellHandle>, RuntimeCellHandle), EvalStatus> {
@@ -97,11 +97,12 @@ fn write_selected(
 }
 
 /// Writes an already selected container and returns an independent array requiring writeback.
-fn write_value(
+pub(super) fn write_value(
     current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
     assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let append = index.is_none();
     if values.type_tag(current)? == EVAL_TAG_OBJECT {
         if !eval_array_access_object_matches(current, context, values)? { return Err(EvalStatus::RuntimeFatal); }
         if index.is_none() {
@@ -125,6 +126,16 @@ fn write_value(
         operands.push(returned);
         return Ok(None);
     }
+    if values.type_tag(current)? == EVAL_TAG_STRING {
+        if let Some(index) = index {
+            if op.is_some() {
+                return eval_throw_error("Cannot use assign-op operators with string offsets", context, values);
+            }
+            let replacement = eval_string_offset_write(current, index, assigned, context, values)?;
+            operands.push(replacement);
+            return Ok(Some(replacement));
+        }
+    }
     let index = match index {
         Some(index) if values.type_tag(index)? == EVAL_TAG_STRING => {
             if let Some(key) = eval_numeric_string_array_key(&values.string_bytes(index)?) {
@@ -139,9 +150,15 @@ fn write_value(
         },
     };
     let array = if values.is_array_like(current)? { values.array_clone_shallow(current)? }
-        else { values.array_new(1)? };
+        else { eval_array_autovivification(Some(current), append, context, values)? };
     operands.push(array);
     context.clone_array_element_aliases(current, array, None);
+    let promoted = eval_array_set_target_for_index(array, index, values)?;
+    if promoted != array {
+        operands.push(promoted);
+        context.clone_array_element_aliases(array, promoted, None);
+    }
+    let array = promoted;
     let value = compound_value(array, index, op, assigned, operands, context, values)?;
     for declared in context.local_reference_types(current) {
         validate_generic_local_element(Some(&declared), array, index, value, context, values)?;

@@ -235,7 +235,7 @@ pub(super) fn prepare_index<'a>(
 }
 
 /// Reads a late variable only after the RHS and keeps the resulting cell owned through the write.
-fn finish_index(
+pub(super) fn finish_index(
     index: PreparedWriteIndex<'_>, owners: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {

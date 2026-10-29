@@ -696,6 +696,7 @@ fn visit_static_var_declarations(
             }
             EvalStmt::ArrayAppendVar { .. }
             | EvalStmt::ArraySetVar { .. }
+            | EvalStmt::DimensionWrite { .. }
             | EvalStmt::Break
             | EvalStmt::ClassDecl(_)
             | EvalStmt::Continue

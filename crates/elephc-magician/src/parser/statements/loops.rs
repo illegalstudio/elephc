@@ -40,7 +40,7 @@ impl Parser {
                 *self = expression;
                 return Ok(vec![EvalStmt::Expr(value)]);
             }
-            if matches!(value, EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }) {
+            if needs_dimension_tail(&value, expression.current()) {
                 let statements = expression.parse_property_like_stmt_tail(value, true)?;
                 *self = expression;
                 return Ok(statements);

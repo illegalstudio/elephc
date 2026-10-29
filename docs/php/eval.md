@@ -235,6 +235,14 @@ runtime include-execution history.
 
 Supported unary operators are `+`, `-`, `!`, and integer bitwise `~`.
 
+Nested array writes and appends keep their storage path, including
+`$rows["items"][] = $value` and `$registry->handlers["save"][] = $handler`.
+Property writes can use indexed object receivers such as `$views[0]->name`.
+Object dimensions returned by a method remain writable, including
+`$xml->attributes()["id"] = "new"`. Array replacements preserve copied snapshots.
+A temporary array with no variable or property to receive its replacement raises
+`Error`; native object dimensions keep their shared object identity.
+
 Supported binary operators are:
 
 | Category | Operators |

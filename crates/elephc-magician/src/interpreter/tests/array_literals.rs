@@ -10,6 +10,58 @@
 use super::super::*;
 use super::support::*;
 
+/// Nested appends autovivify quietly and retain independent snapshots across array replacement.
+#[test]
+fn execute_nested_dimension_writes_preserve_cow() {
+    let program = parse_fragment(br#"
+        $rows = [];
+        $rows['i'][] = 'first';
+        $snapshot = $rows;
+        $rows['i'][] = 'second';
+        $rows['i'][0] .= '!';
+        return count($rows['i']) . ':' . count($snapshot['i']) . ':' . $rows['i'][0] . ':' . $snapshot['i'][0];
+    "#).expect("parse nested writes");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute nested writes");
+    assert_eq!(values.get(result), FakeValue::String("2:1:first!:first".into()));
+}
+
+/// A computed object root runs once while nested arrays write back into its declared property.
+#[test]
+fn execute_computed_property_dimension_writes() {
+    let program = parse_fragment(br#"
+        class DimensionRegistry {
+            public array $handlers = [];
+            public int $calls = 0;
+            public function registry(): object { $this->calls += 1; return $this; }
+        }
+        $registry = new DimensionRegistry();
+        $registry->registry()->handlers['save'][] = 'first';
+        $registry->registry()->handlers['save'][] = 'second';
+        return count($registry->handlers['save']) . ':' . $registry->calls;
+    "#).expect("parse computed property writes");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute computed property writes");
+    assert_eq!(values.get(result), FakeValue::String("2:2".into()));
+}
+
+/// Unattached temporary array writes fail explicitly instead of losing an aliased replacement.
+#[test]
+fn execute_temporary_array_dimension_write_is_refused() {
+    let program = parse_fragment(br#"
+        function temporaryDimensionArray(): array { return []; }
+        try { temporaryDimensionArray()[0] = 1; }
+        catch (Error $error) { return $error->getMessage(); }
+    "#).expect("parse temporary array write");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch the explicit refusal");
+    assert_eq!(values.get(result), FakeValue::String(
+        "Unsupported dimension write: temporary arrays have no attached storage".into()));
+}
+
 /// Verifies indexed array literals and reads execute through runtime hooks.
 #[test]
 fn execute_program_reads_indexed_array_literal() {

@@ -9,6 +9,16 @@
 
 use super::*;
 
+/// Keeps plain local indexed stores on their fast path and shares all richer mutation tails.
+pub(super) fn needs_dimension_tail(target: &EvalExpr, next: &TokenKind) -> bool {
+    match target {
+        EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. } => true,
+        EvalExpr::ArrayGet { array, .. } => !matches!(array.as_ref(), EvalExpr::LoadVar(_))
+            || !matches!(next, TokenKind::Equal),
+        _ => false,
+    }
+}
+
 /// Builds a property by-reference binding statement from a parsed property target.
 pub(super) fn property_reference_bind_stmt(
     target: EvalExpr,
@@ -111,7 +121,7 @@ pub(super) fn property_array_append_stmt(target: EvalExpr, value: EvalExpr) -> R
             property: *property,
             value,
         }),
-        _ => Err(EvalParseError::UnexpectedToken),
+        array => Ok(EvalStmt::DimensionWrite { array, index: None, op: None, value }),
     }
 }
 
@@ -157,7 +167,7 @@ pub(super) fn property_array_set_stmt(
             op,
             value,
         }),
-        _ => Err(EvalParseError::UnexpectedToken),
+        array => Ok(EvalStmt::DimensionWrite { array, index: Some(index), op, value }),
     }
 }
 

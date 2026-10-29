@@ -23,6 +23,12 @@ pub enum EvalStmt {
         index: EvalExpr,
         value: EvalExpr,
     },
+    DimensionWrite {
+        array: EvalExpr,
+        index: Option<EvalExpr>,
+        op: Option<EvalBinOp>,
+        value: EvalExpr,
+    },
     Break,
     Continue,
     DoWhile {

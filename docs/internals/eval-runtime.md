@@ -454,6 +454,17 @@ capacity. Included files have their own memo (`parse_script_cached`), with the
 same cap: a file starts in HTML mode and a fragment in PHP mode, so the same
 bytes parse to different programs and must never share a key.
 
+`EvalStmt::DimensionWrite` carries a complete receiver expression, an optional
+index, a compound operator, and the RHS. Magician prepares computed roots and
+keys before evaluating the RHS, then resolves live variable and property storage.
+The dimension writer retains every traversed parent, applies native object
+handlers directly, and propagates copied array replacements back through their
+index, property, static-property, or local attachment. Absent array children
+autovivify without read warnings; all intermediate owners retire in reverse order
+on normal completion and failure. A temporary array without an attachment is
+refused before mutation. The parser shares these mutation tails with `for`
+clauses, and the property-hook and static-local visitors cover the new statement.
+
 ## Runtime script cache
 
 **Sources:** `crates/elephc-magician/src/script_cache/`, the

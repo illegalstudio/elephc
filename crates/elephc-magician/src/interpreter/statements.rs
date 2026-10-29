@@ -19,6 +19,7 @@ mod class_declarations;
 mod class_resolution;
 mod closure_binding;
 mod dispatch;
+mod dimension_writes;
 mod dynamic_method_execution;
 mod enum_declarations;
 mod exceptions;
