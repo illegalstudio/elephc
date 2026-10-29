@@ -115,14 +115,14 @@ fn static_array_replacement_cleanup_failure_keeps_the_published_owner() {
     }
 }
 
-/// Asymmetric write visibility is checked before a replacement box reaches static storage.
+/// Read visibility failure preserves static storage before any replacement box is copied.
 #[test]
-fn static_array_write_access_failure_preserves_the_slot() {
+fn static_array_read_access_failure_preserves_the_slot() {
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let program =
-        parse_fragment(b"class StaticDeniedCopy { public private(set) static array $items = []; }")
+        parse_fragment(b"class StaticDeniedCopy { private static array $items = []; }")
             .unwrap();
     let returned =
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
