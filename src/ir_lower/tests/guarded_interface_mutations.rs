@@ -98,10 +98,16 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
             let member = function.instructions.iter().find(|inst| inst.op == op).unwrap();
             let receiver = function.value(member.operands[0]).unwrap();
             assert_eq!(receiver.php_type, PhpType::Object("Label".into()), "{target}: {name}");
-            let load = function.instructions.iter().find(|inst| inst.result == Some(member.operands[0])).unwrap();
+            let mut load = function.instructions.iter().find(|inst| inst.result == Some(member.operands[0])).unwrap();
+            if load.op == Op::Acquire {
+                assert_eq!(receiver.ownership, crate::ir::Ownership::Owned, "{target}: {name}");
+                load = function.instructions.iter().find(|inst| inst.result == Some(load.operands[0])).unwrap();
+            }
             assert_eq!(load.op, Op::LoadLocal, "{target}: {name}: receiver producer");
-            assert_eq!(load.result_php_type, receiver.php_type);
-            assert_eq!(load.result_ownership, receiver.ownership);
+            let view = function.value(load.result.unwrap()).unwrap();
+            assert_eq!(view.php_type, receiver.php_type);
+            assert_eq!(load.result_php_type, view.php_type);
+            assert_eq!(load.result_ownership, view.ownership);
             let slot = function.locals.iter().find(|slot| slot.name.as_deref() == Some("root")).unwrap();
             assert_eq!(slot.php_type, PhpType::Object("Root".into()), "{target}: {name}");
         }

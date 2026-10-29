@@ -236,7 +236,12 @@ fn refined_instruction_effects(
             named_property_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
         Op::DynamicPropGet => {
-            dynamic_property_effects(function, instruction, context).unwrap_or(instruction.effects)
+            let effects = dynamic_property_effects(function, instruction, context).unwrap_or(instruction.effects);
+            if instruction.immediate == Some(Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::QuietRead)) {
+                // Quiet traversal can materialize a missing XML child even when the
+                // ordinary property metadata only describes a read.
+                effects | Effects::WRITES_HEAP | Effects::ALLOC_HEAP | Effects::REFCOUNT_OP
+            } else { effects }
         }
         _ => instruction.effects,
     }

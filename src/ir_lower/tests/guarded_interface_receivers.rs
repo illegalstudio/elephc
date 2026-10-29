@@ -100,6 +100,16 @@ function choose(bool $active): Endpoint {
     if ($active) { return new Reference(); }
     return new Direct();
 }
+class GuardedBase {}
+class GuardedChild extends GuardedBase {
+    public function guardedValue(): int { return 11; }
+}
+function guarded_base_method(GuardedBase $base): int {
+    if ($base instanceof GuardedChild) { return $base->guardedValue(); }
+    return 0;
+}
+$base = new GuardedChild();
+echo guarded_base_method($base);
 $endpoint = choose($argc > 1);
 echo property($endpoint), method($endpoint), label($endpoint);
 probe($endpoint);
@@ -127,6 +137,7 @@ for ($global = 0; $global < 1; $global++) {
             ("main", Op::PropGet, "Reference"),
             ("dynamic", Op::DynamicPropGet, "Reference"),
             ("buffer_probe", Op::DynamicPropGet, "Buffered"),
+            ("guarded_base_method", Op::MethodCall, "GuardedChild"),
         ] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             let member = function.instructions.iter().find(|inst| inst.op == op).unwrap();
@@ -147,8 +158,10 @@ for ($global = 0; $global < 1; $global++) {
             assert_eq!(view.php_type, receiver.php_type);
             assert_eq!(load.result_php_type, view.php_type);
             assert_eq!(load.result_ownership, view.ownership);
-            let slot = function.locals.iter().find(|slot| slot.name.as_deref() == Some("endpoint")).unwrap();
-            assert_eq!(slot.php_type, PhpType::Object("Endpoint".into()), "{target}: {name}");
+            let (local, original) = if name == "guarded_base_method" { ("base", "GuardedBase") }
+                else { ("endpoint", "Endpoint") };
+            let slot = function.locals.iter().find(|slot| slot.name.as_deref() == Some(local)).unwrap();
+            assert_eq!(slot.php_type, PhpType::Object(original.into()), "{target}: {name}");
         }
         for optimized in [false, true] {
             if optimized { crate::ir_passes::optimize_module(&mut module); }

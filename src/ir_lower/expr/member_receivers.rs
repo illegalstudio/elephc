@@ -1,5 +1,5 @@
 //! Purpose:
-//! Preserve checked class/interface views on native interface receiver values.
+//! Preserve checked class/interface views on native object receiver values.
 //!
 //! Called from:
 //! - Property reads, writes, unset probes and method-call lowering.
@@ -69,8 +69,7 @@ fn checked_member_receiver_type_at_span(
     original: &PhpType,
     span: Span,
 ) -> Option<PhpType> {
-    let PhpType::Object(original) = original else { return None; };
-    if !ctx.interfaces.contains_key(original) { return None; }
+    let PhpType::Object(_) = original else { return None; };
     let Some(Some(PhpType::Object(class))) = ctx.member_receiver_types
         .get(&(ctx.loop_storage_scope.clone(), span))
     else {
