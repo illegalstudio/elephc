@@ -302,7 +302,7 @@ fn magic_property_arm(
     } else {
         None
     };
-    let isset = if has_isset && !mode.is_read() {
+    let isset = if has_isset && !mode.uses_magic_get() {
         let target = resolve_method_call_target(ctx, class_name, "__isset", 2)?;
         // A probe php answers from `__isset` must never call `__get` in its place: a class whose
         // `__isset` result this arm cannot read (not a `bool`) gets no arm at all.

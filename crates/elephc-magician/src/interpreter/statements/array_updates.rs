@@ -186,15 +186,10 @@ pub(super) fn eval_array_unset_element_stmt(
             return Ok(());
         }
         EvalExpr::PropertyGet { object, property } => {
-            return with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                eval_property_array_unset_result(args[0], property, index, context, scope, values)
-            });
+            return eval_property_dimension_unset(object, DimensionProperty::Literal(property), index, context, scope, values);
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            return with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                eval_property_array_unset_result(args[0], &property, index, context, scope, values)
-            });
+            return eval_property_dimension_unset(object, DimensionProperty::Dynamic(property), index, context, scope, values);
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -241,26 +236,6 @@ pub(super) fn eval_array_unset_element_stmt(
     }
     with_eval_void_operands(&[array], context, scope, values, |args, context, scope, values| {
         eval_array_access_unset_result(args[0], index, context, scope, values)
-    })
-}
-
-/// Releases the old property read and the rebuilt array after an indexed unset writes back.
-fn eval_property_array_unset_result(
-    object: RuntimeCellHandle,
-    property: &str,
-    index: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let array = eval_property_get_result(object, property, context, values)?;
-    with_eval_value_lease(array, context, values, |array, context, values| {
-        if let Some(replacement) = eval_array_unset_target_result(array, index, context, scope, values)? {
-            with_eval_value_lease(replacement, context, values, |replacement, context, values| {
-                eval_property_set_result(object, property, replacement, context, values)
-            })?;
-        }
-        Ok(())
     })
 }
 

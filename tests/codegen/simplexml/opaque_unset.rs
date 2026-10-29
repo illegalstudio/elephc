@@ -86,5 +86,113 @@ unset($ordinary, $xml, $error);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
-    assert_eq!(out.stdout, "Unsupported unset(): opaque ordinary object property storage has no attached removal path|[1,2]");
+    assert_eq!(out.stdout, "Unsupported unset(): opaque array property storage has no attached removal path|[1,2]");
+}
+
+/// Nullable holders, runtime holder classes and typed dynamic XML names keep handle mutations.
+#[test]
+fn test_simplexml_opaque_unset_holders_bundle() {
+    if skip_without_xml_native("test_simplexml_opaque_unset_holders_bundle") { return; }
+    let source = r###"<?php
+interface OpaqueUnsetHolderMarker {}
+class OpaqueUnsetPage implements OpaqueUnsetHolderMarker {
+    public SimpleXMLElement $xml;
+    public function __construct(SimpleXMLElement $xml) { $this->xml = $xml; }
+}
+class OpaqueUnsetUninitialized { public SimpleXMLElement $absent; }
+class OpaqueUnsetBox {
+    public ArrayObject $bag;
+    public function __construct() { $this->bag = new ArrayObject(['k' => 1, 'j' => 2]); }
+}
+function OpaqueUnsetPageDrop(?OpaqueUnsetPage $page): void { unset($page->xml['id']); }
+function OpaqueUnsetBoxDrop(?OpaqueUnsetBox $box): void { unset($box->bag['k']); }
+function OpaqueUnsetHolderDrop(object $holder): void { unset($holder->xml['id']); }
+function OpaqueUnsetMarkerDrop(OpaqueUnsetHolderMarker $holder): void { unset($holder->xml['id']); }
+function OpaqueUnsetMissing(object $holder): void { unset($holder->absent['id']); }
+class OpaqueUnsetGetter {
+    public SimpleXMLElement $xml;
+    public function __construct(SimpleXMLElement $xml) { $this->xml = $xml; }
+    public function __isset(string $name): bool { echo 'bad-isset|'; return false; }
+    public function __get(string $name): mixed { echo 'get|'; return $this->xml; }
+}
+class OpaqueUnsetDerived extends SimpleXMLElement {
+    public function removeNamed(string $name): void { unset($this->{$name}[0]); }
+}
+$page = new OpaqueUnsetPage(new SimpleXMLElement('<p id="1" keep="2"/>'));
+OpaqueUnsetPageDrop($page); OpaqueUnsetPageDrop(null); echo $page->xml->asXML();
+$box = new OpaqueUnsetBox(); OpaqueUnsetBoxDrop($box); OpaqueUnsetBoxDrop(null); echo json_encode($box->bag->getArrayCopy()), '|';
+$holder = new OpaqueUnsetPage(new SimpleXMLElement('<o id="1" keep="2"/>'));
+OpaqueUnsetHolderDrop($holder); echo $holder->xml->asXML();
+$marker = new OpaqueUnsetPage(new SimpleXMLElement('<i id="1" keep="2"/>'));
+OpaqueUnsetMarkerDrop($marker); echo $marker->xml->asXML();
+$missing = new stdClass(); OpaqueUnsetMissing($missing);
+echo property_exists($missing, 'absent') ? 'created|' : 'missing|';
+$missing->absent = null; OpaqueUnsetMissing($missing); echo 'null|';
+$uninitialized = new OpaqueUnsetUninitialized(); OpaqueUnsetMissing($uninitialized); echo 'uninitialized|';
+$getter = new OpaqueUnsetGetter(new SimpleXMLElement('<g id="1" keep="2"/>'));
+OpaqueUnsetMissing($getter); echo $getter->xml->asXML();
+$typed = new SimpleXMLElement('<t><a>1</a><a>2</a></t>'); $name = 'a';
+unset($typed->{$name}[0]); echo $typed->asXML();
+$derived = new OpaqueUnsetDerived('<d><a>1</a><a>2</a></d>');
+$derived->removeNamed($name); echo $derived->asXML();
+$chain = new SimpleXMLElement('<c><child><a>1</a><a>2</a></child></c>');
+unset($chain->child->{$name}[0]); echo $chain->asXML();
+unset($chain->missing->{$name}[0]); echo $chain->asXML();
+unset($page, $box, $holder, $marker, $missing, $uninitialized, $getter, $typed, $derived, $chain, $name);
+"###;
+    let renamed = source.replace("OpaqueUnset", "EvalOpaqueUnset");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "<?xml version=\"1.0\"?>\n<p keep=\"2\"/>\n{\"j\":2}|<?xml version=\"1.0\"?>\n<o keep=\"2\"/>\n<?xml version=\"1.0\"?>\n<i keep=\"2\"/>\ncreated|null|uninitialized|get|<?xml version=\"1.0\"?>\n<g keep=\"2\"/>\n<?xml version=\"1.0\"?>\n<t><a>2</a></t>\n<?xml version=\"1.0\"?>\n<d><a>2</a></d>\n<?xml version=\"1.0\"?>\n<c><child><a>2</a></child></c>\n<?xml version=\"1.0\"?>\n<c><child><a>2</a></child><missing/></c>\n";
+    assert_bundle_with(&[
+        BundleCase { name: "opaque_holders_aot", source, expected },
+        BundleCase { name: "opaque_holders_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
+/// Unresolved reference-returning calls fail explicitly while object handles remain mutable.
+#[test]
+fn test_simplexml_opaque_unset_reference_calls() {
+    if skip_without_xml_native("test_simplexml_opaque_unset_reference_calls") { return; }
+    let out = compile_and_run_with_heap_debug(r###"<?php
+class OpaqueUnsetRefBag {
+    public mixed $data = ['a' => 1, 'b' => 2];
+    public function &bag(): mixed { return $this->data; }
+}
+class OpaqueUnsetOtherBag { public function bag(int $unused): mixed { return []; } }
+function OpaqueUnsetAmbiguous(mixed $holder): void { unset($holder->bag()['a']); }
+class OpaqueUnsetParentBag { public function bag(): mixed { return []; } }
+class OpaqueUnsetChildBag extends OpaqueUnsetParentBag {
+    public mixed $data = ['a' => 1, 'b' => 2];
+    public function &bag(): mixed { return $this->data; }
+}
+function OpaqueUnsetOverride(OpaqueUnsetParentBag $holder): void { unset($holder->bag()['a']); }
+function OpaqueUnsetByValue(): mixed { return ['a' => 1, 'b' => 2]; }
+$xml = new SimpleXMLElement('<r a="1" b="2"/>');
+$data = ['a' => 1, 'b' => 2];
+$ref = function &() use (&$data): mixed { return $data; };
+try { unset($ref()['a']); } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($data), '|';
+$bag = new OpaqueUnsetRefBag();
+try { OpaqueUnsetAmbiguous($bag); } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($bag->data), '|';
+$child = new OpaqueUnsetChildBag();
+try { OpaqueUnsetOverride($child); } catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($child->data), '|';
+unset(OpaqueUnsetByValue()['a']); echo 'value|';
+$handle = function () use ($xml): mixed { return $xml; };
+unset($handle()['a']); echo $xml->asXML();
+unset($handle, $ref, $data, $bag, $child, $xml, $error);
+"###);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+    let message = "Unsupported unset(): array result of an unresolved or overridable call has no attached removal path";
+    assert_eq!(out.stdout, format!("{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|value|<?xml version=\"1.0\"?>\n<r b=\"2\"/>\n"));
 }

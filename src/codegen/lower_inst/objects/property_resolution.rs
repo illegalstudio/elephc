@@ -241,7 +241,7 @@ impl PropertyAccessKind {
     fn magic_method(self) -> Option<&'static str> {
         match self {
             Self::DirectRead(mode) | Self::RuntimeRead(mode) => {
-                Some(if mode.is_read() { "__get" } else { "__isset" })
+                Some(if mode.uses_magic_get() { "__get" } else { "__isset" })
             }
             Self::DirectWrite | Self::RuntimeWrite => Some("__set"),
             Self::DirectUnset | Self::RuntimeUnset => Some("__unset"),
@@ -359,7 +359,7 @@ pub(super) fn resolve_property_runtime_action(
         if let Some(magic) = kind.magic_method() {
             if class_declares_method(ctx, class_name, magic) {
                 return Ok(
-                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.is_read()) {
+                    if matches!(kind, PropertyAccessKind::DirectRead(mode) if mode.uses_magic_get()) {
                         PropertyRuntimeAction::MagicGet
                     } else {
                         PropertyRuntimeAction::MagicDeferred
@@ -426,7 +426,7 @@ pub(super) fn resolve_property_runtime_action(
             if matches!(
                 kind,
                 PropertyAccessKind::DirectRead(mode) | PropertyAccessKind::RuntimeRead(mode)
-                    if !mode.is_read()
+                    if !mode.uses_magic_get()
             ) {
                 return Ok(PropertyRuntimeAction::DynamicMissing {
                     warns_on_miss: false,
@@ -912,7 +912,7 @@ pub(super) fn resolve_property_read_arm(
                 .map(|slot| Some(PropertyNameArm::Slot(slot)))
         }
         PropertyNameResolution::Dynamic => Ok(Some(PropertyNameArm::ScopeDynamic)),
-        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.is_read().then(|| {
+        PropertyNameResolution::Inaccessible(visibility) => Ok(mode.uses_magic_get().then(|| {
             PropertyNameArm::Refuse {
                 message: property_access_error_message(&visibility, normalized, property),
             }
@@ -929,7 +929,7 @@ fn class_declares_property_magic(
     class_name: &str,
     mode: PropertyFetchMode,
 ) -> bool {
-    let magic = if mode.is_read() { "__get" } else { "__isset" };
+    let magic = if mode.uses_magic_get() { "__get" } else { "__isset" };
     ctx.module
         .class_infos
         .get(class_name)

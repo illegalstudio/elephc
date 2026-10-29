@@ -27,11 +27,28 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
     values: &mut impl RuntimeValueOps,
     owned: Option<&mut Vec<RuntimeCellHandle>>,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_read_result(object, property_name, context, values, owned, false)
+}
+
+/// Fetches an unset container quietly while preserving visibility and direct magic getter calls.
+pub(super) fn eval_unset_property_get_result(
+    object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_property_read_result(object, property_name, context, values, None, true)
+}
+
+/// Shares ordinary and quiet container reads without using an isset guard before a getter.
+fn eval_property_read_result(
+    object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let Ok(identity) = values.object_identity(object) else {
         return values.property_get(object, property_name);
     };
     if let Some(value) = super::super::runtime_ops::simplexml_properties::invoke(
-        values, object, property_name, elephc_builtin_contract::ObjectProperty::Get, None,
+        values, object, property_name, if quiet { elephc_builtin_contract::ObjectProperty::Probe }
+            else { elephc_builtin_contract::ObjectProperty::Get }, None,
     )? { return Ok(value); }
     let Some(class) = context.dynamic_object_class(identity) else {
         let class_name = eval_runtime_object_class_name(object, values)?;
@@ -54,10 +71,15 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
                 );
             }
             if !is_static {
-                return eval_native_property_get_authorized(
-                    object, &declaring_class, property_name, context, values,
+                return eval_native_property_get_for_container(
+                    object, &declaring_class, property_name, quiet, context, values,
                 );
             }
+        }
+        if quiet && !values.object_dynamic_property_exists(object, property_name)?
+            && values.reflection_method_flags(&class_name, "__get")?.is_none()
+        {
+            return eval_missing_unset_property(object, &class_name, property_name, context, values);
         }
         return values.property_get(object, property_name);
     };
@@ -110,6 +132,7 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
         if property.property_type().is_some()
             && !context.dynamic_property_is_initialized(identity, &storage_property_name)
         {
+            if quiet { return values.null(); }
             return eval_throw_uninitialized_property_error(
                 &declaring_class,
                 property.name(),
@@ -146,8 +169,8 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
                         values,
                     );
                 }
-                return eval_native_property_get_authorized(
-                    object, &declaring_class, property_name, context, values,
+                return eval_native_property_get_for_container(
+                    object, &declaring_class, property_name, quiet, context, values,
                 );
             }
         }
@@ -163,6 +186,9 @@ pub(in crate::interpreter) fn eval_property_get_result_with_ownership(
         {
             return Ok(result);
         }
+    }
+    if quiet && !declared_property_found {
+        return eval_missing_unset_property(object, &object_class_name, property_name, context, values);
     }
     if let Some(target) = context
         .dynamic_property_alias(identity, &storage_property_name)

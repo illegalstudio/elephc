@@ -212,7 +212,7 @@ pub(super) fn finish_name(
 }
 
 /// Releases all captures even when an earlier receiver destructor throws.
-fn release_receivers(
+pub(super) fn release_receivers(
     operands: Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut result = Ok(());

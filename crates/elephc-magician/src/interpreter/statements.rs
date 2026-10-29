@@ -37,6 +37,7 @@ mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
 mod property_dimension_writes;
+mod property_dimension_unset;
 mod property_write_receivers;
 mod property_validation;
 mod abstract_setter;
@@ -92,6 +93,7 @@ use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
 use property_dispatch::*;
+use property_dimension_unset::{eval_property_dimension_unset, eval_missing_unset_property};
 use property_dimension_writes::{
     eval_property_dimension_write, DimensionProperty,
     eval_static_property_array_append_result, eval_static_property_array_set_result,

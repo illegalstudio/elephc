@@ -46,6 +46,8 @@ fn is_storage_receiver(ctx: &LoweringContext<'_, '_>, mut receiver: &Expr) -> bo
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr,
 ) {
+    // Resolve before receiver/argument/key effects can change the source's current type facts.
+    let detached_array_allowed = temporary_array_is_by_value(ctx, array);
     let name = if let ExprKind::Variable(name) = &array.kind { Some(name.as_str()) } else { None };
     // A computed receiver runs before its key; a variable selects its current storage afterwards.
     let early_receiver = name.is_none().then(|| capture_receiver(ctx, array, expr.span));
@@ -90,7 +92,7 @@ pub(super) fn lower(
             // A key expression can assign a concrete array before current storage is loaded.
             lower_unset_array_access(ctx, array, &key, expr);
         }
-    } else {
+    } else if detached_array_allowed {
         let detached = ctx.emit_owned_value(Op::MixedClone, vec![borrowed.value], None,
             PhpType::Mixed, Op::MixedClone.default_effects(), Some(expr.span));
         let (detached, detached_owner) = root_owned_call_operand(ctx, detached, expr.span);
@@ -98,6 +100,9 @@ pub(super) fn lower(
         ctx.emit_void(Op::OffsetUnset, vec![detached.value, key_value.value], None,
             Op::OffsetUnset.default_effects(), Some(expr.span));
         if let Some(slot) = detached_owner { retire_owned_call_operand(ctx, slot, expr.span); }
+    } else {
+        crate::ir_lower::stmt::lower_throw_access_error(ctx,
+            "Unsupported unset(): array result of an unresolved or overridable call has no attached removal path", expr.span);
     }
     branch_to(ctx, merge);
     let array_slots = ctx.initialized_slots_snapshot();
@@ -109,6 +114,38 @@ pub(super) fn lower(
     if let Some(slot) = owner { retire_owned_call_operand(ctx, slot, expr.span); }
     if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, expr.span); }
     release_evaluated_once(ctx, key_temp, expr.span);
+}
+
+/// Proves that discarding a copied array cannot hide a reference-returning runtime implementation.
+fn temporary_array_is_by_value(ctx: &LoweringContext<'_, '_>, mut source: &Expr) -> bool {
+    while let ExprKind::ErrorSuppress(inner) = &source.kind { source = inner; }
+    match &source.kind {
+        ExprKind::FunctionCall { name, .. } =>
+            call_signature(ctx, name, source_prefers_extension_builtin(name))
+                .is_some_and(|signature| !signature.by_ref_return),
+        ExprKind::MethodCall { object, method, .. }
+        | ExprKind::NullsafeMethodCall { object, method, .. } => {
+            let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
+            let Some((class, _)) = singular_object_class(&ty) else { return false; };
+            let class = class.trim_start_matches('\\');
+            let Some(info) = ctx.classes.get(class) else { return false; };
+            let key = php_symbol_key(method);
+            let Some(signature) = info.methods.get(&key) else { return false; };
+            if signature.by_ref_return { return false; }
+            if info.is_final || info.final_methods.contains(&key) { return true; }
+            !ctx.has_eval_barrier() && ctx.classes.iter().all(|(candidate, info)|
+                !class_extends_class(ctx, candidate, class)
+                    || info.methods.get(&key).is_none_or(|signature| !signature.by_ref_return))
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } =>
+            !matches!(receiver, StaticReceiver::Static)
+                && static_method_implementation_signature(ctx, receiver, method)
+                    .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method))
+                    .is_some_and(|signature| !signature.by_ref_return),
+        ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } => false,
+        _ => true,
+    }
 }
 
 /// Roots computed owners before key effects can throw or replace their source storage.
@@ -123,7 +160,7 @@ fn capture_receiver(
 }
 
 /// Preserves null no-ops, false deprecations, and catchable errors without mutating scalar storage.
-fn lower_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+pub(super) fn lower_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
     let done = ctx.builder.create_named_block("unset.scalar.done", vec![]);
     let nonnull = ctx.builder.create_named_block("unset.scalar.nonnull", vec![]);
     let is_null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,

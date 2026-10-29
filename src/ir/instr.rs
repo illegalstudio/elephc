@@ -477,6 +477,8 @@ pub enum MixedNumericOp {
 pub enum PropertyFetchMode {
     /// An ordinary value read: refuse an inaccessible name, warn on an undefined one.
     Read,
+    /// A quiet value fetch for object-handle unset traversal, calling `__get` without `__isset`.
+    QuietRead,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
     Probe,
     /// The probe `isset()` makes: silent like `Probe`, and only the answer's nullness is used,
@@ -493,6 +495,7 @@ impl PropertyFetchMode {
     pub const fn as_eir(self) -> &'static str {
         match self {
             Self::Read => "read",
+            Self::QuietRead => "quiet_read",
             Self::Probe => "probe",
             Self::Isset => "isset",
             Self::Empty => "empty",
@@ -505,7 +508,12 @@ impl PropertyFetchMode {
         matches!(self, Self::Isset | Self::Empty)
     }
 
-    /// Returns whether this mode may raise or warn about the name it fetches.
+    /// Selects a value getter and ordinary visibility checks instead of an isset guard.
+    pub const fn uses_magic_get(self) -> bool {
+        matches!(self, Self::Read | Self::QuietRead)
+    }
+
+    /// Returns whether missing and uninitialized slots use ordinary value-read diagnostics.
     pub const fn is_read(self) -> bool {
         matches!(self, Self::Read)
     }

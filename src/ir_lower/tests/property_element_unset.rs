@@ -231,6 +231,12 @@ $xml = new SimpleXMLElement('<r a="1" b="2" c="3"/>');
 $holder = new NativeXmlUnsetHolder($xml);
 unset($holder->boxed['a'], $holder->typed['b'], $holder->fixed['c']);
 $factory = simplexml_load_string('<r><a>1</a><a>2</a></r>'); unset($factory->a[0]);
+function removeOpaqueXmlField(object $holder): void { unset($holder->typed['id']); }
+function removeNullableXmlField(?NativeXmlUnsetHolder $holder): void { unset($holder->typed['id']); }
+removeOpaqueXmlField($holder); removeNullableXmlField($holder);
+$name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
+$callback = function (): mixed { return []; };
+try { unset($callback()['id']); } catch (Error $error) {}
 "#;
     for name in TARGETS {
         let module = super::lower_source_at_for_target(
