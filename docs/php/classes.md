@@ -487,7 +487,7 @@ echo $n->value; // Ada
 
 Rules:
 
-- A property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error.
+- A virtual property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error. A backed getter-only property retains its implicit write operation.
 - Hooked properties cannot have a default value and cannot be `static`, `final`, or `readonly`.
 - Each hook may be declared at most once per property.
 - `set => expr;` is equivalent to assigning `expr` to the property's own backing slot.
