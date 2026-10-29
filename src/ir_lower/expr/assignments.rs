@@ -22,9 +22,10 @@ pub(super) fn lower_assignment_expr(
     if let Some(result) = native_xml_updates::lower_assignment(
         ctx, target, value, result_target, prelude, conditional_value_temp, expr,
     ) { return result; }
-    let (value, prelude) = super::ordinary_property_incdec::without_capture(
-        ctx, target, value, result_target, prelude, conditional_value_temp,
+    let incdec = super::ordinary_property_incdec::captured_arithmetic(
+        target, value, result_target, prelude, conditional_value_temp,
     );
+    let mut value = value;
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }
@@ -39,6 +40,14 @@ pub(super) fn lower_assignment_expr(
     );
     let mut compound_receiver = None;
     for (position, stmt) in prelude.iter().enumerate() {
+        if position + 1 == prelude.len() {
+            if let Some((operation, old)) = incdec {
+                if super::ordinary_property_incdec::scalar_operand(ctx, old) {
+                    value = operation;
+                    continue;
+                }
+            }
+        }
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
             continue;

@@ -66,6 +66,24 @@ fn ordinary_property_incdec_avoids_mixed_capture_locals_on_every_target() {
     let counter = r#"<?php
 final class InlinePropertyCounter {
     private int $n = 4;
+    private ?int $nullable = 0;
+    private string $text = '4';
+    private bool $flag = false;
+    private float $number = 0.0;
+    private ?float $optionalnumber = 0.0;
+    private int|float $numeric = 0;
+    public function boolpost(): bool { return $this->flag++; }
+    public function boolpre(): bool { return ++$this->flag; }
+    public function floatpost(): float { return $this->number++; }
+    public function floatpre(): float { return ++$this->number; }
+    public function optionalfloatpost(): ?float { return $this->optionalnumber++; }
+    public function optionalfloatpre(): ?float { return ++$this->optionalnumber; }
+    public function numericpost(): int|float { return $this->numeric++; }
+    public function numericpre(): int|float { return ++$this->numeric; }
+    public function nullablepost(): ?int { return $this->nullable++; }
+    public function nullablepre(): ?int { return ++$this->nullable; }
+    public function stringpost(): string { return $this->text++; }
+    public function stringpre(): string { return ++$this->text; }
     public mixed $opaque = 0;
     public function mixedpost(): mixed { return $this->opaque++; }
     public function post(): int { return $this->n++; }
@@ -82,20 +100,21 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
             let module = crate::ir_lower::tests::lower_source_at_for_target(
                 &source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
             );
-            for name in ["post", "pre", "postdec", "predec"] {
+            for name in ["post", "pre", "postdec", "predec", "nullablepost", "nullablepre", "stringpost", "stringpre",
+                "boolpost", "boolpre", "floatpost", "floatpre", "optionalfloatpost", "optionalfloatpre", "numericpost", "numericpre"] {
                 let function = method(&module, &format!("InlinePropertyCounter::{name}"));
                 assert!(!function.locals.iter().any(|local| local.name.as_deref()
                     .is_some_and(|name| name.contains("__elephc_incdec_new_"))),
                     "{target}, xml={xml}, {name}: the checked sum must feed the property directly");
                 assert!(!function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::PhpLocal
-                    && local.php_type.codegen_repr() == crate::types::PhpType::Mixed
+                    && local.php_type == crate::types::PhpType::Mixed
                     && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),
-                    "{target}, xml={xml}, {name}: generated PHP locals must stay scalar");
+                    "{target}, xml={xml}, {name}: scalar property updates must not gain Mixed PHP locals");
             }
             let opaque = method(&module, "InlinePropertyCounter::mixedpost");
             assert!(opaque.locals.iter().any(|local| local.name.as_deref()
                 .is_some_and(|name| name.contains("__elephc_incdec_new_"))),
-                "{target}, xml={xml}: opaque arithmetic must retain its original owner capture");
+                "{target}, xml={xml}: opaque/object arithmetic must retain its original owner capture");
             crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         }
     }
