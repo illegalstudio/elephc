@@ -77,7 +77,9 @@ fn step(
         else if selected_type.codegen_repr() == PhpType::Float { PhpType::Float }
         else { PhpType::Mixed };
     let rooted = Ownership::php_type_needs_lifetime_tracking(&temp_type);
-    let name = ctx.declare_owned_hidden_temp(temp_type.clone());
+    // The incdec kernel borrows a variable until its overwrite retires the old owner.
+    // A one-shot OwnedTemp load would also be consumed by object arithmetic.
+    let name = ctx.declare_synthetic_php_local(temp_type.clone());
     let slot = ctx.local_slots[&name];
     if rooted { crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span); }
     crate::ir_lower::expr::store_value_into_temp(ctx, &name, temp_type, selected, span);

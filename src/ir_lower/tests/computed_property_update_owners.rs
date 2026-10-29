@@ -16,6 +16,7 @@ class UpdateOwnerCounter {
     public string $text = 'a';
     public function receiver(): self { return $this; }
 }
+
 class UpdateOwnerName {
     public function __toString(): string { return 'number'; }
 }
@@ -56,5 +57,41 @@ $xml->a += 1;
             "{target}: scalar coercion must not gain native dispatch or operand owners");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Object arithmetic borrows an incdec working slot until overwrite and final cleanup.
+#[test]
+fn native_dimension_incdec_working_slot_has_one_owner_on_every_target() {
+    use crate::ir::{Immediate, LocalKind, Op, ValueDef};
+    let source = r#"<?php
+function dimensionOwnerStep(SimpleXMLElement $xml): void { $xml[0]++; }
+dimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "dimensionOwnerStep").unwrap();
+        let call = function.instructions.iter().find(|inst| inst.op == Op::StaticMethodCall
+            && matches!(inst.immediate, Some(Immediate::Data(name))
+                if module.data.strings[name.as_raw() as usize] == "SimpleXMLElement::__elephc_add"))
+            .expect("native XML incdec must retain its object arithmetic branch");
+        let old = call.operands[0];
+        let ValueDef::Instruction { inst, .. } = function.value(old).unwrap().def else {
+            panic!("{target}: working operand must load its retained variable");
+        };
+        let load = function.instruction(inst).unwrap();
+        assert_eq!(load.op, Op::LoadLocal, "{target}: incdec working operand");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: working slot"); };
+        assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::PhpLocal,
+            "{target}: updating storage must not transfer on each load");
+        assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
+            && inst.operands.contains(&old)), "{target}: arithmetic must not consume the slot's old owner");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ReleaseLocalSlot
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
+            "{target}: overwrite retires the old owner and final cleanup retires the replacement");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
