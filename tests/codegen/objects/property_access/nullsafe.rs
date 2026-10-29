@@ -386,7 +386,7 @@ echo $root?->branch->label(noisy()) ?? "fallback";
     );
     assert!(!out.success, "program unexpectedly succeeded");
     assert_eq!(out.stdout,
-        "\nFatal error: Uncaught Error: Call to a member function label() on null\n");
+        "\nFatal error: Uncaught Error: Call to a member function label() on null\nStack trace:\n#0 {main}\n");
     assert_eq!(out.stderr, "");
 }
 
