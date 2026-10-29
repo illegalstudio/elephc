@@ -39,8 +39,12 @@ pub(super) fn emit_unbox_owned_descriptor_result(
         PhpType::Float => "__rt_mixed_cast_float",
         PhpType::Str => "__rt_mixed_cast_string",
         PhpType::TaggedScalar => "__rt_mixed_unbox",
+        PhpType::Object(_) => {
+            emit_detach_owned_mixed_heap_result(emitter, ty);
+            return Ok(());
+        }
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
-            emit_detach_owned_mixed_array_result(emitter);
+            emit_detach_owned_mixed_heap_result(emitter, ty);
             return Ok(());
         }
         other => return Err(CodegenIrError::unsupported(format!(
@@ -74,11 +78,11 @@ pub(super) fn emit_unbox_owned_descriptor_result(
     Ok(())
 }
 
-/// Transfers an array payload out of its owned Mixed result box.
+/// Transfers a heap payload out of its owned Mixed result box.
 ///
 /// `Array(Mixed)` may use indexed or promoted hash storage at runtime. Both shapes expose their
 /// container pointer in the low Mixed payload word, and the generic retain preserves either kind.
-fn emit_detach_owned_mixed_array_result(emitter: &mut Emitter) {
+fn emit_detach_owned_mixed_heap_result(emitter: &mut Emitter, ty: &PhpType) {
     let result = abi::int_result_reg(emitter);
     abi::emit_push_reg(emitter, result);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -90,8 +94,7 @@ fn emit_detach_owned_mixed_array_result(emitter: &mut Emitter) {
             emitter.instruction("mov rax, rdi");                                // move the borrowed array payload into the raw array result register
         }
     }
-    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
-    abi::emit_incref_if_refcounted(emitter, &array_ty);
+    abi::emit_incref_if_refcounted(emitter, ty);
     abi::emit_push_reg(emitter, result);
     abi::emit_load_temporary_stack_slot(emitter, result, 16);
     abi::emit_call_label(emitter, "__rt_decref_mixed");
