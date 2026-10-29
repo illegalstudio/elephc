@@ -228,7 +228,7 @@ fn test_simplexml_erased_unset_storage_is_rejected() {
         "$m = json_decode('{\"a\":{\"b\":1,\"c\":2}}', true); unset($m['a']['b']);",
         "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);",
         "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);",
-        "function &erasedRefUnset(): mixed { static $data = ['a' => 1, 'b' => 2]; return $data; } unset(erasedRefUnset()['a']);",
+        "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(): mixed { $data = erasedRefSeed(); return $data; } unset(erasedRefUnset()['a']);",
         "class ErasedMethodRefUnset { public mixed $data = ['a' => 1, 'b' => 2]; public function &bag(): mixed { return $this->data; } } $h = new ErasedMethodRefUnset(); unset($h->bag()['a']);",
         "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { return self::$data; } } unset(ErasedStaticRefUnset::bag()['a']);",
     ] {

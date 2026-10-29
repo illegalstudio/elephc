@@ -200,8 +200,9 @@ class OpaqueUnsetChildBag extends OpaqueUnsetParentBag {
 }
 function OpaqueUnsetOverride(OpaqueUnsetParentBag $holder): void { unset($holder->bag()['a']); }
 function OpaqueUnsetByValue(): mixed { return ['a' => 1, 'b' => 2]; }
+function OpaqueUnsetReferenceData(): mixed { return ['a' => 1, 'b' => 2]; }
 $xml = new SimpleXMLElement('<r a="1" b="2"/>');
-$data = ['a' => 1, 'b' => 2];
+$data = OpaqueUnsetReferenceData();
 $ref = function &() use (&$data): mixed { return $data; };
 try { unset($ref()['a']); } catch (Error $error) { echo $error->getMessage(), '|'; }
 echo json_encode($data), '|';
