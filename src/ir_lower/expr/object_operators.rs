@@ -10,6 +10,15 @@
 
 use super::*;
 
+/// Distinguishes possible PHP objects from scalar unions that merely use boxed storage.
+fn can_contain_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed | PhpType::Object(_) => true,
+        PhpType::Union(members) => members.iter().any(can_contain_object),
+        _ => false,
+    }
+}
+
 /// Captures a by-value left operand before later source expressions can replace its storage.
 pub(super) fn capture_left_operand(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
@@ -42,8 +51,7 @@ pub(crate) fn lower_dynamic_object_binary(
 ) -> Option<LoweredValue> {
     let lt = ctx.builder.value_php_type(lhs.value);
     let rt = ctx.builder.value_php_type(rhs.value);
-    if !matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_))
-        && !matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
+    if !can_contain_object(&lt) && !can_contain_object(&rt) { return None; }
     let mut plans = ctx.classes.keys().filter_map(|name| {
         crate::types::object_operators::binary_plan(op, &PhpType::Object(name.clone()), &PhpType::Mixed)
     }).collect::<Vec<_>>();
@@ -59,7 +67,7 @@ pub(super) fn lower_dynamic_object_negate(
     expr: &Expr, scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
 ) -> Option<LoweredValue> {
     let ty = ctx.builder.value_php_type(value.value);
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
+    if !can_contain_object(&ty) { return None; }
     let mut plans = ctx.classes.keys().filter_map(|name| {
         let ty = PhpType::Object(name.clone());
         let class = crate::types::object_operators::operator_class(&ty)?;
@@ -234,7 +242,7 @@ pub(crate) fn lower_object_truthy(
         for value in extra { release_binary_operand_temporary(ctx, value, expr.span); }
         return Some(result);
     }
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
+    if !can_contain_object(&ty) { return None; }
     let mut handlers = ctx.classes.keys().filter_map(|name| {
         let class = elephc_builtin_contract::lookup_class(name)?;
         Some((class.name, class.operators?.boolean?))
@@ -293,7 +301,7 @@ pub(super) fn lower_object_numeric_cast(
         _ => return None,
     };
     let ty = ctx.builder.value_php_type(input.value);
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_) | PhpType::Object(_)) { return None; }
+    if !can_contain_object(&ty) { return None; }
     let result_type = if matches!(target, CastType::Int) { PhpType::Int } else { PhpType::Float };
     let mut handlers = ctx.classes.keys().filter_map(|name| {
         let class = elephc_builtin_contract::lookup_class(name)?;

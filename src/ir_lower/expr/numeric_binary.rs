@@ -355,6 +355,15 @@ fn coerce_bitwise_operands(
     ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, rhs: LoweredValue,
     left: &Expr, right: &Expr, expr: &Expr,
 ) -> (LoweredValue, LoweredValue) {
+    // Publishing scalar checked boxes changes their producer chain and blocks numeric
+    // fusion. A program without native integer casts keeps its ordinary coercion path.
+    let native_casts = ctx.classes.keys().any(|name| {
+        elephc_builtin_contract::lookup_class(name).and_then(|class| class.operators)
+            .and_then(|operators| operators.cast_method(elephc_builtin_contract::ObjectCast::Int)).is_some()
+    });
+    if !native_casts {
+        return (coerce_to_int(ctx, lhs, left), coerce_to_int(ctx, rhs, right));
+    }
     let pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
     let left_cast = object_operators::lower_object_numeric_cast(ctx, lhs, &CastType::Int, Some(left.span));
     let right_cast = object_operators::lower_object_numeric_cast(ctx, rhs, &CastType::Int, Some(right.span));
