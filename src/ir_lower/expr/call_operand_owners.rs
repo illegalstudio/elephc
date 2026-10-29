@@ -229,15 +229,18 @@ pub(super) fn finish_call_argument_evaluation(
     finish_call_argument_evaluation_with(ctx, operands, false)
 }
 
-/// `finish_call_argument_evaluation` for a user function call: a pin taken on a borrowed source
-/// stays a root released after the call while the operand keeps borrowing. Handed to the call,
-/// it became an owned operand that a conservative return-alias summary (`f($name, 0)` returning
-/// `mixed`) never released, leaking one reference per call.
+/// Transfers raw-string pins to alias comparison while retaining borrowed pins for boxed returns.
+///
+/// Raw string results may either alias a parameter or own a fresh allocation. Passing the pin
+/// as an owned operand lets the call transfer that exact owner on the alias branch and release
+/// it otherwise, without marking every possible result as borrowed. Boxed returns retain the
+/// separate pin because their conservative return summary does not transfer raw argument owners.
 pub(super) fn finish_user_call_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
+    result_type: &PhpType,
 ) -> Vec<CallArgumentIntermediate> {
-    finish_call_argument_evaluation_with(ctx, operands, true)
+    finish_call_argument_evaluation_with(ctx, operands, result_type.codegen_repr() != PhpType::Str)
 }
 
 /// Shared body of the two `finish_*` entries.
