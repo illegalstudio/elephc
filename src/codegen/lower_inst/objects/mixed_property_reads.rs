@@ -308,9 +308,25 @@ fn magic_result_boxes_cleanly(ty: &PhpType) -> bool {
     )
 }
 
-/// Boxes a magic accessor's owned result into the ladder's Mixed cell.
-fn box_magic_result(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
-    emit_box_current_owned_value_as_mixed(ctx.emitter, &ty.codegen_repr());
+/// Converts the getter's physical return ABI into one owned Mixed value snapshot.
+fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCallTarget) {
+    if getter.by_ref_return {
+        crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(
+            ctx.emitter, &getter.return_ty,
+        );
+        return;
+    }
+    let owned = ctx.next_label("magic_return_owned");
+    let done = ctx.next_label("magic_return_boxed");
+    if matches!(getter.return_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        crate::codegen_support::abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        ctx.emitter.label(&owned);
+    } else {
+        crate::codegen_support::emit_box_current_php_return_as_mixed(
+            ctx.emitter, &getter.return_ty, &owned, &done,
+        );
+    }
 }
 
 /// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
@@ -449,7 +465,7 @@ fn emit_magic_property_arm(
             Some(get) => {
                 emit_magic_accessor_args(ctx, property);
                 super::super::emit_resolved_method_call(ctx, get)?;
-                box_magic_result(ctx, &get.return_ty);
+                box_magic_result(ctx, get);
             }
             None => {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
@@ -466,7 +482,7 @@ fn emit_magic_property_arm(
         Some(get) => {
             emit_magic_accessor_args(ctx, property);
             super::super::emit_resolved_method_call(ctx, get)?;
-            box_magic_result(ctx, &get.return_ty);
+            box_magic_result(ctx, get);
         }
         None => emit_boxed_null(ctx),
     }

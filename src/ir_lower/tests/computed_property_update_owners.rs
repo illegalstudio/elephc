@@ -146,3 +146,37 @@ $source = $argc > 0 ? ';' : ''; eval($source);
         assert!(assembly.contains(&format!("{call} {getter}")), "{target}: missing keys reach the normal magic getter");
     }
 }
+
+/// Missing hash entries honor borrowed and reference getter return contracts on every target.
+#[test]
+fn mixed_magic_hash_getter_returns_are_owned_on_every_target() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class MixedGetterReferenceOwner {
+    private mixed $items = [1, 2];
+    public function &__get(string $name): mixed { return $this->items; }
+}
+#[AllowDynamicProperties]
+class MixedGetterBorrowedOwner {
+    public static mixed $items = null;
+    public function __get(string $name): mixed { return self::$items; }
+}
+function mixedGetterOwnerRead(mixed $object): mixed { return $object->missing; }
+echo json_encode(mixedGetterOwnerRead(new MixedGetterReferenceOwner()));
+echo json_encode(mixedGetterOwnerRead(new MixedGetterBorrowedOwner()));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = crate::names::function_symbol("mixedGetterOwnerRead");
+        let function = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+        let function = function.split("\n.globl ").next().unwrap();
+        assert!(function.contains("magic_return_owned"), "{target}: borrowed returns need marker handling");
+        let clone = function.find("__rt_mixed_clone").expect("reference returns need value snapshots");
+        let release = function.find("__rt_reference_cell_release").expect("reference leases need retirement");
+        assert!(clone < release, "{target}: copy the payload before retiring its cell");
+    }
+}

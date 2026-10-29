@@ -24,6 +24,7 @@ class MixedHashMagic {
     public function __get(string $name): int { echo 'get:', $name, '|'; return 30; }
     public function __isset(string $name): bool { echo 'isset:', $name, '|'; return true; }
 }
+
 function MixedHashExercise(mixed $object): void {
     var_dump($object->storedNull, $object->storedFalse, $object->stored, $object->missing);
     var_dump(isset($object->storedNull), isset($object->missing));
@@ -43,6 +44,52 @@ unset($object);
     assert_bundle_with(&[
         BundleCase { name: "mixed_magic_hash_aot", source, expected },
         BundleCase { name: "mixed_magic_hash_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Deprecated:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
+/// Getter reads copy reference results and retain borrowed static boxes before later cleanup.
+#[test]
+fn test_mixed_magic_hash_getter_return_owners_bundle() {
+    let source = r#"<?php
+class MixedGetterOwnerReference {
+    private mixed $data = ['a' => 1, 'b' => 2];
+    public function &__get(string $name): mixed { return $this->data; }
+    public function snapshot(): mixed { return $this->data; }
+}
+class MixedGetterOwnerBorrowed {
+    public static mixed $cache = null;
+    public function __get(string $name): mixed { return self::$cache; }
+}
+function MixedGetterOwnerRead(mixed $object): mixed { return $object->items; }
+$reference = new MixedGetterOwnerReference();
+for ($i = 0; $i < 3; $i++) {
+    $copy = MixedGetterOwnerRead($reference);
+    $copy['z'] = 9;
+    echo json_encode($copy), '|', json_encode($reference->snapshot()), "\n";
+    unset($copy);
+}
+MixedGetterOwnerBorrowed::$cache = [1, 2];
+$borrowed = new MixedGetterOwnerBorrowed();
+$first = MixedGetterOwnerRead($borrowed);
+$second = MixedGetterOwnerRead($borrowed);
+unset($first, $second);
+echo json_encode(MixedGetterOwnerBorrowed::$cache), "\n";
+MixedGetterOwnerBorrowed::$cache = null;
+unset($reference, $borrowed);
+"#;
+    let renamed = source.replace("MixedGetterOwner", "EvalMixedGetterOwner");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = format!("{}[1,2]\n", "{\"a\":1,\"b\":2,\"z\":9}|{\"a\":1,\"b\":2}\n".repeat(3));
+    assert_bundle_with(&[
+        BundleCase { name: "mixed_getter_owners_aot", source, expected: &expected },
+        BundleCase { name: "mixed_getter_owners_eval", source: &eval, expected: &expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
