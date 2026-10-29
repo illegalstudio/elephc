@@ -78,3 +78,25 @@ fn simplexml_dom_text_abi_distinguishes_entities_from_literal_content() {
     }
     abi::elephc_xml_sx_free(root);
 }
+
+/// Literal attribute dimensions reject non-elements while addAttribute retains its parent rule.
+#[test]
+fn simplexml_named_dimensions_do_not_redirect_non_element_receivers() {
+    let root = parse(b"<r><mark a='3'>7<!--kept--><?p kept?></mark></r>", 0, "", false).unwrap();
+    let mark = root.select(2, "mark", "", false, 0);
+    let attribute = mark.with_scope(Scope::Node(mark.select(3, "a", "", false, 0).first().unwrap()));
+    let children = mark.select(6, "", "", false, 0).nodes();
+    let comment = mark.with_scope(Scope::Node(children[1]));
+    let pi = mark.with_scope(Scope::Node(children[2]));
+    for receiver in [&attribute, &comment, &pi] {
+        assert_eq!(receiver.write(3, "x", 0, "wrong"), 0);
+        assert!(mark.select(3, "x", "", false, 0).first().is_none());
+    }
+    assert_eq!(unsafe { owned_string(ffi::dump_node(root.doc.raw, root.first().unwrap())) },
+        "<r><mark a=\"3\">7<!--kept--><?p kept?></mark></r>");
+    let attributes = mark.select(1, "", "", false, 0);
+    assert_eq!(attributes.write(3, "z", 0, "w"), 1);
+    assert!(attribute.add_checked(b"n", Some(b"v"), None, true).is_ok());
+    assert_eq!(unsafe { owned_string(ffi::dump_node(root.doc.raw, root.first().unwrap())) },
+        "<r><mark a=\"3\" z=\"w\" n=\"v\">7<!--kept--><?p kept?></mark></r>");
+}

@@ -108,3 +108,42 @@ echo $xml->asXML();
         "<?xml version=\"1.0\"?>\n<r id=\"new\"/>\n",
     ));
 }
+
+/// Named offsets on non-element nodes are silent no-ops through direct, chained and eval writes.
+#[test]
+fn test_simplexml_non_element_named_dimension_bundle() {
+    if skip_without_xml_native("test_simplexml_non_element_named_dimension_bundle") { return; }
+    let source = r###"<?php
+$doc = new SimpleXMLElement('<r><mark a="3">7<!--kept--><?p kept?></mark></r>');
+$a = $doc->mark['a'];
+$a['x'] = 'wrong'; echo $doc->asXML();
+$a['k'] .= 'wrong'; echo $doc->asXML();
+$doc->mark['a']['nested'] = 'wrong'; echo $doc->asXML();
+$doc->mark['a']['compound'] .= 'wrong'; echo $doc->asXML();
+$named = $doc->mark->attributes()->a;
+$named['q'] = 'wrong'; echo $doc->asXML();
+$nodes = $doc->xpath('//comment()'); $comment = $nodes[0];
+$comment['x'] = 'wrong'; $comment['k'] .= 'wrong'; echo $doc->asXML();
+$nodes = $doc->xpath('//processing-instruction()'); $pi = $nodes[0];
+$pi['x'] = 'wrong'; $pi['k'] .= 'wrong'; echo $doc->asXML();
+echo isset($a['k']) ? 'bad|' : 'absent|';
+$nodes = $doc->xpath('//mark/text()'); $text = $nodes[0]; $text['x'] = 'y';
+$doc->mark->attributes()['z'] = 'w';
+$a->addAttribute('n', 'v'); echo $doc->asXML();
+unset($doc, $a, $named, $nodes, $comment, $pi, $text);
+"###;
+    let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = format!("{}absent|<?xml version=\"1.0\"?>\n<r><mark a=\"3\" x=\"y\" z=\"w\" n=\"v\">7<!--kept--><?p kept?></mark></r>\n",
+        "<?xml version=\"1.0\"?>\n<r><mark a=\"3\">7<!--kept--><?p kept?></mark></r>\n".repeat(7));
+    assert_bundle_with(&[
+        BundleCase { name: "non_element_dimension_aot", source, expected: &expected },
+        BundleCase { name: "non_element_dimension_eval", source: &eval, expected: &expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+        out.stdout
+    });
+}

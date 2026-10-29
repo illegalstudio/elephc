@@ -67,7 +67,7 @@ impl View {
         let missing = if attribute { AddError::MissingAttributeParent } else { AddError::MissingChildParent };
         if !attribute && matches!(self.scope, Scope::Attributes(..)) { return Err(AddError::ElementToAttributes); }
         let mut parent = self.first().ok_or(missing)?;
-        if attribute && unsafe { ffi::node_type(parent) } != 1 {
+        if attribute && !literal && unsafe { ffi::node_type(parent) } != 1 {
             parent = unsafe { ffi::parent(parent) };
         }
         if parent.is_null() || unsafe { ffi::node_type(parent) } != 1 { return Err(missing); }
