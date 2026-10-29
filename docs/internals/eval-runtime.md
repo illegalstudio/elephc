@@ -485,6 +485,13 @@ intermediate owners retire in reverse order on normal completion and failure.
 A temporary array without an attachment is refused before mutation. The parser shares these mutation tails with `for`
 clauses, and the property-hook and static-local visitors cover the new statement.
 
+Nested `UnsetArrayElement` receivers reuse `PreparedWriteReceiver`: computed roots
+and inner keys are captured first, the final key runs once, and
+`finish_property_unset_receiver` then selects live storage without creating missing
+dimensions. Object leaves use the captured key with the existing unset adapter;
+array leaves raise an explicit unsupported-storage Error. Captures retire in reverse
+order even when key evaluation or an unset handler throws.
+
 ## Runtime script cache
 
 **Sources:** `crates/elephc-magician/src/script_cache/`, the

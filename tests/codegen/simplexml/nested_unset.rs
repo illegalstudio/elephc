@@ -31,12 +31,51 @@ unset($old, $replacement, $nestedStorageEntries);
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $source = $argc > 0 ? '{body}' : ''; eval($source); unset($source);");
     let expected = "key|<?xml version=\"1.0\"?>\n<old id=\"old\"/>\n<?xml version=\"1.0\"?>\n<new/>\n";
+    let ordered = r#"<?php
+function orderedUnsetKey(SimpleXMLElement $replacement): string {
+    global $orderedUnsetRows;
+    echo 'key|'; $orderedUnsetRows = [$replacement]; return 'id';
+}
+function orderedUnsetIndex(): int { echo 'inner|'; return 0; }
+function orderedUnsetRoot(): array { global $orderedUnsetRows; echo 'root|'; return $orderedUnsetRows; }
+function orderedUnsetLateKey(): string {
+    global $orderedUnsetPosition;
+    echo 'late|'; $orderedUnsetPosition = 1; return 'id';
+}
+function orderedUnsetFailKey(): string { echo 'fail|'; throw new Error('stop'); }
+$old = new SimpleXMLElement('<old id="old"/>');
+$replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old];
+unset($orderedUnsetRows[orderedUnsetIndex()][orderedUnsetKey($replacement)]);
+echo isset($old['id']) ? 'old' : '-', ':', isset($replacement['id']) ? 'new' : '-', "\n";
+$old = new SimpleXMLElement('<old id="old"/>');
+$replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old];
+unset(orderedUnsetRoot()[0][orderedUnsetKey($replacement)]);
+echo isset($old['id']) ? 'old' : '-', ':', isset($replacement['id']) ? 'new' : '-', "\n";
+$old = new SimpleXMLElement('<old id="old"/>');
+$replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old, $replacement];
+$orderedUnsetPosition = 0;
+unset($orderedUnsetRows[$orderedUnsetPosition][orderedUnsetLateKey()]);
+echo isset($old['id']) ? 'old' : '-', ':', isset($replacement['id']) ? 'new' : '-', "\n";
+$old = new SimpleXMLElement('<old id="old"/>');
+$replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old];
+try { unset(orderedUnsetRoot()[orderedUnsetIndex()][orderedUnsetFailKey()]); }
+catch (Error $error) { echo 'caught|'; }
+echo isset($old['id']) ? 'old' : '-', ':', isset($replacement['id']) ? 'new' : '-', "\n";
+unset($old, $replacement, $orderedUnsetRows, $orderedUnsetPosition, $error);
+"#;
+    let ordered_body = ordered.strip_prefix("<?php").unwrap()
+        .replace("orderedUnset", "evalOrderedUnset").replace('\\', "\\\\").replace('\'', "\\'");
+    let ordered_eval = format!("<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $source = $argc > 0 ? '{ordered_body}' : ''; eval($source); unset($source);");
+    let ordered_expected = "inner|key|old:-\nroot|key|-:new\nlate|old:-\nroot|inner|fail|caught|old:new\n";
     assert_bundle_with(&[
         BundleCase { name: "nested_unset_aot", source, expected },
         BundleCase { name: "nested_unset_eval", source: &eval, expected },
+        BundleCase { name: "ordered_nested_unset_aot", source: ordered, expected: ordered_expected },
+        BundleCase { name: "ordered_nested_unset_eval", source: &ordered_eval, expected: ordered_expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         out.stdout
     });

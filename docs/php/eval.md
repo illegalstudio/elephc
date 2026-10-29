@@ -256,6 +256,12 @@ identity mutation, while a non-object result raises an explicit unsupported-writ
 `offsetSet()` also raises an unsupported-write `Error` when a nested array must be
 written back; eval subclasses can use the builtin storage implementation directly.
 
+Nested object unsets such as `unset($rows[firstKey()][lastKey()])` evaluate
+computed keys in source order before selecting live variable storage. A computed
+root such as `rows()` is captured before those keys. Missing intermediate
+dimensions remain quiet. An array leaf requiring nested array writeback raises
+an explicit unsupported-storage `Error`.
+
 Supported binary operators are:
 
 | Category | Operators |

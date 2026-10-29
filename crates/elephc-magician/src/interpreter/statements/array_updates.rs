@@ -171,6 +171,11 @@ pub(super) fn eval_array_unset_element_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match array {
+        EvalExpr::ArrayGet { .. } => {
+            return super::property_dimension_unset::eval_nested_dimension_unset(
+                array, index, context, scope, values,
+            );
+        }
         EvalExpr::LoadVar(name) => {
             let existing = scope_entry(context, scope, name)
                 .filter(|entry| entry.flags().is_visible())

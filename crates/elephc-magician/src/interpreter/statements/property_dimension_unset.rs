@@ -2,7 +2,7 @@
 //! Removes property dimensions after capturing keys and computed receiver operands.
 //!
 //! Called from:
-//! - Instance property dimension unset statement dispatch.
+//! - Instance property and nested dimension unset statement dispatch.
 //!
 //! Key details:
 //! - Variable receivers stay live through key effects; computed names convert afterwards.
@@ -11,6 +11,31 @@
 
 use super::*;
 use super::property_write_receivers::{prepare_index, finish_name, release_receivers, PreparedPropertyName, finish_property_unset_receiver};
+
+/// Captures nested keys before fetching live storage, preserving computed roots and quiet hops.
+pub(super) fn eval_nested_dimension_unset(
+    array: &EvalExpr, index: &EvalExpr, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut owners = Vec::new();
+    let result = (|| {
+        let receiver = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
+        let index = eval_owned_expr(index, context, scope, values)?;
+        owners.push(index);
+        let array = finish_property_unset_receiver(receiver, &mut owners, context, scope, values)?;
+        owners.push(array);
+        if matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            return eval_throw_error(
+                "Unsupported unset(): erased array storage has no attached removal path", context, values,
+            );
+        }
+        // Objects mutate by identity; all other admitted values only produce scalar diagnostics.
+        let replacement = unset_value(array, index, context, values)?;
+        debug_assert!(replacement.is_none());
+        Ok(())
+    })();
+    result.and(release_receivers(owners, context, values))
+}
 
 /// Captures operands once and resolves the current property only after the key has run.
 pub(super) fn eval_property_dimension_unset(
