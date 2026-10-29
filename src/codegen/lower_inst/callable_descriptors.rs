@@ -200,7 +200,11 @@ pub(super) fn emit_instance_method_first_class_callable(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| normalized_class.clone());
-    if !class_method_body_exists(ctx, &impl_class, &method_key) {
+    // Only resume has the ordinary descriptor ABI among the bodyless Fiber instance methods.
+    // Start needs its dedicated argument array; state predicates need a hidden state operand.
+    let has_descriptor_wrapper = IntrinsicCall::instance_method(&impl_class, &method_key)
+        .is_some_and(|intrinsic| intrinsic.kind() == IntrinsicCallKind::FiberResume);
+    if !class_method_body_exists(ctx, &impl_class, &method_key) && !has_descriptor_wrapper {
         return Err(CodegenIrError::unsupported(format!(
             "instance first-class callable '{}' without emitted method body",
             target

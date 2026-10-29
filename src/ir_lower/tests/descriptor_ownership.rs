@@ -29,6 +29,26 @@ unset($values, $factory);
     }
 }
 
+/// Fiber resume uses its reviewed native method wrapper through the ordinary descriptor ABI.
+#[test]
+fn fiber_resume_descriptors_emit_on_all_targets() {
+    let source = r#"<?php
+$fiber = new Fiber(static function(): void { Fiber::suspend(); });
+$fiber->start();
+$resume = $fiber->resume(...);
+$resume('done');
+unset($resume, $fiber);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Concrete descriptor strings transfer one exact owner and retire it after expression use.
 #[test]
 fn concrete_descriptor_string_results_are_owned_and_released_once_on_all_targets() {
