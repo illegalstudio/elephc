@@ -10,6 +10,16 @@
 
 use super::super::support::*;
 
+/// Indexed receivers keep property stores and updates on the property mutation path.
+#[test]
+fn parse_fragment_accepts_indexed_property_mutations() {
+    let program = parse_fragment(br#"$view[0]->y = 1; $held[0][0]->y += 2; $view[0]->{$name}++;"#)
+        .expect("indexed property mutations should parse");
+    assert!(matches!(&program.statements()[0], EvalStmt::PropertySet { object: EvalExpr::ArrayGet { .. }, .. }));
+    assert!(matches!(&program.statements()[1], EvalStmt::PropertyCompoundAssign { object: EvalExpr::ArrayGet { .. }, .. }));
+    assert!(matches!(&program.statements()[2], EvalStmt::DynamicPropertyIncDec { object: EvalExpr::ArrayGet { .. }, .. }));
+}
+
 /// Verifies object property writes parse as dedicated EvalIR statements.
 #[test]
 fn parse_fragment_accepts_property_write_source() {
