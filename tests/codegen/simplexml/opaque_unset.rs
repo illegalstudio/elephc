@@ -265,9 +265,16 @@ function UnsetTraversalTypedLocal(): void {
     unset($final->m[1]); $name = 'k'; unset($final->{$name}['id']);
     echo $final->asXML();
 }
+class UnsetTraversalBox { public mixed $value; }
 function UnsetTraversalOrdinaryContainers(): void {
     $items = [new SimpleXMLElement('<list><b>1</b><b>2</b></list>')];
+    unset($items[1]->b->c[0], $items[1][0]->b[0]);
+    echo count($items), '|';
     unset($items[0]->b[0]); echo $items[0]->asXML();
+    $map = ['only' => new SimpleXMLElement('<map><a><b/></a></map>')];
+    unset($map['absent']->a->b[0]); echo count($map), '|', $map['only']->asXML();
+    $boxes = [new UnsetTraversalBox()]; $boxes[0]->value = new SimpleXMLElement('<box><b/></box>');
+    unset($boxes[3]->value->b[0]); echo count($boxes), '|', $boxes[0]->value->asXML();
     $bag = new ArrayObject([new SimpleXMLElement('<bag><b>1</b><b>2</b></bag>')]);
     unset($bag[0]->b[0]); echo $bag[0]->asXML();
 }
@@ -303,7 +310,7 @@ unset($old, $typedOld, $name);
     let renamed = source.replace("UnsetTraversal", "EvalUnsetTraversal");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "<?xml version=\"1.0\"?>\n<local><a/></local>\n<?xml version=\"1.0\"?>\n<final><m/><k/></final>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n<?xml version=\"1.0\"?>\n<existing><a><b>2</b></a></existing>\n[]|<?xml version=\"1.0\"?>\n<list><b>2</b></list>\n<?xml version=\"1.0\"?>\n<bag><b>2</b></bag>\n<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n<?xml version=\"1.0\"?>\n<s><a>2</a></s>\n<?xml version=\"1.0\"?>\n<old/>\n<?xml version=\"1.0\"?>\n<new><a/></new>\n";
+    let expected = "<?xml version=\"1.0\"?>\n<local><a/></local>\n<?xml version=\"1.0\"?>\n<final><m/><k/></final>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><a/></r>\n<?xml version=\"1.0\"?>\n<existing><a><b>2</b></a></existing>\n[]|1|<?xml version=\"1.0\"?>\n<list><b>2</b></list>\n1|<?xml version=\"1.0\"?>\n<map><a><b/></a></map>\n1|<?xml version=\"1.0\"?>\n<box><b/></box>\n<?xml version=\"1.0\"?>\n<bag><b>2</b></bag>\n<?xml version=\"1.0\"?>\n<r><a>1</a></r>\n<?xml version=\"1.0\"?>\n<s><a>2</a></s>\n<?xml version=\"1.0\"?>\n<old/>\n<?xml version=\"1.0\"?>\n<new><a/></new>\n";
     assert_bundle_with(&[
         BundleCase { name: "unset_traversal_aot", source, expected },
         BundleCase { name: "unset_traversal_eval", source: &eval, expected },

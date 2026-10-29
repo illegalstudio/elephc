@@ -243,7 +243,8 @@ $name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
 function typedNativeXmlUnsetLocal(): void {
     $value = new SimpleXMLElement('<r><a/></r>');
     unset($value->a->b[0], $value->absent[1], $value->a[2]->b[0]);
-    $items = [new SimpleXMLElement('<list><b/></list>')]; unset($items[0]->b[0]);
+    $items = [new SimpleXMLElement('<list><b/></list>')];
+    unset($items[3]->a->b[0], $items[3][0]->b[0], $items[0]->b[0]);
     $bag = new ArrayObject([new SimpleXMLElement('<bag><b/></bag>')]); unset($bag[0]->b[0]);
 }
 typedNativeXmlUnsetLocal();

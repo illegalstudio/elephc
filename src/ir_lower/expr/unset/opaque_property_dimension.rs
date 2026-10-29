@@ -195,9 +195,13 @@ fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredV
 fn quiet_index(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, index: &Expr, source: &Expr,
 ) -> LoweredValue {
-    if value_is_nullable(ctx, parent.value) {
+    let value = if value_is_nullable(ctx, parent.value) {
         lower_nullable_array_access(ctx, parent, index, source, false)
-    } else { lower_array_access_from_value(ctx, parent, index, source, false) }
+    } else { lower_array_access_from_value(ctx, parent, index, source, false) };
+    // Typed object misses carry a null word; boxing normalizes it before later native dispatch.
+    if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Object(_)) {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(source.span))
+    } else { value }
 }
 
 /// Skips name conversion after a missing unset dimension, protecting the selected owner on unwind.
