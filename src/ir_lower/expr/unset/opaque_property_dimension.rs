@@ -175,20 +175,29 @@ fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredV
         }
         ExprKind::ArrayAccess { array, index } => {
             let parent = finish_receiver(ctx, array);
+            let ty = ctx.builder.value_php_type(parent.value);
+            if !property_access::may_have_native_xml_dimensions(ctx, &ty) {
+                return quiet_index(ctx, parent, index, source);
+            }
             property_access::native_xml_reads::dispatch(ctx, parent, source, PhpType::Mixed, false,
                 |ctx, parent| lower_method_call_with_receiver(ctx, parent, "__elephc_dimension_select", &[
                     index.as_ref().clone(), Expr::new(ExprKind::BoolLiteral(false), source.span),
                     Expr::new(ExprKind::BoolLiteral(false), source.span),
                 ], Op::MethodCall, source),
-                |ctx, parent| {
-                    if value_is_nullable(ctx, parent.value) {
-                        lower_nullable_array_access(ctx, parent, index, source, false)
-                    } else { lower_array_access_from_value(ctx, parent, index, source, false) }
-                },
+                |ctx, parent| quiet_index(ctx, parent, index, source),
             )
         }
         _ => lower_expr(ctx, source),
     }
+}
+
+/// Keeps ordinary arrays and ArrayAccess receivers on their existing quiet read path.
+fn quiet_index(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, index: &Expr, source: &Expr,
+) -> LoweredValue {
+    if value_is_nullable(ctx, parent.value) {
+        lower_nullable_array_access(ctx, parent, index, source, false)
+    } else { lower_array_access_from_value(ctx, parent, index, source, false) }
 }
 
 /// Skips name conversion after a missing unset dimension, protecting the selected owner on unwind.

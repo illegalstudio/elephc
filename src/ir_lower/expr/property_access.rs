@@ -12,7 +12,7 @@ use super::*;
 pub(super) mod native_xml_reads;
 mod runtime_hooks;
 mod write_dimensions;
-pub(crate) use write_dimensions::lower_native_dimension_write_select;
+pub(crate) use write_dimensions::{lower_native_dimension_write_select, may_have_native_xml_dimensions};
 pub(crate) use write_dimensions::lower_native_dimension_incdec_select_from_values;
 pub(super) mod write_select;
 pub(crate) use write_select::lower_property_write_receiver;

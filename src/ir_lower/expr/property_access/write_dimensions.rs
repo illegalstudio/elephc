@@ -17,17 +17,22 @@ pub(crate) fn lower_native_dimension_write_select(
     lower_dimension_select(ctx, object, index, expr, true)
 }
 
+/// Admits only opaque receiver storage or classes whose dimensions can use native XML adapters.
+pub(crate) fn may_have_native_xml_dimensions(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    ctx.classes.contains_key("SimpleXMLElement") &&
+        (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            || is_opaque_property_object(ctx, ty)
+            || native_dimension_method_for_type(ctx, ty,
+                elephc_builtin_contract::ObjectDimension::WriteSelect).is_some())
+}
+
 /// Distinguishes a dereferencing write from incdec's non-throwing native scalar conversion.
 fn lower_dimension_select(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: &Expr, expr: &Expr,
     throw_on_failure: bool,
 ) -> LoweredValue {
     let ty = ctx.builder.value_php_type(object.value);
-    let may_be_native = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        || is_opaque_property_object(ctx, &ty)
-        || native_dimension_method_for_type(ctx, &ty,
-            elephc_builtin_contract::ObjectDimension::WriteSelect).is_some();
-    if !ctx.classes.contains_key("SimpleXMLElement") || !may_be_native {
+    if !may_have_native_xml_dimensions(ctx, &ty) {
         return lower_array_access_from_lowered_receiver(ctx, object, index, expr);
     }
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
