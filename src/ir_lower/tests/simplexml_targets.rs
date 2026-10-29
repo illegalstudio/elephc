@@ -7,6 +7,32 @@
 //! Key details:
 //! - Covers document factories, dimensions, casts, JSON, DOM import, and iteration.
 
+/// Nullable native children bypass public ArrayAccess methods on every supported target.
+#[test]
+fn native_xml_child_reads_bypass_public_offset_get_on_every_target() {
+    let source = r#"<?php
+class NativeChildReadXml extends SimpleXMLElement implements ArrayAccess {
+    public function offsetGet(mixed $key): mixed { return 'public'; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetUnset(mixed $key): void {}
+}
+function nativeChildRead(NativeChildReadXml $xml): mixed { return $xml->item[0]; }
+echo (string)nativeChildRead(new NativeChildReadXml('<r><item>native</item></r>'));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nativeChildRead").unwrap();
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::MethodCall && matches!(inst.immediate,
+                Some(crate::ir::Immediate::Data(name)) if
+                    module.data.strings[name.as_raw() as usize] == "__elephc_dimension_get")
+        }), "{target}: native syntax must select the native adapter before interface dispatch");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Compiles the same complete SimpleXML fixture through one supported target's emitter.
 fn verify_simplexml_target(target: &str) {
     let source = [r###"<?php

@@ -403,19 +403,38 @@ fn lower_array_access_from_values_with_receiver_pins(
         index_value = rooted;
         owner
     } else { None };
+    // Native dimension syntax is distinct from explicit ArrayAccess method calls, even
+    // when a nullable subclass implements that interface and overrides offsetGet.
+    let native_method = (op == Op::RuntimeCall).then(|| {
+        native_dimension_method_for_type(ctx, &ctx.builder.value_php_type(array_value.value),
+            elephc_builtin_contract::ObjectDimension::Get)
+    }).flatten();
     let mut operands = vec![array_value.value, index_value.value];
-    if matches!(op, Op::RuntimeCall) {
+    let mut extra = Vec::new();
+    let (op, immediate) = if let Some(method) = native_method {
+        let signature = ctx.classes.get("SimpleXMLElement")
+            .and_then(|class| class.methods.get(method)).cloned();
+        extra = object_operators::append_hidden_arguments(ctx, signature.as_ref(),
+            &mut operands, 1, expr);
+        (Op::MethodCall, Some(Immediate::Data(ctx.intern_string(method))))
+    } else {
+        (op, (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)))
+    };
+    if op == Op::RuntimeCall {
         let warning_flag = emit_bool_literal(ctx, warn_on_missing, Some(expr.span));
         operands.push(warning_flag.value);
     }
     let result = ctx.emit_value(
         op,
         operands,
-        (op == Op::StrCharAt).then_some(Immediate::Bool(warn_on_missing)),
+        immediate,
         result_type,
         op.default_effects(),
         Some(expr.span),
     );
+    for argument in extra {
+        crate::ir_lower::ownership::release_if_owned(ctx, argument, Some(expr.span));
+    }
     if op == Op::StrCharAt {
         // The backend returns a view into the receiver. The common stabilization below
         // must copy that byte before an owning receiver can be retired (issue #1908).
