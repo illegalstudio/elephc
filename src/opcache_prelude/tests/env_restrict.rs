@@ -244,7 +244,7 @@ pub(super) fn default_restrict_api_renders_byte_identical_bodies() {
                 80500,
                 &overrides
             ));
-            let status = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &overrides, false, None));
+            let status = rendered(get_status_declaration(PhpVersion::Php85, true, &manifest, &overrides, false, None, None));
             // No placeholder survives and no warning leaks into the default body.
             assert!(!status.contains("__RESTRICT_API_WARNING__"));
             assert!(!status.contains("restricted by"));
@@ -289,7 +289,7 @@ pub(super) fn denying_restrict_api_renders_restricted_bodies() {
 
         // The two array-returning functions keep their dead array exit, so `array|false`
         // narrowing still works for callers.
-        let status = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &overrides, true, None));
+        let status = rendered(get_status_declaration(PhpVersion::Php85, true, &[], &overrides, true, None, None));
         assert!(
             status.contains("if (false === false)"),
             "restricted status forces the always-taken gate regardless of SAPI"

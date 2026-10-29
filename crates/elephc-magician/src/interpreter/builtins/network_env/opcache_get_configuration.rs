@@ -87,7 +87,7 @@ fn build_blacklist(
 /// The matrix is the CLI default, which is the only configuration this fallback answers for:
 /// a binary with any other OPcache configuration carries the native declaration whenever it can
 /// run an opaque `eval()` (see `opcache_prelude::injection`). What a CLI-default binary can still
-/// change at run time is the three `ini_set()`-able directives, and those are reported as set.
+/// change at run time is the `ini_set()`-able directives, and those are reported as set.
 fn build_directives(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -107,8 +107,8 @@ fn build_directives(
 /// The typed value an `ini_set()` installed for directive `name`, if any.
 fn ini_set_override(name: &str) -> Option<DirectiveValue> {
     use crate::script_cache::{
-        directive_override, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
-        DIRECTIVE_VALIDATE_TIMESTAMPS,
+        directive_override, DIRECTIVE_ENABLE, DIRECTIVE_FILE_UPDATE_PROTECTION,
+        DIRECTIVE_REVALIDATE_FREQ, DIRECTIVE_VALIDATE_TIMESTAMPS,
     };
     match name {
         "opcache.revalidate_freq" => directive_override(DIRECTIVE_REVALIDATE_FREQ)
@@ -117,6 +117,10 @@ fn ini_set_override(name: &str) -> Option<DirectiveValue> {
             .map(|value| DirectiveValue::Bool(value != 0)),
         "opcache.file_update_protection" => directive_override(DIRECTIVE_FILE_UPDATE_PROTECTION)
             .map(|value| DirectiveValue::Int(value as i64)),
+        // `ini_set('opcache.enable', 0)` records a disable for the rest of the request; the
+        // override store only ever carries `0` for this id (an attempt to re-enable is refused).
+        "opcache.enable" => directive_override(DIRECTIVE_ENABLE)
+            .map(|value| DirectiveValue::Bool(value != 0)),
         _ => None,
     }
 }

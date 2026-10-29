@@ -183,6 +183,10 @@ pub(crate) fn config() -> ScriptCacheConfig {
         if let Some(value) = overrides[DIRECTIVE_API_RESTRICTED as usize] {
             config.api_restricted = value != 0;
         }
+        // `ini_set('opcache.enable', 0)` clears the master gate for the rest of the request.
+        if let Some(value) = overrides[DIRECTIVE_ENABLE as usize] {
+            config.enabled = value != 0;
+        }
     });
     config
 }
@@ -205,18 +209,25 @@ pub const DIRECTIVE_FILE_UPDATE_PROTECTION: u64 = 2;
 /// The compiler's `opcache.restrict_api` verdict, as [`swap_directive`] addresses it. Installed
 /// by the compiled configuration only; nothing maps an `ini_set()` onto it.
 pub const DIRECTIVE_API_RESTRICTED: u64 = 3;
+/// `opcache.enable`, as [`swap_directive`] addresses it.
+///
+/// php-src's `OnEnable` accepts exactly one runtime transition: a TRUTHY value on an
+/// already-enabled cache is a silent no-op, and a FALSY one disables the cache for the rest of
+/// the request. Enabling a disabled cache is refused with an `E_WARNING`, so this slot only ever
+/// carries `0` — that is the whole of the mutable behaviour.
+pub const DIRECTIVE_ENABLE: u64 = 4;
 
 /// The value [`swap_directive`] answers for an id it does not know.
 pub const DIRECTIVE_UNKNOWN: u64 = u64::MAX;
 
 /// How many ids [`swap_directive`] knows; the override table's width.
-const DIRECTIVE_COUNT: usize = 4;
+const DIRECTIVE_COUNT: usize = 5;
 
 /// Installs one directive's value on the live configuration, returning the previous one.
 ///
-/// This is the mutable half of the channel, and it exists because the three directives
+/// This is the mutable half of the channel, and it exists because the directives
 /// it addresses are `PHP_INI_ALL` in php-src: `ini_set()` genuinely moves them there, and
-/// the runtime cache reads all three on every lookup, so a change takes effect on the
+/// the runtime cache reads them on every lookup, so a change takes effect on the
 /// very next include rather than needing a restart.
 ///
 /// THE IDS ARE A WIRE CONTRACT shared with generated code, not an internal detail — they
@@ -238,6 +249,7 @@ pub fn swap_directive(id: u64, value: u64, as_override: bool) -> u64 {
         DIRECTIVE_VALIDATE_TIMESTAMPS => u64::from(effective.validate_timestamps),
         DIRECTIVE_FILE_UPDATE_PROTECTION => effective.file_update_protection as u64,
         DIRECTIVE_API_RESTRICTED => u64::from(effective.api_restricted),
+        DIRECTIVE_ENABLE => u64::from(effective.enabled),
         _ => return DIRECTIVE_UNKNOWN,
     };
     if as_override {
@@ -254,6 +266,7 @@ pub fn swap_directive(id: u64, value: u64, as_override: bool) -> u64 {
             DIRECTIVE_VALIDATE_TIMESTAMPS => config.validate_timestamps = value != 0,
             DIRECTIVE_FILE_UPDATE_PROTECTION => config.file_update_protection = value as i64,
             DIRECTIVE_API_RESTRICTED => config.api_restricted = value != 0,
+            DIRECTIVE_ENABLE => config.enabled = value != 0,
             _ => {}
         }
     });
@@ -422,6 +435,22 @@ mod tests {
         assert!(!config().validate_timestamps);
         assert_eq!(swap_directive(DIRECTIVE_FILE_UPDATE_PROTECTION, 9, true), 2);
         assert_eq!(config().file_update_protection, 9);
+
+        clear_directive_overrides();
+        set_config(ScriptCacheConfig::disabled());
+    }
+
+    /// Verifies `DIRECTIVE_ENABLE` is the master gate: an override of `0` disables the cache
+    /// and answers the previous value, which is what `ini_set('opcache.enable', 0)` returns.
+    #[test]
+    fn swap_directive_moves_the_master_gate() {
+        set_config(ScriptCacheConfig {
+            enabled: true,
+            ..ScriptCacheConfig::disabled()
+        });
+
+        assert_eq!(swap_directive(DIRECTIVE_ENABLE, 0, true), 1);
+        assert!(!config().enabled);
 
         clear_directive_overrides();
         set_config(ScriptCacheConfig::disabled());

@@ -5,14 +5,20 @@
 //! rather than by `error_reporting`, and a FATAL exits the process outright.
 //!
 //! Called from:
-//! - `crate::script_cache::store` for the file-cache directory refusal.
-//! - `crate::ffi::context::__elephc_eval_configure_opcache()` to install the gate.
+//! - `elephc-magician`'s `script_cache::{store, file_cache, blacklist}` for the runtime
+//!   diagnostics, through the thread-local configuration installed by the generated prologue.
+//! - `elephc`'s `main` for the compile-time startup refusals reference PHP emits while
+//!   registering the INI entries, through [`emit_with_config`] with the compile-time gate.
+//! - `elephc`'s `pipeline` for the compile-time per-script `Message Cached script` lines.
 //!
 //! Key details:
+//! - This file is shared VERBATIM between the `elephc` and `elephc-magician` crates via a
+//!   `#[path]` include (the same mechanism `directives.rs` / `state.rs` use), so it must not
+//!   name types from either crate. Only `std` and `libc` are used.
 //! - The line shape is `zend_accelerator_debug.c`'s, reproduced field for field:
 //!   `asctime(localtime(t))` truncated at 24 bytes, ` (<pid>): `, a level word with a
 //!   TRAILING SPACE (`Fatal Error `, `Error `, `Warning `, `Message `, `Debug `), the
-//!   message, a newline, flushed. VERIFIED against reference PHP 8.5.6:
+//!   message, a newline, flushed. VERIFIED against reference PHP 8.5.10:
 //!   `Sat Sep 12 08:33:47 2026 (79737): Fatal Error opcache.file_cache must be a full
 //!   path of an accessible directory`.
 //! - The timestamp comes from libc's `localtime` — the same zone-aware conversion
@@ -41,6 +47,7 @@ use std::io::Write;
 #[repr(i32)]
 pub(crate) enum AccelLogLevel {
     /// Logged at every verbosity, and exits the process with status 254.
+    #[allow(dead_code)]
     Fatal = 0,
     /// Logged at every verbosity.
     #[allow(dead_code)]
@@ -83,6 +90,7 @@ pub(crate) struct AccelLogConfig {
 impl AccelLogConfig {
     /// The configuration a binary without generated OPcache wiring observes: php-src's
     /// own defaults, so a harness linking this archive directly behaves like reference.
+    #[allow(dead_code)]
     pub(crate) const fn defaults() -> Self {
         Self {
             verbosity: 1,
@@ -96,11 +104,13 @@ thread_local! {
 }
 
 /// Installs the compile-time accelerator log configuration for the current thread.
+#[allow(dead_code)]
 pub(crate) fn set_config(config: AccelLogConfig) {
     ACCEL_LOG_CONFIG.with(|cell| *cell.borrow_mut() = config);
 }
 
 /// Returns a copy of the configuration active on the current thread.
+#[allow(dead_code)]
 pub(crate) fn config() -> AccelLogConfig {
     ACCEL_LOG_CONFIG.with(|cell| cell.borrow().clone())
 }
@@ -110,6 +120,7 @@ pub(crate) fn config() -> AccelLogConfig {
 /// Mirrors `zend_accel_error_va_args`: the write is gated by the verbosity, the error
 /// handling is NOT. A `Fatal` therefore terminates the process whether or not anything
 /// was printed — with status 254, php-src's `exit(-2)` as the shell sees it.
+#[allow(dead_code)]
 pub(crate) fn accel_error(level: AccelLogLevel, message: &str) -> ! {
     accel_log(level, message);
     // Only `Fatal` reaches this function's `!` return; every other level goes through
@@ -122,8 +133,21 @@ pub(crate) fn accel_error(level: AccelLogLevel, message: &str) -> ! {
 ///
 /// Silently does nothing when `level` is above the configured verbosity. A log file that
 /// cannot be opened falls back to stderr rather than being dropped, exactly as php-src does.
+#[allow(dead_code)]
 pub(crate) fn accel_log(level: AccelLogLevel, message: &str) {
-    let config = config();
+    emit_with_config(level, message, &config());
+}
+
+/// Emits one accelerator diagnostic against an EXPLICIT configuration, doing no error
+/// handling.
+///
+/// The thread-local form (`accel_log`) serves the generated binary, whose gate is installed
+/// by its prologue. The compiler has no such state: it emits the startup refusals reference
+/// PHP prints while registering the INI entries, and its gate comes straight from the
+/// effective `opcache.log_verbosity_level` / `opcache.error_log` of the `--ini` overrides.
+/// Both paths share the line shape and the gate so they cannot drift.
+#[allow(dead_code)]
+pub(crate) fn emit_with_config(level: AccelLogLevel, message: &str, config: &AccelLogConfig) {
     if (level as i32) > config.verbosity {
         return;
     }
@@ -288,5 +312,35 @@ mod tests {
     #[test]
     fn the_live_clock_produces_a_24_byte_line() {
         assert_eq!(local_time_string().len(), 24);
+    }
+
+    /// The explicit-config gate matches the thread-local one: a Warning below the gate is
+    /// dropped, and at or above it is written to the configured log file.
+    #[test]
+    fn emit_honours_the_explicit_gate_and_error_log() {
+        let dir = std::env::temp_dir().join(format!("accel_log_emit_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("accel.log");
+        // A killed earlier run can leave the file behind; the quiet-phase assert below is a
+        // "was not created" claim, so start from a clean slate.
+        std::fs::remove_file(&log).ok();
+        let quiet = AccelLogConfig {
+            verbosity: 1,
+            error_log: log.to_string_lossy().into_owned(),
+        };
+        emit_with_config(AccelLogLevel::Warning, "dropped below the gate", &quiet);
+        assert!(
+            !log.exists(),
+            "a warning below the gate must not create the log file"
+        );
+
+        let loud = AccelLogConfig {
+            verbosity: 2,
+            error_log: log.to_string_lossy().into_owned(),
+        };
+        emit_with_config(AccelLogLevel::Warning, "kept at the gate", &loud);
+        let written = std::fs::read_to_string(&log).unwrap();
+        assert!(written.contains("): Warning kept at the gate\n"), "{written:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

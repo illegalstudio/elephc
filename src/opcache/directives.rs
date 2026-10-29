@@ -463,13 +463,13 @@ pub fn directive_int_range(name: &str) -> Option<(i64, i64)> {
 ///
 /// TWO FAMILIES, TWO CHANNELS. The ten JIT tuning validators live in the JIT INI block and report
 /// through `zend_error(E_WARNING, …)`, so they print unconditionally as a startup
-/// `Warning: <body> in Unknown on line 0`. `opcache.max_accelerated_files` and
-/// `opcache.interned_strings_buffer` instead report through `zend_accel_error(ACCEL_LOG_WARNING,
-/// …)`, which is gated on `opcache.log_verbosity_level >= 2` and therefore prints NOTHING at the
-/// default verbosity of 1 — the refusal is silent, and only the reverted value is observable.
-/// Those two return `None` here; modelling their verbosity-gated log line would mean modelling
-/// `zend_accel_error`'s whole timestamped `<date> (<pid>): Warning <body>` channel, which elephc
-/// has no counterpart for (its `--ini` diagnostics go to the compiler's stderr).
+/// `Warning: <body> in Unknown on line 0`. `opcache.max_accelerated_files`,
+/// `opcache.interned_strings_buffer`, `opcache.memory_consumption` and
+/// `opcache.max_wasted_percentage` instead report through
+/// `zend_accel_error(ACCEL_LOG_WARNING, …)`, gated on `opcache.log_verbosity_level >= 2` and
+/// carrying the timestamped `<date> (<pid>): Warning <body>` shape. Those return `None` here:
+/// they belong to [`accel_startup_warnings`], which the compiler emits through the shared
+/// accelerator channel (`crate::opcache::accel_log`) at the effective verbosity.
 ///
 /// AND TWO MESSAGE SHAPES within the JIT family, which is why this is a lookup and not a format:
 /// the six `OnUpdateCounter` directives interpolate `; using default value instead.` where the
@@ -806,7 +806,11 @@ fn parse_ini_int(name: &str, raw: &str) -> Option<i64> {
         if mebibytes < 8 {
             return None;
         }
-        return mebibytes.checked_mul(1024 * 1024);
+        // After the 32-bit `atoi` truncation above, `mebibytes <= i32::MAX`, so the byte count
+        // cannot overflow `i64` and this multiply is exact. php-src's `ZEND_LONG_MAX / 1 MiB`
+        // guard — which clamps to `ZEND_LONG_MAX & ~(1 MiB - 1)` — is therefore unreachable; the
+        // saturating multiply only avoids a debug panic if the truncation ever changes.
+        return Some(mebibytes.saturating_mul(1024 * 1024));
     }
     // `opcache.max_accelerated_files` is the SECOND `atoi`-read integer directive
     // (`OnUpdateMaxAcceleratedFiles`), so a `K`/`M`/`G` suffix or a `0x` prefix is NOT honored:
@@ -850,57 +854,205 @@ fn parse_ini_int(name: &str, raw: &str) -> Option<i64> {
 /// off-by-one in three of their message bounds means the reverted value is genuinely surprising —
 /// see [`directive_int_range`]). NOT modelled HERE: the `zend_accel_error(ACCEL_LOG_WARNING, …)`
 /// lines for `opcache.max_accelerated_files` / `opcache.interned_strings_buffer` / the
-/// `opcache.memory_consumption` floor, which reference PHP itself suppresses at the default
-/// `opcache.log_verbosity_level` of 1 — they appear only at `>= 2`. They stay silent here too,
-/// exactly as reference PHP's default configuration renders them, and this compile-time channel
-/// would be the WRONG place for them regardless: it is unconditional, so emitting them would
-/// produce noise reference does not. elephc does now have the timestamped accelerator channel
-/// they belong on (`crate::opcache_prelude`'s `zend_accel_error` emulation, which
-/// `opcache.blacklist_filename` already uses for its no-match warning), so moving them there is
-/// possible — it is just not this function's job. `opcache.max_wasted_percentage` and an invalid
-/// `opcache.jit` spelling are likewise silent in reference PHP. The runtime
+/// `opcache.memory_consumption` floor / `opcache.max_wasted_percentage`. Those are gated on
+/// `opcache.log_verbosity_level >= 2`, so they belong to the verbosity-aware accelerator channel
+/// rather than this unconditional one: [`accel_startup_warnings`] computes them and the compiler
+/// emits them through the shared channel (`crate::opcache::accel_log`). An invalid
+/// `opcache.jit` spelling is silent in reference PHP. The runtime
 /// `ELEPHC_INI_*` path emits nothing — it is an elephc extension with no reference counterpart
 /// (see [`directive_runtime_overridable`]), and a compiled binary has no startup phase to warn in.
 #[allow(dead_code)]
 pub fn ini_override_warnings(version_id: u32, overrides: &[(String, String)]) -> Vec<String> {
-    let mut warnings = Vec::new();
-    if overrides.is_empty() {
-        return warnings;
-    }
+    startup_diagnostics(version_id, overrides)
+        .into_iter()
+        .filter(|event| event.channel == StartupDiagnosticChannel::EWarning)
+        .map(|event| event.message)
+        .collect()
+}
+
+/// Returns the message bodies of the startup `zend_accel_error(ACCEL_LOG_WARNING, …)` lines
+/// reference PHP emits while REGISTERING the INI entries, for the `--ini` overrides of
+/// `version_id`'s directive table that its handlers refuse.
+///
+/// THE OTHER CHANNEL. [`ini_override_warnings`] returns what php-src prints through
+/// `zend_error(E_WARNING, …)` — unconditional, `Warning: …` on the compiler's own voice. These
+/// four handlers instead report through `zend_accel_error(ACCEL_LOG_WARNING, …)`, which is gated
+/// on `opcache.log_verbosity_level >= 2` and carries the timestamped
+/// `<date> (<pid>): Warning <body>` shape. `bug79665.phpt` pins all three that its `--INI--`
+/// block reaches (memory, accelerated-files, wasted-percentage) at verbosity 2. The caller
+/// applies the gate through [`crate::opcache::accel_log::emit_with_config`], so at the default
+/// verbosity 1 nothing is printed — exactly as reference PHP is silent by default.
+///
+/// MESSAGES are byte-verified against `ext/opcache/zend_accelerator_module.c`:
+/// - `opcache.memory_consumption` (`OnUpdateMemoryConsumption`): `atoi` below 8 MiB refuses.
+///   The overflow guard above `ZEND_LONG_MAX / 1 MiB` CLAMPS rather than refusing, so there is
+///   no upper-limit message.
+/// - `opcache.max_accelerated_files` (`OnUpdateMaxAcceleratedFiles`): `atoi` below 200 or above
+///   1000000 refuses, with a distinct message per side.
+/// - `opcache.interned_strings_buffer` (`OnUpdateInternedStringsBuffer`): the QUANTITY parser,
+///   refused below 0 or above `MAX_INTERNED_STRINGS_BUFFER_SIZE` (32767 on every 64-bit build).
+/// - `opcache.max_wasted_percentage` (`OnUpdateMaxWastedPercentage`): the raw percent read with
+///   C `atoi`, refused at `<= 0` or `> 50`.
+///
+/// The bodies carry php-src's OWN embedded trailing newline (`"...8MB.\n"`): the accelerator
+/// channel appends its own newline on top, so reference emits a BLANK LINE after each warning,
+/// and so does this. Dropping the embedded `\n` would collapse that blank line.
+///
+/// Iteration follows the table's REGISTRATION order, which is the order php-src registers the
+/// handlers in and therefore the order it logs them.
+// `allow(dead_code)`: this is a TEST-ONLY projection of [`startup_diagnostics`] — the compiler
+// consumes the merged stream — kept so the two channels stay assertable without re-deriving the
+// events. It is also dead in the `elephc-magician` `#[path]` include.
+#[allow(dead_code)]
+pub fn accel_startup_warnings(version_id: u32, overrides: &[(String, String)]) -> Vec<String> {
+    startup_diagnostics(version_id, overrides)
+        .into_iter()
+        .filter(|event| event.channel == StartupDiagnosticChannel::AccelError)
+        .map(|event| event.message)
+        .collect()
+}
+
+/// The channel a startup diagnostic is written through.
+///
+/// php-src produces both families from the SAME INI-registration pass, in directive registration
+/// order, so the order between them is observable when a single compile mixes a
+/// malformed-quantity / JIT-range override with an accelerator-range one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupDiagnosticChannel {
+    /// `zend_error(E_WARNING, …)`: unconditional, the compiler's own `Warning: …` voice.
+    EWarning,
+    /// `zend_accel_error(ACCEL_LOG_WARNING, …)`: the timestamped accelerator channel, gated on
+    /// `opcache.log_verbosity_level >= 2`.
+    AccelError,
+}
+
+/// One startup diagnostic, in the order php-src emits it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartupDiagnostic {
+    /// Which channel the line goes through.
+    pub channel: StartupDiagnosticChannel,
+    /// The message body. `EWarning` bodies carry no prefix; `AccelError` bodies end with php-src's
+    /// own embedded newline, so the channel's added newline yields a blank line after them.
+    pub message: String,
+}
+
+/// Returns every startup diagnostic reference PHP emits while REGISTERING the INI entries, for
+/// the `--ini` overrides of `version_id`'s directive table, in php-src's own order.
+///
+/// ONE PASS, IN REGISTRATION ORDER. php-src applies each directive's value in the order the
+/// handlers were registered, and that directive's handler emits its quantity `E_WARNING` (if any)
+/// and then its range diagnostic at that point. Emitting the two families in two separate passes
+/// (all `Warning:` lines, then all accelerator lines) misorders any compile that mixes them.
+pub fn startup_diagnostics(
+    version_id: u32,
+    overrides: &[(String, String)],
+) -> Vec<StartupDiagnostic> {
+    let mut events = Vec::new();
     for (name, value) in opcache_directives(version_id) {
-        if !matches!(value, DirectiveValue::Int(_)) {
-            continue;
-        }
         let Some(raw) = latest_override(overrides, name) else {
             continue;
         };
         let scanned = ini_scanner_value(raw);
-        // THREE integer directives never reach `zend_ini_parse_quantity_warn` and so never carry a
-        // quantity diagnostic: `opcache.memory_consumption` and `opcache.max_accelerated_files`
-        // are `atoi`-read, and `opcache.jit_prof_threshold` is a `double` (`OnUpdateReal`) that
-        // merely REPORTS as an int in the 8.2 profile. VERIFIED on reference PHP 8.5.6:
-        // `-d opcache.max_accelerated_files=12abc` and `-d opcache.jit_prof_threshold=0.005` print
-        // nothing, while `-d opcache.interned_strings_buffer=12abc` and
-        // `-d opcache.max_file_size=12abc` both print the `unknown multiplier "c"` line.
-        let quantity_read =
-            name != MEMORY_CONSUMPTION && name != MAX_ACCELERATED_FILES && name != JIT_PROF_THRESHOLD;
-        if quantity_read {
-            if let (_, Some(body)) = parse_ini_quantity(scanned) {
-                warnings.push(format!("Invalid \"{name}\" setting. {body}"));
+        // The QUANTITY and JIT-RANGE diagnostics are INTEGER-only. The accelerator family below
+        // is keyed by NAME and is NOT: `opcache.max_wasted_percentage` is a FLOAT directive.
+        if matches!(value, DirectiveValue::Int(_)) {
+            // The QUANTITY diagnostic (`Warning: Invalid "<name>" setting. <body>`). THREE integer
+            // directives never reach `zend_ini_parse_quantity_warn` and so never carry one:
+            // `opcache.memory_consumption` and `opcache.max_accelerated_files` are `atoi`-read, and
+            // `opcache.jit_prof_threshold` is a `double` (`OnUpdateReal`). VERIFIED on reference
+            // PHP 8.5.10: `-d opcache.max_accelerated_files=12abc` and
+            // `-d opcache.jit_prof_threshold=0.005` print nothing, while
+            // `-d opcache.interned_strings_buffer=12abc` and `-d opcache.max_file_size=12abc` both
+            // print the `unknown multiplier "c"` line.
+            let quantity_read = name != MEMORY_CONSUMPTION
+                && name != MAX_ACCELERATED_FILES
+                && name != JIT_PROF_THRESHOLD;
+            if quantity_read {
+                if let (_, Some(body)) = parse_ini_quantity(scanned) {
+                    events.push(StartupDiagnostic {
+                        channel: StartupDiagnosticChannel::EWarning,
+                        message: format!("Invalid \"{name}\" setting. {body}"),
+                    });
+                }
+            }
+            // The JIT RANGE diagnostic, AFTER the quantity one for the same directive because
+            // php-src runs `zend_ini_parse_quantity_warn` first and only then tests the range — so
+            // a value like `--ini opcache.jit_hot_func=999abc` produces BOTH lines, in this order
+            // (VERIFIED on reference PHP 8.5.10). `parse_ini_int` returning `None` IS the refusal,
+            // so the two cannot disagree about whether the value was kept.
+            if parse_ini_int(name, scanned).is_none() {
+                if let Some(body) = ini_range_warning(name) {
+                    events.push(StartupDiagnostic {
+                        channel: StartupDiagnosticChannel::EWarning,
+                        message: body,
+                    });
+                }
             }
         }
-        // The RANGE diagnostic, emitted AFTER the quantity one for the same directive because
-        // php-src runs `zend_ini_parse_quantity_warn` first and only then tests the range — so a
-        // value like `--ini opcache.jit_hot_func=999abc` produces BOTH lines, in this order
-        // (VERIFIED on reference PHP 8.5.6). `parse_ini_int` returning `None` IS the refusal, so
-        // the two cannot disagree about whether the value was kept.
-        if parse_ini_int(name, scanned).is_none() {
-            if let Some(body) = ini_range_warning(name) {
-                warnings.push(body);
-            }
+        // The ACCELERATOR diagnostic, through `zend_accel_error(ACCEL_LOG_WARNING, …)`.
+        if let Some(body) = accel_startup_warning(name, scanned) {
+            events.push(StartupDiagnostic {
+                channel: StartupDiagnosticChannel::AccelError,
+                message: body,
+            });
         }
     }
-    warnings
+    events
+}
+
+/// The accelerator-channel message body for one overridden directive, or `None` when its value is
+/// not refused. See [`startup_diagnostics`] for the ordering and [`ini_range_warning`] for the
+/// `E_WARNING` sibling.
+///
+/// MESSAGES are byte-verified against `ext/opcache/zend_accelerator_module.c`:
+/// - `opcache.memory_consumption` (`OnUpdateMemoryConsumption`): `atoi` below 8 MiB refuses; the
+///   overflow guard above `ZEND_LONG_MAX / 1 MiB` CLAMPS rather than refusing.
+/// - `opcache.max_accelerated_files` (`OnUpdateMaxAcceleratedFiles`): `atoi` below 200 or above
+///   1000000 refuses, with a distinct message per side.
+/// - `opcache.interned_strings_buffer` (`OnUpdateInternedStringsBuffer`): the QUANTITY parser,
+///   refused below 0 or above `MAX_INTERNED_STRINGS_BUFFER_SIZE` (32767 on every 64-bit build).
+/// - `opcache.max_wasted_percentage` (`OnUpdateMaxWastedPercentage`): the raw percent read with C
+///   `atoi`, refused at `<= 0` or `> 50`.
+///
+/// The bodies carry php-src's OWN embedded trailing newline (`"...8MB.\n"`): the accelerator
+/// channel appends its own newline on top, so reference emits a BLANK LINE after each warning.
+fn accel_startup_warning(name: &str, scanned: &str) -> Option<String> {
+    match name {
+        MEMORY_CONSUMPTION => (parse_ini_atoi(scanned) < 8)
+            .then(|| "opcache.memory_consumption is set below the required 8MB.\n".to_string()),
+        MAX_ACCELERATED_FILES => {
+            if parse_ini_int(name, scanned).is_some() {
+                return None;
+            }
+            Some(if parse_ini_atoi(scanned) < 200 {
+                "opcache.max_accelerated_files is set below the required minimum (200).\n"
+                    .to_string()
+            } else {
+                "opcache.max_accelerated_files is set above the limit (1000000).\n".to_string()
+            })
+        }
+        "opcache.interned_strings_buffer" => {
+            if parse_ini_int(name, scanned).is_some() {
+                return None;
+            }
+            let size = parse_ini_quantity(scanned).0;
+            Some(if size < 0 {
+                format!(
+                    "opcache.interned_strings_buffer must be greater than or equal to 0, \
+                     {size} given.\n"
+                )
+            } else {
+                format!(
+                    "opcache.interned_strings_buffer must be less than or equal to 32767, \
+                     {size} given.\n"
+                )
+            })
+        }
+        MAX_WASTED_PERCENTAGE => parse_ini_max_wasted_percentage(scanned)
+            .is_none()
+            .then(|| "opcache.max_wasted_percentage must be set between 1 and 50.\n".to_string()),
+        _ => None,
+    }
 }
 
 /// Converts a raw INI override string for directive `name` into the directive's typed,
@@ -1020,8 +1172,17 @@ fn parse_ini_max_wasted_percentage(raw: &str) -> Option<f64> {
 
 /// Reads `raw` with C `atoi` semantics: skip leading ASCII whitespace, accept one optional
 /// `+`/`-`, consume the leading run of decimal digits, and stop at the first non-digit. A string
-/// with no leading digits yields `0`; digits beyond the 18th are dropped rather than overflowing
-/// (a saturation the real `atoi` leaves undefined and that no plausible directive value reaches).
+/// with no leading digits yields `0`.
+///
+/// THE RESULT IS A 32-BIT `int`. C's `atoi` returns `int`, and php-src assigns it to a
+/// `zend_long`, so the value is TRUNCATED to 32 bits and sign-extended — exactly `(int)strtol`.
+/// A 19+-digit literal saturates to `LONG_MAX` / `LONG_MIN` first, then truncates (`LONG_MAX`
+/// low 32 bits is `-1`). This is observable and was MEASURED on reference PHP 8.5.10:
+/// `-d opcache.memory_consumption=3000000000` truncates negative and warns "set below the
+/// required 8MB", `-d opcache.max_accelerated_files=4000000000` warns "below the required
+/// minimum (200)", and `-d opcache.max_wasted_percentage=12884901918` truncates to `30` and is
+/// accepted as `0.3`. An earlier revision saturated at 18 digits and kept a positive `i64`,
+/// which disagreed with reference on every value at or above 2^31.
 ///
 /// This is the reader `OnUpdateMaxWastedPercentage` uses, and it is deliberately NOT Rust's
 /// `str::parse` (which rejects `2.5` and `2abc`) nor PHP's own `(int)` cast (which reads `3e1` as
@@ -1038,20 +1199,19 @@ fn parse_ini_atoi(raw: &str) -> i64 {
         negative = bytes[index] == b'-';
         index += 1;
     }
-    let mut value: i64 = 0;
-    let mut digits = 0;
+    // Accumulate in i128 so a 19+-digit literal saturates the way `strtol` does (LONG_MAX /
+    // LONG_MIN) instead of wrapping.
+    let mut magnitude: i128 = 0;
     while index < bytes.len() && bytes[index].is_ascii_digit() {
-        if digits < 18 {
-            value = value * 10 + i64::from(bytes[index] - b'0');
+        magnitude = magnitude * 10 + i128::from(bytes[index] - b'0');
+        if magnitude > i64::MAX as i128 + 1 {
+            magnitude = i64::MAX as i128 + 1;
         }
-        digits += 1;
         index += 1;
     }
-    if negative {
-        -value
-    } else {
-        value
-    }
+    let signed = if negative { -magnitude } else { magnitude };
+    let long = signed.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+    long as i32 as i64
 }
 
 /// Reads a plain float directive (`opcache.jit_prof_threshold`) with `zend_strtod` LEADING-PREFIX
@@ -2994,6 +3154,179 @@ mod tests {
         assert_eq!(
             effective_directive_ini_string("opcache.memory_consumption", &mem, &bad),
             "128"
+        );
+    }
+
+    /// `bug79665.phpt` at `opcache.log_verbosity_level=2`: the three refused overrides produce
+    /// the verbatim `zend_accel_error(ACCEL_LOG_WARNING, …)` bodies, in REGISTRATION order
+    /// (memory, accelerated-files, wasted-percentage). The body carries no severity prefix or
+    /// newline; the caller applies the gate and the timestamped line shape.
+    #[test]
+    fn accel_startup_warnings_match_bug79665() {
+        let overrides = vec![
+            ("opcache.max_wasted_percentage".to_string(), "60".to_string()),
+            ("opcache.memory_consumption".to_string(), "7".to_string()),
+            ("opcache.max_accelerated_files".to_string(), "10".to_string()),
+        ];
+        assert_eq!(
+            accel_startup_warnings(80500, &overrides),
+            vec![
+                "opcache.memory_consumption is set below the required 8MB.\n".to_string(),
+                "opcache.max_accelerated_files is set below the required minimum (200).\n"
+                    .to_string(),
+                "opcache.max_wasted_percentage must be set between 1 and 50.\n".to_string(),
+            ]
+        );
+        // In-range overrides warn on neither family, and no override is silent.
+        let good = vec![
+            ("opcache.memory_consumption".to_string(), "256".to_string()),
+            ("opcache.max_accelerated_files".to_string(), "1000".to_string()),
+            ("opcache.max_wasted_percentage".to_string(), "50".to_string()),
+        ];
+        assert!(accel_startup_warnings(80500, &good).is_empty());
+        assert!(accel_startup_warnings(80500, &[]).is_empty());
+    }
+
+    /// The upper-limit sides and the interned-buffer bounds carry their own messages, emitted in
+    /// registration order (interned precedes accelerated-files).
+    #[test]
+    fn accel_startup_warnings_cover_the_upper_bounds() {
+        let above = vec![
+            (
+                "opcache.max_accelerated_files".to_string(),
+                "2000000".to_string(),
+            ),
+            (
+                "opcache.interned_strings_buffer".to_string(),
+                "40000".to_string(),
+            ),
+        ];
+        assert_eq!(
+            accel_startup_warnings(80500, &above),
+            vec![
+                "opcache.interned_strings_buffer must be less than or equal to 32767, 40000 \
+                 given.\n"
+                    .to_string(),
+                "opcache.max_accelerated_files is set above the limit (1000000).\n".to_string(),
+            ]
+        );
+        let negative = vec![("opcache.interned_strings_buffer".to_string(), "-1".to_string())];
+        assert_eq!(
+            accel_startup_warnings(80500, &negative),
+            vec![
+                "opcache.interned_strings_buffer must be greater than or equal to 0, -1 given.\n"
+                    .to_string()
+            ]
+        );
+    }
+
+    /// `parse_ini_atoi` reproduces C `atoi`'s 32-bit `int` truncation, which is observable.
+    ///
+    /// VERIFIED on reference PHP 8.5.10: `-d opcache.memory_consumption=3000000000` truncates
+    /// negative and warns "below the required 8MB"; `-d opcache.max_accelerated_files=4000000000`
+    /// warns "below the required minimum (200)"; `-d opcache.max_wasted_percentage=12884901918`
+    /// truncates to `30` and is accepted as `0.3`; a 23-digit literal saturates to `LONG_MAX` and
+    /// truncates to `-1`.
+    #[test]
+    fn parse_ini_atoi_truncates_to_32_bits() {
+        assert_eq!(parse_ini_atoi("3000000000"), -1_294_967_296);
+        assert_eq!(parse_ini_atoi("4000000000"), -294_967_296);
+        assert_eq!(parse_ini_atoi("4294967296"), 0);
+        assert_eq!(parse_ini_atoi("4294967297"), 1);
+        assert_eq!(parse_ini_atoi("12884901918"), 30);
+        assert_eq!(parse_ini_atoi("9999999999999999999999"), -1);
+        // Ordinary values are untouched, and the leading-prefix rules still hold.
+        assert_eq!(parse_ini_atoi("128"), 128);
+        assert_eq!(parse_ini_atoi(" 7 "), 7);
+        assert_eq!(parse_ini_atoi("2.5"), 2);
+        assert_eq!(parse_ini_atoi("abc"), 0);
+        assert_eq!(parse_ini_atoi("-3"), -3);
+    }
+
+    /// The accelerator warning sides follow the TRUNCATED value, not the literal.
+    #[test]
+    fn accel_startup_warnings_use_the_truncated_atoi_value() {
+        let mem = vec![(
+            "opcache.memory_consumption".to_string(),
+            "3000000000".to_string(),
+        )];
+        assert_eq!(
+            accel_startup_warnings(80500, &mem),
+            vec!["opcache.memory_consumption is set below the required 8MB.\n".to_string()]
+        );
+        let files = vec![(
+            "opcache.max_accelerated_files".to_string(),
+            "4000000000".to_string(),
+        )];
+        assert_eq!(
+            accel_startup_warnings(80500, &files),
+            vec![
+                "opcache.max_accelerated_files is set below the required minimum (200).\n"
+                    .to_string()
+            ]
+        );
+        // `12884901918` truncates to 30 → within 1..=50 → no warning, as reference.
+        let wasted = vec![(
+            "opcache.max_wasted_percentage".to_string(),
+            "12884901918".to_string(),
+        )];
+        assert!(accel_startup_warnings(80500, &wasted).is_empty());
+    }
+
+    /// `startup_diagnostics` emits BOTH families in one registration-order pass: an accelerator
+    /// refusal for an early directive precedes an `E_WARNING` for a later one, which the old
+    /// two-pass emitter reversed.
+    #[test]
+    fn startup_diagnostics_interleave_in_registration_order() {
+        let overrides = vec![
+            ("opcache.jit_hot_func".to_string(), "999".to_string()),
+            ("opcache.memory_consumption".to_string(), "7".to_string()),
+        ];
+
+        assert_eq!(
+            startup_diagnostics(80500, &overrides),
+            vec![
+                StartupDiagnostic {
+                    channel: StartupDiagnosticChannel::AccelError,
+                    message:
+                        "opcache.memory_consumption is set below the required 8MB.\n".to_string(),
+                },
+                StartupDiagnostic {
+                    channel: StartupDiagnosticChannel::EWarning,
+                    message: "Invalid \"opcache.jit_hot_func\" setting; using default value \
+                              instead. Should be between 0 and 255"
+                        .to_string(),
+                },
+            ]
+        );
+    }
+
+    /// The ONE directive whose single override fires BOTH channels: a malformed
+    /// `interned_strings_buffer` emits the quantity `Warning:` and then the accelerator range
+    /// line, in that order.
+    #[test]
+    fn interned_override_emits_both_channels_in_order() {
+        let overrides = vec![(
+            "opcache.interned_strings_buffer".to_string(),
+            "99999abc".to_string(),
+        )];
+        let events = startup_diagnostics(80500, &overrides);
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!(events[0].channel, StartupDiagnosticChannel::EWarning);
+        assert!(
+            events[0]
+                .message
+                .starts_with("Invalid \"opcache.interned_strings_buffer\" setting."),
+            "{:?}",
+            events[0]
+        );
+        assert_eq!(events[1].channel, StartupDiagnosticChannel::AccelError);
+        assert!(
+            events[1].message.starts_with(
+                "opcache.interned_strings_buffer must be less than or equal to 32767"
+            ),
+            "{:?}",
+            events[1]
         );
     }
 }

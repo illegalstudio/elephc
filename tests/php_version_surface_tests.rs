@@ -572,13 +572,12 @@ var_dump(ini_get('not.a.real.directive'));
     );
 }
 
-/// `ini_restore` is consistent with `ini_set`: neither can move a compiled directive.
-///
-/// `ini_set()` returns `false` for every key (documented in `opcache_prelude`), and
-/// `ini_restore()` therefore has nothing to undo. This asserts the pair together so the two
-/// halves of the "INI is compile-time baked" story cannot drift apart.
+/// `ini_set('opcache.enable', '0')` DISABLES the cache (php-src `OnEnable`), and `ini_restore`
+/// cannot re-enable it: php-src refuses to temporarily ENABLE a disabled cache, so the value
+/// stays `'0'`. VERIFIED on reference PHP 8.5.10 (`string(1) "1"` / `set-CHANGED` /
+/// `restore-CHANGED`).
 #[test]
-fn ini_restore_is_consistent_with_ini_set() {
+fn ini_set_opcache_enable_disables_and_ini_restore_cannot_reenable() {
     let source = r#"<?php
 $before = ini_get('opcache.enable');
 var_dump(ini_set('opcache.enable', '0'));
@@ -587,7 +586,7 @@ ini_restore('opcache.enable');
 echo ini_get('opcache.enable') === $before ? "restore-unchanged" : "restore-CHANGED", "\n";
 "#;
     let out = run_for_profile("elephc_ini_pair", source, "8.5");
-    assert_eq!(out, "bool(false)\nset-unchanged\nrestore-unchanged\n");
+    assert_eq!(out, "string(1) \"1\"\nset-CHANGED\nrestore-CHANGED\n");
 }
 
 /// The version-surface functions are declared, so `function_exists()` reports them.
