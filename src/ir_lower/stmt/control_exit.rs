@@ -690,6 +690,18 @@ pub(crate) fn lower_throw_access_error(
     lower_throw_access_exception(ctx, "Error", message, span);
 }
 
+/// Throws a catchable access Error whose message uses already captured runtime strings.
+pub(crate) fn lower_throw_access_error_message(
+    ctx: &mut LoweringContext<'_, '_>, message: &Expr, span: Span,
+) {
+    if ctx.builder.insertion_block_is_terminated() { return; }
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("Error"), args: vec![message.clone()],
+    }, span);
+    let value = crate::ir_lower::expr::lower_expr(ctx, &error);
+    terminate_throw(ctx, value.value);
+}
+
 /// Lowers a statically-decided access violation as a named catchable exception.
 pub(crate) fn lower_throw_access_exception(
     ctx: &mut LoweringContext<'_, '_>,

@@ -55,7 +55,7 @@ pub(super) fn eval_property_dimension_unset(
         owners.push(index);
         let object = finish_property_unset_receiver(receiver, &mut owners, context, scope, values)?;
         owners.push(object);
-        if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(()); }
+        if !matches!(values.type_tag(object)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return Ok(()); }
         let property = match property {
             PreparedPropertyName::Literal(name) => name,
             PreparedPropertyName::Dynamic(name) => finish_name(name, &mut owners, context, scope, values)?,

@@ -91,9 +91,8 @@ fn remove_property_value(
     let name = property_access::coerce_runtime_property_name(ctx, name, array.span);
     let name = park_lowered_unset_operand(ctx, name, array.span, owners);
     let name_value = lower_expr(ctx, &name);
-    let selected = property_access::lower_dynamic_property_fetch_or_select(
-        ctx, receiver, name_value, PhpType::Mixed, mode, false, true, array,
-    );
+    debug_assert!(matches!(mode, PropertyFetchMode::QuietRead));
+    let selected = fetch_unset_property(ctx, receiver, name_value, array);
     let ty = ctx.builder.value_php_type(selected.value);
     let selected = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) { selected }
         else { ctx.box_value_as_mixed(selected, PhpType::Mixed, Some(expr.span)) };
@@ -114,7 +113,7 @@ fn remove_property_value(
     jump(ctx, done);
     ctx.builder.position_at_end(other);
     ctx.restore_initialized_slots(initial.clone());
-    // OffsetUnset's object arm uses the native or public method table without copying an array.
+    // Native adapters and eval-aware public dispatch preserve object identity without array copies.
     let is_object = ctx.emit_value(Op::TypePredicate, vec![selected.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(expr.span));
@@ -123,9 +122,8 @@ fn remove_property_value(
     ctx.builder.terminate(Terminator::CondBr { cond: is_object.value,
         then_target: object, then_args: Vec::new(), else_target: scalar, else_args: Vec::new() });
     ctx.builder.position_at_end(object);
-    let key = lower_expr(ctx, key);
-    ctx.emit_void(Op::OffsetUnset, vec![selected.value, key.value], None,
-        Op::OffsetUnset.default_effects(), Some(expr.span));
+    native_dimension_probes::lower(ctx, selected, &PhpType::Mixed, key,
+        elephc_builtin_contract::ObjectDimension::Unset, expr);
     jump(ctx, done);
     let object_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(scalar);
@@ -176,8 +174,7 @@ fn finish_receiver_in_context(ctx: &mut LoweringContext<'_, '_>, source: &Expr, 
         ExprKind::PropertyAccess { object, property } => {
             let parent = finish_receiver_in_context(ctx, object, true);
             let name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral(property.clone()), source.span));
-            property_access::lower_dynamic_property_fetch_or_select(ctx, parent, name, PhpType::Mixed,
-                PropertyFetchMode::QuietRead, false, true, source)
+            fetch_unset_property(ctx, parent, name, source)
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             let parent = finish_receiver_in_context(ctx, object, true);
@@ -219,9 +216,7 @@ fn quiet_index(
 
 /// Distinguishes quiet missing containers from scalar errors before an intermediate offset read.
 fn guard_dimension_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span, as_object: bool) {
-    let closure_class = ctx.intern_class_name("Closure");
-    let closure = ctx.emit_value(Op::InstanceOf, vec![parent.value], Some(Immediate::Data(closure_class)),
-        PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
+    let closure = is_unset_closure(ctx, parent, span);
     let closure_error = ctx.builder.create_named_block("unset.dimension.closure", Vec::new());
     let ordinary = ctx.builder.create_named_block("unset.dimension.ordinary", Vec::new());
     let closure_initial = ctx.initialized_slots_snapshot();
@@ -272,8 +267,7 @@ fn select_dynamic_property(
     ctx.builder.position_at_end(present);
     let name = lower_expr(ctx, property);
     let name = property_access::coerce_runtime_property_name(ctx, name, source.span);
-    let value = property_access::lower_dynamic_property_fetch_or_select(ctx, parent, name, PhpType::Mixed,
-        PropertyFetchMode::QuietRead, false, true, source);
+    let value = fetch_unset_property(ctx, parent, name, source);
     store_value_into_temp(ctx, &temp, PhpType::Mixed, value, source.span);
     jump(ctx, merge);
     let present_slots = ctx.initialized_slots_snapshot();
@@ -289,6 +283,36 @@ fn select_dynamic_property(
     let result = take_owned_temp(ctx, &temp, source.span);
     stage_call_result(ctx, staging.as_ref(), result, source.span);
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, source.span); }
+    take_prepublished_call_result(ctx, staging, result, source.span)
+}
+
+/// Protects a converted property name and receiver while validating Closure materialization.
+fn fetch_unset_property(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, name: LoweredValue, source: &Expr,
+) -> LoweredValue {
+    let staging = prepublish_call_result(ctx, &PhpType::Mixed, source.span);
+    let (parent, parent_owner) = root_owned_call_operand(ctx, parent, source.span);
+    let parent_type = ctx.builder.value_php_type(parent.value);
+    let borrowed = if Ownership::php_type_needs_lifetime_tracking(&parent_type) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value], None, parent_type,
+            Op::Borrow.default_effects(), Some(source.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { parent };
+    let mut names = Vec::new();
+    let name = park_lowered_unset_operand(ctx, name, source.span, &mut names);
+    reject_unset_closure_property(ctx, borrowed, &name, source.span);
+    let key = lower_expr(ctx, &name);
+    let value = property_access::lower_dynamic_property_fetch_or_select(ctx, borrowed, key,
+        PhpType::Mixed, PropertyFetchMode::QuietRead, false, true, source);
+    let value = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed { value }
+        else { ctx.box_value_as_mixed(value, PhpType::Mixed, Some(source.span)) };
+    // A later throwing hop must see an independent producer, not an already-cleared temp load.
+    let result = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, value, Some(source.span));
+    crate::ir_lower::ownership::release_if_owned(ctx, value, Some(source.span));
+    stage_call_result(ctx, staging.as_ref(), result, source.span);
+    for owner in names.into_iter().rev() { retire_owned_call_operand(ctx, owner, source.span); }
+    if let Some(owner) = parent_owner { retire_owned_call_operand(ctx, owner, source.span); }
     take_prepublished_call_result(ctx, staging, result, source.span)
 }
 

@@ -107,7 +107,7 @@ fn finish_receiver(
         PreparedWriteReceiver::Property(parent, property) => {
             let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
             owners.push(parent);
-            if unset && values.type_tag(parent)? != EVAL_TAG_OBJECT { values.null()? }
+            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { values.null()? }
             else if unset { eval_unset_property_get_result(parent, &property, context, values)? }
             else { eval_write_property_get_result(parent, &property, context, values)? }
         }
@@ -115,7 +115,7 @@ fn finish_receiver(
             let early = if name_first && !unset { Some(finish_name(property, owners, context, scope, values)?) } else { None };
             let parent = finish_receiver(*parent, owners, context, scope, values, unset, true)?;
             owners.push(parent);
-            if unset && values.type_tag(parent)? != EVAL_TAG_OBJECT { return values.null(); }
+            if unset && !matches!(values.type_tag(parent)?, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) { return values.null(); }
             let property = if let Some(property) = early { property } else {
                 finish_name(property, owners, context, scope, values)?
             };
@@ -182,7 +182,7 @@ fn unset_dimension(
 pub(super) fn require_unset_array_access(
     value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if values.type_tag(value)? == EVAL_TAG_CALLABLE {
+    if is_unset_closure(value, context, values)? {
         return eval_throw_error("Cannot use object of type Closure as array", context, values);
     }
     if eval_array_access_object_matches(value, context, values)? { return Ok(()); }
@@ -192,6 +192,18 @@ pub(super) fn require_unset_array_access(
         None => eval_runtime_object_class_name(value, values)?,
     };
     eval_throw_error(&format!("Cannot use object of type {class} as array"), context, values)
+}
+
+/// Recognizes host callable cells and eval-backed Closure objects without requiring class hooks.
+pub(super) fn is_unset_closure(
+    value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_CALLABLE => Ok(true),
+        EVAL_TAG_OBJECT => Ok(values.object_identity(value).ok()
+            .is_some_and(|identity| context.dynamic_object_is_class(identity, "Closure"))),
+        _ => Ok(false),
+    }
 }
 
 /// Reads an update target as a lazy native selection, with the ordinary getter as fallback.

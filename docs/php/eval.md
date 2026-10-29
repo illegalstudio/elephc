@@ -265,6 +265,9 @@ String and numeric intermediate containers throw PHP's offset errors; `false`
 emits its array-conversion deprecation and `null` remains quiet.
 The string-offset error distinguishes a following property from a following
 dimension. Non-indexable objects, including closures, raise a catchable `Error`.
+Fetching a Closure property as an unset container raises
+`Cannot create dynamic property Closure::$name` after converting the name.
+Unsetting its final property name remains quiet.
 
 Supported binary operators are:
 

@@ -97,7 +97,34 @@ catch (Error $error) { echo $error->getMessage(), "\n"; }
 $rows = $scalarCases; $rows[0] = $foreignUnsetClosure;
 try { unset($rows[0][0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }
-unset($scalarCases, $value, $rows, $holder, $error, $text, $plain, $foreignUnsetClosure, $name);
+$closureCases = $scalarCases;
+$closureCases[0] = $foreignUnsetClosure; $closureCases[1] = static fn(): int => 2;
+for ($i = 0; $i < 2; $i++) {
+    $closure = $closureCases[$i];
+    $rows = $scalarCases; $rows[0] = $closure;
+    try { unset($rows[0][1]); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    $erased = json_decode('{}'); $erased->p = $closure;
+    try { unset($erased->p[1]); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    try { unset($closure->p[0]); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    $property = 'dyn';
+    try { unset($closure->{$property}[0]); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    $erased->nested = $closure;
+    try { unset($erased->nested->p[0]); }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+    unset($erased->nested->absent); echo "final-property-quiet\n";
+}
+$rows = $scalarCases; $rows[0] = $plain;
+try { unset($rows[0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$erased->p = $plain;
+try { unset($erased->p[1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+unset($scalarCases, $value, $rows, $holder, $error, $text, $plain, $foreignUnsetClosure, $name,
+    $closureCases, $closure, $erased, $property, $i);
 "#;
     let activation = "<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $foreignUnsetClosure = static fn(): int => 1; ";
     let scalar_aot = format!("{activation}{scalar_body}");
@@ -106,9 +133,41 @@ unset($scalarCases, $value, $rows, $holder, $error, $text, $plain, $foreignUnset
     let string_error = "Cannot use string offset as an array";
     let scalar_error = "Cannot unset offset in a non-array variable";
     let object_offset_error = "Cannot use string offset as an object";
+    let closure_expected = "Cannot use object of type Closure as array\nCannot use object of type Closure as array\n\
+        Cannot create dynamic property Closure::$p\nCannot create dynamic property Closure::$dyn\n\
+        Cannot create dynamic property Closure::$p\nfinal-property-quiet\n";
     let scalar_expected = format!(
         "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n\
-         {object_offset_error}\n{object_offset_error}\n{object_offset_error}\n{object_offset_error}\nCannot use object of type stdClass as array\nCannot use object of type Closure as array\n");
+         {object_offset_error}\n{object_offset_error}\n{object_offset_error}\n{object_offset_error}\nCannot use object of type stdClass as array\nCannot use object of type Closure as array\n\
+         {closure_expected}{closure_expected}Cannot use object of type stdClass as array\nCannot use object of type stdClass as array\n");
+    let dynamic_body = r#"
+class EvalFinalUnsetAccess implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { return false; }
+    public function offsetGet(mixed $offset): mixed { return null; }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void { echo 'dynamic:', $offset, '|'; }
+}
+return [new EvalFinalUnsetAccess(), static fn(): int => 3];
+"#.replace('\\', "\\\\").replace('\'', "\\'");
+    let dynamic = format!(r#"<?php
+$activate = new SimpleXMLElement('<activate/>'); unset($activate);
+$source = $argc > 0 ? '{dynamic_body}' : '';
+$returned = eval($source);
+if (!is_array($returned)) {{ throw new Error('expected array'); }}
+$dynamic = $returned[0]; $closure = $returned[1];
+$rows = json_decode('[0]', true);
+if (!is_array($rows)) {{ throw new Error('expected array'); }}
+$rows[0] = $dynamic; unset($rows[0][1]);
+$holder = json_decode('{{}}'); $holder->p = $dynamic; unset($holder->p[2]);
+$holder->p = $closure;
+try {{ unset($holder->p[0][1]); }} catch (Error $error) {{ echo $error->getMessage(), "\n"; }}
+try {{ unset($holder->p[0]); }} catch (Error $error) {{ echo $error->getMessage(), "\n"; }}
+try {{ unset($holder->p->slot[0]); }} catch (Error $error) {{ echo $error->getMessage(), "\n"; }}
+unset($holder->p->absent); echo "final-property-quiet\n";
+unset($source, $returned, $dynamic, $closure, $rows, $holder, $error);
+"#);
+    let dynamic_expected = "dynamic:1|dynamic:2|Cannot use object of type Closure as array\n\
+        Cannot use object of type Closure as array\nCannot create dynamic property Closure::$slot\nfinal-property-quiet\n";
     assert_bundle_with(&[
         BundleCase { name: "nested_unset_aot", source, expected },
         BundleCase { name: "nested_unset_eval", source: &eval, expected },
@@ -116,6 +175,7 @@ unset($scalarCases, $value, $rows, $holder, $error, $text, $plain, $foreignUnset
         BundleCase { name: "ordered_nested_unset_eval", source: &ordered_eval, expected: ordered_expected },
         BundleCase { name: "scalar_nested_unset_aot", source: &scalar_aot, expected: &scalar_expected },
         BundleCase { name: "scalar_nested_unset_eval", source: &scalar_eval, expected: &scalar_expected },
+        BundleCase { name: "eval_declared_final_unset_access", source: &dynamic, expected: dynamic_expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

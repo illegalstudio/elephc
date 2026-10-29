@@ -54,7 +54,7 @@ pub(super) fn lower(
     let result = if native.is_none() && contains_xml(ctx, source_type) {
         dispatch(ctx, borrowed, &key, operation, public, nullable, expr)
     } else {
-        invoke(ctx, borrowed, &key, operation, native.unwrap_or(public), nullable, expr)
+        invoke(ctx, borrowed, &key, operation, native.unwrap_or(public), native.is_none(), nullable, expr)
     };
     if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, expr.span); }
     release_evaluated_once(ctx, key_temp, expr.span);
@@ -95,13 +95,13 @@ fn dispatch(
         ObjectDimension::Unset => "__elephc_dimension_unset",
         _ => unreachable!("dimension probe operation"),
     };
-    let value = invoke(ctx, receiver, key, operation, method, false, expr);
+    let value = invoke(ctx, receiver, key, operation, method, false, false, expr);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
     branch_to(ctx, merge);
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(no);
     ctx.restore_initialized_slots(initial.clone());
-    let value = invoke(ctx, object, key, operation, public, nullable, expr);
+    let value = invoke(ctx, object, key, operation, public, true, nullable, expr);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
     branch_to(ctx, merge);
     let public_slots = ctx.initialized_slots_snapshot();
@@ -114,7 +114,7 @@ fn dispatch(
 /// Calls one protocol with an already captured key and a false result for nullable absence.
 fn invoke(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, key: &Expr,
-    operation: ObjectDimension, method: &str, nullable: bool, expr: &Expr,
+    operation: ObjectDimension, method: &str, public_array_access: bool, nullable: bool, expr: &Expr,
 ) -> LoweredValue {
     if nullable {
         let is_null = ctx.emit_value(Op::IsNull, vec![object.value], None, PhpType::Bool,
@@ -133,7 +133,7 @@ fn invoke(
         let absent_slots = ctx.initialized_slots_snapshot();
         ctx.builder.position_at_end(present);
         ctx.restore_initialized_slots(initial.clone());
-        let value = invoke_nonnull(ctx, object, key, operation, method, expr);
+        let value = invoke_nonnull(ctx, object, key, operation, method, public_array_access, expr);
         store_value_into_temp(ctx, &temp, PhpType::Bool, value, expr.span);
         branch_to(ctx, merge);
         let present_slots = ctx.initialized_slots_snapshot();
@@ -142,14 +142,17 @@ fn invoke(
             absent_slots, true, present_slots, true));
         return take_owned_temp(ctx, &temp, expr.span);
     }
-    invoke_nonnull(ctx, object, key, operation, method, expr)
+    invoke_nonnull(ctx, object, key, operation, method, public_array_access, expr)
 }
 
 /// Borrows captured operands only on the continuation where the receiver is non-null.
 fn invoke_nonnull(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, key: &Expr,
-    operation: ObjectDimension, method: &str, expr: &Expr,
+    operation: ObjectDimension, method: &str, public_array_access: bool, expr: &Expr,
 ) -> LoweredValue {
+    if operation == ObjectDimension::Unset && public_array_access {
+        require_unset_array_access(ctx, object, expr.span);
+    }
     let result = lower_method_call_with_receiver(ctx, object, method, &[key.clone()], Op::MethodCall, expr);
     if operation == ObjectDimension::Isset { ctx.truthy_consuming(result, Some(expr.span)) }
     else {

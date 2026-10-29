@@ -65,6 +65,8 @@ mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
 mod native_dimension_probes;
+mod unset_access_errors;
+use unset_access_errors::{is_unset_closure, require_unset_array_access, reject_unset_closure_property};
 mod native_xml_empty;
 mod callable_probes;
 mod descriptor_invoke;

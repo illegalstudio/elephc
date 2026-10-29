@@ -35,6 +35,9 @@ pub(super) fn eval_unset_property_get_result(
     object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if super::property_write_receivers::is_unset_closure(object, context, values)? {
+        return eval_throw_error(&format!("Cannot create dynamic property Closure::${property_name}"), context, values);
+    }
     eval_property_read_result(object, property_name, context, values, None, true)
 }
 

@@ -497,6 +497,11 @@ offset read, protecting a temporary parent across diagnostic callbacks and throw
 Both traversals carry the next fetch kind to distinguish string offsets used as
 objects from those used as arrays. Eval validates object indexability before its
 read bridge, and compiled closure cells use the same catchable object-as-array Error.
+Object leaves keep native adapters or eval-aware public ArrayAccess method dispatch
+after an interface check. Property-container fetches reject compiled and eval-backed
+Closure identities after converting the name; final property removal stays quiet.
+Receiver, converted-name and result owners remain published through these checks
+and through normal cleanup.
 
 ## Runtime script cache
 

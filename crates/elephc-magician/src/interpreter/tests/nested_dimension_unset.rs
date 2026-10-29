@@ -93,7 +93,22 @@ catch (Error $error) { echo $error->getMessage(), "\n"; }
 $plain = new stdClass();
 try { unset($plain[0][1]); }
 catch (Error $error) { echo $error->getMessage(), "\n"; }
-unset($cases, $value, $rows, $holder, $error, $text, $plain, $name);
+$closure = static fn(): int => 1;
+$rows = [$closure];
+try { unset($rows[0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$holder->closure = $closure;
+try { unset($holder->closure[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { unset($closure->p[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$name = 'dyn';
+try { unset($closure->{$name}[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+try { unset($holder->closure->p[0]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+unset($holder->closure->absent); echo "final-property-quiet\n";
+unset($cases, $value, $rows, $holder, $error, $text, $plain, $name, $closure);
 "#;
     let program = parse_fragment(source).unwrap();
     let mut values = FakeOps::default();
@@ -107,7 +122,10 @@ unset($cases, $value, $rows, $holder, $error, $text, $plain, $name);
     let object_offset_error = "Cannot use string offset as an object";
     assert_eq!(values.output, format!(
         "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n\
-         {object_offset_error}\n{object_offset_error}\n{object_offset_error}\n{object_offset_error}\nCannot use object of type stdClass as array\n"));
+         {object_offset_error}\n{object_offset_error}\n{object_offset_error}\n{object_offset_error}\nCannot use object of type stdClass as array\n\
+         Cannot use object of type Closure as array\nCannot use object of type Closure as array\n\
+         Cannot create dynamic property Closure::$p\nCannot create dynamic property Closure::$dyn\n\
+         Cannot create dynamic property Closure::$p\nfinal-property-quiet\n"));
     assert_eq!(values.warnings,
         ["Deprecated: Automatic conversion of false to array is deprecated"]);
 }
