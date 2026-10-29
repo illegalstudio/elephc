@@ -52,6 +52,7 @@ mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod ordinary_property_incdec;
 mod native_xml_updates;
 pub(crate) use native_xml_updates::lower_statement as lower_native_xml_property_update;
 mod string_offset_assign;

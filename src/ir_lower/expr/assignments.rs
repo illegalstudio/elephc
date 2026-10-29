@@ -22,6 +22,9 @@ pub(super) fn lower_assignment_expr(
     if let Some(result) = native_xml_updates::lower_assignment(
         ctx, target, value, result_target, prelude, conditional_value_temp, expr,
     ) { return result; }
+    let (value, prelude) = super::ordinary_property_incdec::without_capture(
+        target, value, result_target, prelude, conditional_value_temp,
+    );
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }

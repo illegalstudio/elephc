@@ -59,3 +59,38 @@ echo custom(new Guard(), $argc > 3), special(new Guard(), $argc > 3);
         }
     }
 }
+
+/// Ordinary property incdec retains scalar PHP locals with or without the XML capability loaded.
+#[test]
+fn ordinary_property_incdec_avoids_mixed_capture_locals_on_every_target() {
+    let counter = r#"<?php
+final class InlinePropertyCounter {
+    private int $n = 4;
+    public function post(): int { return $this->n++; }
+    public function pre(): int { return ++$this->n; }
+    public function postdec(): int { return $this->n--; }
+    public function predec(): int { return --$this->n; }
+}
+$counter = new InlinePropertyCounter();
+echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
+"#;
+    for xml in [false, true] {
+        let source = format!("{counter}{}", if xml { "$xml = new SimpleXMLElement('<r/>');" } else { "" });
+        for target in TARGETS {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                &source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+            );
+            for name in ["post", "pre", "postdec", "predec"] {
+                let function = method(&module, &format!("InlinePropertyCounter::{name}"));
+                assert!(!function.locals.iter().any(|local| local.name.as_deref()
+                    .is_some_and(|name| name.contains("__elephc_incdec_new_"))),
+                    "{target}, xml={xml}, {name}: the checked sum must feed the property directly");
+                assert!(!function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::PhpLocal
+                    && local.php_type.codegen_repr() == crate::types::PhpType::Mixed
+                    && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),
+                    "{target}, xml={xml}, {name}: generated PHP locals must stay scalar");
+            }
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
+    }
+}
