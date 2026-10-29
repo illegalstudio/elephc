@@ -26,7 +26,7 @@ class OpaqueUnsetName {
 }
 class OpaqueUnsetQuietName { public function __toString(): string { echo 'bad-conversion|'; return 'a'; } }
 function OpaqueUnsetBase(): mixed { global $computed; echo 'base|'; return $computed; }
-function OpaqueUnsetGetName(): object { echo 'name-value|'; return new OpaqueUnsetName(); }
+function OpaqueUnsetGetName(): OpaqueUnsetName { echo 'name-value|'; return new OpaqueUnsetName(); }
 function OpaqueUnsetQuiet(mixed $value): void {
     $name = new OpaqueUnsetQuietName();
     unset($value->a[OpaqueUnsetKey()]); unset($value->{$name}[OpaqueUnsetKey()]); echo 'quiet|';
@@ -279,7 +279,7 @@ fn test_simplexml_unset_traversal_modes_bundle() {
     if skip_without_xml_native("test_simplexml_unset_traversal_modes_bundle") { return; }
     let source = r###"<?php
 class UnsetTraversalStatic {
-    public static $xml;
+    public static ?SimpleXMLElement $xml = null;
     public static SimpleXMLElement $typed;
 }
 class UnsetTraversalName {

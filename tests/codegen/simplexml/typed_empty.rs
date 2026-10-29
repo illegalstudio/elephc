@@ -52,7 +52,9 @@ foreach ($nodes as $node) {
     else { throw new Error('unexpected presence receiver'); }
 }
 foreach ($nodes as $node) {
-    if (is_object($node)) { xmlPresenceObject($node); }
+    if ($node instanceof XmlPresenceGetOnly) { xmlPresenceObject($node); }
+    elseif ($node instanceof XmlPresenceBoth) { xmlPresenceObject($node); }
+    elseif ($node instanceof XmlPresenceElement) { xmlPresenceObject($node); }
     else { throw new Error('expected object receiver'); }
 }
 foreach ($nodes as $node) {

@@ -617,11 +617,13 @@ $metadataDocument->loadXML('<r><![CDATA[raw]]><?work data?></r>');
 $metadataChildren = $metadataDocument->documentElement->childNodes;
 echo $metadataChildren->item(0)->nodeName, ':', $metadataChildren->item(0)->nodeValue, '|';
 $metadataPi = $metadataChildren->item(1);
-echo $metadataPi->target, ':', $metadataPi->data, '|';
-$metadataPi->nodeValue = 'changed';
-echo $metadataPi->data, '|';
-$metadataPi->data = 'again';
-echo $metadataPi->nodeValue, ':', $metadataDocument->saveXML($metadataPi), '|';
+if ($metadataPi instanceof DOMProcessingInstruction) {
+    echo $metadataPi->target, ':', $metadataPi->data, '|';
+    $metadataPi->nodeValue = 'changed';
+    echo $metadataPi->data, '|';
+    $metadataPi->data = 'again';
+    echo $metadataPi->nodeValue, ':', $metadataDocument->saveXML($metadataPi), '|';
+} else { throw new Error('Expected the metadata processing instruction'); }
 $scriptDocument = new DOMDocument();
 $scriptDocument->loadHTML('<html><body><script>if (a < b) go()</script></body></html>', LIBXML_NOERROR | LIBXML_NOWARNING);
 echo $scriptDocument->getElementsByTagName('script')->item(0)->childNodes->item(0)->nodeName, '|';
