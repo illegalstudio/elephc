@@ -13,15 +13,29 @@ use super::*;
 /// Recognizes boxed storage whose runtime value may carry an XML dimension adapter.
 pub(super) fn supports(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
     ctx.classes.contains_key("SimpleXMLElement")
-        && !is_storage_receiver(array)
+        && !is_storage_receiver(ctx, array)
         && array_cast_source::array_cast_source_type_for_ir(ctx, array).codegen_repr() == PhpType::Mixed
 }
 
 /// Keeps storage expressions out of the value-only temporary array removal path.
-fn is_storage_receiver(mut receiver: &Expr) -> bool {
+fn is_storage_receiver(ctx: &LoweringContext<'_, '_>, mut receiver: &Expr) -> bool {
     let mut wrapped = false;
     while let ExprKind::ErrorSuppress(inner) = &receiver.kind { receiver = inner; wrapped = true; }
     if matches!(receiver.kind, ExprKind::Variable(_)) { return wrapped; }
+    let signature = match &receiver.kind {
+        ExprKind::FunctionCall { name, .. } =>
+            call_signature(ctx, name, source_prefers_extension_builtin(name)),
+        ExprKind::MethodCall { object, method, .. }
+        | ExprKind::NullsafeMethodCall { object, method, .. } => {
+            let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
+            crate::ir_lower::expr::method_metadata::method_signature_for_receiver_type(ctx, &ty, method)
+        }
+        ExprKind::StaticMethodCall { receiver, method, .. } =>
+            static_method_implementation_signature(ctx, receiver, method)
+                .or_else(|| lexical_instance_static_call_signature(ctx, receiver, method)).cloned(),
+        _ => None,
+    };
+    if signature.is_some_and(|signature| signature.by_ref_return) { return true; }
     matches!(receiver.kind,
         ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }
         | ExprKind::NullsafePropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }

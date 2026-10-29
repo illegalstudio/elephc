@@ -438,7 +438,7 @@ pub(super) fn lower_unset_array_access_property_offset(
 /// side effect and sees what PHP's delayed fetch sees. Anything else is lowered once and parked
 /// by [`park_lowered_unset_operand`]. The caller retires every slot pushed onto `owners` after
 /// the operation.
-fn park_unset_operand(
+pub(super) fn park_unset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     operand: &Expr,
     owners: &mut Vec<crate::ir::LocalSlotId>,
@@ -464,7 +464,7 @@ fn park_unset_operand(
 /// The value is retained into a hidden temporary registered as a call-operand owner, so a
 /// throwing `offsetUnset()` releases it on unwind, and an owning source temporary is released
 /// right away. The slot is pushed onto `owners` for the caller to retire.
-fn park_lowered_unset_operand(
+pub(super) fn park_lowered_unset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,

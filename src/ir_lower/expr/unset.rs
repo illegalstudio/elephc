@@ -9,6 +9,7 @@
 
 use super::*;
 mod mixed_dimension;
+mod opaque_property_dimension;
 
 mod property_elements;
 use property_elements::*;
@@ -58,6 +59,7 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
                 || mixed_dimension::supports(ctx, array)
+                || opaque_property_dimension::supports(ctx, array)
                 || unset_array_access_property_array_type(ctx, array).is_some()
                 || unset_array_access_has_array_access_property_receiver(ctx, array)
                 || unset_array_access_static_php_array_receiver(ctx, array).is_some()
@@ -178,6 +180,10 @@ fn lower_unset_array_access_from_key(
     }
     if let Some((receiver, property)) = unset_array_access_static_php_array_receiver(ctx, array) {
         lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
+        return;
+    }
+    if opaque_property_dimension::supports(ctx, array) {
+        opaque_property_dimension::lower(ctx, array, index, expr);
         return;
     }
     if mixed_dimension::supports(ctx, array) {

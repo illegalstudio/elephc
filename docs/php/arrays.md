@@ -754,3 +754,5 @@ feasible, but these functions are not wired into the compiler or interpreter
 today. Use an associative array explicitly in portable elephc code.
 
 Erased receivers read from a nested array element, a dynamic property, or a `mixed` static property do not currently have an attached element-removal path. `unset()` on these shapes reports an unsupported target instead of modifying a discarded array copy. Enabling SimpleXML does not enable these additional array-storage shapes. Declared array properties and ordinary `mixed` instance properties use the property removal support described above.
+
+When a property receiver's class is erased, native SimpleXML removal is selected at runtime. A false or null base is quiet. An ordinary object whose property storage cannot be resolved is refused with an explicit `Error`; its array is not modified through a temporary copy. Known declared and `mixed` instance properties retain the attached removal path. Calls returning an erased value by reference remain unsupported as `unset()` receivers.

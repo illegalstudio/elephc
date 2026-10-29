@@ -14,6 +14,7 @@ mod review_type_boundaries;
 mod eval_bundles;
 mod write_contracts;
 mod typed_empty;
+mod opaque_unset;
 mod opaque_writes;
 mod dimension_writes;
 mod dimension_owners;
