@@ -100,6 +100,13 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     } else {
         None
     };
+    let reference_entries = if dynamic_static_slot.is_some() {
+        super::reference_return_dispatch::entries(
+            ctx, impl_class, &method_key, callee_sig,
+            crate::codegen_support::source_method_adapters::MethodKind::Static,
+            !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(callee_sig),
+        )?
+    } else { Vec::new() };
     let overridable_late_static = late_bound_static
         && dynamic_static_slot.is_some()
         && !receiver_info.final_static_methods.contains(&method_key);
@@ -151,7 +158,9 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(
                 callee_sig,
             ),
-        );
+            &reference_entries,
+            &callee_sig.return_type,
+        )?;
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, &method_key));
     }
@@ -225,17 +234,14 @@ pub(super) fn lower_lexical_instance_static_method_call(
     emit_ref_arg_writebacks(ctx, &call_args)
 }
 
-/// Emits an indirect static-vtable call for a late-bound `static::method()` receiver.
-pub(super) fn emit_dynamic_static_method_call(ctx: &mut FunctionContext<'_>, slot: usize) {
-    emit_dynamic_static_method_call_with_abi(ctx, slot, false);
-}
-
 /// Emits late-static dispatch through either the physical or source-ABI table.
 pub(super) fn emit_dynamic_static_method_call_with_abi(
     ctx: &mut FunctionContext<'_>,
     slot: usize,
     source_abi: bool,
-) {
+    reference_entries: &[super::reference_return_dispatch::ReferenceReturnEntry],
+    return_ty: &PhpType,
+) -> Result<()> {
     let hidden_called_class_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_id_scratch = abi::temp_int_reg(ctx.emitter.target);
     let dispatch_scratch = abi::symbol_scratch_reg(ctx.emitter);
@@ -262,7 +268,7 @@ pub(super) fn emit_dynamic_static_method_call_with_abi(
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_scratch, dispatch_scratch, slot * 8);
-    abi::emit_call_reg(ctx.emitter, dispatch_scratch);
+    super::reference_return_dispatch::emit_call(ctx, dispatch_scratch, reference_entries, return_ty)
 }
 
 /// Lowers static `Fiber::suspend($value = null)` through the shared runtime helper.

@@ -3088,4 +3088,39 @@ mod source_entry_tests {
         }
     }
 
+
+    /// Inherited metadata cannot hide the physical implementation's reference-return ABI.
+    #[test]
+    fn inherited_eval_method_slots_keep_physical_reference_returns_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = Module::new(Target::parse(name).unwrap());
+            let declared = signature(Vec::new());
+            let mut physical = declared.clone();
+            physical.by_ref_return = true;
+            let mut owner = ClassInfo { class_id: 1, ..ClassInfo::default() };
+            owner.methods.insert("items".into(), physical.clone());
+            owner.static_methods.insert("staticitems".into(), physical);
+            module.class_infos.insert("PhysicalReferenceOwner".into(), owner);
+            let mut inherited = ClassInfo { class_id: 2, parent: Some("PhysicalReferenceOwner".into()), ..ClassInfo::default() };
+            inherited.methods.insert("items".into(), declared.clone());
+            inherited.static_methods.insert("staticitems".into(), declared);
+            inherited.method_impl_classes.insert("items".into(), "PhysicalReferenceOwner".into());
+            inherited.static_method_impl_classes.insert("staticitems".into(), "PhysicalReferenceOwner".into());
+            module.class_infos.insert("InheritedReferenceView".into(), inherited.clone());
+            let emitted = [
+                ("PhysicalReferenceOwner".into(), "items".into(), false),
+                ("PhysicalReferenceOwner".into(), "staticitems".into(), true),
+            ].into_iter().collect();
+            let mut instance_slots = Vec::new();
+            collect_class_method_slots(&module, "InheritedReferenceView", &inherited, &emitted, &mut instance_slots);
+            let instance = instance_slots.iter().find(|slot| slot.method == "items").unwrap();
+            assert!(instance.by_ref_return && !instance.return_uses_marker, "{name}: physical instance ABI");
+            assert_eq!(instance.entry_symbol, method_symbol("PhysicalReferenceOwner", "items"));
+            let mut static_slots = Vec::new();
+            collect_class_static_method_slots(&module, "InheritedReferenceView", &inherited, &emitted, &mut static_slots);
+            let static_slot = static_slots.iter().find(|slot| slot.method == "staticitems").unwrap();
+            assert!(static_slot.by_ref_return && !static_slot.return_uses_marker, "{name}: physical static ABI");
+            assert_eq!(static_slot.entry_symbol, static_method_symbol("PhysicalReferenceOwner", "staticitems"));
+        }
+    }
 }

@@ -201,6 +201,8 @@ mod handler_registration_owners;
 mod closure_reference_owners;
 mod boxed_array_call_results;
 mod compiled_method_results;
+#[path = "runtime_gc/class_override_results.rs"]
+mod class_override_results;
 mod intrinsic_method_results;
 mod mixed_parameters;
 mod issue_551_ownership;

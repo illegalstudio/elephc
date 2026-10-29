@@ -27,7 +27,7 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper(
         method_key,
         sig,
         dynamic_slot,
-    );
+    )?;
     ctx.emitter.label(&done_label);
     Ok(wrapper_label)
 }
@@ -228,7 +228,13 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
     method_key: &str,
     sig: &FunctionSig,
     dynamic_slot: Option<usize>,
-) {
+) -> Result<()> {
+    let reference_entries = if dynamic_slot.is_some() {
+        super::reference_return_dispatch::entries(
+            ctx, impl_class, method_key, sig,
+            crate::codegen_support::source_method_adapters::MethodKind::Static, false,
+        )?
+    } else { Vec::new() };
     let visible_arg_types = descriptor_visible_arg_types(sig);
     let called_class_ty = PhpType::Int;
     let incoming_types = descriptor_entry_incoming_types(&visible_arg_types, &called_class_ty);
@@ -280,7 +286,9 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
     let padding = abi::outgoing_call_stack_pad_bytes(ctx.emitter.target, actual_overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, padding);
     if let Some(slot) = dynamic_slot {
-        emit_dynamic_static_method_call(ctx, slot);
+        emit_dynamic_static_method_call_with_abi(
+            ctx, slot, false, &reference_entries, &sig.return_type,
+        )?;
     } else {
         abi::emit_call_label(ctx.emitter, &static_method_symbol(impl_class, method_key));
     }
@@ -289,13 +297,22 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
         abi::emit_release_temporary_stack(ctx.emitter, actual_overflow_bytes);
     }
     if sig.return_type.codegen_repr() == PhpType::Str && !sig.by_ref_return {
-        emit_late_static_owned_string_result(
-            ctx, impl_class, method_key, dynamic_slot,
-            descriptor_entry_slot_offset(visible_arg_types.len()),
-        );
+        if reference_entries.is_empty() {
+            emit_late_static_owned_string_result(
+                ctx, impl_class, method_key, dynamic_slot,
+                descriptor_entry_slot_offset(visible_arg_types.len()),
+            );
+        } else {
+            let owned = ctx.next_label("reference_override_string_owned");
+            crate::codegen_support::abi::emit_branch_if_php_return_owned(ctx.emitter, &owned);
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            crate::codegen_support::abi::emit_php_return_status(ctx.emitter, true);
+            ctx.emitter.label(&owned);
+        }
     }
     abi::emit_frame_restore(ctx.emitter, frame_size);
     abi::emit_return(ctx.emitter);
+    Ok(())
 }
 
 /// Gives every selected static implementation one owned result without copying an owned string.

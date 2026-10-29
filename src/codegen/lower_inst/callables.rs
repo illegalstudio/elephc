@@ -40,7 +40,7 @@ use super::{
 use crate::codegen::{CodegenIrError, Result};
 
 mod instance_expr;
-mod results;
+pub(super) mod results;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
