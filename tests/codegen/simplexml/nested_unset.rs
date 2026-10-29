@@ -67,15 +67,42 @@ unset($old, $replacement, $orderedUnsetRows, $orderedUnsetPosition, $error);
         .replace("orderedUnset", "evalOrderedUnset").replace('\\', "\\\\").replace('\'', "\\'");
     let ordered_eval = format!("<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); $source = $argc > 0 ? '{ordered_body}' : ''; eval($source); unset($source);");
     let ordered_expected = "inner|key|old:-\nroot|key|-:new\nlate|old:-\nroot|inner|fail|caught|old:new\n";
+    let scalar_body = r#"
+$scalarCases = json_decode('["abc","",5,1.5,true,false,null]', true);
+if (!is_array($scalarCases)) { throw new Error('expected array'); }
+foreach ($scalarCases as $value) {
+    $rows = [$value];
+    try { unset($rows[0][0][0]); echo "quiet\n"; }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+$holder = new stdClass(); $holder->field = $scalarCases[0];
+try { unset($holder->field[0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$rows = [$scalarCases[2]];
+unset($rows[0]->field[0]); echo "property-quiet\n";
+unset($scalarCases, $value, $rows, $holder, $error);
+"#;
+    let activation = "<?php $activate = new SimpleXMLElement('<activate/>'); unset($activate); ";
+    let scalar_aot = format!("{activation}{scalar_body}");
+    let scalar_body = scalar_body.replace('\\', "\\\\").replace('\'', "\\'");
+    let scalar_eval = format!("{activation}$source = $argc > 0 ? '{scalar_body}' : ''; eval($source); unset($source);");
+    let string_error = "Cannot use string offset as an array";
+    let scalar_error = "Cannot unset offset in a non-array variable";
+    let scalar_expected = format!(
+        "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n");
     assert_bundle_with(&[
         BundleCase { name: "nested_unset_aot", source, expected },
         BundleCase { name: "nested_unset_eval", source: &eval, expected },
         BundleCase { name: "ordered_nested_unset_aot", source: ordered, expected: ordered_expected },
         BundleCase { name: "ordered_nested_unset_eval", source: &ordered_eval, expected: ordered_expected },
+        BundleCase { name: "scalar_nested_unset_aot", source: &scalar_aot, expected: &scalar_expected },
+        BundleCase { name: "scalar_nested_unset_eval", source: &scalar_eval, expected: &scalar_expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
         assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        assert_eq!(out.stderr.matches("Automatic conversion of false to array is deprecated").count(), 2,
+            "{}", out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         out.stdout
     });

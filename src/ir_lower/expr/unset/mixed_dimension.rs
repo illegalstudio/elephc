@@ -182,6 +182,18 @@ fn root_receiver(
 
 /// Preserves null no-ops, false deprecations, and catchable errors without mutating scalar storage.
 pub(super) fn lower_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    lower_scalar_with_string_error(ctx, value, span, "Cannot unset string offsets");
+}
+
+/// Applies FETCH_DIM_UNSET diagnostics while traversing an intermediate scalar container.
+pub(super) fn lower_intermediate_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) {
+    lower_scalar_with_string_error(ctx, value, span, "Cannot use string offset as an array");
+}
+
+/// Shares null and false handling while distinguishing intermediate and final string offsets.
+fn lower_scalar_with_string_error(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span, string_error: &str,
+) {
     let done = ctx.builder.create_named_block("unset.scalar.done", vec![]);
     let nonnull = ctx.builder.create_named_block("unset.scalar.nonnull", vec![]);
     let is_null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
@@ -216,7 +228,7 @@ pub(super) fn lower_scalar(ctx: &mut LoweringContext<'_, '_>, value: LoweredValu
     ctx.builder.terminate(Terminator::CondBr { cond: is_string.value,
         then_target: string, then_args: vec![], else_target: other, else_args: vec![] });
     ctx.builder.position_at_end(string);
-    crate::ir_lower::stmt::lower_throw_access_error(ctx, "Cannot unset string offsets", span);
+    crate::ir_lower::stmt::lower_throw_access_error(ctx, string_error, span);
     ctx.builder.position_at_end(other);
     crate::ir_lower::stmt::lower_throw_access_error(ctx, "Cannot unset offset in a non-array variable", span);
     ctx.builder.position_at_end(done);

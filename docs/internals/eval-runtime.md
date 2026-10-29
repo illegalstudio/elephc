@@ -491,6 +491,9 @@ and inner keys are captured first, the final key runs once, and
 dimensions. Object leaves use the captured key with the existing unset adapter;
 array leaves raise an explicit unsupported-storage Error. Captures retire in reverse
 order even when key evaluation or an unset handler throws.
+Dimension hops distinguish quiet nulls and deprecated false values from invalid
+scalar containers. The AOT unset traversal applies the same check before its quiet
+offset read, protecting a temporary parent across diagnostic callbacks and throws.
 
 ## Runtime script cache
 

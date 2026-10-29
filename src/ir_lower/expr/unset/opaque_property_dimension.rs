@@ -195,6 +195,9 @@ pub(super) fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) 
 fn quiet_index(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, index: &Expr, source: &Expr,
 ) -> LoweredValue {
+    let pins = super::super::pin_in_flight_owners(ctx, &[parent.value], source.span);
+    guard_dimension_parent(ctx, parent, source.span);
+    super::super::unpin_in_flight_owners(ctx, pins, source.span);
     let value = if value_is_nullable(ctx, parent.value) {
         lower_nullable_array_access(ctx, parent, index, source, false)
     } else { lower_array_access_from_value(ctx, parent, index, source, false) };
@@ -202,6 +205,30 @@ fn quiet_index(
     if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Object(_)) {
         ctx.box_value_as_mixed(value, PhpType::Mixed, Some(source.span))
     } else { value }
+}
+
+/// Distinguishes quiet missing containers from scalar errors before an intermediate offset read.
+fn guard_dimension_parent(ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue, span: Span) {
+    let mut predicates = Vec::new();
+    for predicate in [crate::ir::PhpTypePredicate::Array, crate::ir::PhpTypePredicate::Object] {
+        predicates.push(ctx.emit_value(Op::TypePredicate, vec![parent.value],
+            Some(Immediate::TypePredicate(predicate)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), Some(span)));
+    }
+    let container = ctx.emit_value(Op::IBitOr, vec![predicates[0].value, predicates[1].value], None,
+        PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+    let scalar = ctx.builder.create_named_block("unset.dimension.scalar", Vec::new());
+    let done = ctx.builder.create_named_block("unset.dimension.checked", Vec::new());
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: container.value,
+        then_target: done, then_args: Vec::new(), else_target: scalar, else_args: Vec::new() });
+    ctx.builder.position_at_end(scalar);
+    mixed_dimension::lower_intermediate_scalar(ctx, parent, span);
+    jump(ctx, done);
+    let scalar_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
+        initial.clone(), true, scalar_slots, true));
 }
 
 /// Skips name conversion after a missing unset dimension, protecting the selected owner on unwind.

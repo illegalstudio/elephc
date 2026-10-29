@@ -155,7 +155,13 @@ fn unset_dimension(
             if !present.and_then(|present| released.map(|()| present))? { return values.null(); }
             eval_array_get_result(parent, index, context, values)
         }
-        _ => values.null(),
+        EVAL_TAG_NULL => values.null(),
+        EVAL_TAG_BOOL if !values.truthy(parent)? => {
+            values.warning("Deprecated: Automatic conversion of false to array is deprecated")?;
+            values.null()
+        }
+        EVAL_TAG_STRING => eval_throw_error("Cannot use string offset as an array", context, values),
+        _ => eval_throw_error("Cannot unset offset in a non-array variable", context, values),
     }
 }
 

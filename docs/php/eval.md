@@ -261,6 +261,8 @@ computed keys in source order before selecting live variable storage. A computed
 root such as `rows()` is captured before those keys. Missing intermediate
 dimensions remain quiet. An array leaf requiring nested array writeback raises
 an explicit unsupported-storage `Error`.
+String and numeric intermediate containers throw PHP's offset errors; `false`
+emits its array-conversion deprecation and `null` remains quiet.
 
 Supported binary operators are:
 

@@ -64,3 +64,34 @@ unset($old, $replacement, $nestedUnsetRows, $nestedUnsetIndex, $error);
          Unsupported unset(): erased array storage has no attached removal path|1");
     assert!(values.warnings.is_empty(), "{:?}", values.warnings);
 }
+
+/// Intermediate dimensions reject strings and numbers while preserving false and null behavior.
+#[test]
+fn nested_unset_reports_scalar_intermediate_diagnostics() {
+    let source = br#"
+$cases = ['abc', '', 5, 1.5, true, false, null];
+foreach ($cases as $value) {
+    $rows = [$value];
+    try { unset($rows[0][0][0]); echo "quiet\n"; }
+    catch (Error $error) { echo $error->getMessage(), "\n"; }
+}
+$holder = new stdClass(); $holder->field = 'abc';
+try { unset($holder->field[0][1]); }
+catch (Error $error) { echo $error->getMessage(), "\n"; }
+$rows = [5]; unset($rows[0]->field[0]); echo "property-quiet\n";
+unset($cases, $value, $rows, $holder, $error);
+"#;
+    let program = parse_fragment(source).unwrap();
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let result =
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, result).unwrap();
+    let string_error = "Cannot use string offset as an array";
+    let scalar_error = "Cannot unset offset in a non-array variable";
+    assert_eq!(values.output, format!(
+        "{string_error}\n{string_error}\n{scalar_error}\n{scalar_error}\n{scalar_error}\nquiet\nquiet\n{string_error}\nproperty-quiet\n"));
+    assert_eq!(values.warnings,
+        ["Deprecated: Automatic conversion of false to array is deprecated"]);
+}
