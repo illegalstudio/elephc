@@ -236,10 +236,9 @@ for ($i = 0; $i < 4; $i++) {
 fn test_simplexml_erased_unset_storage_is_rejected() {
     if skip_without_xml_native("test_simplexml_erased_unset_storage_is_rejected") { return; }
     for body in [
-        "$m = json_decode('{\"a\":{\"b\":1,\"c\":2}}', true); unset($m['a']['b']);",
         "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);",
         "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);",
-        "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(): mixed { $data = erasedRefSeed(); return $data; } unset(erasedRefUnset()['a']);",
+        "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(mixed &$data): mixed { return $data; } $data = erasedRefSeed(); unset(erasedRefUnset($data)['a']);",
         "class ErasedMethodRefUnset { public mixed $data = ['a' => 1, 'b' => 2]; public function &bag(): mixed { return $this->data; } } $h = new ErasedMethodRefUnset(); unset($h->bag()['a']);",
         "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { return self::$data; } } unset(ErasedStaticRefUnset::bag()['a']);",
     ] {
@@ -247,6 +246,23 @@ fn test_simplexml_erased_unset_storage_is_rejected() {
         let error = compile_source_expect_backend_error(&source);
         assert!(error.contains("unset target shape"), "{error}");
     }
+}
+
+/// An erased array element is refused at runtime while the original parent remains unchanged.
+#[test]
+fn test_simplexml_erased_nested_array_unset_preserves_unsupported_storage() {
+    if skip_without_xml_native("test_simplexml_erased_nested_array_unset_preserves_unsupported_storage") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$xml = new SimpleXMLElement('<r/>');
+$data = json_decode('{"a":{"b":1,"c":2}}', true);
+try { unset($data['a']['b']); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+echo json_encode($data);
+unset($xml, $data, $error);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Unsupported unset(): erased array storage has no attached removal path|{\"a\":{\"b\":1,\"c\":2}}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// New property removal retains native XML protocols and mutates ordinary property storage in place.

@@ -13,7 +13,7 @@ use super::*;
 /// Recognizes boxed storage whose runtime value may carry an XML dimension adapter.
 pub(super) fn supports(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
     ctx.classes.contains_key("SimpleXMLElement")
-        && !is_storage_receiver(ctx, array)
+        && (!is_storage_receiver(ctx, array) || matches!(array.kind, ExprKind::ArrayAccess { .. }))
         && array_cast_source::array_cast_source_type_for_ir(ctx, array).codegen_repr() == PhpType::Mixed
 }
 
@@ -47,16 +47,24 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr,
 ) {
     // Resolve before receiver/argument/key effects can change the source's current type facts.
-    let detached_array_allowed = temporary_array_is_by_value(ctx, array);
+    let storage_receiver = is_storage_receiver(ctx, array);
+    let detached_array_allowed = !storage_receiver && temporary_array_is_by_value(ctx, array);
+    let mut traversal_owners = Vec::new();
+    let staged_receiver = matches!(array.kind, ExprKind::ArrayAccess { .. }).then(||
+        super::opaque_property_dimension::prepare_receiver(ctx, array, &mut traversal_owners));
     let name = if let ExprKind::Variable(name) = &array.kind { Some(name.as_str()) } else { None };
     // A computed receiver runs before its key; a variable selects its current storage afterwards.
-    let early_receiver = name.is_none().then(|| capture_receiver(ctx, array, expr.span));
+    let early_receiver = (name.is_none() && staged_receiver.is_none())
+        .then(|| capture_receiver(ctx, array, expr.span));
     let (key, key_temp) = evaluate_once(ctx, index, expr);
     let key_owner = key_temp.as_ref().filter(|name|
         Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
         .map(|name| ctx.local_slots[name]);
     if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, expr.span); }
-    let (object, owner) = early_receiver.unwrap_or_else(|| capture_receiver(ctx, array, expr.span));
+    let (object, owner) = if let Some(staged) = staged_receiver {
+        let object = super::opaque_property_dimension::finish_receiver(ctx, &staged);
+        root_receiver(ctx, object, expr.span)
+    } else { early_receiver.unwrap_or_else(|| capture_receiver(ctx, array, expr.span)) };
     let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, PhpType::Mixed,
         Op::Borrow.default_effects(), Some(expr.span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
@@ -101,8 +109,13 @@ pub(super) fn lower(
             Op::OffsetUnset.default_effects(), Some(expr.span));
         if let Some(slot) = detached_owner { retire_owned_call_operand(ctx, slot, expr.span); }
     } else {
+        let message = if storage_receiver {
+            "Unsupported unset(): erased array storage has no attached removal path"
+        } else {
+            "Unsupported unset(): array result of an unresolved or overridable call has no attached removal path"
+        };
         crate::ir_lower::stmt::lower_throw_access_error(ctx,
-            "Unsupported unset(): array result of an unresolved or overridable call has no attached removal path", expr.span);
+            message, expr.span);
     }
     branch_to(ctx, merge);
     let array_slots = ctx.initialized_slots_snapshot();
@@ -114,6 +127,7 @@ pub(super) fn lower(
     if let Some(slot) = owner { retire_owned_call_operand(ctx, slot, expr.span); }
     if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, expr.span); }
     release_evaluated_once(ctx, key_temp, expr.span);
+    for owner in traversal_owners.into_iter().rev() { retire_owned_call_operand(ctx, owner, expr.span); }
 }
 
 /// Proves that discarding a copied array cannot hide a reference-returning runtime implementation.
@@ -153,6 +167,13 @@ fn capture_receiver(
     ctx: &mut LoweringContext<'_, '_>, array: &Expr, span: Span,
 ) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
     let object = lower_expr(ctx, array);
+    root_receiver(ctx, object, span)
+}
+
+/// Gives the selected receiver one owned box after delayed storage traversal.
+fn root_receiver(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
+) -> (LoweredValue, Option<crate::ir::LocalSlotId>) {
     let object = if ctx.builder.value_php_type(object.value).codegen_repr() == PhpType::Mixed {
         object
     } else { ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span)) };

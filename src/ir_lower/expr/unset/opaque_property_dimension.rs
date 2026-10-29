@@ -139,7 +139,7 @@ fn remove_property_value(
 }
 
 /// Captures computed roots and names now while postponing property traversal until after the key.
-fn prepare_receiver(
+pub(super) fn prepare_receiver(
     ctx: &mut LoweringContext<'_, '_>, source: &Expr, owners: &mut Vec<crate::ir::LocalSlotId>,
 ) -> Expr {
     let kind = match &source.kind {
@@ -161,7 +161,7 @@ fn prepare_receiver(
 }
 
 /// Resolves unset receiver properties with materialization but dimensions without creation.
-fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredValue {
+pub(super) fn finish_receiver(ctx: &mut LoweringContext<'_, '_>, source: &Expr) -> LoweredValue {
     match &source.kind {
         ExprKind::PropertyAccess { object, property } => {
             let parent = finish_receiver(ctx, object);
