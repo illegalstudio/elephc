@@ -66,6 +66,8 @@ fn ordinary_property_incdec_avoids_mixed_capture_locals_on_every_target() {
     let counter = r#"<?php
 final class InlinePropertyCounter {
     private int $n = 4;
+    public mixed $opaque = 0;
+    public function mixedpost(): mixed { return $this->opaque++; }
     public function post(): int { return $this->n++; }
     public function pre(): int { return ++$this->n; }
     public function postdec(): int { return $this->n--; }
@@ -90,6 +92,10 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
                     && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),
                     "{target}, xml={xml}, {name}: generated PHP locals must stay scalar");
             }
+            let opaque = method(&module, "InlinePropertyCounter::mixedpost");
+            assert!(opaque.locals.iter().any(|local| local.name.as_deref()
+                .is_some_and(|name| name.contains("__elephc_incdec_new_"))),
+                "{target}, xml={xml}: opaque arithmetic must retain its original owner capture");
             crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         }
     }

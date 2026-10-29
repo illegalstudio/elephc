@@ -13,12 +13,18 @@ use super::*;
 /// Consumes an ordinary property's checked increment directly without a frame-lifetime Mixed local.
 /// The parser's old capture preserves one getter call; prefix results still reread the stored type.
 pub(super) fn without_capture<'a>(
-    target: &Expr, value: &'a Expr, result: Option<&Expr>, prelude: &'a [Stmt],
+    ctx: &LoweringContext<'_, '_>, target: &Expr, value: &'a Expr,
+    result: Option<&Expr>, prelude: &'a [Stmt],
     conditional: Option<&str>,
 ) -> (&'a Expr, &'a [Stmt]) {
     let unchanged = (value, prelude);
     if conditional.is_some() || !matches!(target.kind,
         ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) { return unchanged; }
+    // Only checked integer arithmetic introduces a new Mixed scalar owner here. Keep
+    // other captures, including object arithmetic, on their existing lifetime path.
+    if super::array_cast_source::array_cast_source_type_for_ir(ctx, target).codegen_repr() != PhpType::Int {
+        return unchanged;
+    }
     let ExprKind::Variable(name) = &value.kind else { return unchanged; };
     if !crate::names::is_generated_local_name(name) || !name.contains("__elephc_incdec_new_") {
         return unchanged;
