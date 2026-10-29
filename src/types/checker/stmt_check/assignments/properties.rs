@@ -468,9 +468,9 @@ fn check_object_property_write(
             );
             if initialization_denied { return Ok(()); }
         }
-        // A property with a `get` hook but no `set` hook is read-only: external writes are an error
-        // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's
-        // own accessor target the raw backing slot and are allowed.
+        // A virtual getter without a setter is read-only. A backed getter still has PHP's
+        // ordinary storage write when no setter is declared. Accessor-internal writes use
+        // the backing slot directly.
         let has_get_hook = class_info
             .methods
             .contains_key(&php_symbol_key(&property_hook_get_method(property)));
@@ -485,7 +485,9 @@ fn check_object_property_write(
                 method == php_symbol_key(&property_hook_get_method(property))
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
-        if has_get_hook && !has_set_hook && !in_own_accessor {
+        let virtual_property = class_info.property_hooks.get(property)
+            .is_some_and(|hooks| hooks.is_virtual());
+        if virtual_property && has_get_hook && !has_set_hook && !in_own_accessor {
             return Err(CompileError::new(
                 span,
                 &format!(

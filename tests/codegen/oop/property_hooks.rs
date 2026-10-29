@@ -12,6 +12,26 @@
 
 use super::*;
 
+/// A backed getter without a setter keeps ordinary writes and compound-update storage.
+#[test]
+fn test_backed_get_only_property_keeps_implicit_storage_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BackedOnlyRead {
+    public int $number = 1 {
+        get { echo 'G'; return $this->number * 10; }
+    }
+}
+$object = new BackedOnlyRead();
+$object->number = 2;
+var_dump($object->number);
+$object->number += 1;
+var_dump($object->number);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Gint(20)\nGGint(210)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Camel-case inherited backed hooks read initialized raw storage within their own accessor.
 #[test]
 fn test_camel_case_inherited_backed_property_hooks() {
