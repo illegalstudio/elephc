@@ -8,6 +8,7 @@
 //! - Computed receivers run once before operands; variable and static loads run afterward.
 //! - Compound reads follow RHS evaluation and native write-fetch, including in eval.
 //! - Every retained operand is released after normal completion or an exception.
+//! - Eval-owned static arrays detach their boxed cell before runtime payload COW writes.
 
 use super::*;
 use super::property_write_receivers::{PreparedPropertyName, prepare_index, finish_name};
@@ -103,6 +104,22 @@ pub(super) fn write_value(
     assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Snapshot,
+        operands, context, values)
+}
+
+/// Distinguishes a getter snapshot from an independent cell already published in a static slot.
+enum ArrayWriteStorage {
+    Snapshot,
+    Published,
+}
+
+/// Shares dimension semantics while allowing a published static cell to use runtime payload COW.
+fn write_value_in_storage(
+    current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
+    assigned: RuntimeCellHandle, storage: ArrayWriteStorage, operands: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let append = index.is_none();
     if values.type_tag(current)? == EVAL_TAG_OBJECT {
         if !eval_array_access_object_matches(current, context, values)? { return Err(EvalStatus::RuntimeFatal); }
@@ -150,10 +167,14 @@ pub(super) fn write_value(
             operands.push(key); key
         },
     };
-    let array = if values.is_array_like(current)? { values.array_clone_shallow(current)? }
+    let reuse = matches!(storage, ArrayWriteStorage::Published) && values.is_array_like(current)?;
+    let array = if reuse { current }
+        else if values.is_array_like(current)? { values.array_clone_shallow(current)? }
         else { eval_array_autovivification(Some(current), append, context, values)? };
-    operands.push(array);
-    context.clone_array_element_aliases(current, array, None);
+    if !reuse {
+        operands.push(array);
+        context.clone_array_element_aliases(current, array, None);
+    }
     let promoted = eval_array_set_target_for_index(array, index, values)?;
     if promoted != array {
         operands.push(promoted);
@@ -196,7 +217,18 @@ fn static_write(
         let current = eval_static_property_get_result(class_name, property, context, values)?;
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
-        if let Some(array) = write_value(current, key, op, assigned, &mut operands, context, values)? {
+        let (current, storage) = match detach_live_static_array(
+            class_name, property, current, &mut operands, context, values,
+        )? {
+            Some(current) => {
+                operands.push(current);
+                (current, ArrayWriteStorage::Published)
+            }
+            None => (current, ArrayWriteStorage::Snapshot),
+        };
+        if let Some(array) = write_value_in_storage(
+            current, key, op, assigned, storage, &mut operands, context, values,
+        )? {
             eval_static_property_set_result(class_name, property, array, context, values)?;
         }
         Ok(())
@@ -206,6 +238,32 @@ fn static_write(
         if result.is_ok() { result = released; }
     }
     result
+}
+
+/// Publishes a detached eval static box and retires its old receiver lease before payload mutation.
+fn detach_live_static_array(
+    class_name: &str, property: &str, current: RuntimeCellHandle,
+    operands: &mut Vec<RuntimeCellHandle>, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if !values.is_array_like(current)? || values.is_reference(current)? { return Ok(None); }
+    let resolved = resolve_eval_static_member_class_name(class_name, context)?;
+    let Some((declaring, declared)) = context.class_property(&resolved, property) else { return Ok(None); };
+    if !declared.is_static()
+        || context.static_property_alias(&declaring, declared.name()).is_some()
+        || context.static_property(&declaring, declared.name()) != Some(current)
+    { return Ok(None); }
+
+    // The same-cell setter validates write visibility and types without changing slot ownership.
+    eval_static_property_set_result(&resolved, property, current, context, values)?;
+    let replacement = copy_scope_value(current, context, values)?;
+    // This transfers the new owner to storage even if retiring the displaced owner reports an error.
+    store_static_property_value(&declaring, declared.name(), replacement, context, values)?;
+    let receiver = operands.pop().ok_or(EvalStatus::RuntimeFatal)?;
+    debug_assert_eq!(receiver, current);
+    eval_release_value(context, values, receiver)?;
+    // Retaining the box protects it from reentrant slot replacement without sharing its payload.
+    values.retain(replacement).map(Some)
 }
 
 /// Applies a compound operator to the selected post-RHS dimension without reevaluating the RHS.

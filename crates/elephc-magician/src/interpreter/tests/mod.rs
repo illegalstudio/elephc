@@ -77,6 +77,7 @@ mod operand_string_sources;
 mod operand_shared_runtime;
 mod native_ref_cleanup;
 mod static_members;
+mod static_dimension_writes;
 mod generics;
 mod support;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
