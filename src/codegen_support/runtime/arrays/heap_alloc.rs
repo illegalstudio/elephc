@@ -125,6 +125,15 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_alloc_small_bin_scan");                    // reload the previous next slot and keep scanning this bin
 
     emitter.label("__rt_heap_alloc_small_bin_found");
+    // -- a reused cached block still has to fit the live memory_limit budget --
+    emitter.instruction("add x13, x11, #16");                                   // footprint of the cached block including its header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_gc_live");
+    emitter.instruction("ldr x14, [x14]");                                      // current live bytes before this reuse
+    emitter.instruction("add x13, x13, x14");                                   // live bytes after reusing the cached block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_limit");
+    emitter.instruction("ldr x15, [x15]");                                      // configured runtime memory ceiling
+    emitter.instruction("cmp x13, x15");                                        // does the reused block fit the live budget?
+    emitter.instruction("b.hi __rt_heap_exhausted");                            // no — a freed block cannot bypass memory_limit
     emitter.instruction("ldr x11, [x10, #16]");                                 // x11 = cached_small_block->next within this size class
     emitter.instruction("str x11, [x16]");                                      // unlink the cached block from its segregated small-bin chain
     emitter.instruction("sub x13, x10, x12");                                   // x13 = header offset from the heap base (x12 still holds _heap_buf)
@@ -194,6 +203,15 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("sub x12, x11, x0");                                    // x12 = free block payload minus requested payload
     emitter.instruction("cmp x12, #24");                                        // is there room for a new 16-byte header plus minimum payload?
     emitter.instruction("b.lt __rt_heap_alloc_fl_take_whole");                  // no — consume the whole free block
+    // -- a split allocation only keeps the requested payload live, but still owes its header --
+    emitter.instruction("add x13, x0, #16");                                    // footprint of the requested block including its header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_gc_live");
+    emitter.instruction("ldr x14, [x14]");                                      // current live bytes before this reuse
+    emitter.instruction("add x13, x13, x14");                                   // live bytes after splitting the free block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_limit");
+    emitter.instruction("ldr x15, [x15]");                                      // configured runtime memory ceiling
+    emitter.instruction("cmp x13, x15");                                        // does the split allocation fit the live budget?
+    emitter.instruction("b.hi __rt_heap_exhausted");                            // no — free blocks cannot bypass memory_limit
     emitter.instruction("add x13, x10, x0");                                    // x13 = current header + requested payload
     emitter.instruction("add x13, x13, #16");                                   // x13 = split remainder header address
     emitter.instruction("sub x12, x12, #16");                                   // x12 = remainder payload size after carving out a new header
@@ -223,6 +241,15 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b __rt_heap_alloc_count");                             // count allocation and return
 
     emitter.label("__rt_heap_alloc_fl_take_whole");
+    // -- consuming the whole block makes its full payload live, so charge that size --
+    emitter.instruction("add x13, x11, #16");                                   // footprint of the whole reused block including its header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_gc_live");
+    emitter.instruction("ldr x14, [x14]");                                      // current live bytes before this reuse
+    emitter.instruction("add x13, x13, x14");                                   // live bytes after taking the whole block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_heap_limit");
+    emitter.instruction("ldr x15, [x15]");                                      // configured runtime memory ceiling
+    emitter.instruction("cmp x13, x15");                                        // does the whole-block allocation fit the live budget?
+    emitter.instruction("b.hi __rt_heap_exhausted");                            // no — free blocks cannot bypass memory_limit
     emitter.instruction("ldr x12, [x10, #16]");                                 // x12 = current->next (rest of list)
     emitter.instruction("str x12, [x9]");                                       // prev->next = current->next (unlink current)
     emitter.instruction("mov w13, #1");                                         // initial refcount = 1
@@ -258,13 +285,23 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_off");
     emitter.instruction("ldr x10, [x9]");                                       // x10 = current heap offset
 
-    // -- bounds check: offset + 16 + requested <= heap_max --
+    // -- arena position check: offset + 16 + requested <= heap_max --
     emitter.instruction("add x12, x10, x0");                                    // x12 = offset + requested size
     emitter.instruction("add x12, x12, #16");                                   // x12 = offset + requested + header (16 bytes)
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_max");
-    emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
-    emitter.instruction("cmp x12, x13");                                        // does the allocation fit (unsigned, so a wrapped size stays above the limit)?
+    emitter.instruction("ldr x13, [x13]");                                      // x13 = reserved arena capacity in bytes
+    emitter.instruction("cmp x12, x13");                                        // does the position stay inside the reserved arena (unsigned, so wrapped sizes fail)?
     emitter.instruction("b.hi __rt_heap_alloc_larger_bin");                     // no — reuse a larger binned block, else coalesce, before giving up
+
+    // -- the live budget is independent of the historical bump position --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_gc_live");
+    emitter.instruction("ldr x13, [x13]");                                      // load current live bytes before the bump allocation
+    emitter.instruction("add x13, x13, x0");                                    // add the requested payload
+    emitter.instruction("add x13, x13, #16");                                   // include the block header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x14", "_heap_limit");
+    emitter.instruction("ldr x14, [x14]");                                      // load the runtime memory ceiling
+    emitter.instruction("cmp x13, x14");                                        // does the live footprint fit the runtime ceiling?
+    emitter.instruction("b.hi __rt_heap_exhausted");                            // no — the bump position cannot bypass memory_limit
 
     // -- compute base address of heap buffer --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");
@@ -368,11 +405,38 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
         emitter.instruction("b __rt_throw_current");                            // unwind to the cdylib handler with allocation status recorded
         emitter.label("__rt_heap_exhausted_fatal");
     }
+    // Preserve the failed request across the two decimal conversions.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_fail_request");
+    emitter.instruction("str x0, [x9]");                                        // remember the allocation size for the diagnostic
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_fatal_prefix");
     emitter.instruction("mov x0, #2");                                          // fd = stderr
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_err_msg");
-    emitter.instruction("mov x2, #35");                                         // message length: "Fatal error: heap memory exhausted\n"
+    emitter.instruction(                                                        // PHP's "Allowed memory size of " prefix
+        &format!("mov x2, #{}", crate::codegen_support::runtime::data::HEAP_FATAL_PREFIX.len())
+    );
     emitter.syscall(4);
-    emitter.instruction("mov x0, #1");                                          // exit code 1
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_limit");
+    emitter.instruction("ldr x0, [x9]");                                        // heap limit in bytes
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.syscall(4);                                                         // write the limit digits
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_fatal_middle");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction(                                                        // " bytes exhausted (tried to allocate "
+        &format!("mov x2, #{}", crate::codegen_support::runtime::data::HEAP_FATAL_MIDDLE.len())
+    );
+    emitter.syscall(4);
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_fail_request");
+    emitter.instruction("ldr x0, [x9]");                                        // requested allocation size
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.syscall(4);                                                         // write the request digits
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_heap_fatal_suffix");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    emitter.instruction(                                                        // closing location and newline
+        &format!("mov x2, #{}", crate::codegen_support::runtime::data::HEAP_FATAL_SUFFIX.len())
+    );
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #255");                                        // PHP fatal exit status
     emitter.syscall(1);
 
     emitter.label("__rt_heap_alloc_size_overflow");
@@ -466,6 +530,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_alloc_small_bin_scan");                  // reload the previous next slot and keep scanning this bin
 
     emitter.label("__rt_heap_alloc_small_bin_found");
+    // -- a reused cached block still has to fit the live memory_limit budget --
+    emitter.instruction("lea r8, [r11 + 16]");                                  // footprint of the cached block including its header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_gc_live");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // current live bytes before this reuse
+    emitter.instruction("add r8, rdi");                                         // live bytes after reusing the cached block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_heap_limit");
+    emitter.instruction("cmp r8, QWORD PTR [rdi]");                             // does the reused block fit the live budget?
+    emitter.instruction("ja __rt_heap_exhausted");                              // no — a freed block cannot bypass memory_limit
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the cached block's next pointer within this size class
     emitter.instruction("mov QWORD PTR [rcx], r11");                            // unlink the cached block from its segregated small-bin chain
     crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_heap_buf");
@@ -535,6 +607,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rcx, rax");                                        // compute the payload bytes left over after satisfying this allocation
     emitter.instruction("cmp rcx, 24");                                         // is there room for a new 16-byte header plus minimum reusable payload?
     emitter.instruction("jb __rt_heap_alloc_fl_take_whole");                    // no — consume the entire free block instead of creating an unusable tail
+    // -- a split allocation only keeps the requested payload live, but still owes its header --
+    emitter.instruction("lea r8, [rax + 16]");                                  // footprint of the requested block including its header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_gc_live");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // current live bytes before this reuse
+    emitter.instruction("add r8, rdi");                                         // live bytes after splitting the free block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_heap_limit");
+    emitter.instruction("cmp r8, QWORD PTR [rdi]");                             // does the split allocation fit the live budget?
+    emitter.instruction("ja __rt_heap_exhausted");                              // no — free blocks cannot bypass memory_limit
     emitter.instruction("lea r8, [r10 + rax + 16]");                            // compute the header address for the split remainder block
     emitter.instruction("sub rcx, 16");                                         // remove the new header size so rcx becomes the remainder payload size
     emitter.instruction("mov DWORD PTR [r8], ecx");                             // write the split remainder payload size into its free-block header
@@ -562,6 +642,14 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_alloc_count");                           // reuse the common allocation-accounting path
 
     emitter.label("__rt_heap_alloc_fl_take_whole");
+    // -- consuming the whole block makes its full payload live, so charge that size --
+    emitter.instruction("lea r8, [r11 + 16]");                                  // footprint of the whole reused block including its header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_gc_live");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // current live bytes before this reuse
+    emitter.instruction("add r8, rdi");                                         // live bytes after taking the whole block
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_heap_limit");
+    emitter.instruction("cmp r8, QWORD PTR [rdi]");                             // does the whole-block allocation fit the live budget?
+    emitter.instruction("ja __rt_heap_exhausted");                              // no — free blocks cannot bypass memory_limit
     emitter.instruction("mov rcx, QWORD PTR [r10 + 16]");                       // load the matched free block successor before unlinking it
     emitter.instruction("mov QWORD PTR [r9], rcx");                             // unlink the matched free block from the ordered free list
     emitter.instruction("mov DWORD PTR [r10 + 4], 1");                          // restore a live refcount of one in the reused whole block
@@ -596,9 +684,17 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rcx, rax");                                        // add the requested payload size to the current bump offset
     emitter.instruction("add rcx, 16");                                         // include the uniform 16-byte header in the tentative allocation end
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_max");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity in bytes
-    emitter.instruction("cmp rcx, r8");                                         // does the bump allocation still fit inside the configured heap capacity?
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the reserved arena capacity in bytes
+    emitter.instruction("cmp rcx, r8");                                         // does the position stay inside the reserved arena?
     emitter.instruction("ja __rt_heap_alloc_larger_bin");                       // no — reuse a larger binned block, else coalesce, before giving up
+    // -- the live budget is independent of the historical bump position --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rdi", "_gc_live");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // load current live bytes before the bump allocation
+    emitter.instruction("add rdi, rax");                                        // add the requested payload
+    emitter.instruction("add rdi, 16");                                         // include the block header
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_limit");
+    emitter.instruction("cmp rdi, QWORD PTR [r8]");                             // does the live footprint fit the runtime ceiling?
+    emitter.instruction("ja __rt_heap_exhausted");                              // no — the bump position cannot bypass memory_limit
     crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_buf");
     emitter.instruction("lea r10, [r11 + r10]");                                // compute the new block header address inside the heap buffer
     emitter.instruction("mov DWORD PTR [r10], eax");                            // write the requested payload size into the new block header
@@ -699,14 +795,47 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
         emitter.instruction("jmp __rt_throw_current");                          // unwind to the cdylib handler with allocation status recorded
         emitter.label("__rt_heap_exhausted_fatal");
     }
-    emitter.instruction("mov edi, 2");                                          // fd = stderr for the heap exhaustion fatal error message
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_err_msg");
-    emitter.instruction("mov edx, 35");                                         // pass the exact heap exhaustion message length to the Linux write syscall
-    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");                                             // print the fatal heap exhaustion message to stderr
-    emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
-    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
-    emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
+    // Preserve the failed request across the two decimal conversions.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_fail_request");
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // remember the allocation size for the diagnostic
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_fatal_prefix");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction(                                                        // PHP's "Allowed memory size of " prefix
+        &format!("mov edx, {}", crate::codegen_support::runtime::data::HEAP_FATAL_PREFIX.len())
+    );
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the prefix bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_limit");
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // heap limit in bytes
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov rsi, rax");                                        // decimal digits pointer
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the limit digits
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_fatal_middle");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction(                                                        // " bytes exhausted (tried to allocate "
+        &format!("mov edx, {}", crate::codegen_support::runtime::data::HEAP_FATAL_MIDDLE.len())
+    );
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the middle bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_fail_request");
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // requested allocation size
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");
+    emitter.instruction("mov rsi, rax");                                        // decimal digits pointer
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the request digits
+    crate::codegen_support::abi::emit_symbol_address(emitter, "rsi", "_heap_fatal_suffix");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr
+    emitter.instruction(                                                        // closing location and newline
+        &format!("mov edx, {}", crate::codegen_support::runtime::data::HEAP_FATAL_SUFFIX.len())
+    );
+    emitter.instruction("mov eax, 1");                                          // Linux write syscall
+    emitter.instruction("syscall");                                             // write the suffix bytes
+    emitter.instruction("mov edi, 255");                                        // PHP fatal exit status
+    emitter.instruction("mov eax, 231");                                        // Linux exit_group syscall
+    emitter.instruction("syscall");                                             // exit with PHP's fatal status
 
     emitter.label("__rt_heap_alloc_size_overflow");
     emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
@@ -754,6 +883,23 @@ mod tests {
         assert!(asm.contains("lsr x9, x0, #32\n"));
         assert!(asm.contains("cbnz x9, __rt_heap_alloc_size_overflow\n"));
         assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies the bump path checks arena position against `_heap_max` and the live budget
+    /// against `_heap_limit`, so a lowered limit does not reject allocations while free arena
+    /// space remains.
+    #[test]
+    fn bump_path_checks_arena_position_and_live_budget_separately() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_heap_alloc(&mut emitter);
+            let asm = emitter.output();
+            let bump = asm.find("__rt_heap_alloc_bump").unwrap();
+            let section = &asm[bump..];
+            assert!(section.contains("_heap_max"), "{name}: position check");
+            assert!(section.contains("_gc_live"), "{name}: live-byte check");
+            assert!(section.contains("_heap_limit"), "{name}: runtime ceiling check");
+        }
     }
 
     /// Verifies PIC allocators recover through the cdylib boundary instead of exiting.

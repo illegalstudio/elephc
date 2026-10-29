@@ -141,6 +141,53 @@ fn ini_entries_of_the_project_manifest_act_like_ini_flags() {
     assert_eq!(from_manifest, from_flags, "an [ini] entry is exactly one --ini flag");
 }
 
+/// The merged list is checked again after `[ini]` entries are prepended: a manifest
+/// `memory_limit` below PHP's startup floor is refused, reported, and leaves the default.
+#[test]
+fn manifest_memory_limit_below_the_startup_floor_is_refused() {
+    let root = make_test_dir("project_ini_memory_floor");
+    fs::write(root.join("elephc.toml"), "[ini]\nmemory_limit = \"1M\"\n").unwrap();
+    let source = root.join("main.php");
+    fs::write(&source, probe(&["memory_limit"])).unwrap();
+
+    let output = compile(&root, &source, &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Warning: Failed to set memory limit to 1048576 bytes (Current memory usage is 2097152 bytes)"
+        ),
+        "{stderr}"
+    );
+    let run = Command::new(source.with_extension(""))
+        .output()
+        .expect("failed to run binary");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "memory_limit='128M'\n"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// The manifest `memory_limit` participates in arena sizing: it may grow the default heap,
+/// but it cannot silently exceed an explicitly requested `--heap-size`.
+#[test]
+fn manifest_memory_limit_respects_an_explicit_heap_size() {
+    let root = make_test_dir("project_ini_memory_arena");
+    fs::write(root.join("elephc.toml"), "[ini]\nmemory_limit = \"256M\"\n").unwrap();
+    let source = root.join("main.php");
+    fs::write(&source, "<?php echo 1;\n").unwrap();
+
+    let output = compile(&root, &source, &["--heap-size=67108864"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "the compile must fail");
+    assert!(
+        stderr.contains("--ini memory_limit=256M exceeds --heap-size=67108864"),
+        "{stderr}"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}
+
 /// An `--ini` on the command line wins over the manifest's value for the same directive.
 #[test]
 fn the_command_line_wins_over_the_manifest() {

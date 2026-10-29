@@ -406,7 +406,12 @@ elephc --heap-size=16777216 heavy.php   # 16 MB
 ```
 
 If a program exhausts its heap it aborts with a fatal "heap memory exhausted"
-error; raising `--heap-size` is the fix. See [Memory Model](../internals/memory-model.md).
+error; raising `--heap-size` is the fix. `--ini memory_limit=…` can lower the
+runtime ceiling below the reservation, and the compiled binary also honours
+`ini_set('memory_limit', …)` at run time. Raising the limit beyond the reserved arena is
+refused with PHP's `Failed to set memory limit` warning and leaves the previous ceiling in
+place; rebuild with a larger `--heap-size` to allow it.
+See [Memory Model](../internals/memory-model.md).
 
 ## Runtime dead stripping
 

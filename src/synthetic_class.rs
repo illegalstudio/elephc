@@ -467,6 +467,11 @@ pub fn e_error_suppress(value: Expr) -> Expr {
     Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
 }
 
+/// `clone value`.
+pub fn e_clone(value: Expr) -> Expr {
+    Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
+}
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -894,6 +899,9 @@ pub fn s_nested_array_assign(target: Expr, value: Expr) -> Stmt {
 }
 
 /// `self::$prop[<index>] = <value>;` in statement position.
+///
+/// The `self::` receiver is what keeps the assignment inside the declaring class instead of
+/// binding a same-named subclass property; `s_static_prop_array_assign` names a concrete class.
 pub fn s_self_static_prop_array_assign(property: &str, index: Expr, value: Expr) -> Stmt {
     Stmt::new(
         StmtKind::StaticPropertyArrayAssign {
@@ -2364,6 +2372,8 @@ pub struct ClassBuilder {
     constants: Vec<ClassConst>,
     properties: Vec<ClassProperty>,
     methods: Vec<ClassMethod>,
+    /// Span stamped on the declaration; `Span::dummy()` marks it compiler-internal.
+    span: Span,
 }
 
 /// Starts a concrete (non-abstract, non-final) class named `name`.
@@ -2377,10 +2387,20 @@ pub fn class(name: &str) -> ClassBuilder {
         constants: Vec::new(),
         properties: Vec::new(),
         methods: Vec::new(),
+        span: Span::dummy(),
     }
 }
 
 impl ClassBuilder {
+    /// Sets the span stamped on the class declaration.
+    ///
+    /// A non-dummy source span marks the class as user-declared for `__debugInfo()` and the
+    /// other behaviors compiler-internal classes deliberately skip.
+    pub fn span(mut self, span: Span) -> Self {
+        self.span = span;
+        self
+    }
+
     /// Makes the class `abstract`.
     pub fn abstract_(mut self) -> Self {
         self.is_abstract = true;
@@ -2621,7 +2641,7 @@ impl ClassBuilder {
                 methods: self.methods,
                 constants: self.constants,
             },
-            Span::dummy(),
+            self.span,
         )
     }
 }

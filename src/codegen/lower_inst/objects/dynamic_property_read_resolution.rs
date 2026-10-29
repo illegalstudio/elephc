@@ -465,14 +465,42 @@ fn emit_runtime_name_plan_read(
             emit_boxed_null(ctx);
             Ok(())
         }
-        // php would answer the accessor, which a RUNTIME name cannot reach in this phase. It
-        // answers php null and, above all, never reads the slot. `MagicGet` is a DIRECT-name
-        // answer and is never built for a runtime name, but it takes the same safe arm.
-        PropertyRuntimeAction::MagicDeferred | PropertyRuntimeAction::MagicGet => {
+        // The runtime class can still hold the name in its dynamic-property hash: a sibling
+        // subclass may have put it in the candidate-name ladder even though this class does not
+        // declare it. Probe before answering, so a stored entry is never lost to the accessor
+        // fallback (which a RUNTIME name cannot reach in this phase).
+        PropertyRuntimeAction::MagicDeferred
+        | PropertyRuntimeAction::MagicRead { .. } => {
+            let _ = static_class;
+            let hash_offset = match &arm.action {
+                PropertyRuntimeAction::MagicRead { hash_offset } => *hash_offset,
+                _ => dynamic_property_hash_offset_for_class(ctx, &arm.class_name, property)?,
+            };
+            match hash_offset {
+                Some(hash_offset) => emit_scope_dynamic_property_hash_probe(
+                    ctx,
+                    &arm.class_name,
+                    property,
+                    base_reg,
+                    hash_offset,
+                    false,
+                ),
+                None => {
+                    // The accessor has no runtime-name call site here; php null is the safe
+                    // answer and never exposes the slot.
+                    emit_boxed_null(ctx);
+                    Ok(())
+                }
+            }
+        }
+        PropertyRuntimeAction::MagicIsset { .. } | PropertyRuntimeAction::MagicEmpty { .. } => {
             let _ = static_class;
             emit_boxed_null(ctx);
             Ok(())
         }
+        PropertyRuntimeAction::RefuseRuntimeName { .. } => Err(CodegenIrError::invalid_module(
+            "dynamic property read resolved to a runtime-name refusal",
+        )),
         PropertyRuntimeAction::Refuse { .. } => Err(CodegenIrError::invalid_module(
             "property dispatch handed a refusal arm to its action emitter",
         )),

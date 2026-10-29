@@ -122,7 +122,12 @@ fn lower_static_method_call_impl(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
+    ctx.call_argument_evaluation_scopes
+        .last_mut()
+        .expect("call argument scope")
+        .live_property_reference_arguments = !call_args.iter().any(is_spread_arg);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         ref_place_args::rewrite_typed_property_ref_args(ctx, signature, call_args)
     });
@@ -184,6 +189,11 @@ fn lower_static_method_call_impl(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
@@ -396,6 +406,7 @@ pub(super) fn lower_static_method_descriptor_call(
     let descriptor = lower_first_class_callable(ctx, &target, expr);
     let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
     let mut operands = vec![descriptor.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
     let conversion_roots =
         root_unpublished_argument_conversions(ctx, &mut operands[1..], expr.span);
@@ -411,6 +422,11 @@ pub(super) fn lower_static_method_descriptor_call(
     for slot in conversion_roots.into_iter().rev() {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

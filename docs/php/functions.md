@@ -533,6 +533,11 @@ Known gaps against PHP for these nullable by-reference parameters:
   ("requires a variable with mixed/union/nullable storage when passed by reference").
 - A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
   message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
+- Passing the same property twice to two by-reference parameters (`f($box->n, $box->n)`)
+  shares one live cell when the property storage can be addressed that way, as in PHP. For a
+  declared property that needs the copy-in/copy-out temporary, each argument gets its own
+  snapshot, so the second argument sees the value read at its source position rather than the
+  first callee write.
 
 An element of a **typed array** can be passed to a wider by-reference parameter such as
 `mixed &$slot`. For a plain local (`array<int, int> $ids`), the array's entries are widened
@@ -682,6 +687,44 @@ $items = &$bag->items;
 $items[] = "apple";
 echo implode(", ", $bag->items); // apple
 ```
+
+An untyped property binds its live reference cell when it is passed to a by-reference
+parameter, so another view of the object sees the callee's write while the call is still
+running. A declared scalar property (and declared `mixed`/union storage whose representation
+cannot share the cell) instead uses a boxed copy-in temporary and writes the value back after
+the call. The declared property type is enforced on that write-back, so an incompatible value
+raises PHP's `Cannot assign … to reference held by property …` `TypeError` and the property
+keeps its previous value:
+
+```php
+<?php
+class Box { public string $text = "old"; }
+function replace(mixed &$slot) { $slot = ["not", "text"]; }
+$box = new Box();
+try {
+    replace($box->text);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo $box->text; // old
+```
+
+A concretely typed parameter is supported for any property whose storage can be read into
+the call and written back, even when the declared type is not statically compatible with the
+parameter: the property's CURRENT value is checked at the call boundary. A compatible value,
+such as an `int|string` property holding an `int` passed to `int &$slot`, reaches the callee
+and is written back. An incompatible value (a `string` property, or the `string` member of a
+union) raises PHP's call-site `f(): Argument #N ($x) must be of type T, U given`
+`TypeError` before the callee body runs, and the property keeps its previous value. Array
+elements of untyped properties are widened and promoted the same way, so
+`bump($box->items[0])` writes through to the property array.
+
+An **untyped** property is PHP's ordinary writable zval rather than a declared type: in weak
+mode its current value is coerced to the parameter (a numeric string to `int`, an `int` to
+`string`, and so on), the callee mutates the converted temporary, and the result is written
+back. A value the weak predicate refuses raises the same call-site `TypeError` and leaves the
+property unchanged. `declare(strict_types=1)` performs no conversion, and a declared `mixed`
+property is not coercible either: both keep the strict current-value check.
 
 Aliasing works for any declared property type, including `string` and `float`. Reassigning
 an array alias to a differently-typed literal keeps the property readable, because the new
