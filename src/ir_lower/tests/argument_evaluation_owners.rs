@@ -23,8 +23,12 @@ invokeOwnedStringCast('kept');
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = lower_for(source, target);
         let function = module.functions.iter().find(|function| function.name == "invokeOwnedStringCast").unwrap();
-        let claim = function.instructions.iter().find(|inst| inst.op == Op::EnsureOwned)
-            .expect("the fresh string cast must gain a releasing owner shape");
+        let claim = function.instructions.iter().find(|inst| {
+            inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))
+                && function.instructions.iter().any(|producer| {
+                    producer.result == inst.operands.first().copied() && producer.op == Op::Cast
+                })
+        }).expect("the fresh string cast must gain an independent evaluation owner");
         let value = claim.result.unwrap();
         let cast = function.instructions.iter().find(|inst| inst.result == Some(claim.operands[0])).unwrap();
         assert_eq!(cast.op, Op::Cast, "{target}");
@@ -36,6 +40,44 @@ invokeOwnedStringCast('kept');
             && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
         assert!(function.instructions.iter().any(|inst| inst.op == Op::PopCallOperandOwner
             && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// A borrowed trim view still retires its normalized cast through an alias-capable user call.
+#[test]
+fn alias_calls_retire_normalized_string_cast_views_on_all_targets() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+    let source = r#"<?php
+function wrapNormalizedCast(string $text): string { return '<' . $text . '>'; }
+function callNormalizedCast(int $key): void {
+    $values = ['a'];
+    $text = str_repeat('g', 3);
+    for ($index = 0; $index < 2; $index++) {
+        echo wrapNormalizedCast(trim((string)$text));
+        $text = $key == 99 ? 42 : @$values[$key];
+    }
+}
+callNormalizedCast($argc + 5);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "callNormalizedCast").unwrap();
+        let call = function.instructions.iter().find(|inst| {
+            inst.op == Op::Call && matches!(inst.immediate, Some(Immediate::Data(name))
+                if module.data.function_names[name.as_raw() as usize] == "wrapNormalizedCast")
+        }).expect("user call over the normalized trim view");
+        let trim = function.instructions.iter().find(|inst| {
+            inst.op == Op::RuntimeCall && inst.immediate == Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::Trim)))
+        }).expect("trim view");
+        let copy = function.instructions.iter().find(|inst| {
+            inst.op == Op::StrPersist && inst.immediate == Some(Immediate::Bool(true))
+                && trim.operands.contains(&inst.result.unwrap())
+        }).expect("normalized cast owner borrowed by trim").result.unwrap();
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == Op::ReleaseUnlessAliases && inst.operands == [copy, call.result.unwrap()]
+        }), "{target}: the user call must settle the normalized cast's owner");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

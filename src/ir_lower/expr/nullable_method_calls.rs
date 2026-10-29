@@ -491,6 +491,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     }
                     if owned_string_arg && user_call_result {
                         if result_repr == PhpType::Str {
+                            // A runtime view has no releasing owner of its own. Retire the
+                            // normalized cast it borrows unless that owner became the result.
+                            release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
                             ctx.emit_void(
                                 Op::ReleaseUnlessAliases,
                                 vec![lowered.value, result],

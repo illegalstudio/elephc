@@ -9,7 +9,7 @@
 
 use crate::ir::{Immediate, LocalKind, Op};
 
-/// A final string argument pin spans the callee and leaves normal alias comparison authoritative.
+/// A borrowed string's evaluation pin spans the callee and retires without transferring its owner.
 #[test]
 fn alias_returning_calls_protect_string_evaluation_pins_on_all_targets() {
     let source = r#"<?php
@@ -32,11 +32,14 @@ function callStringAlias(string $text, bool $fail): string {
                 if module.data.function_names[name.as_raw() as usize].eq_ignore_ascii_case("aliasStringInput"))
         }).expect("alias-returning call");
         let operand = call.operands[0];
-        assert!(function.instructions.iter().any(|inst| inst.result == Some(operand)
+        let borrow = function.instructions.iter().find(|inst| inst.result == Some(operand)
+            && inst.op == Op::Borrow).expect("the call borrows its evaluation snapshot");
+        let snapshot = borrow.operands[0];
+        assert!(function.instructions.iter().any(|inst| inst.result == Some(snapshot)
             && inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))),
-            "{target}: call consumes the independent evaluation snapshot");
+            "{target}: evaluation must keep an independent string snapshot");
         let store = function.instructions[..call_index].iter().rev().find(|inst| {
-            inst.op == Op::StoreLocal && inst.operands == [operand]
+            inst.op == Op::StoreLocal && inst.operands == [snapshot]
         }).expect("snapshot parking slot");
         let Some(Immediate::LocalSlot(slot)) = store.immediate else { panic!("owner slot"); };
         assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::OwnedTemp);
@@ -46,11 +49,12 @@ function callStringAlias(string $text, bool $fail): string {
             && inst.immediate == Some(Immediate::LocalSlot(slot))),
             "{target}: final snapshot must be published through invocation");
         assert!(function.instructions[call_index + 1..].iter().any(|inst| {
-            inst.op == Op::UnsetLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
-        }), "{target}: normal return detaches the pin without consuming the string");
-        assert!(function.instructions[call_index + 1..].iter().any(|inst| {
-            inst.op == Op::ReleaseUnlessAliases && inst.operands.first() == Some(&operand)
-        }), "{target}: runtime alias comparison still decides the snapshot owner");
+            inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(slot))
+        }), "{target}: normal return retires the independent evaluation pin");
+        assert!(!function.instructions[call_index + 1..].iter().any(|inst| {
+            matches!(inst.op, Op::Release | Op::ReleaseUnlessAliases)
+                && inst.operands.first() == Some(&operand)
+        }), "{target}: borrowed call storage must never be released as an owned operand");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
