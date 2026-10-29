@@ -224,7 +224,7 @@ echo "|", implode(",", range(1, 5)), "|", implode(",", range(5, 1)), "|", implod
 #[test]
 fn test_range_largest_accepted_span_still_reaches_heap_exhaustion() {
     let err = compile_and_run_expect_failure("<?php $a = range(-1073741822, 0); echo count($a);");
-    assert!(err.contains("heap memory exhausted"), "{}", err);
+    assert!(err.contains("Allowed memory size of"), "{}", err);
 }
 
 /// Regression guard for the accepted side of the `array_fill()` boundary: `INT_MAX` itself is
@@ -234,5 +234,5 @@ fn test_range_largest_accepted_span_still_reaches_heap_exhaustion() {
 fn test_array_fill_largest_accepted_count_still_reaches_heap_exhaustion() {
     let err =
         compile_and_run_expect_failure("<?php $a = array_fill(0, 2147483647, 7); echo count($a);");
-    assert!(err.contains("heap memory exhausted"), "{}", err);
+    assert!(err.contains("Allowed memory size of"), "{}", err);
 }

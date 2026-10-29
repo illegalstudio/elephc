@@ -77,6 +77,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             crate::version_prelude::version_declarations(
                 &["zend_version", "php_sapi_name", "ini_restore"],
                 crate::web_prelude::PhpVersion::Php85,
+                true,
             ),
         ),
         (

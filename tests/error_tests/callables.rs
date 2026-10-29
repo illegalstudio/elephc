@@ -1105,3 +1105,25 @@ fn test_source_variadic_override_rejects_hidden_argc_abi_mismatch() {
         "the inherited signature cannot be widened to collect surplus arguments",
     );
 }
+
+/// A property whose declared type is incompatible with a concretely typed by-reference
+/// parameter keeps the "must be passed a variable" refusal instead of binding a temporary.
+#[test]
+fn test_error_property_ref_argument_to_incompatible_typed_parameter_requires_variable() {
+    for (source, expected) in [
+        (
+            "<?php class C { public string $s = '5'; } function inc(int &$n): void { $n++; } $c = new C(); inc($c->s);",
+            "must be passed a variable",
+        ),
+        (
+            "<?php class C { public int $n = 1; } function set(string &$s): void { $s = 'x'; } $c = new C(); set($c->n);",
+            "must be passed a variable",
+        ),
+        (
+            "<?php class C { public array $a = []; public static function set(int &$n): void {} } $c = new C(); C::set($c->a);",
+            "cannot bind typed by-reference storage",
+        ),
+    ] {
+        expect_error(source, expected);
+    }
+}

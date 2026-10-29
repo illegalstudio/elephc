@@ -2451,7 +2451,8 @@ echo implode('#', $parts);"#;
     let _ = child.wait();
 
     let shared_count = core_ini::DIRECTIVES.len() + mbstring_ini::DIRECTIVES.len();
-    let all_count = 33 + 54 + shared_count;
+    // The dynamic `memory_limit` Core row joins the static shared rows.
+    let all_count = 33 + 54 + shared_count + 1;
     let first_shared_key = core_ini::DIRECTIVES.iter().chain(mbstring_ini::DIRECTIVES.iter())
         .map(|directive| directive.name).min().expect("shared INI catalog");
     let expected = format!("1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\

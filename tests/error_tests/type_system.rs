@@ -67,39 +67,6 @@ fn test_nested_spread_literal_merges_type_in_linear_time() {
     );
 }
 
-/// Direct scalar property references need writeback support distinct from nested array origins.
-#[test]
-fn test_error_by_ref_argument_rejects_direct_property_storage() {
-    for source in [
-        "<?php function setv(mixed &$value): void {} class Box { public iterable $value = []; } $box = new Box(); setv($box->value);",
-        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
-}
-
-/// Method by-reference parameters reject property storage the rewrite cannot narrow back.
-///
-/// Union and callable properties need a runtime type dispatch the current write-back does not
-/// provide; they keep their pre-existing rejection instead of silently passing a copy.
-#[test]
-fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
-    for source in [
-        "<?php class Sink { public function setv(mixed &$value): void {} } class Box { public iterable $value = []; } $sink = new Sink(); $box = new Box(); $sink->setv($box->value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
-}
-
-/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
-#[test]
-fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
-    expect_error(
-        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
-        "cannot bind an array property by reference",
-    );
-}
-
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.
 #[test]
 fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
@@ -113,6 +80,19 @@ fn test_error_by_ref_argument_rejects_nested_mixed_property_storage() {
     }
 }
 
+/// A static `iterable` property passed directly to a by-reference parameter keeps the
+/// "must be passed a variable" refusal. Instance properties take the copy-in/copy-out path
+/// covered by `codegen::references::test_by_reference_untyped_property_widens_storage`.
+#[test]
+fn test_error_by_ref_argument_rejects_static_iterable_property_storage() {
+    // Instance properties use the boxed-temporary write-back; a static `iterable` slot
+    // cannot provide the declared array storage that write-back needs.
+    expect_error(
+        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
+        "must be passed a variable",
+    );
+}
+
 /// Builds the non-null PHP array contract without assuming indexed or associative storage.
 fn declared_array_contract() -> PhpType {
     PhpType::Union(vec![
@@ -121,8 +101,15 @@ fn declared_array_contract() -> PhpType {
     ])
 }
 
-/// Verifies that `??=` with no right-hand side expression produces an "Unexpected token" error.
-/// Input: `$x ??=;` — the semicolon terminates the expression with no RHS.
+/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
+#[test]
+fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
+    expect_error(
+        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
+        "cannot bind an array property by reference",
+    );
+}
+
 #[test]
 fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");

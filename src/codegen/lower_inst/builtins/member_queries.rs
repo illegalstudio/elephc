@@ -404,6 +404,7 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
 ) -> bool {
     if elephc_builtin_contract::lookup_class(resolved_class)
         .is_some_and(|class| class.property_is_hidden(property_name))
+        || crate::codegen_support::runtime::data::is_uri_opaque_handle(resolved_class, property_name)
     {
         return false;
     }

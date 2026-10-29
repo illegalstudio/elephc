@@ -56,10 +56,13 @@ fn ini_restore_decl() -> Stmt {
     function("ini_restore")
         .param("option", TypeExpr::Str)
         .returns(TypeExpr::Void)
-        .body(vec![crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_RESTORE), s_assign(
-            "option",
-            e_cast(CastType::String, e_var("option")),
-        )])
+        .body(vec![
+            crate::shared_ini_prelude::memory_limit_restore(),
+            crate::shared_ini_prelude::directive(
+                elephc_builtin_contract::mbstring_abi::ini::INI_RESTORE,
+            ),
+            s_assign("option", e_cast(CastType::String, e_var("option"))),
+        ])
         .build()
 }
 
@@ -102,14 +105,26 @@ fn inject_if_used_on_compiler_stack(
     if selected.is_empty() {
         return program;
     }
-    let mut combined = version_declarations(&selected, php_version);
+    // The OPcache prelude runs first and already declares the shared `memory_limit` state when
+    // `ini_get()` / `ini_set()` / `ini_get_all()` pulled it in; only add it here when
+    // `ini_restore()` is the sole consumer.
+    let include_memory_state = selected.contains(&"ini_restore")
+        && !crate::opcache_prelude::detect::program_declares(
+            &program,
+            "__elephc_memory_limit_raw",
+        );
+    let mut combined = version_declarations(&selected, php_version, include_memory_state);
     inventory.record_program("version", &combined);
     combined.extend(program);
     combined
 }
 
 /// Builds the declarations for exactly the named functions, in the canonical order.
-pub(crate) fn version_declarations(selected: &[&str], php_version: PhpVersion) -> Program {
+pub(crate) fn version_declarations(
+    selected: &[&str],
+    php_version: PhpVersion,
+    include_memory_state: bool,
+) -> Program {
     internal_declarations(|| {
         let mut declarations = Vec::new();
         if selected.contains(&"zend_version") {
@@ -119,6 +134,13 @@ pub(crate) fn version_declarations(selected: &[&str], php_version: PhpVersion) -
             declarations.push(php_sapi_name_decl());
         }
         if selected.contains(&"ini_restore") {
+            if include_memory_state {
+                declarations.extend(crate::shared_ini_prelude::memory_limit_state_decls(
+                    &crate::shared_ini_prelude::memory_limit_initial(
+                        &crate::codegen_support::ini_overrides(),
+                    ),
+                ));
+            }
             declarations.push(ini_restore_decl());
         }
         declarations

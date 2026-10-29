@@ -67,6 +67,7 @@ pub(super) fn lower_new_object(
         &php_type,
         expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let previous_description = ctx
         .call_description
@@ -99,6 +100,11 @@ pub(super) fn lower_new_object(
         Some(expr.span),
     );
     stage_call_result(ctx, result_staging.as_ref(), object, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,

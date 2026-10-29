@@ -397,7 +397,9 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        assert_eq!(eval_internal, 134);
+        // Includes the internal `__elephc_set_memory_limit` runtime setter, which also has no
+        // eval execution route.
+        assert_eq!(eval_internal, 135);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 359);
@@ -410,7 +412,8 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 824);
+        // Includes the internal `__elephc_set_memory_limit` runtime setter.
+        assert_eq!(aot_registry, 825);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 424 + curl_surface);
@@ -469,7 +472,7 @@ mod tests {
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 493);
+        assert_eq!(unsupported, 494);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

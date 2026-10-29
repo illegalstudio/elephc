@@ -137,3 +137,52 @@ fn emit_flag_type_error(ctx: &mut FunctionContext<'_>, target: RuntimeFnId, give
 fn flag_type_error_prefix(target: RuntimeFnId) -> String {
     format!("{}(): Argument #1 ($real_usage) must be of type bool, ", target.as_eir())
 }
+
+/// Lowers `__elephc_set_memory_limit(bytes)` by clamping the request to the reserved arena
+/// capacity and publishing it as the allocator's live ceiling.
+///
+/// `-1` is PHP's "unlimited" spelling. The heap arena is a fixed reservation, so unlimited
+/// means "the whole arena" here, exactly like the compile-time `--ini memory_limit=-1` path.
+/// A positive request is clamped to `_heap_max` for the same reason.
+pub(crate) fn lower_set_memory_limit(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    shared::ensure_arg_count(inst, "__elephc_set_memory_limit", 1)?;
+    ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+    ctx.emitter.comment("__elephc_set_memory_limit()");
+    let unlimited = ctx.next_label("memory_limit_unlimited");
+    let publish = ctx.next_label("memory_limit_publish");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // is the request exactly -1 (PHP's unlimited spelling)?
+            ctx.emitter.instruction(&format!("b.eq {unlimited}"));             // -1 selects the reserved arena capacity
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_heap_max", 0);
+            ctx.emitter.instruction("cmp x0, x9");                              // compare the request against the reserved capacity
+            ctx.emitter.instruction("csel x0, x0, x9, lo");                     // keep the smaller of the request and the arena
+            ctx.emitter.instruction(&format!("b {publish}"));                  // publish the clamped ceiling
+            ctx.emitter.label(&unlimited);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x0", "_heap_max", 0);   // unlimited is the whole reserved arena
+            ctx.emitter.label(&publish);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_heap_limit", 0);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                            // is the request exactly -1 (PHP's unlimited spelling)?
+            ctx.emitter.instruction(&format!("je {unlimited}"));               // -1 selects the reserved arena capacity
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_heap_max", 0);
+            ctx.emitter.instruction("cmp rax, r10");                           // compare the request against the reserved capacity
+            ctx.emitter.instruction("cmovg rax, r10");                         // keep the smaller of the request and the arena
+            ctx.emitter.instruction(&format!("jmp {publish}"));                // publish the clamped ceiling
+            ctx.emitter.label(&unlimited);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rax", "_heap_max", 0);  // unlimited is the whole reserved arena
+            ctx.emitter.label(&publish);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_heap_limit", 0);
+        }
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
