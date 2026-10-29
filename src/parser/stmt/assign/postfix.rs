@@ -66,6 +66,15 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     if lhs_pos != lhs_expr_tokens.len() {
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
+    let lhs_expr = if is_append {
+        match lhs_expr.kind {
+            ExprKind::DynamicPropertyAccess { object, property } => match property.kind {
+                ExprKind::StringLiteral(property) => Expr::new(ExprKind::PropertyAccess { object, property }, lhs_expr.span),
+                _ => Expr::new(ExprKind::DynamicPropertyAccess { object, property }, lhs_expr.span),
+            },
+            _ => lhs_expr,
+        }
+    } else { lhs_expr };
 
     let computed_indexed_update = !is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. })
         && matches!(op, AssignmentOperator::Compound(_))

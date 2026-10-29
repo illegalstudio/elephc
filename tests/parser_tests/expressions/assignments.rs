@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Quoted property append names retain their complete spelling, including namespace colons.
+#[test]
+fn test_parse_quoted_property_append_names() {
+    let statements = parse_source("<?php $xml->{'p:q'}[] = 'second';");
+    assert!(matches!(&statements[0].kind, StmtKind::PropertyArrayPush { property, .. } if property == "p:q"));
+    let statements = parse_source("<?php echo ($xml->{'p:q'}[] = 'second');");
+    assert!(matches!(&statements[0].kind, StmtKind::Echo(_)));
+}
+
 /// A property suffix extends the increment target and lowers the known fresh-null Error.
 #[test]
 fn test_append_followup_prefix_property_target() {
