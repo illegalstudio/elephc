@@ -27,6 +27,8 @@ function updateOwnerExercise(UpdateOwnerCounter $counter): void {
     echo $counter->{new UpdateOwnerName()};
 }
 updateOwnerExercise(new UpdateOwnerCounter());
+function updateOwnerNumericMask(int|float $value): int { return $value & 7; }
+echo updateOwnerNumericMask($argc);
 $xml = new SimpleXMLElement('<r><a>1</a></r>');
 $xml->a += 1;
 "#;
@@ -35,6 +37,10 @@ $xml->a += 1;
             source, std::path::Path::new("main.php"), std::path::Path::new("."),
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
+        let numeric = module.functions.iter().find(|function| function.name == "updateOwnerNumericMask").unwrap();
+        assert!(!numeric.instructions.iter().any(|inst| matches!(inst.op,
+            crate::ir::Op::InstanceOf | crate::ir::Op::PushCallOperandOwner)),
+            "{target}: scalar coercion must not gain native dispatch or operand owners");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

@@ -361,7 +361,9 @@ fn coerce_bitwise_operands(
         elephc_builtin_contract::lookup_class(name).and_then(|class| class.operators)
             .and_then(|operators| operators.cast_method(elephc_builtin_contract::ObjectCast::Int)).is_some()
     });
-    if !native_casts {
+    let possible_object = object_operators::can_contain_object(&ctx.builder.value_php_type(lhs.value))
+        || object_operators::can_contain_object(&ctx.builder.value_php_type(rhs.value));
+    if !native_casts || !possible_object {
         return (coerce_to_int(ctx, lhs, left), coerce_to_int(ctx, rhs, right));
     }
     let pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);

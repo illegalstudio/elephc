@@ -11,7 +11,7 @@
 use super::*;
 
 /// Distinguishes possible PHP objects from scalar unions that merely use boxed storage.
-fn can_contain_object(ty: &PhpType) -> bool {
+pub(super) fn can_contain_object(ty: &PhpType) -> bool {
     match ty {
         PhpType::Mixed | PhpType::Object(_) => true,
         PhpType::Union(members) => members.iter().any(can_contain_object),
