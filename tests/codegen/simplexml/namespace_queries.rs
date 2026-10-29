@@ -49,8 +49,18 @@ $xml = new SimpleXMLElement($opening . '>' . str_repeat($tile, 4000) . '</r>');
 unset($opening, $tile);
 $used = $xml->getNamespaces(true); $declared = $xml->getDocNamespaces(true);
 if (!is_array($declared)) { throw new Error('namespace snapshot must be an array'); }
-echo count($used), ':', count($declared), ':', array_key_first($used), ':', array_key_last($used), ':', json_encode(array_key_first($declared)), ':', array_key_last($declared), "\n";
-unset($used, $declared, $xml);
+$firstUsed = null; $lastUsed = null;
+foreach ($used as $prefix => $uri) {
+    if ($firstUsed === null) { $firstUsed = $prefix; }
+    $lastUsed = $prefix;
+}
+$firstDeclared = null; $lastDeclared = null;
+foreach ($declared as $prefix => $uri) {
+    if ($firstDeclared === null) { $firstDeclared = $prefix; }
+    $lastDeclared = $prefix;
+}
+echo count($used), ':', count($declared), ':', $firstUsed, ':', $lastUsed, ':', json_encode($firstDeclared), ':', $lastDeclared, "\n";
+unset($used, $declared, $xml, $firstUsed, $lastUsed, $firstDeclared, $lastDeclared, $prefix, $uri);
 "###;
     let quoted_body = body.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("<?php\n{body}\n$source = $argc > 0 ? '{quoted_body}' : ''; eval($source);");
