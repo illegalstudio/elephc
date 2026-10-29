@@ -46,7 +46,7 @@ pub(crate) fn lower_statement(
     }
     let ExprKind::BinaryOp { op, right, .. } = &value.kind else { return false; };
     if !possible(ctx, object, Property::Named(property)) || operation(op).is_none() { return false; }
-    let result = lower(ctx, object, Property::Named(property), op, right, false, false, false, value);
+    let result = lower(ctx, object, Property::Named(property), op, right, false, false, false, "assign", value);
     if !ctx.builder.insertion_block_is_terminated() {
         crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
     }
@@ -74,7 +74,7 @@ pub(super) fn lower_assignment(
             && value.span.col == expr.span.col && operation(op).is_some() {
             if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
             for stmt in prelude { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
-            return Some(lower(ctx, object, property, op, right, false, scoped, false, expr));
+            return Some(lower(ctx, object, property, op, right, false, scoped, false, "assign", expr));
         }
     }
     let ExprKind::Variable(assigned) = &value.kind else { return None; };
@@ -95,7 +95,7 @@ pub(super) fn lower_assignment(
     if scoped { super::super::scoped_writes::consume_update_operands(ctx); }
     for stmt in &prelude[..prefix] { crate::ir_lower::stmt::lower_stmt(ctx, stmt); }
     let reread = result.is_some_and(|result| result == target);
-    Some(lower(ctx, object, property, op, right, post, scoped, reread, expr))
+    Some(lower(ctx, object, property, op, right, post, scoped, reread, "increment/decrement", expr))
 }
 
 /// Admits XML subclasses and erased receivers while leaving other typed objects unchanged.
@@ -112,7 +112,7 @@ fn possible(ctx: &LoweringContext<'_, '_>, object: &Expr, property: Property<'_>
 /// Captures operands once, then chooses the native update or the ordinary property operation.
 fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: Property<'_>, op: &BinOp,
-    right: &Expr, post: bool, scoped: bool, reread: bool, expr: &Expr,
+    right: &Expr, post: bool, scoped: bool, reread: bool, verb: &str, expr: &Expr,
 ) -> LoweredValue {
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
     let inputs = match prepare_inputs(ctx, object, property, right, scoped, expr) {
@@ -121,6 +121,10 @@ fn lower(
     let name_expr = local_expr(&inputs.name, expr.span);
     let right_expr = local_expr(&inputs.rhs, expr.span);
     let parent = load(ctx, &inputs.receiver, expr.span);
+    let name_value = load(ctx, &inputs.name, expr.span);
+    crate::ir_lower::stmt::property_write_receiver::guard_mixed_dynamic_write(
+        ctx, parent, name_value, verb, expr.span,
+    );
     let code = operation(op).expect("validated update operation") as i64;
     let result = if !ctx.classes.contains_key("SimpleXMLElement") {
         ordinary(ctx, parent, property, &name_expr, op, &right_expr, post, reread, expr)

@@ -82,6 +82,7 @@ fn write_selected(
     op: Option<EvalBinOp>, assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_property_write_receiver(object, property, "modify", context, values)?;
     let current = match super::super::runtime_ops::simplexml_properties::invoke(
         values, object, property, elephc_builtin_contract::ObjectProperty::WriteFetch, None,
     )? {

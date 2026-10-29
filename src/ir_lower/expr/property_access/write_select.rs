@@ -75,6 +75,7 @@ pub(crate) fn lower_property_write_receiver(
 pub(in crate::ir_lower::expr) fn select_named(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, expr: &Expr,
 ) -> LoweredValue {
+    crate::ir_lower::stmt::property_write_receiver::guard_mixed_write_hop(ctx, object, property, expr.span);
     let object = refine_member_receiver(ctx, object, expr);
     let object = box_opaque_property_receiver(ctx, object, expr.span);
     if let Some(method) = native_property_method_for_value(ctx, object.value, property,
@@ -128,6 +129,7 @@ pub(in crate::ir_lower::expr) fn lower_property_write_prelude(
 pub(super) fn select_dynamic(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, name: LoweredValue, expr: &Expr,
 ) -> LoweredValue {
+    crate::ir_lower::stmt::property_write_receiver::guard_mixed_dynamic_write_hop(ctx, object, name, expr.span);
     let object = refine_member_receiver(ctx, object, expr);
     let property = match &expr.kind {
         ExprKind::DynamicPropertyAccess { property, .. } => property.as_ref().clone(),

@@ -205,6 +205,17 @@ fn eval_property_read_result(
     )
 }
 
+/// Rejects null write receivers before a native property bridge can report a runtime fatal.
+pub(super) fn validate_property_write_receiver(
+    object: RuntimeCellHandle, property: &str, verb: &str,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if values.type_tag(object)? == EVAL_TAG_NULL {
+        return eval_throw_error(&format!("Attempt to {verb} property \"{property}\" on null"), context, values);
+    }
+    Ok(())
+}
+
 /// Writes one object property while enforcing eval-declared member visibility.
 pub(crate) fn eval_property_set_result(
     object: RuntimeCellHandle,
@@ -213,6 +224,7 @@ pub(crate) fn eval_property_set_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_property_write_receiver(object, property_name, "assign", context, values)?;
     let Ok(identity) = values.object_identity(object) else {
         return values.property_set(object, property_name, value);
     };

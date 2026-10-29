@@ -10,6 +10,7 @@
 use crate::support::*;
 
 mod review_regressions;
+mod review_writes;
 mod review_type_boundaries;
 mod eval_bundles;
 mod write_contracts;

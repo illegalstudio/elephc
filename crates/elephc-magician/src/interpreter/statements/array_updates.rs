@@ -41,6 +41,7 @@ pub(super) fn eval_property_compound_assign_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_property_write_receiver(object, property, "assign", context, values)?;
     if let Some(result) = super::super::runtime_ops::simplexml_properties::update(
         values, object, property, op, right, false,
     )? { return eval_release_value(context, values, result); }
@@ -61,6 +62,7 @@ pub(super) fn eval_property_inc_dec_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    validate_property_write_receiver(object, property, "increment/decrement", context, values)?;
     if super::super::runtime_ops::simplexml_properties::is_native(values, object, property)? {
         let one = values.int(1)?;
         return with_eval_value_lease(one, context, values, |one, context, values| {

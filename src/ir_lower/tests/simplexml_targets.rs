@@ -18,6 +18,10 @@ class NativeChildReadXml extends SimpleXMLElement implements ArrayAccess {
     public function offsetUnset(mixed $key): void {}
 }
 function nativeChildRead(NativeChildReadXml $xml): mixed { return $xml->item[0]; }
+function nativeNullableRead(?NativeChildReadXml $xml): mixed { return $xml[0]; }
+function nativeNullableCoalesce(?NativeChildReadXml $xml): mixed { return $xml[0] ?? 'absent'; }
+nativeNullableRead(null);
+echo nativeNullableCoalesce(null);
 function nativeChildLiteral(NativeChildReadXml $xml): mixed {
     $children = ['node' => $xml->item];
     $absent = [$xml->missing->child];
@@ -36,6 +40,31 @@ echo (string)nativeChildLiteral(new NativeChildReadXml('<r><item id="old">native
                 Some(crate::ir::Immediate::Data(name)) if
                     module.data.strings[name.as_raw() as usize] == "__elephc_dimension_get")
         }), "{target}: native syntax must select the native adapter before interface dispatch");
+        for name in ["nativeNullableRead", "nativeNullableCoalesce"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::RuntimeCall), "{target}: {name}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Boxed write-select failures guard both final writes and intermediate property traversals.
+#[test]
+fn boxed_native_write_receivers_guard_null_on_every_target() {
+    let source = r#"<?php
+function nativeBoxedWrite(mixed $node): void { $node->leaf = 'value'; }
+function nativeBoxedNestedWrite(mixed $node): void { $node->child->leaf = 'value'; }
+function nativeBoxedCompound(mixed $node): void { $node->leaf .= 'value'; }
+$xml = new SimpleXMLElement('<r/>');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for name in ["nativeBoxedWrite", "nativeBoxedNestedWrite", "nativeBoxedCompound"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
+        }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

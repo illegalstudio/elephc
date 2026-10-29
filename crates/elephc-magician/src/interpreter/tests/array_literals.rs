@@ -62,6 +62,74 @@ fn execute_temporary_array_dimension_write_is_refused() {
         "Unsupported dimension write: temporary arrays have no attached storage".into()));
 }
 
+/// Dynamic static class and property operands preserve an attached nested write target.
+#[test]
+fn execute_dynamic_static_nested_dimension_writes() {
+    let program = parse_fragment(br#"
+        class DynamicDimensionStore { public static array $items = []; }
+        $class = 'DynamicDimensionStore';
+        $property = 'items';
+        $class::$items['k'][] = 1;
+        $class::${$property}['k'][] = 2;
+        return count(DynamicDimensionStore::$items['k']);
+    "#).expect("parse dynamic static writes");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute attached writes");
+    assert_eq!(values.get(result), FakeValue::Int(2));
+}
+
+/// Writes through a null property receiver raise catchable operation-specific PHP Errors.
+#[test]
+fn execute_null_property_write_errors_are_catchable() {
+    let program = parse_fragment(br#"
+        $null = null; $result = '';
+        try { $null->plain = 1; } catch (Error $error) { $result .= $error->getMessage() . '|'; }
+        try { $null->nested->leaf = 1; } catch (Error $error) { $result .= $error->getMessage() . '|'; }
+        try { $null->items[] = 1; } catch (Error $error) { $result .= $error->getMessage() . '|'; }
+        try { $null->text .= 'a'; } catch (Error $error) { $result .= $error->getMessage() . '|'; }
+        try { $null->number++; } catch (Error $error) { $result .= $error->getMessage() . '|'; }
+        return $result;
+    "#).expect("parse null property writes");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch null property Errors");
+    assert_eq!(values.get(result), FakeValue::String(concat!(
+        "Attempt to assign property \"plain\" on null|",
+        "Attempt to modify property \"nested\" on null|",
+        "Attempt to modify property \"items\" on null|",
+        "Attempt to assign property \"text\" on null|",
+        "Attempt to increment/decrement property \"number\" on null|",
+    ).into()));
+}
+
+/// By-value overloaded array children emit a notice and never call offsetSet during writeback.
+#[test]
+fn execute_overloaded_dimension_copies_discard_writeback() {
+    let program = parse_fragment(br#"
+        class CopiedDimension implements ArrayAccess {
+            public array $data = ['k' => ['x' => 1]];
+            public int $sets = 0;
+            public function offsetGet(mixed $key): mixed { return $this->data[$key]; }
+            public function offsetSet(mixed $key, mixed $value): void { $this->sets += 1; $this->data[$key] = $value; }
+            public function offsetExists(mixed $key): bool { return true; }
+            public function offsetUnset(mixed $key): void {}
+        }
+        $copy = new CopiedDimension();
+        $copy['k']['x'] = 2;
+        $copy['k'][] = 3;
+        $copy['k']['x'] += 4;
+        return $copy->sets . ':' . $copy->data['k']['x'];
+    "#).expect("parse overloaded copies");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute disposable copies");
+    assert_eq!(values.get(result), FakeValue::String("0:1".into()));
+    assert_eq!(values.warnings.len(), 3);
+    assert!(values.warnings.iter().all(|message| message.contains(
+        "Indirect modification of overloaded element of CopiedDimension has no effect")));
+}
+
 /// Verifies indexed array literals and reads execute through runtime hooks.
 #[test]
 fn execute_program_reads_indexed_array_literal() {

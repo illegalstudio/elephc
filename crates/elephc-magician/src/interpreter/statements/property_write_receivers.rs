@@ -16,6 +16,7 @@ use super::property_dimension_writes::DimensionProperty;
 pub(super) enum PreparedWriteReceiver<'a> {
     Late(&'a EvalExpr),
     Value(RuntimeCellHandle),
+    Static { class: String, property: String },
     Property(Box<Self>, String),
     DynamicProperty(Box<Self>, PreparedWriteIndex<'a>, bool),
     Index(Box<Self>, PreparedWriteIndex<'a>),
@@ -35,6 +36,19 @@ pub(super) fn prepare_property_write_receiver<'a>(
 ) -> Result<PreparedWriteReceiver<'a>, EvalStatus> {
     Ok(match expr {
         EvalExpr::LoadVar(_) | EvalExpr::StaticPropertyGet { .. } => PreparedWriteReceiver::Late(expr),
+        EvalExpr::DynamicStaticPropertyGet { class_name, property } => {
+            let class = eval_owned_expr(class_name, context, scope, values)?;
+            owners.push(class);
+            let class = eval_dynamic_class_name(class.borrowed(), context, values)?;
+            PreparedWriteReceiver::Static { class, property: property.clone() }
+        }
+        EvalExpr::DynamicStaticPropertyNameGet { class_name, property } => {
+            let class = eval_owned_expr(class_name, context, scope, values)?;
+            owners.push(class);
+            let class = eval_dynamic_class_name(class.borrowed(), context, values)?;
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            PreparedWriteReceiver::Static { class, property }
+        }
         EvalExpr::PropertyGet { object, property } => PreparedWriteReceiver::Property(
             Box::new(prepare_property_write_receiver(object, owners, context, scope, values)?), property.clone()),
         EvalExpr::DynamicPropertyGet { object, property } => {
@@ -80,6 +94,8 @@ fn finish_receiver(
     let value = match plan {
         PreparedWriteReceiver::Late(expr) => return eval_owned_expr(expr, context, scope, values),
         PreparedWriteReceiver::Value(value) => return values.retain(value),
+        PreparedWriteReceiver::Static { class, property } =>
+            eval_static_property_get_result(&class, &property, context, values)?,
         PreparedWriteReceiver::Property(parent, property) => {
             let parent = finish_receiver(*parent, owners, context, scope, values, unset)?;
             owners.push(parent);
@@ -148,6 +164,7 @@ pub(super) fn eval_write_property_get_result(
     object: RuntimeCellHandle, property: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    validate_property_write_receiver(object, property, "modify", context, values)?;
     match super::super::runtime_ops::simplexml_properties::invoke(
         values, object, property, elephc_builtin_contract::ObjectProperty::WriteSelect, None,
     )? {

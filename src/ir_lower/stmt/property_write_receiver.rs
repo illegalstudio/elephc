@@ -16,6 +16,7 @@ use super::*;
 pub(crate) struct PropertyWriteReceiver {
     pub(crate) value: LoweredValue,
     nullable_class: Option<String>,
+    nullable_mixed: bool,
     pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
     owners: Vec<LoweredValue>,
 }
@@ -24,6 +25,7 @@ impl PropertyWriteReceiver {
     /// Acquires borrowed static storage and parks any independently owned receiver for unwind.
     pub(crate) fn new(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> Self {
         let nullable_class = nullable_write_class(ctx, value);
+        let nullable_mixed = ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed;
         ctx.with_independent_write_receiver(|ctx| {
             // PHP cannot rebind `$this`, so its concrete parameter slot never widens to
             // Mixed. Keep that borrowed load visible to buffer-property loop hoisting.
@@ -46,7 +48,7 @@ impl PropertyWriteReceiver {
             } else { value };
             let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
             let owners = if ctx.value_is_owning_temporary(value) { vec![value] } else { Vec::new() };
-            Self { value, nullable_class, pins, owners }
+            Self { value, nullable_class, nullable_mixed, pins, owners }
         })
     }
 
@@ -86,10 +88,11 @@ impl PropertyWriteReceiver {
         &mut self, ctx: &mut LoweringContext<'_, '_>, property: WritePropertyName<'_>, verb: &str,
         operands: &[crate::ir::ValueId], span: Span,
     ) {
-        let Some(class) = self.nullable_class.clone() else { return; };
+        let class = self.nullable_class.clone();
+        if class.is_none() && !self.nullable_mixed { return; }
         let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, operands, span);
         let object = ctx.with_independent_write_receiver(|ctx|
-            narrow_nullable_write_receiver(ctx, self.value, &class, property, verb, span));
+            narrow_nullable_write_receiver(ctx, self.value, class.as_deref(), property, verb, span));
         crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
         // The runtime unwind stack is LIFO. Detach the RHS record before publishing the
         // narrowed object's lease, which must outlive all subsequent coercion/store work.
@@ -223,7 +226,7 @@ fn nullable_write_class(ctx: &LoweringContext<'_, '_>, value: LoweredValue) -> O
 
 /// Narrows a known nullable class for fixed-slot mutation, with PHP's operation-specific null Error.
 fn narrow_nullable_write_receiver(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, class: &str,
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, class: Option<&str>,
     property: WritePropertyName<'_>, verb: &str, span: Span,
 ) -> LoweredValue {
     let is_null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
@@ -241,6 +244,7 @@ fn narrow_nullable_write_receiver(
         WritePropertyName::Runtime(property) => lower_dynamic_null_error(ctx, property, verb, span),
     }
     ctx.builder.position_at_end(present);
+    let Some(class) = class else { return value; };
     if ctx.interfaces.contains_key(class.trim_start_matches('\\')) {
         let boxed = ctx.emit_value(Op::Borrow, vec![value.value], None, PhpType::Mixed,
             Op::Borrow.default_effects(), Some(span));
@@ -250,6 +254,41 @@ fn narrow_nullable_write_receiver(
     let target = PhpType::Object(class.to_string());
     ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, target.clone(),
         Op::mixed_unbox_effects(&target), Some(span))
+}
+
+/// Guards a boxed intermediate property hop without changing its enclosing receiver lease.
+pub(crate) fn guard_mixed_write_hop(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: &str, span: Span,
+) {
+    guard_mixed_write_hop_name(ctx, value, WritePropertyName::Literal(property), "modify", &[], span);
+}
+
+/// Guards a computed-name intermediate hop while its evaluated name remains unwind-visible.
+pub(crate) fn guard_mixed_dynamic_write_hop(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: LoweredValue, span: Span,
+) {
+    guard_mixed_dynamic_write(ctx, value, property, "modify", span);
+}
+
+/// Guards a captured update using its operation-specific PHP Error verb.
+pub(crate) fn guard_mixed_dynamic_write(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: LoweredValue,
+    verb: &str, span: Span,
+) {
+    guard_mixed_write_hop_name(ctx, value, WritePropertyName::Runtime(property), verb, &[property.value], span);
+}
+
+/// Null boxed receivers raise the same modification Error regardless of their source provenance.
+fn guard_mixed_write_hop_name(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, property: WritePropertyName<'_>, verb: &str,
+    extra: &[crate::ir::ValueId], span: Span,
+) {
+    if ctx.builder.value_php_type(value.value).codegen_repr() != PhpType::Mixed { return; }
+    let mut operands = vec![value.value];
+    operands.extend_from_slice(extra);
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &operands, span);
+    narrow_nullable_write_receiver(ctx, value, None, property, verb, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// Builds the runtime-name Error through ordinary constructor lowering without replaying the name.

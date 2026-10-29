@@ -16,6 +16,7 @@ use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finis
 /// One attached parent which can receive a copied child after a nested array mutation.
 enum Parent {
     Variable(String),
+    Discard,
     Static { class: String, property: String },
     Property { object: RuntimeCellHandle, property: String },
     Index { array: RuntimeCellHandle, index: RuntimeCellHandle },
@@ -40,6 +41,7 @@ pub(super) fn eval_dimension_write(
         while let Some(value) = replacement {
             let Some(parent) = parents.pop() else { break; };
             replacement = match parent {
+                Parent::Discard => None,
                 Parent::Variable(name) => {
                     validate_generic_local_contracts(scope, &name, value, context, values)?;
                     write_back_owned_variable_ref_target(scope, &name, value, context, values)?;
@@ -85,6 +87,11 @@ fn resolve(
             parents.push(Parent::Static { class: class_name.clone(), property: property.clone() });
             current
         }
+        PreparedWriteReceiver::Static { class, property } => {
+            let current = eval_static_property_get_result(&class, &property, context, values)?;
+            parents.push(Parent::Static { class, property });
+            current
+        }
         PreparedWriteReceiver::Late(expr) => eval_owned_expr(expr, context, scope, values)?,
         PreparedWriteReceiver::Value(value) => values.retain(value)?,
         PreparedWriteReceiver::Property(parent, property) => {
@@ -106,14 +113,33 @@ fn resolve(
         PreparedWriteReceiver::Index(parent, index) => {
             let array = resolve(*parent, parents, owners, context, scope, values)?;
             let index = finish_index(index, owners, context, scope, values)?;
-            let current = match super::super::runtime_ops::simplexml_properties::dimension(
+            let native = super::super::runtime_ops::simplexml_properties::dimension(
                 values, array.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect,
                 vec![index.borrowed()],
-            )? {
+            )?;
+            let current = match native {
                 Some(current) => current,
                 None => quiet_child(array, index, owners, context, values)?,
             };
-            parents.push(Parent::Index { array, index });
+            let overloaded_temporary = values.type_tag(array)? == EVAL_TAG_OBJECT
+                && values.type_tag(current)? != EVAL_TAG_OBJECT
+                && !has_writable_spl_dimensions(array, context, values)?;
+            if overloaded_temporary {
+                let current = if current.is_borrowed() { values.retain(current)? } else { current };
+                owners.push(current);
+                // Native write-select already emits its own indirect-modification notice.
+                if native.is_none() {
+                    let class = eval_dynamic_class_name(array, context, values)?;
+                    eval_dispatch_php_error(
+                        &format!("Indirect modification of overloaded element of {class} has no effect"),
+                        8, context, values,
+                    )?;
+                }
+                parents.push(Parent::Discard);
+                return Ok(current);
+            } else {
+                parents.push(Parent::Index { array, index });
+            }
             current
         }
     };
@@ -140,4 +166,20 @@ fn quiet_child(
         EVAL_TAG_STRING => eval_throw_error("Cannot use string offset as an array", context, values),
         _ => eval_throw_error("Cannot use a scalar value as an array", context, values),
     }
+}
+
+/// SPL storage adapters expose writable elements; ordinary overloaded array results are copies.
+fn has_writable_spl_dimensions(
+    object: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    let runtime_class = eval_dynamic_class_name(object, context, values)?;
+    let owner = if let Some((owner, _)) = context.class_method(&runtime_class, "offsetGet") {
+        Some(owner)
+    } else { values.reflection_method_declaring_class(&runtime_class, "offsetGet")? };
+    for class in ["ArrayObject", "ArrayIterator"] {
+        if owner.as_deref().is_some_and(|owner| same_eval_class_name(owner, class))
+            && dynamic_object_is_a(object, class, false, context, values)?
+                .map_or_else(|| values.object_is_a(object, class, false), Ok)? { return Ok(true); }
+    }
+    Ok(false)
 }
