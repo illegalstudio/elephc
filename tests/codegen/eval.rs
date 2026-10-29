@@ -24099,24 +24099,24 @@ return $target->join("1", "2", "3", "4", "5", "6", "7", "8", "9")
     assert_eq!(out, "123456789|abcdefghi|ABCDEFGHI");
 }
 
-/// Verifies generated/AOT variadic bridge rejects named arguments captured by the tail.
+/// Generated user-method variadic tails retain positional and named entries through eval.
 #[test]
-fn test_eval_aot_variadic_method_rejects_named_tail() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_aot_variadic_methods_preserve_named_tail() {
+    let out = compile_and_run(
         r#"<?php
 class EvalAotVariadicNamedTailTarget {
-    public function collect(...$items): int {
-        return count($items);
+    public function collect(...$items): string {
+        return count($items) . ":" . json_encode($items);
+    }
+    public static function collectStatic(...$items): string {
+        return count($items) . ":" . json_encode($items);
     }
 }
-eval('$target = new EvalAotVariadicNamedTailTarget();
-$target->collect(named: "A");');
+echo eval('$target = new EvalAotVariadicNamedTailTarget();
+return $target->collect("head", named: "A") . "|" . EvalAotVariadicNamedTailTarget::collectStatic(named: "B");');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+    assert_eq!(out, r#"2:{"0":"head","named":"A"}|1:{"named":"B"}"#);
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT declared type metadata.
