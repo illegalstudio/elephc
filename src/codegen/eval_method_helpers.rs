@@ -3092,16 +3092,21 @@ mod source_entry_tests {
     /// Inherited metadata cannot hide the physical implementation's reference-return ABI.
     #[test]
     fn inherited_eval_method_slots_keep_physical_reference_returns_on_every_target() {
+        let tokens = crate::lexer::tokenize(
+            "<?php class PhysicalReferenceOwner {} class InheritedReferenceView extends PhysicalReferenceOwner {}",
+        ).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let checked = crate::types::check(&program).unwrap();
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut module = Module::new(Target::parse(name).unwrap());
             let declared = signature(Vec::new());
             let mut physical = declared.clone();
             physical.by_ref_return = true;
-            let mut owner = ClassInfo { class_id: 1, ..ClassInfo::default() };
+            let mut owner = checked.classes["PhysicalReferenceOwner"].clone();
             owner.methods.insert("items".into(), physical.clone());
             owner.static_methods.insert("staticitems".into(), physical);
             module.class_infos.insert("PhysicalReferenceOwner".into(), owner);
-            let mut inherited = ClassInfo { class_id: 2, parent: Some("PhysicalReferenceOwner".into()), ..ClassInfo::default() };
+            let mut inherited = checked.classes["InheritedReferenceView"].clone();
             inherited.methods.insert("items".into(), declared.clone());
             inherited.static_methods.insert("staticitems".into(), declared);
             inherited.method_impl_classes.insert("items".into(), "PhysicalReferenceOwner".into());
