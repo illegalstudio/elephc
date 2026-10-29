@@ -60,6 +60,7 @@ $targetMetadataDocument->loadXML('<r><![CDATA[q]]><?work data?></r>');
 $targetMetadataChildren = $targetMetadataDocument->documentElement->childNodes;
 echo $targetMetadataChildren->item(0)->nodeName;
 $targetMetadataPi = $targetMetadataChildren->item(1);
+if (!($targetMetadataPi instanceof DOMProcessingInstruction)) { throw new Error('expected processing instruction'); }
 $targetMetadataPi->data = 'changed';
 echo $targetMetadataPi->data;
 $targetMetadataDocument->loadXML('<!--before--><?work data?><r/><!---->');

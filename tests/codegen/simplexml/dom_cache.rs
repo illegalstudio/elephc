@@ -18,6 +18,7 @@ fn test_simplexml_dom_cache_identity_and_weak_owners_bundle() {
     if ($html) { $document->loadHTML('<html><body><div><a></a><b></b></div></body></html>'); }
     else { $document->loadXML('<div><a/><b/></div>'); }
     $root = $document->getElementsByTagName('div')->item(0);
+    if (!($root instanceof DOMElement)) { throw new Error('expected div element'); }
     $first = $root->childNodes->item(0);
     $last = $root->childNodes->item(1);
     echo $html ? 'html|' : 'xml|';
@@ -29,6 +30,7 @@ fn test_simplexml_dom_cache_identity_and_weak_owners_bundle() {
     $xml = simplexml_import_dom($root);
     $xml->addChild('c', 'value');
     $added = $root->childNodes->item(2);
+    if (!($added instanceof DOMElement)) { throw new Error('expected appended element'); }
     var_dump($added === $last->nextSibling, $root === $added->parentNode);
     $weak = WeakReference::create($added);
     unset($added, $xml, $first, $last, $root, $document);

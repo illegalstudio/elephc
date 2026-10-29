@@ -48,6 +48,7 @@ for ($n = 0; $n < 50; $n++) {
 $xml = new SimpleXMLElement($opening . '>' . str_repeat($tile, 4000) . '</r>');
 unset($opening, $tile);
 $used = $xml->getNamespaces(true); $declared = $xml->getDocNamespaces(true);
+if (!is_array($declared)) { throw new Error('namespace snapshot must be an array'); }
 echo count($used), ':', count($declared), ':', array_key_first($used), ':', array_key_last($used), ':', json_encode(array_key_first($declared)), ':', array_key_last($declared), "\n";
 unset($used, $declared, $xml);
 "###;
