@@ -1209,9 +1209,26 @@ $object = new TypedPrefixResult();
 var_dump(++$object->value, $object->value);
 $dynamic = new TypedPrefixResult();
 var_dump(++$dynamic->{'value'}, $dynamic->value);
+class HookPrefixResult {
+    public int $back = 5;
+    public int $value {
+        get { echo 'G'; return $this->back; }
+        set { echo 'S'; $this->back = $value; }
+    }
+}
+class MagicPrefixResult {
+    public int $back = 5;
+    public function __get(string $name): int { echo 'G'; return $this->back; }
+    public function __set(string $name, mixed $value): void { echo 'S'; $this->back = (int)$value; }
+}
+$hook = new HookPrefixResult();
+var_dump(++$hook->value, $hook->back);
+$magic = new MagicPrefixResult();
+var_dump(++$magic->value, $magic->back);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n".repeat(2));
+    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n".repeat(2)
+        + "GSint(6)\nint(6)\nGSint(6)\nint(6)\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

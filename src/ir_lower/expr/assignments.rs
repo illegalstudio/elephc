@@ -26,6 +26,7 @@ pub(super) fn lower_assignment_expr(
         target, value, result_target, prelude, conditional_value_temp,
     );
     let mut value = value;
+    let mut prefix_readback = false;
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }
@@ -42,8 +43,11 @@ pub(super) fn lower_assignment_expr(
     for (position, stmt) in prelude.iter().enumerate() {
         if position + 1 == prelude.len() {
             if let Some((operation, old)) = incdec {
-                if super::ordinary_property_incdec::scalar_operand(ctx, old) {
+                if super::ordinary_property_incdec::scalar_operand(ctx, old)
+                    && (result_target.is_some()
+                        || super::ordinary_property_incdec::plain_prefix_readback(ctx, target)) {
                     value = operation;
+                    prefix_readback = result_target.is_none();
                     continue;
                 }
             }
@@ -67,6 +71,7 @@ pub(super) fn lower_assignment_expr(
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
     let target = compound_receiver.as_ref().map(|receiver| &receiver.target).unwrap_or(target);
+    let result_target = result_target.or_else(|| prefix_readback.then_some(target));
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,

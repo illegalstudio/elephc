@@ -97,7 +97,7 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
     for xml in [false, true] {
         let source = format!("{counter}{}", if xml { "$xml = new SimpleXMLElement('<r/>');" } else { "" });
         for target in TARGETS {
-            let module = crate::ir_lower::tests::lower_source_at_for_target(
+            let mut module = crate::ir_lower::tests::lower_source_at_for_target(
                 &source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
             );
             for name in ["post", "pre", "postdec", "predec", "nullablepost", "nullablepre", "stringpost", "stringpre",
@@ -116,6 +116,10 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
                 .is_some_and(|name| name.contains("__elephc_incdec_new_"))),
                 "{target}, xml={xml}: opaque/object arithmetic must retain its original owner capture");
             crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            crate::ir_passes::optimize_module(&mut module);
+            let calls = called_methods(&module, function(&module, "main"));
+            assert!(!calls.iter().any(|name| matches!(name.as_str(), "post" | "pre" | "postdec" | "predec")),
+                "{target}, xml={xml}: ordinary scalar updates must remain inlinable: {calls:?}");
         }
     }
 }
