@@ -34,8 +34,8 @@
 //!   through an error macro, bakes the builder's staging directory into `libxml2.a`, making
 //!   the artifact non-reproducible and leaking that path. gcc >= 8, clang >= 10 and Apple
 //!   clang all accept `-ffile-prefix-map`. The shim is compiled by hand with the same flags.
-//! - Recipe revision 2 adds the SimpleXML tree, namespace, XPath, and document-copy shim.
-//!   Revision 3 adds the parsing base URL needed for relative external subsets and entities.
+//! - The embedded shim combines SimpleXML tree, namespace, XPath, document-copy, base-URL
+//!   and DOM support from `libxml2_simplexml*.c` with the core shim in `SHIM_SOURCE`.
 
 use std::ffi::OsString;
 use std::fs;

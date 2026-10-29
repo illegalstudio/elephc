@@ -20970,7 +20970,7 @@
       "module": "libxml",
       "name": "LIBXML_RECOVER",
       "route": "predefined",
-      "since": null,
+      "since": "8.4",
       "value": 1
     },
     {

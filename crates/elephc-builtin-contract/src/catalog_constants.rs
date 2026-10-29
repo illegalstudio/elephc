@@ -258,7 +258,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("LIBXML_NSCLEAN", Libxml, ConstValue::Int(8192)),
     constant!("LIBXML_PARSEHUGE", Libxml, ConstValue::Int(524288)),
     constant!("LIBXML_PEDANTIC", Libxml, ConstValue::Int(128)),
-    constant!("LIBXML_RECOVER", Libxml, ConstValue::Int(1)),
+    constant!("LIBXML_RECOVER", Libxml, ConstValue::Int(1), since: Php84),
     constant!("LIBXML_COMPACT", Libxml, ConstValue::Int(65536)),
     constant!("LIBXML_HTML_NODEFDTD", Libxml, ConstValue::Int(4)),
     constant!("LIBXML_NOBLANKS", Libxml, ConstValue::Int(256)),
