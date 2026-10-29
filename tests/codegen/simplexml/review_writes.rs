@@ -56,15 +56,21 @@ $virtual["n"][] = 8;
 echo json_encode($virtual->getArrayCopy()), "|";
 class ReferenceDimension implements ArrayAccess {
     public mixed $slot = [];
-    public function &offsetGet(mixed $key): mixed { echo "bad-reference-get|"; return $this->slot; }
+    public function &offsetGet(mixed $key): mixed { echo "reference-get|"; return $this->slot; }
     public function offsetSet(mixed $key, mixed $value): void {}
     public function offsetExists(mixed $key): bool { return false; }
     public function offsetUnset(mixed $key): void {}
 }
 $reference = new ReferenceDimension();
 try { $reference[0][] = 1; } catch (Error $error) { echo $error->getMessage(), "|"; }
+$reference->slot = new ArrayObject(["y" => 1]);
+$reference[0]["y"] = 5;
+echo json_encode($reference->slot->getArrayCopy()), "|";
 $nativeReference = new NativeReferenceDimension();
 try { $nativeReference[0][] = 1; } catch (Error $error) { echo $error->getMessage(), "|"; }
+$nativeReference->slot = new ArrayObject(["y" => 1]);
+$nativeReference[0]["y"] = 6;
+echo json_encode($nativeReference->slot->getArrayCopy()), "|";
 $nativeVirtual = new NativeVirtualSetDimension(["k" => ["x" => 1]]);
 try { $nativeVirtual["k"]["x"] = 9; } catch (Error $error) { echo $error->getMessage(), "|"; }
 echo json_encode($nativeVirtual->getArrayCopy()), "|";
@@ -79,8 +85,9 @@ unset($xml, $source);
         "<?xml version=\"1.0\"?>\n<r/>\n",
         "{\"k\":{\"x\":2,\"0\":3}}|{\"k\":{\"x\":5}}|",
         "{\"k\":{\"x\":6}}|{\"k\":{\"x\":7},\"n\":[8]}|",
-        "Unsupported dimension write: by-reference offsetGet|",
-        "Unsupported dimension write: by-reference offsetGet|",
+        "reference-get|Unsupported dimension write: by-reference offsetGet|",
+        "reference-get|{\"y\":5}|",
+        "Unsupported dimension write: by-reference offsetGet|{\"y\":6}|",
         "Unsupported dimension write: native SPL offsetSet override|{\"k\":{\"x\":1}}|",
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);

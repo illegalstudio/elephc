@@ -245,8 +245,9 @@ A temporary array with no variable or property to receive its replacement raises
 `ArrayAccess::offsetGet()` array result is a disposable copy: nested writes emit
 an indirect-modification notice and do not call `offsetSet()`. Builtin `ArrayObject`
 and `ArrayIterator` getters retain writable storage, including inherited eval
-subclasses. Nested writes through a by-reference `offsetGet()` raise an explicit
-unsupported-write `Error` before invoking the getter. A native subclass overriding
+subclasses. A by-reference `offsetGet()` runs once: an object result retains
+identity mutation, while a non-object result raises an explicit unsupported-write
+`Error` because its reference attachment cannot yet be represented. A native subclass overriding
 `offsetSet()` also raises an unsupported-write `Error` when a nested array must be
 written back; eval subclasses can use the builtin storage implementation directly.
 

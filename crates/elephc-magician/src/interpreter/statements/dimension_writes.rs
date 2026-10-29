@@ -134,11 +134,7 @@ fn resolve(
                 vec![index.borrowed()],
             )?;
             let attachment = if native.is_none() && values.type_tag(array)? == EVAL_TAG_OBJECT {
-                let attachment = overloaded_attachment(array, context, values)?;
-                if matches!(attachment, OverloadedAttachment::Reference) {
-                    return eval_throw_error("Unsupported dimension write: by-reference offsetGet", context, values);
-                }
-                attachment
+                overloaded_attachment(array, context, values)?
             } else { OverloadedAttachment::Copy };
             let current = match native {
                 Some(current) => current,
@@ -147,6 +143,9 @@ fn resolve(
             let current = if current.is_borrowed() { values.retain(current)? } else { current };
             owners.push(current);
             if values.type_tag(array)? == EVAL_TAG_OBJECT && values.type_tag(current)? != EVAL_TAG_OBJECT {
+                if matches!(attachment, OverloadedAttachment::Reference) {
+                    return eval_throw_error("Unsupported dimension write: by-reference offsetGet", context, values);
+                }
                 if let OverloadedAttachment::Spl(owner) = attachment {
                     parents.push(Parent::Spl { array, index, owner });
                 } else {

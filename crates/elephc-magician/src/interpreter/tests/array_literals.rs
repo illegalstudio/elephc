@@ -130,13 +130,13 @@ fn execute_overloaded_dimension_copies_discard_writeback() {
         "Indirect modification of overloaded element of CopiedDimension has no effect")));
 }
 
-/// Reference-returning offset getters fail before invocation instead of discarding a real write.
+/// Reference-returning array getters are evaluated once before an explicit unsupported-write Error.
 #[test]
 fn execute_reference_offset_dimension_write_is_explicitly_refused() {
     let program = parse_fragment(br#"
         class ReferenceOffsetDimension implements ArrayAccess {
             public mixed $slot = [];
-            public function &offsetGet(mixed $key): mixed { echo 'bad-getter'; return $this->slot; }
+            public function &offsetGet(mixed $key): mixed { echo 'getter|'; return $this->slot; }
             public function offsetSet(mixed $key, mixed $value): void {}
             public function offsetExists(mixed $key): bool { return false; }
             public function offsetUnset(mixed $key): void {}
@@ -150,7 +150,7 @@ fn execute_reference_offset_dimension_write_is_explicitly_refused() {
     assert_eq!(values.get(result), FakeValue::String(
         "Unsupported dimension write: by-reference offsetGet".into()));
     assert!(values.warnings.is_empty());
-    assert!(values.output.is_empty(), "the unsupported getter must not run");
+    assert_eq!(values.output, "getter|", "the getter must run exactly once");
 }
 
 /// Verifies indexed array literals and reads execute through runtime hooks.

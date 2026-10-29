@@ -469,9 +469,9 @@ writeback uses the builtin storage method rather than an eval `offsetSet` overri
 A native subclass overriding `offsetSet` raises an explicit unsupported-write Error
 when a nested array replacement needs writeback, because its bridge has no separate
 non-virtual entry. For ordinary overloaded dimensions, by-reference `offsetGet`
-is refused before invoking the getter
-with `Error: Unsupported dimension write: by-reference offsetGet`, for both eval
-and native methods. Absent array children autovivify without read warnings; all
+runs once and object results retain the identity path. A non-object result raises
+`Error: Unsupported dimension write: by-reference offsetGet`, for both eval and
+native methods, after its selected owner has joined reverse cleanup. Absent array children autovivify without read warnings; all
 intermediate owners retire in reverse order on normal completion and failure.
 A temporary array without an attachment is refused before mutation. The parser shares these mutation tails with `for`
 clauses, and the property-hook and static-local visitors cover the new statement.
