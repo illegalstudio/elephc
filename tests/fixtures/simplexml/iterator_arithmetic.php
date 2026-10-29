@@ -14,7 +14,8 @@ var_dump($iterator + $element, $element * $iterator, $iterator - $element,
 $derivedIterator = new LineageXmlIterator('<r>4</r>');
 $derivedElement = new LineageXmlElement('<r>5</r>');
 var_dump($derivedIterator + $element, $derivedElement + $iterator);
-$updated = new LineageXmlIterator('<r>2</r>');
+function lineageXmlUpdateSource(): mixed { return new LineageXmlIterator('<r>2</r>'); }
+$updated = lineageXmlUpdateSource();
 $updated += $derivedElement;
 var_dump($updated, negateLineageXml($iterator), negateLineageXml($derivedElement),
     incrementLineageXml($iterator), incrementLineageXml($derivedElement));

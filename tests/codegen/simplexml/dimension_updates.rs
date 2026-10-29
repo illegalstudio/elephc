@@ -47,7 +47,9 @@ $holder->xml[0]++;
 echo $doc->asXML();
 $namespaced = new SimpleXMLElement('<r xmlns:p="urn:p"><p:a>kept</p:a></r>');
 $orphan = clone $namespaced->children('urn:p')->a[0];
-$holder->xml = $orphan->children('urn:p');
+$orphanChildren = $orphan->children('urn:p');
+if ($orphanChildren instanceof SimpleXMLElement) { $holder->xml = $orphanChildren; }
+else { throw new Error('expected orphan child view'); }
 $holder->xml[0]++;
 echo $orphan->asXML(), "\n";
 $ordinary = DimensionUpdateOpaque([4, 9]);

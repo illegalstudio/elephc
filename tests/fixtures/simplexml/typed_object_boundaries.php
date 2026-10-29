@@ -63,7 +63,7 @@ class BoundaryXmlStaticChild extends BoundaryXmlStaticBase {
 class BoundaryXmlReturnBase extends BoundaryXmlElement {
     public function missingStatic(): static { return $this->missing->child; }
     public function missingSelf(): self { return $this->missing->child; }
-    public static function missingStaticCall(SimpleXMLElement $root): static { return $root->missing->child; }
+    public static function missingStaticCall(self $root): static { return $root->missing->child; }
 }
 class BoundaryXmlReturnChild extends BoundaryXmlReturnBase {}
 function staticStateProbeBoundaryXml(SimpleXMLElement $root): void {
@@ -100,15 +100,16 @@ try { acceptBoundaryXml(node: $root->missing->child); } catch (TypeError $error)
 $missing = $root->missing->child;
 try { acceptBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { acceptRefBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { acceptIterableBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { variadicBoundaryXml(1, $root, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-$arguments = [$root, $missing];
+try { acceptIterableBoundaryXml($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { variadicBoundaryXml(1, $root, $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+$arguments = [$root, $root->missing->child];
 try { variadicBoundaryXml(1, ...$arguments); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { variadicBoundaryXml(1, good: $root, bad: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { referenceVariadicBoundaryXml($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { orderedVariadicBoundaryXml($missing, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { orderedVariadicBoundaryXml($missing, bad: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { orderedVariadicBoundaryXml(bad: $missing, first: $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { variadicBoundaryXml(1, good: $root, bad: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+$referenceMissing = [$root->missing->child];
+try { referenceVariadicBoundaryXml($referenceMissing[0]); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { orderedVariadicBoundaryXml($root->missing->child, $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { orderedVariadicBoundaryXml($root->missing->child, bad: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { orderedVariadicBoundaryXml(bad: $root->missing->child, first: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnUnionBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { returnIterableBoundaryXml($root); } catch (TypeError $error) { reportBoundaryXml($error); }
@@ -120,14 +121,15 @@ $property = 'node';
 try { $box->{$property} = $missing; } catch (TypeError $error) { reportBoundaryXml($error); }
 $instanceProperty = new ReflectionProperty(BoundaryXmlBox::class, 'node');
 try { $instanceProperty->setValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { $instanceProperty->setRawValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+// Raw reflection is exposed through eval, including writes to generated instance storage.
+eval('try { $instanceProperty->setRawValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }');
 echo $box->node->getName(), "\n";
 try { $box->union = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 var_dump($box->union);
 $box->items = $root;
 try { $box->items = $missing; } catch (TypeError $error) { reportBoundaryXml($error); }
 BoundaryXmlBox::$staticItems = $root;
-try { BoundaryXmlBox::$staticItems = $missing; } catch (TypeError $error) { reportBoundaryXml($error); }
+try { BoundaryXmlBox::$staticItems = $root->missing->child; } catch (TypeError $error) { reportBoundaryXml($error); }
 $box->nullableItems = $missing;
 var_dump($box->nullableItems);
 BoundaryXmlBox::$staticNode = $root->present;
@@ -144,15 +146,15 @@ try { $lateReturn->missingSelf(); } catch (TypeError $error) { reportBoundaryXml
 try { BoundaryXmlReturnChild::missingStaticCall($lateReturn); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { new BoundaryXmlConstructor($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $methods = new BoundaryXmlMethods();
-try { $methods->__propset_node($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $methods->__propset_node($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { $methods->__propget_node($root); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { $methods->accept($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { BoundaryXmlMethods::acceptStatic($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
-try { $root->relativeVariadic($missing); } catch (TypeError $error) { reportBoundaryXml($error); }
+try { $root->relativeVariadic($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $callback = acceptBoundaryXml(...);
 try { $callback($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
-$callback = $argc > 0 ? 'acceptBoundaryXml' : 'unusedBoundaryXml';
-try { $callback($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
+$namedCallback = $argc > 0 ? 'acceptBoundaryXml' : 'unusedBoundaryXml';
+try { $namedCallback($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $closure = function (SimpleXMLElement $node): void { echo 'closure|'; };
 try { $closure($root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 $hook = new BoundaryXmlHook();
@@ -164,9 +166,10 @@ echo $returned->getName(), "\n";
 acceptBoundaryXml($root->missing);
 $present = $root->present;
 acceptRefBoundaryXml($present);
-acceptPeerBoundaryXml($present);
+acceptPeerBoundaryXml($root->present);
 acceptNullableUnionBoundaryXml($root->missing->child);
 acceptIterableBoundaryXml($root);
 variadicBoundaryXml(1, $root, named: $root);
-referenceVariadicBoundaryXml($root);
+$referencePresent = [$root];
+referenceVariadicBoundaryXml($referencePresent[0]);
 echo "done\n";

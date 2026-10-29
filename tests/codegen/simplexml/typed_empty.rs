@@ -45,9 +45,20 @@ function xmlPresenceInterface(XmlPresencePeer $node): void {
 }
 $nodes = [new XmlPresenceGetOnly(), new XmlPresenceBoth(), new XmlPresenceElement('<r><a>1</a></r>')];
 foreach ($nodes as $node) { xmlPresenceMixed($node); }
-foreach ($nodes as $node) { xmlPresenceUnion($node); }
-foreach ($nodes as $node) { xmlPresenceObject($node); }
-foreach ($nodes as $node) { xmlPresenceInterface($node); }
+foreach ($nodes as $node) {
+    if ($node instanceof XmlPresenceGetOnly) { xmlPresenceUnion($node); }
+    elseif ($node instanceof XmlPresenceBoth) { xmlPresenceUnion($node); }
+    elseif ($node instanceof XmlPresenceElement) { xmlPresenceUnion($node); }
+    else { throw new Error('unexpected presence receiver'); }
+}
+foreach ($nodes as $node) {
+    if (is_object($node)) { xmlPresenceObject($node); }
+    else { throw new Error('expected object receiver'); }
+}
+foreach ($nodes as $node) {
+    if ($node instanceof XmlPresencePeer) { xmlPresenceInterface($node); }
+    else { throw new Error('expected presence peer'); }
+}
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     let expected = "0:0:get|present:1|isset|1:isset|1:isset|get|fallback:isset|get|1|1:1:1:0|";
