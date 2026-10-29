@@ -231,7 +231,7 @@ pub(super) fn emit_static_late_bound_descriptor_entry_wrapper_body(
 ) -> Result<()> {
     let reference_entries = if dynamic_slot.is_some() {
         super::reference_return_dispatch::entries(
-            ctx, impl_class, method_key, sig,
+            ctx, impl_class, method_key, sig.by_ref_return,
             crate::codegen_support::source_method_adapters::MethodKind::Static, false,
         )?
     } else { Vec::new() };

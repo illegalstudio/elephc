@@ -102,7 +102,7 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     };
     let reference_entries = if dynamic_static_slot.is_some() {
         super::reference_return_dispatch::entries(
-            ctx, impl_class, &method_key, callee_sig,
+            ctx, impl_class, &method_key, callee_sig.by_ref_return,
             crate::codegen_support::source_method_adapters::MethodKind::Static,
             !crate::codegen_support::source_method_adapters::uses_physical_func_args_abi(callee_sig),
         )?

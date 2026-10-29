@@ -127,11 +127,8 @@ pub(super) fn emit_dynamic_instance_method_call_with_abi(
     slot: usize,
     target: &MethodCallTarget,
 ) -> Result<()> {
-    let signature = ctx.module.class_infos.get(&target.impl_class)
-        .and_then(|info| info.methods.get(&target.method_key))
-        .ok_or_else(|| CodegenIrError::unsupported("missing instance dispatch signature"))?;
     let reference_entries = super::reference_return_dispatch::entries(
-        ctx, &target.impl_class, &target.method_key, signature,
+        ctx, &target.impl_class, &target.method_key, target.by_ref_return,
         crate::codegen_support::source_method_adapters::MethodKind::Instance, target.source_abi,
     )?;
     let class_id_reg = abi::temp_int_reg(ctx.emitter.target);

@@ -2,7 +2,7 @@
 //! Adapts reference-returning overrides selected by a by-value class call.
 //!
 //! Called from:
-//! - Instance and late-static vtable dispatch and compiled method result storage.
+//! - Instance and late-static vtable dispatch, including callable descriptor entries.
 //!
 //! Key details:
 //! - Only affected inheritance families emit entry-address branches.
@@ -20,10 +20,10 @@ pub(super) struct ReferenceReturnEntry {
 
 /// Finds reference-returning implementations in one by-value caller's inheritance family.
 pub(super) fn entries(
-    ctx: &FunctionContext<'_>, class: &str, method: &str, signature: &FunctionSig,
+    ctx: &FunctionContext<'_>, class: &str, method: &str, caller_returns_reference: bool,
     kind: MethodKind, source_abi: bool,
 ) -> Result<Vec<ReferenceReturnEntry>> {
-    if signature.by_ref_return { return Ok(Vec::new()); }
+    if caller_returns_reference { return Ok(Vec::new()); }
     let mut implementations = std::collections::BTreeMap::new();
     for (name, info) in &ctx.module.class_infos {
         if !class_is_same_or_subclass(ctx, name, class) { continue; }
@@ -91,7 +91,7 @@ pub(super) fn emit_call(
 }
 
 /// Converts a returned reference cell into the owned representation promised to its caller.
-pub(super) fn emit_value_snapshot(
+fn emit_value_snapshot(
     ctx: &mut FunctionContext<'_>, physical_ty: &PhpType, caller_ty: &PhpType,
 ) -> Result<()> {
     crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(
