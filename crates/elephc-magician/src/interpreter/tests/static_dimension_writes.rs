@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Counts provider API calls instead of relying on machine-dependent timing.
-//! - Fake arrays keep their established copy semantics; executable CI checks native payload COW.
+//! - Fake value copies preserve stored entries and index history without runtime key traversal.
 
 use super::super::*;
 use super::support::*;
@@ -28,11 +28,17 @@ fn static_array_writes_use_the_native_value_copy_contract() {
         "$class = 'StaticCopyContract'; for ($i = 0; $i < 64; $i++) { $class::$items[$i] += 1; }",
     ] {
         let before = values.array_value_copy_calls;
+        let key_walks = values.array_iter_key_calls;
         let program = parse_fragment(source.as_bytes()).unwrap();
         let returned =
             execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         eval_release_value(&mut context, &mut values, returned).unwrap();
         assert_eq!(values.array_value_copy_calls - before, 64, "{source}");
+        assert_eq!(
+            values.array_iter_key_calls - key_walks,
+            0,
+            "{source}: no key scan per write"
+        );
         let stored = context
             .static_property("StaticCopyContract", "items")
             .unwrap();
@@ -140,4 +146,38 @@ fn static_array_write_access_failure_preserves_the_slot() {
     if let Some(error) = context.take_pending_throw() {
         eval_release_value(&mut context, &mut values, error).unwrap();
     }
+}
+
+/// Static appends retain deleted-tail history and report exhausted integer keys before writing.
+#[test]
+fn static_array_appends_preserve_history_and_exhaustion() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let source = br#"
+class StaticIndexHistory { public static mixed $items = null; }
+$original = [1, 2, 3]; unset($original[2]);
+StaticIndexHistory::$items = $original;
+StaticIndexHistory::$items[] = 9;
+echo isset(StaticIndexHistory::$items[3]) ? 'history|' : 'bad|';
+StaticIndexHistory::$items = [PHP_INT_MAX => 1];
+try { StaticIndexHistory::$items[] = 2; }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+echo count(StaticIndexHistory::$items);
+unset($original, $error);
+"#;
+    let program = parse_fragment(source).unwrap();
+    let returned =
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    eval_release_value(&mut context, &mut values, returned).unwrap();
+    assert_eq!(
+        values.output,
+        "history|Cannot add element to the array as the next element is already occupied|1"
+    );
+    let stored = context
+        .static_property("StaticIndexHistory", "items")
+        .unwrap();
+    assert_eq!(values.array_next_index(stored).unwrap(), None);
+    assert_eq!(values.array_len(stored).unwrap(), 1);
+    assert_eq!(values.cell_owners[&(stored.as_ptr() as usize)], 1);
 }

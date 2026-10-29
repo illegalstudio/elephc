@@ -72,10 +72,10 @@ macro_rules! impl_fake_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_set(array, index, value)
     }
-    /// Records native-copy API selection while retaining the fake's existing copy behavior.
+    /// Copies fake entries and index history without calling runtime element traversal hooks.
     fn copy_array_value(&mut self, array: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         self.array_value_copy_calls += 1;
-        self.array_clone_shallow(array)
+        self.copy_value(array)
     }
     /// Reads one fake object property by name.
     fn property_get(

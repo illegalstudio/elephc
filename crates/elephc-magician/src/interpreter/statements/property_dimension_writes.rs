@@ -162,7 +162,9 @@ fn write_value_in_storage(
         }
         Some(index) => index,
         None => {
-            let key = if values.is_array_like(current)? { eval_array_append_key(current, values)? }
+            let key = if values.is_array_like(current)? {
+                super::array_append::eval_array_append_index(current, context, values)?
+            }
                 else { values.int(0)? };
             operands.push(key); key
         },
@@ -173,11 +175,15 @@ fn write_value_in_storage(
         else { eval_array_autovivification(Some(current), append, context, values)? };
     if !reuse {
         operands.push(array);
+        if values.type_tag(current)? == EVAL_TAG_ASSOC {
+            values.array_copy_index_history(current, array)?;
+        }
         context.clone_array_element_aliases(current, array, None);
     }
     let promoted = eval_array_set_target_for_index(array, index, values)?;
     if promoted != array {
         operands.push(promoted);
+        values.array_copy_index_history(array, promoted)?;
         context.clone_array_element_aliases(array, promoted, None);
     }
     let array = promoted;

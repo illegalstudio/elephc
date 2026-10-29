@@ -15,13 +15,7 @@ pub(super) fn eval_array_append_owned_value_with_type(
     array: RuntimeCellHandle, value: RuntimeCellHandle, declared: &[EvalParameterType],
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(index) = values.array_next_index(array)? else {
-        return eval_throw_error(
-            "Cannot add element to the array as the next element is already occupied",
-            context, values,
-        );
-    };
-    let index = values.int(index)?;
+    let index = eval_array_append_index(array, context, values)?;
     let inserted = (|| {
         for ty in context.local_reference_types(array) {
             validate_generic_local_element(Some(&ty), array, index, value, context, values)?;
@@ -31,4 +25,17 @@ pub(super) fn eval_array_append_owned_value_with_type(
     })();
     let cleanup = values.release(index);
     inserted.and_then(|result| cleanup.map(|()| result))
+}
+
+/// Selects an owned automatic key from host history and raises PHP's exhaustion Error.
+pub(super) fn eval_array_append_index(
+    array: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let Some(index) = values.array_next_index(array)? else {
+        return eval_throw_error(
+            "Cannot add element to the array as the next element is already occupied",
+            context, values,
+        );
+    };
+    values.int(index)
 }
