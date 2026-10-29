@@ -55,18 +55,19 @@ echo $orphan->asXML(), "\n";
 $ordinary = DimensionUpdateOpaque([4, 9]);
 $ordinary[0]++; --$ordinary[1];
 DimensionUpdateStatic::$ordinary = [1, 3];
+$ordinaryAlias = DimensionUpdateStatic::$ordinary;
 DimensionUpdateStatic::$ordinary[0]++; --DimensionUpdateStatic::$ordinary[1];
-echo json_encode($ordinary), ':', json_encode(DimensionUpdateStatic::$ordinary), "\n";
+echo json_encode($ordinary), ':', json_encode(DimensionUpdateStatic::$ordinary), ':', json_encode($ordinaryAlias), "\n";
 DimensionUpdateStatic::$bag = [];
 DimensionUpdateStatic::$ordinary = null;
-unset($doc, $view, $bag, $opaque, $empty, $holder, $namespaced, $orphan, $ordinary);
+unset($doc, $view, $bag, $opaque, $empty, $holder, $namespaced, $orphan, $ordinary, $ordinaryAlias);
 restore_error_handler();
 "###;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
-    assert_eq!(out.stdout, "key|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n<p:a xmlns:p=\"urn:p\">kept</p:a>\n[5,8]:[2,2]\n");
+    assert_eq!(out.stdout, "key|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n<p:a xmlns:p=\"urn:p\">kept</p:a>\n[5,8]:[2,2]:[1,3]\n");
 }
 
 /// Saved missing views report the indirect notice and leave the document unchanged on failure.

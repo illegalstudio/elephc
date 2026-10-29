@@ -480,6 +480,10 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
     let key_marker = if array_access_ty.is_some() { None } else { key_marker };
     let property_value = if let Some(property_ty) = array_access_ty {
         load_static_property_as(ctx, receiver, property, property_ty, span)
+    } else if let Some(property_ty) = static_property_type(ctx, receiver, property)
+        .filter(|ty| ty.codegen_repr() == PhpType::Mixed)
+    {
+        separate_boxed_static_property(ctx, receiver, property, property_ty, span)
     } else {
         load_static_property(ctx, receiver, property, span)
     };

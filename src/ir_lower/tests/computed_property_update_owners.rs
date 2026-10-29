@@ -95,3 +95,30 @@ dimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Static Mixed indexed writes publish an independent box before runtime mutation.
+#[test]
+fn static_mixed_dimension_write_separates_storage_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class StaticDimensionOwner { public static mixed $items = null; }
+function staticDimensionOwnerWrite(): void { StaticDimensionOwner::$items[0] = 5; }
+staticDimensionOwnerWrite();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "staticDimensionOwnerWrite").unwrap();
+        let clone = function.instructions.iter().find(|inst| inst.op == Op::MixedClone)
+            .expect("boxed static writes must separate the shared cell");
+        let cloned = clone.result.unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::StoreStaticProperty
+            && inst.operands.contains(&cloned)
+            && matches!(inst.immediate, Some(Immediate::Data(name))
+                if module.data.strings[name.as_raw() as usize] == "StaticDimensionOwner::items")),
+            "{target}: publish the independent cell into original static storage");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

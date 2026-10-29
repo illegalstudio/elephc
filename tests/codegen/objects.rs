@@ -28,6 +28,8 @@ mod property_access;
 mod constructor_promotion;
 #[path = "objects/static_properties.rs"]
 mod static_properties;
+#[path = "objects/static_mixed_dimensions.rs"]
+mod static_mixed_dimensions;
 #[path = "objects/static_false_writes.rs"]
 mod static_false_writes;
 #[path = "objects/nested_write_review.rs"]
