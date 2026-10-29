@@ -180,3 +180,35 @@ echo json_encode(mixedGetterOwnerRead(new MixedGetterBorrowedOwner()));
         assert!(clone < release, "{target}: copy the payload before retiring its cell");
     }
 }
+
+/// Reference isset probes release their lease before testing the raw bool on every target.
+#[test]
+fn mixed_magic_hash_reference_isset_uses_bool_payload_on_every_target() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+final class ReferenceIssetOwner {
+    public bool $answer = false;
+    public function &__isset(string $name): bool { return $this->answer; }
+}
+function referenceIssetOwnerProbe(mixed $object): bool { return isset($object->missing); }
+var_dump(referenceIssetOwnerProbe(new ReferenceIssetOwner()));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = crate::names::function_symbol("referenceIssetOwnerProbe");
+        let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+        let body = body.split("\n.globl ").next().unwrap();
+        let arm = module.target.arch == crate::codegen::platform::Arch::AArch64;
+        let call = if arm { "bl" } else { "call" };
+        let callee = crate::names::method_symbol("ReferenceIssetOwner", "__isset");
+        let after = body.split_once(&format!("{call} {callee}")).unwrap().1;
+        let release = after.find("__rt_reference_cell_release").expect("probe must retire the cell");
+        let compare = after.find(if arm { "cmp x0, #0" } else { "test rax, rax" })
+            .expect("probe must test the returned bool");
+        assert!(release < compare, "{target}: restore the bool before the existing probe branch");
+    }
+}

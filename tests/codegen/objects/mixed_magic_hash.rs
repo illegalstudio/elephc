@@ -98,3 +98,38 @@ unset($reference, $borrowed);
         out.stdout
     });
 }
+
+/// Reference-returning isset hooks expose their bool payload to every quiet probe.
+#[test]
+fn test_mixed_magic_hash_reference_isset_probes_bundle() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class ReferenceMagicProbe {
+    public bool $answer = false;
+    public function &__isset(string $name): bool { return $this->answer; }
+    public function __get(string $name): int { return 5; }
+}
+function ReferenceMagicProbeExercise(mixed $object): void {
+    var_dump(isset($object->missing), empty($object->missing), $object->missing ?? 'd');
+}
+$probe = new ReferenceMagicProbe();
+ReferenceMagicProbeExercise($probe);
+$probe->answer = true;
+ReferenceMagicProbeExercise($probe);
+unset($probe);
+"#;
+    let renamed = source.replace("ReferenceMagicProbe", "EvalReferenceMagicProbe");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "bool(false)\nbool(true)\nstring(1) \"d\"\nbool(true)\nbool(false)\nint(5)\n";
+    assert_bundle_with(&[
+        BundleCase { name: "reference_isset_aot", source, expected },
+        BundleCase { name: "reference_isset_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}

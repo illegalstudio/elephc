@@ -445,6 +445,18 @@ fn emit_magic_property_arm(
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         emit_magic_accessor_args(ctx, property);
         super::super::emit_resolved_method_call(ctx, isset)?;
+        if isset.by_ref_return {
+            // Bool has one raw payload word; preserve it while retiring the transferred cell.
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, result);
+            abi::emit_load_from_address(ctx.emitter, result, result, 0);
+            abi::emit_push_reg(ctx.emitter, result);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_release");
+            abi::emit_pop_reg(ctx.emitter, result);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction("cmp x0, #0");                          // did __isset() report the name as set?
