@@ -45,6 +45,15 @@ impl View {
                 let node = parent.ensure_first()?;
                 parent.with_scope(Scope::Node(node)).add_literal(name, None, true)
             },
+            Scope::AttributeMiss(parent, name) => {
+                let node = parent.ensure_first()?;
+                if name.is_empty() || unsafe { ffi::node_type(node) } != 1 { return None; }
+                let name = cstring(name);
+                let empty = cstring("");
+                // XPath's original name filter excludes existing attributes with this name.
+                let created = unsafe { ffi::add_literal(node, name.as_ptr(), empty.as_ptr(), 1, 0) };
+                (!created.is_null()).then_some(created)
+            },
             Scope::Index(parent, 0) => parent.ensure_first(),
             _ => None,
         }
@@ -150,6 +159,9 @@ impl View {
         let nodes = target.nodes();
         if nodes.len() > 1 { return -2; }
         if let Some(node) = nodes.first() { self.assign_node(*node, value); return 1; }
+        if matches!(target.scope, Scope::AttributeMiss(..)) {
+            return target.ensure_first().map(|node| { target.assign_node(node, value); 1 }).unwrap_or(0);
+        }
         if kind == 3 || (kind == 2 && matches!(self.scope, Scope::Attributes(..))) {
             let owner = if matches!(self.scope, Scope::Attributes(..)) { parent_for_attributes(self) } else { Rc::new(self.clone()) };
             return i64::from(owner.ensure_first().and_then(|node| {

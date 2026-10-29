@@ -42,6 +42,7 @@ impl View {
             Scope::XPath(nodes) => Scope::XPath(Rc::new(nodes.iter().map(|node| map(*node)).filter(|node| !node.is_null()).collect())),
             Scope::Children(parent, name) => Scope::Children(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), name.clone()),
             Scope::Attributes(parent, name) => Scope::Attributes(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), name.clone()),
+            Scope::AttributeMiss(parent, name) => Scope::AttributeMiss(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), name.clone()),
             Scope::Index(parent, index) => Scope::Index(Rc::new(parent.remap_with(doc.clone(), clone_owner.clone(), map)), *index),
         };
         let identity = map(self.identity);

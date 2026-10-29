@@ -54,6 +54,26 @@ restore_error_handler();
 foreach ([$nodeViewRoot->missing, new stdClass()] as $nodeViewInvalid) {
     try { simplexml_import_dom($nodeViewInvalid); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
 }
+function NodeViewFilteredAttribute(string $data): void {
+    $root = new SimpleXMLElement($data); $selected = $root->xpath('//@*')[0];
+    echo 'filter:', (int)($selected->b === null), ':', (int)($selected['b'] === null), ':',
+        (int)($selected->zzz === null), ':', (int)isset($selected->b), ':', (int)isset($selected['b']), ':',
+        (int)empty($selected->b), ':', (int)empty($selected['b']), '|';
+    echo (string)$selected->id, ':', (string)$selected['id'], ':', (string)$selected[0], '|';
+    unset($selected->b, $selected['b']); echo $root->asXML();
+    $selected->b = 'new'; $selected['b'] = 'next'; $selected->b->c = 'ignored';
+    echo $root->asXML();
+    echo (int)($selected->b === null), ':', (int)isset($selected['b']), '|';
+}
+NodeViewFilteredAttribute('<r id="1" b="old"/>');
+NodeViewFilteredAttribute('<r xmlns:p="urn:p" p:id="1" p:b="old"/>');
+$nodeViewFiltered = simplexml_load_string('<r xmlns:p="u"><p:a><p:b>PB</p:b><b>UB</b></p:a><a>U</a></r>', null, 0, 'p', true);
+if ($nodeViewFiltered instanceof SimpleXMLElement) {
+    $nodeViewImported = simplexml_import_dom($nodeViewFiltered);
+    echo $nodeViewImported->a->asXML(), '|';
+    $nodeViewImportedChild = simplexml_import_dom($nodeViewFiltered->a);
+    echo (string)$nodeViewImportedChild->b, ':', (string)$nodeViewFiltered->a->b, '|';
+}
 unset($nodeViewRoot, $nodeViewNodes, $nodeViewNode, $nodeViewAttributeNodes, $nodeViewAttribute,
     $nodeViewChildren, $nodeViewAttributes, $nodeViewList, $nodeViewControls, $nodeViewAliasRoot, $nodeViewAlias,
-    $nodeViewPlain, $nodeViewInvalid, $error);
+    $nodeViewPlain, $nodeViewInvalid, $nodeViewFiltered, $nodeViewImported, $nodeViewImportedChild, $error);

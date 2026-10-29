@@ -75,3 +75,54 @@ fn simplexml_xpath_empty_selection_registration_uses_the_document_context() {
     }
     abi::elephc_xml_sx_free(root);
 }
+
+/// Named access intersects XPath's original attribute name and creates fresh literal misses.
+#[test]
+fn simplexml_xpath_attribute_name_filter_keeps_sibling_attributes() {
+    for xml in ["<r id='1' b='old'/>", "<r xmlns:p='urn:p' p:id='1' p:b='old'/>"] {
+        let root = parse(xml.as_bytes(), 0, "", false).unwrap();
+        let nodes = root.xpath("//@*").unwrap();
+        let selected = root.with_scope(Scope::XPath(Rc::new(nodes.clone()))).item(0).unwrap();
+        for kind in [2, 3] {
+            let absent = selected.select(kind, "b", "", false, 0);
+            assert!(matches!(absent.scope, Scope::AttributeMiss(..)));
+            assert!(absent.first().is_none());
+            assert!(absent.nodes().is_empty());
+            assert_eq!(absent.item_count(), 0);
+            assert!(iteration::Cursor::new(&absent).current().is_none());
+            selected.remove(kind, "b", 0);
+            assert_eq!(unsafe { owned_bytes(ffi::text(nodes[1])) }, b"old");
+            assert_eq!(selected.select(kind, "id", "", false, 0).first(), Some(nodes[0]));
+        }
+        assert_eq!(selected.select(4, "", "", false, 0).first(), Some(nodes[0]));
+        assert_eq!(selected.write(2, "b", 0, "new"), 1);
+        assert_eq!(selected.write(3, "b", 0, "next"), 1);
+        assert!(selected.select(2, "b", "", false, 0).ensure_first().is_some());
+        assert_eq!(unsafe { owned_bytes(ffi::text(nodes[1])) }, b"old");
+        let created = root.xpath("/r/@b").unwrap();
+        assert_eq!(created.len(), if xml.contains("xmlns") { 3 } else { 4 });
+        let text: Vec<_> = created.iter().map(|node| unsafe { owned_bytes(ffi::text(*node)) }).collect();
+        assert!(text.ends_with(&[b"new".to_vec(), b"next".to_vec(), vec![]]));
+        assert!(selected.select(2, "b", "", false, 0).first().is_none());
+    }
+}
+
+/// Imports bind the first element with a fresh unqualified namespace and XPath context.
+#[test]
+fn simplexml_import_selection_resets_namespace_filters() {
+    let root = parse(b"<r xmlns:p='u'><p:a><p:b>PB</p:b><b>UB</b></p:a><a>U</a></r>", 0, "p", true).unwrap();
+    root.xpath_ns.borrow_mut().insert(b"q".to_vec(), b"u".to_vec());
+    let imported = root.select(16, "", "", false, 0);
+    assert_eq!(imported.first(), root.first());
+    assert!(imported.ns.value.is_empty() && !imported.ns.prefix);
+    assert!(imported.xpath_ns.borrow().is_empty());
+    let plain = imported.select(2, "a", "", false, 0).first().unwrap();
+    assert_eq!(unsafe { owned_bytes(ffi::text(plain)) }, b"U");
+    let child = root.select(2, "a", "", false, 0);
+    let imported_child = child.select(16, "", "", false, 0);
+    assert_eq!(imported_child.first(), child.first());
+    let plain = imported_child.select(2, "b", "", false, 0).first().unwrap();
+    let prefixed = child.select(2, "b", "", false, 0).first().unwrap();
+    assert_eq!(unsafe { owned_bytes(ffi::text(plain)) }, b"UB");
+    assert_eq!(unsafe { owned_bytes(ffi::text(prefixed)) }, b"PB");
+}

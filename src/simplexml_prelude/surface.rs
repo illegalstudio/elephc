@@ -229,7 +229,7 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
         $mode = elephc_xml_sx_int($handle, 5);
         if ($mode !== 1 && elephc_xml_sx_int($handle, 1) === 0) { return null; }
         $selected = elephc_xml_sx_select($handle, 2, $name, "", 0, 0);
-        if ($mode === 3 && elephc_xml_sx_int($selected, 1) === 0) {
+        if ($mode >= 3 && elephc_xml_sx_int($selected, 1) === 0) {
             elephc_xml_sx_free($selected);
             return null;
         }
@@ -927,7 +927,7 @@ function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElem
             __elephc_simplexml_warning("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
             return null;
         }
-        return __elephc_simplexml_wrap(elephc_xml_sx_select($handle, 4, '', '', 0, 0), $class);
+        return __elephc_simplexml_wrap(elephc_xml_sx_select($handle, 16, '', '', 0, 0), $class);
     }
     if ($node instanceof DOMNode) { return __elephc_simplexml_import_node($node, $class); }
     throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');

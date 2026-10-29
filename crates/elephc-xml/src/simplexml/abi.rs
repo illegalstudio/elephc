@@ -138,6 +138,7 @@ pub extern "C" fn elephc_xml_sx_clone(handle: i64) -> i64 { guard(|| view(handle
 /// Selects children (0), attributes (1), a property (2), an attribute (3), or offset (4).
 /// Internal modes 7/8 preserve filters; 9/10 project children or a sibling tail, 11 reads document children.
 /// DOM modes 12/13/14 select parent/previous/next; 15 includes attributes from every namespace.
+/// Import mode 16 selects the first node with no namespace or XPath registration filter.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_select(handle: i64, kind: i64, name: *const c_char, ns: *const c_char, prefix: i64, index: i64) -> i64 {
     guard(|| view(handle).map(|v| {
@@ -163,7 +164,7 @@ pub extern "C" fn elephc_xml_sx_int(handle: i64, operation: i64) -> i64 {
         } else { i64::from(v.first().is_some()) },
         4 => v.first().map(|n| unsafe { ffi::node_type(n) as i64 }).unwrap_or(0),
         5 => match v.scope { Scope::Children(_, None) => 1, Scope::Children(_, Some(_)) => 2,
-            Scope::Attributes(_, None) => 3, Scope::Attributes(_, Some(_)) => 4, _ => 0 },
+            Scope::Attributes(_, None) => 3, Scope::Attributes(_, Some(_)) | Scope::AttributeMiss(..) => 4, _ => 0 },
         6 => v.first().map(|n| i64::from(projection_is_string(n))).unwrap_or(0),
         7 => v.first().map(|n| unsafe { i64::from(ffi::empty(n) != 0) }).unwrap_or(1),
         8 => v.first().map(|node| unsafe {
@@ -340,7 +341,7 @@ pub unsafe extern "C" fn elephc_xml_sx_register(handle: i64, prefix: *const c_ch
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_sx_xpath(handle: i64, expression: *const c_char) -> i64 {
     guard(|| { diagnostics::reset(); view(handle).map(|v| {
-        if v.first().is_none() || matches!(v.scope, Scope::Attributes(..)) { return 0; }
+        if v.first().is_none() || matches!(v.scope, Scope::Attributes(..) | Scope::AttributeMiss(..)) { return 0; }
         match v.xpath(&bytes(expression)) {
             Ok(nodes) => insert(v.with_scope(Scope::XPath(Rc::new(nodes)))),
             Err(query::XPathError::Invalid) => -1,
@@ -409,7 +410,7 @@ pub extern "C" fn elephc_xml_sx_xml_hex(handle: i64, whole: i64) -> *const c_cha
 pub extern "C" fn elephc_xml_sx_projection_base(handle: i64) -> i64 {
     guard(|| view(handle).map(|v| {
         let node = match &v.scope {
-            Scope::Children(parent, None) | Scope::Attributes(parent, _) => parent.first(),
+            Scope::Children(parent, None) | Scope::Attributes(parent, _) | Scope::AttributeMiss(parent, _) => parent.first(),
             _ => v.first(),
         };
         insert(v.with_scope(Scope::Node(node.unwrap_or(std::ptr::null_mut()))))

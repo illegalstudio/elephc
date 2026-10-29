@@ -27,7 +27,13 @@ fn test_simplexml_node_views_bundle() {
         + "NodeViewAlias:a|yes:0|SimpleXMLElement:r|<a shared=\"yes\">first</a>"
         + "<?xml version=\"1.0\"?>\n<r><a>second</a></r>\n"
         + &"2:simplexml_import_dom(): Invalid Nodetype to import|1|".repeat(3)
-        + &"simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|".repeat(2);
+        + &"simplexml_import_dom(): Argument #1 ($node) must be a valid XML node|".repeat(2)
+        + concat!(
+            "filter:1:1:1:0:0:1:1|1:1:1|<?xml version=\"1.0\"?>\n<r id=\"1\" b=\"old\"/>\n",
+            "<?xml version=\"1.0\"?>\n<r id=\"1\" b=\"old\" b=\"new\" b=\"next\" b=\"\"/>\n1:0|",
+            "filter:1:1:1:0:0:1:1|1:1:1|<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" p:id=\"1\" p:b=\"old\"/>\n",
+            "<?xml version=\"1.0\"?>\n<r xmlns:p=\"urn:p\" p:id=\"1\" p:b=\"old\" b=\"new\" b=\"next\" b=\"\"/>\n1:0|<a>U</a>|UB:PB|",
+        );
     let eval_expected = expected.replace("NodeView", "EvalNodeView");
     assert_bundle_with(&[
         BundleCase { name: "node_views_aot", source, expected: &expected },

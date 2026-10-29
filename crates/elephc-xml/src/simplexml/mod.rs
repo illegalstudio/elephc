@@ -69,6 +69,7 @@ enum Scope {
     Node(Node),
     Children(Rc<View>, Option<Vec<u8>>),
     Attributes(Rc<View>, Option<Vec<u8>>),
+    AttributeMiss(Rc<View>, Vec<u8>),
     Index(Rc<View>, usize),
     Nodes(Rc<Vec<Node>>),
     XPath(Rc<Vec<Node>>),
@@ -107,6 +108,7 @@ impl View {
     fn nodes(&self) -> Vec<Node> {
         match &self.scope {
             Scope::Node(node) => if node.is_null() { vec![] } else { vec![*node] },
+            Scope::AttributeMiss(..) => vec![],
             Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.as_ref().clone(),
             Scope::Index(parent, index) => parent.node_at(*index).into_iter().collect(),
             Scope::Children(parent, name) | Scope::Attributes(parent, name) => {
@@ -130,6 +132,7 @@ impl View {
     fn node_at(&self, index: usize) -> Option<Node> {
         match &self.scope {
             Scope::Node(node) => (index == 0 && !node.is_null()).then_some(*node),
+            Scope::AttributeMiss(..) => None,
             Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.get(index).copied(),
             Scope::Index(parent, selected) => (index == 0).then(|| parent.node_at(*selected)).flatten(),
             Scope::Children(parent, name) | Scope::Attributes(parent, name) => {
@@ -201,6 +204,7 @@ impl View {
         let parent = Rc::new(self.first().map(|node| self.with_scope(Scope::Node(node)))
             .unwrap_or_else(|| self.clone()));
         let scope = match kind {
+            16 => Scope::Node(self.first().unwrap_or(std::ptr::null_mut())),
             12..=14 => Scope::Node(self.first().map(|node| unsafe {
                 match kind { 12 => ffi::parent(node), 13 => ffi::previous(node), _ => ffi::next(node) }
             }).unwrap_or(std::ptr::null_mut())),
@@ -213,6 +217,9 @@ impl View {
             }
             0 | 7 => Scope::Children(parent, None),
             1 | 8 => Scope::Attributes(parent, None),
+            2 | 3 if matches!(&self.scope, Scope::Attributes(_, Some(filter)) if filter.as_slice() != name) => {
+                Scope::AttributeMiss(parent_for_attributes(self), name.into())
+            }
             2 => if matches!(self.scope, Scope::Attributes(..)) {
                 Scope::Attributes(parent_for_attributes(self), Some(name.into()))
             } else {
@@ -240,7 +247,8 @@ impl View {
             _ => self.node_at(index).map(Scope::Node)
                 .unwrap_or_else(|| Scope::Index(parent, index)),
         };
-        let filter = if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
+        let filter = if kind == 16 { Namespace::default() }
+            else if kind <= 1 { Namespace { value: ns.into(), prefix } } else { self.ns.clone() };
         let identity = scope_identity(&scope);
         let mut selected = Self { scope, identity, ns: filter, xpath_ns: Rc::new(RefCell::new(BTreeMap::new())), ..self.clone() };
         selected.refresh_pins();
@@ -263,7 +271,7 @@ unsafe fn borrowed_string_matches(raw: *const c_char, value: impl AsRef<[u8]>) -
 fn scope_identity(scope: &Scope) -> Node {
     match scope {
         Scope::Node(node) => *node,
-        Scope::Children(parent, _) | Scope::Attributes(parent, _) | Scope::Index(parent, _) =>
+        Scope::Children(parent, _) | Scope::Attributes(parent, _) | Scope::AttributeMiss(parent, _) | Scope::Index(parent, _) =>
             parent.first().unwrap_or(std::ptr::null_mut()),
         Scope::Nodes(nodes) | Scope::XPath(nodes) => nodes.first().copied().unwrap_or(std::ptr::null_mut()),
     }
@@ -271,7 +279,10 @@ fn scope_identity(scope: &Scope) -> Node {
 
 /// Resolves the element whose attributes a named attribute wrapper must search.
 fn parent_for_attributes(view: &View) -> Rc<View> {
-    match &view.scope { Scope::Attributes(parent, _) => parent.clone(), _ => Rc::new(view.clone()) }
+    match &view.scope {
+        Scope::Attributes(parent, _) | Scope::AttributeMiss(parent, _) => parent.clone(),
+        _ => Rc::new(view.clone()),
+    }
 }
 
 /// Copies a borrowed C string; null pointers represent an empty string.

@@ -42,7 +42,7 @@ impl Cursor {
                     }
                 }
             }
-            Scope::Node(_) | Scope::Index(..) => CursorState::Empty,
+            Scope::Node(_) | Scope::Index(..) | Scope::AttributeMiss(..) => CursorState::Empty,
         };
         Self { owner: selected, state }
     }
