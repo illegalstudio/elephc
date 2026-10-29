@@ -472,11 +472,24 @@ pub fn is_compound_property_assignment_self_read(
         } if read_object.as_ref() == object && read_property == property
     );
     match &value.kind {
-        ExprKind::BinaryOp { left, .. } => same_property(left),
-        ExprKind::Variable(name) => prelude.iter().rev().find_map(|stmt| {
+        ExprKind::BinaryOp { left, .. } => {
+            let mut read = left.as_ref();
+            let mut earlier = prelude;
+            loop {
+                if same_property(read) { break true; }
+                let ExprKind::Variable(name) = &read.kind else { break false; };
+                let Some((position, bound)) = earlier.iter().enumerate().rev().find_map(|(position, stmt)| {
+                    let StmtKind::Assign { name: binding, value } = &stmt.kind else { return None; };
+                    (binding == name).then_some((position, value))
+                }) else { break false; };
+                read = bound;
+                earlier = &earlier[..position];
+            }
+        }
+        ExprKind::Variable(name) => prelude.iter().enumerate().rev().find_map(|(position, stmt)| {
             let StmtKind::Assign { name: bound, value } = &stmt.kind else { return None; };
             (bound == name).then(|| is_compound_property_assignment_self_read(
-                value, object, property, assignment_span, &[],
+                value, object, property, assignment_span, &prelude[..position],
             ))
         }).unwrap_or(false),
         ExprKind::Assignment { value: operation, prelude, .. } => {

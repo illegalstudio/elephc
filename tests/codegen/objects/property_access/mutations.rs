@@ -1207,9 +1207,11 @@ fn test_typed_string_property_prefix_increment_returns_stored_string() {
 class TypedPrefixResult { public string $value = '5'; }
 $object = new TypedPrefixResult();
 var_dump(++$object->value, $object->value);
+$dynamic = new TypedPrefixResult();
+var_dump(++$dynamic->{'value'}, $dynamic->value);
 "#);
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n");
+    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n".repeat(2));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
