@@ -162,7 +162,8 @@ fn emit_getter(
     emit_call_arg_temp_cleanups(ctx, &args, None)?;
     emit_ref_arg_writebacks(ctx, &args)?;
     let result = inst.result.ok_or_else(|| CodegenIrError::invalid_module("unset property read has no result"))?;
-    ctx.load_value_to_reg(result, abi::int_result_reg(ctx.emitter))
+    ctx.load_value_to_reg(result, abi::int_result_reg(ctx.emitter))?;
+    Ok(())
 }
 
 /// Copies a getter's returned cell before retiring its lease or scalar-name argument owners.
