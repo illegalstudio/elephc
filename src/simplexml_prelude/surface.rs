@@ -251,6 +251,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
             if ($created > 0) {
                 elephc_xml_sx_free($view);
                 $view = $created;
+            } elseif (elephc_xml_sx_int($handle, 1) !== 0 && elephc_xml_sx_int($handle, 4) !== 1) {
+                elephc_xml_sx_free($view);
+                throw new Error('SimpleXMLElement is not properly initialized');
             }
         }
         $selected = __elephc_simplexml_wrap($view, get_class($this));
@@ -491,13 +494,13 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     public function attributes(?string $namespaceOrPrefix = null, bool $isPrefix = false): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
-        if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 4) === 2) { return null; }
+        if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 5) >= 3) { return null; }
         $selected = elephc_xml_sx_select($handle, 1, "", $namespaceOrPrefix ?? "", (int)$isPrefix, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
     public function children(?string $namespaceOrPrefix = null, bool $isPrefix = false): ?SimpleXMLElement {
         $handle = $this->__elephc_handle;
-        if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 4) === 2) { return null; }
+        if (elephc_xml_sx_int($handle, 1) === 0 || elephc_xml_sx_int($handle, 5) >= 3) { return null; }
         $selected = elephc_xml_sx_select($handle, 0, "", $namespaceOrPrefix ?? "", (int)$isPrefix, 0);
         return __elephc_simplexml_wrap($selected, get_class($this));
     }
@@ -915,6 +918,17 @@ function __elephc_simplexml_bind_dom(DOMNode $node, SimpleXMLElement $view): voi
 
 function simplexml_import_dom(object $node, ?string $class_name = "SimpleXMLElement"): ?SimpleXMLElement {
     $class = __elephc_simplexml_class($class_name, 'simplexml_import_dom');
+    if ($node instanceof SimpleXMLElement) {
+        $handle = $node->__elephc_handle_value();
+        if (elephc_xml_sx_int($handle, 1) === 0) {
+            throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
+        }
+        if (elephc_xml_sx_int($handle, 4) !== 1) {
+            __elephc_simplexml_warning("Warning: simplexml_import_dom(): Invalid Nodetype to import\n");
+            return null;
+        }
+        return __elephc_simplexml_wrap(elephc_xml_sx_select($handle, 4, '', '', 0, 0), $class);
+    }
     if ($node instanceof DOMNode) { return __elephc_simplexml_import_node($node, $class); }
     throw new TypeError('simplexml_import_dom(): Argument #1 ($node) must be a valid XML node');
 }

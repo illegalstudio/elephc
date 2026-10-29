@@ -253,6 +253,7 @@ echo $doc->saveXML();
         include_str!("../../../tests/fixtures/simplexml/typed_object_boundaries.php").trim_start_matches("<?php"),
         include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php").trim_start_matches("<?php"),
         include_str!("../../../tests/fixtures/simplexml/generator_object_boundaries.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/node_views.php").trim_start_matches("<?php"),
     ].concat();
     let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"), std::path::Path::new("."),
         crate::codegen::platform::Target::parse(target).unwrap());

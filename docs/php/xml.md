@@ -57,6 +57,10 @@ and the `RecursiveIterator` methods. Integer and float casts read the selected
 node text. Array casts, `get_object_vars()`, `__debugInfo()`, and JSON encoding expose XML
 properties, including `@attributes` and repeated children. DOM imports share
 their document, so edits through either API remain visible through the other.
+`simplexml_import_dom()` also accepts a SimpleXML selection and returns an alias
+of its first element, using the requested subclass. Importing an attribute or
+another non-element node emits a warning and returns `null`; an empty selection
+raises `TypeError`.
 DOM node objects keep their identity across child and sibling queries; their parent
 and sibling links follow SimpleXML edits. HTML DOM output keeps the documented
 [legacy subset format](dom-html.md) after import.

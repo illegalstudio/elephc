@@ -26,6 +26,7 @@ mod comparisons_and_files;
 mod stream_urls;
 mod projections;
 mod namespace_queries;
+mod node_views;
 mod dom_cache;
 mod debug;
 mod debug_owners;
