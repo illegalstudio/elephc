@@ -15,6 +15,22 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Accepts scalar names and objects with PHP's public string conversion contract.
+    pub(crate) fn valid_dynamic_property_name_type(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Str | PhpType::Int | PhpType::Mixed => true,
+            PhpType::Object(class) => self.object_type_implements_interface(class, "Stringable")
+                || self.classes.get(class).is_some_and(|info| {
+                    let key = crate::names::php_symbol_key("__toString");
+                    info.methods.get(&key).is_some_and(|sig| sig.return_type == PhpType::Str)
+                        && info.method_visibilities.get(&key)
+                            == Some(&crate::parser::ast::Visibility::Public)
+                }),
+            PhpType::Union(members) => members.iter().all(|member| self.valid_dynamic_property_name_type(member)),
+            _ => false,
+        }
+    }
+
     /// Infers the type of a property access expression (`$obj->prop`).
     ///
     /// Returns the declared property type on class/object, handles `Mixed`
@@ -201,15 +217,10 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
-        // the lowering has no arm for a boxed runtime property name and answers
-        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
-        // genuinely `mixed` name hits. The checker's message is the better one until the backend
-        // grows that arm.
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !self.valid_dynamic_property_name_type(&property_ty) {
             return Err(CompileError::new(
                 property.span,
-                "Dynamic property name must be string or integer",
+                "Dynamic property name must be string or integer, or a Stringable object",
             ));
         }
 

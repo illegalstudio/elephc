@@ -217,6 +217,9 @@ fn ordinary(
             Property::Dynamic(_) => lower_dynamic_property_fetch_from_value(ctx, receiver, name, PropertyFetchMode::Read, expr),
         }
     } else { load(ctx, if post { &current } else { &next }, expr.span) };
+    // The ordinary getter/arithmetic may produce a concrete scalar or string. The
+    // common result owner has boxed storage and must outlive every operand lease.
+    let result = ctx.box_value_as_mixed(result, PhpType::Mixed, Some(expr.span));
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     retire(ctx, owners, expr.span);
     take_prepublished_call_result(ctx, staging, result, expr.span)
@@ -262,7 +265,9 @@ fn reserve(ctx: &mut LoweringContext<'_, '_>, ty: PhpType, owners: &mut Vec<Capt
 /// Lends a captured operand while its registered slot owns cleanup.
 fn load(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) -> LoweredValue {
     let value = ctx.load_local(name, Some(span));
-    ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+    if Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(value.value)) {
+        ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
+    }
     value
 }
 
