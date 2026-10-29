@@ -26,8 +26,9 @@ pub(super) fn lower(
         else_target: no, else_args: Vec::new() });
 
     ctx.builder.position_at_end(yes);
+    let array_type = PhpType::Array(Box::new(PhpType::Mixed));
     let raw = ctx.emit_value(Op::MixedUnbox, vec![container.value], None,
-        PhpType::Array(Box::new(PhpType::Mixed)), Op::MixedUnbox.default_effects(), Some(span));
+        array_type.clone(), Op::mixed_unbox_effects(&array_type), Some(span));
     crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
     let (raw, owner) = super::super::nested_array_writes::root_static_update_receiver(ctx, raw, span);
     lower_from_container(ctx, group, raw, span);
