@@ -18,7 +18,14 @@ class NativeChildReadXml extends SimpleXMLElement implements ArrayAccess {
     public function offsetUnset(mixed $key): void {}
 }
 function nativeChildRead(NativeChildReadXml $xml): mixed { return $xml->item[0]; }
+function nativeChildLiteral(NativeChildReadXml $xml): mixed {
+    $children = ['node' => $xml->item];
+    $absent = [$xml->missing->child];
+    unset($children['node']['id']);
+    return $children['node'];
+}
 echo (string)nativeChildRead(new NativeChildReadXml('<r><item>native</item></r>'));
+echo (string)nativeChildLiteral(new NativeChildReadXml('<r><item id="old">native</item></r>'));
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),

@@ -465,7 +465,9 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
     if !property.starts_with("__elephc_")
         && crate::types::builtin_classes::has_native_dimensions(normalized, ctx.classes)
     {
-        return Some(PhpType::Object(normalized.to_string()));
+        // The native property adapter returns a boxed view or null. Literal storage
+        // must match that result rather than stamp a raw object payload over the cell.
+        return Some(PhpType::Mixed);
     }
     class_info
         .properties
