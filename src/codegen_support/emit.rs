@@ -218,6 +218,26 @@ impl Emitter {
     /// which follows the export label.
     fn emit_sysv_callee_saved_shim(&mut self, name: &str, stack_words: usize) {
         let body = format!("{}_sysv_body", name);
+        self.emit_sysv_callee_saved_call(&body, stack_words);
+        let _ = writeln!(self.buf, "{}:", body);
+    }
+
+    /// Emits the global `entry`, which Rust calls through a function pointer, running the
+    /// argument-less `target` with rbx and r12-r15 preserved for it.
+    ///
+    /// The `--web` bridge calls the request handler and the application callbacks this way,
+    /// and those bodies follow the emitter's convention, not SysV's: once the bridge is
+    /// optimized, its worker loop keeps values in r12-r14 across the handler call, and the
+    /// worker died after its first request. Only meaningful on x86_64.
+    pub fn sysv_callee_saved_entry(&mut self, entry: &str, target: &str) {
+        debug_assert_eq!(self.target.arch, Arch::X86_64);
+        self.label_global(entry);
+        self.emit_sysv_callee_saved_call(target, 0);
+    }
+
+    /// Saves rbx and r12-r15, calls `target` with `stack_words` copied stack arguments,
+    /// restores the registers and returns `target`'s result.
+    fn emit_sysv_callee_saved_call(&mut self, target: &str, stack_words: usize) {
         for reg in ["rbx", "r12", "r13", "r14", "r15"] {
             self.instruction(&format!("push {}", reg));                     // save a register Rust may keep a value in across this call
         }
@@ -231,7 +251,7 @@ impl Emitter {
         for _ in 0..stack_words {
             self.instruction(&format!("push QWORD PTR [rsp + {}]", source));   // copy a stack-passed argument below the saved registers
         }
-        self.instruction(&format!("call {}", body));                            // run the export body with the caller's registers saved
+        self.instruction(&format!("call {}", target));                          // run the body with the caller's registers saved
         let pushed = 8 * stack_words + padding;
         if pushed != 0 {
             self.instruction(&format!("add rsp, {}", pushed));                  // drop the copied arguments and the padding
@@ -240,7 +260,6 @@ impl Emitter {
             self.instruction(&format!("pop {}", reg));                          // restore the caller's register
         }
         self.instruction("ret");                                                // return the body's rax/rdx/xmm0 result untouched
-        let _ = writeln!(self.buf, "{}:", body);
     }
 
     /// Starts writing a whole function that is needed WHILE another one is being written.
