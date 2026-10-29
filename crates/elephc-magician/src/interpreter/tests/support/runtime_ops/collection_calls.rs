@@ -74,6 +74,7 @@ macro_rules! impl_fake_collection_call_ops {
     }
     /// Copies fake entries and index history without calling runtime element traversal hooks.
     fn copy_array_value(&mut self, array: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !self.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
         self.array_value_copy_calls += 1;
         self.copy_value(array)
     }
