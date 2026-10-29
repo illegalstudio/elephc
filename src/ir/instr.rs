@@ -477,7 +477,7 @@ pub enum MixedNumericOp {
 pub enum PropertyFetchMode {
     /// An ordinary value read: refuse an inaccessible name, warn on an undefined one.
     Read,
-    /// A quiet value fetch for object-handle unset traversal, calling `__get` without `__isset`.
+    /// An unset container fetch: quiet declared slots, direct `__get`, and missing dynamic null slots.
     QuietRead,
     /// A silent existence probe: an inaccessible or undefined name answers `null`.
     Probe,

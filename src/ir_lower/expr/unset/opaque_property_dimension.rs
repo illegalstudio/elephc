@@ -5,7 +5,7 @@
 //! - Direct unset lowering after known property and static storage paths.
 //!
 //! Key details:
-//! - Computed bases and names run before the key; variable bases are read afterwards.
+//! - Computed roots and name values run before the key; writable traversal follows it.
 //! - False/null bases remain quiet, and unsupported ordinary storage raises an explicit Error.
 
 use super::*;
@@ -41,16 +41,12 @@ pub(super) fn lower(
         _ => unreachable!("opaque property unset classification"),
     };
     let mut owners = Vec::new();
-    let object = if matches!(object.kind, ExprKind::PropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }) {
-        // Intermediate properties are fetched for write; only the final property is a quiet probe.
-        let value = property_access::lower_property_write_receiver(ctx, object);
-        park_lowered_unset_operand(ctx, value, object.span, &mut owners)
-    } else { park_unset_operand(ctx, object, &mut owners) };
+    let object = prepare_receiver(ctx, object, &mut owners);
     let property = park_unset_operand(ctx, &property, &mut owners);
     // A variable key must also be snapshotted before name conversion can replace its cell.
     let key = lower_expr(ctx, index);
     let key = park_lowered_unset_operand(ctx, key, index.span, &mut owners);
-    let object = lower_expr(ctx, &object);
+    let object = property_access::lower_property_write_receiver(ctx, &object);
     let object = park_lowered_unset_operand(ctx, object, array.span, &mut owners);
     let object = lower_expr(ctx, &object);
     let class = ctx.intern_class_name("SimpleXMLElement");
@@ -106,9 +102,6 @@ fn remove_property_value(
         else { ctx.box_value_as_mixed(selected, PhpType::Mixed, Some(expr.span)) };
     let selected = park_lowered_unset_operand(ctx, selected, array.span, owners);
     let selected = lower_expr(ctx, &selected);
-    if mode == PropertyFetchMode::QuietRead {
-        materialize_missing_null(ctx, receiver, name_value, selected, expr);
-    }
     let is_array = ctx.emit_value(Op::TypePredicate, vec![selected.value],
         Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
         Op::TypePredicate.default_effects(), Some(expr.span));
@@ -148,55 +141,25 @@ fn remove_property_value(
     for owner in owners.split_off(inner_owners).into_iter().rev() { retire_owned_call_operand(ctx, owner, expr.span); }
 }
 
-/// Preserves PHP's missing dynamic null slot without invoking a magic setter in place of unset.
-fn materialize_missing_null(
-    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, name: LoweredValue,
-    selected: LoweredValue, expr: &Expr,
-) {
-    let done = ctx.builder.create_named_block("unset.opaque.null.done", Vec::new());
-    let missing = ctx.builder.create_named_block("unset.opaque.null.lookup", Vec::new());
-    let is_null = ctx.emit_value(Op::IsNull, vec![selected.value], None, PhpType::Bool,
-        Op::IsNull.default_effects(), Some(expr.span));
-    let initial = ctx.initialized_slots_snapshot();
-    ctx.builder.terminate(Terminator::CondBr { cond: is_null.value,
-        then_target: missing, then_args: Vec::new(), else_target: done, else_args: Vec::new() });
-    ctx.builder.position_at_end(missing);
-    let exists = metadata_bool(ctx, crate::ir::RuntimeFnId::PropertyExists, receiver, name, expr.span);
-    let getter = ctx.builder.create_named_block("unset.opaque.null.getter", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr { cond: exists.value,
-        then_target: done, then_args: Vec::new(), else_target: getter, else_args: Vec::new() });
-    ctx.builder.position_at_end(getter);
-    let get_name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral("__get".into()), expr.span));
-    let has_get = metadata_bool(ctx, crate::ir::RuntimeFnId::MethodExists, receiver, get_name, expr.span);
-    let setter = ctx.builder.create_named_block("unset.opaque.null.setter", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr { cond: has_get.value,
-        then_target: done, then_args: Vec::new(), else_target: setter, else_args: Vec::new() });
-    ctx.builder.position_at_end(setter);
-    let set_name = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral("__set".into()), expr.span));
-    let has_set = metadata_bool(ctx, crate::ir::RuntimeFnId::MethodExists, receiver, set_name, expr.span);
-    let unsupported = ctx.builder.create_named_block("unset.opaque.null.unsupported", Vec::new());
-    let create = ctx.builder.create_named_block("unset.opaque.null.create", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr { cond: has_set.value,
-        then_target: unsupported, then_args: Vec::new(), else_target: create, else_args: Vec::new() });
-    ctx.builder.position_at_end(unsupported);
-    crate::ir_lower::stmt::lower_throw_access_error(ctx,
-        "Unsupported unset(): missing opaque property requires a raw storage fetch", expr.span);
-    jump(ctx, done);
-    ctx.builder.position_at_end(create);
-    ctx.emit_void(Op::DynamicPropSet, vec![receiver.value, name.value, selected.value], None,
-        Op::DynamicPropSet.default_effects(), Some(expr.span));
-    jump(ctx, done);
-    ctx.builder.position_at_end(done);
-    ctx.restore_initialized_slots(initial);
-}
-
-/// Uses the shared typed metadata builtins without invoking user-named function aliases.
-fn metadata_bool(
-    ctx: &mut LoweringContext<'_, '_>, target: crate::ir::RuntimeFnId,
-    receiver: LoweredValue, name: LoweredValue, span: Span,
-) -> LoweredValue {
-    ctx.emit_value(Op::RuntimeCall, vec![receiver.value, name.value],
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))), PhpType::Bool, target.effects(), Some(span))
+/// Captures computed roots and names now while postponing property traversal until after the key.
+fn prepare_receiver(
+    ctx: &mut LoweringContext<'_, '_>, source: &Expr, owners: &mut Vec<crate::ir::LocalSlotId>,
+) -> Expr {
+    let kind = match &source.kind {
+        ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
+            object: Box::new(prepare_receiver(ctx, object, owners)), property: property.clone(),
+        },
+        ExprKind::DynamicPropertyAccess { object, property } => ExprKind::DynamicPropertyAccess {
+            object: Box::new(prepare_receiver(ctx, object, owners)),
+            property: Box::new(park_unset_operand(ctx, property, owners)),
+        },
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess {
+            array: Box::new(prepare_receiver(ctx, array, owners)),
+            index: Box::new(park_unset_operand(ctx, index, owners)),
+        },
+        _ => return park_unset_operand(ctx, source, owners),
+    };
+    Expr::new(kind, source.span)
 }
 
 /// Joins an arm only when its preceding operation still has a normal continuation.

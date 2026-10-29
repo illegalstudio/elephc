@@ -20,14 +20,7 @@ pub(super) fn eval_property_dimension_unset(
 ) -> Result<(), EvalStatus> {
     let mut owners = Vec::new();
     let result = (|| {
-        let early = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
-            let value = if matches!(object, EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }) {
-                let plan = prepare_property_write_receiver(object, &mut owners, context, scope, values)?;
-                finish_property_write_receiver(plan, &mut owners, context, scope, values)?
-            } else { eval_owned_expr(object, context, scope, values)? };
-            owners.push(value);
-            Some(value)
-        };
+        let receiver = prepare_property_write_receiver(object, &mut owners, context, scope, values)?;
         let property = match property {
             DimensionProperty::Literal(name) => PreparedPropertyName::Literal(name.to_string()),
             DimensionProperty::Dynamic(name) => PreparedPropertyName::Dynamic(
@@ -35,14 +28,8 @@ pub(super) fn eval_property_dimension_unset(
         };
         let index = eval_owned_expr(index, context, scope, values)?;
         owners.push(index);
-        let object = match early {
-            Some(object) => object,
-            None => {
-                let object = eval_owned_expr(object, context, scope, values)?;
-                owners.push(object);
-                object
-            }
-        };
+        let object = finish_property_write_receiver(receiver, &mut owners, context, scope, values)?;
+        owners.push(object);
         if values.type_tag(object)? != EVAL_TAG_OBJECT { return Ok(()); }
         let property = match property {
             PreparedPropertyName::Literal(name) => name,

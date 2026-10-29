@@ -109,6 +109,9 @@ pub(super) fn lower_dynamic_prop_get_nonnull(
     object: ValueId,
     property_value: ValueId,
 ) -> Result<()> {
+    if property_fetch_mode(inst) == PropertyFetchMode::QuietRead {
+        return super::unset_property_reads::lower(ctx, inst, object, property_value);
+    }
     if let Some(property) = const_string_operand(ctx, property_value)? {
         return lower_const_dynamic_prop_get(ctx, object, property, inst);
     }

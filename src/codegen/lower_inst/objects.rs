@@ -179,6 +179,7 @@ mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
 mod dynamic_property_read_entry;
+mod unset_property_reads;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;

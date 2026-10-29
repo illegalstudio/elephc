@@ -227,6 +227,10 @@ class NativeXmlUnsetHolder {
         $this->boxed = $xml; $this->typed = $xml; $this->fixed = $xml;
     }
 }
+class NativeXmlUnsetRefGetter {
+    public mixed $payload;
+    public function &__get(string $name): mixed { return $this->payload; }
+}
 $xml = new SimpleXMLElement('<r a="1" b="2" c="3"/>');
 $holder = new NativeXmlUnsetHolder($xml);
 unset($holder->boxed['a'], $holder->typed['b'], $holder->fixed['c']);
@@ -234,6 +238,7 @@ $factory = simplexml_load_string('<r><a>1</a><a>2</a></r>'); unset($factory->a[0
 function removeOpaqueXmlField(object $holder): void { unset($holder->typed['id']); }
 function removeNullableXmlField(?NativeXmlUnsetHolder $holder): void { unset($holder->typed['id']); }
 removeOpaqueXmlField($holder); removeNullableXmlField($holder);
+$getter = new NativeXmlUnsetRefGetter(); $getter->payload = $xml; removeOpaqueXmlField($getter);
 $name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
 $callback = function (): mixed { return []; };
 try { unset($callback()['id']); } catch (Error $error) {}
@@ -242,6 +247,13 @@ try { unset($callback()['id']); } catch (Error $error) {}
         let module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
+        let quiet_reads = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|inst| inst.immediate == Some(crate::ir::Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::QuietRead)))
+            .collect::<Vec<_>>();
+        assert!(!quiet_reads.is_empty(), "{name}: opaque holder must fetch quietly");
+        for inst in quiet_reads {
+            assert!(inst.effects.contains(crate::ir::Effects::WRITES_HEAP), "{name}: quiet fetch may create a null field");
+        }
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         let table = assembly.split_once("_class_offsetunset_ptrs:\n").expect("offset unset table").1;

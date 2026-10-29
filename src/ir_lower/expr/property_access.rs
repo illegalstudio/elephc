@@ -1128,7 +1128,9 @@ fn lower_dynamic_property_fetch_without_native(
         vec![object.value, property.value],
         Some(Immediate::PropertyFetchMode(mode)),
         result_type,
-        Op::DynamicPropGet.default_effects(),
+        Op::DynamicPropGet.default_effects() | if mode == PropertyFetchMode::QuietRead {
+            crate::ir::Effects::WRITES_HEAP | crate::ir::Effects::ALLOC_HEAP | crate::ir::Effects::REFCOUNT_OP
+        } else { crate::ir::Effects::PURE },
         Some(expr.span),
     );
     // A name computed for this read (`$o->{(string) $mixed}`) is a temporary the

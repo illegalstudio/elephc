@@ -126,7 +126,7 @@ OpaqueUnsetHolderDrop($holder); echo $holder->xml->asXML();
 $marker = new OpaqueUnsetPage(new SimpleXMLElement('<i id="1" keep="2"/>'));
 OpaqueUnsetMarkerDrop($marker); echo $marker->xml->asXML();
 $missing = new stdClass(); OpaqueUnsetMissing($missing);
-echo property_exists($missing, 'absent') ? 'created|' : 'missing|';
+echo json_encode($missing), '|';
 $missing->absent = null; OpaqueUnsetMissing($missing); echo 'null|';
 $uninitialized = new OpaqueUnsetUninitialized(); OpaqueUnsetMissing($uninitialized); echo 'uninitialized|';
 $getter = new OpaqueUnsetGetter(new SimpleXMLElement('<g id="1" keep="2"/>'));
@@ -138,12 +138,38 @@ $derived->removeNamed($name); echo $derived->asXML();
 $chain = new SimpleXMLElement('<c><child><a>1</a><a>2</a></child></c>');
 unset($chain->child->{$name}[0]); echo $chain->asXML();
 unset($chain->missing->{$name}[0]); echo $chain->asXML();
-unset($page, $box, $holder, $marker, $missing, $uninitialized, $getter, $typed, $derived, $chain, $name);
+function OpaqueUnsetObserveKey(): int {
+    global $observed; echo 'key-sees:', trim($observed->asXML()), '|'; return 0;
+}
+function OpaqueUnsetThrowKey(): int { throw new RuntimeException('throw-key'); }
+function OpaqueUnsetReplaceIntermediate(): int {
+    global $delayed; $delayed = new SimpleXMLElement('<new/>'); return 0;
+}
+function OpaqueUnsetComputedIntermediate(): SimpleXMLElement {
+    global $computedIntermediate; echo 'root|'; return $computedIntermediate;
+}
+$observed = new SimpleXMLElement('<observe/>');
+unset($observed->a->b[OpaqueUnsetObserveKey()]); echo $observed->asXML();
+$throwing = new SimpleXMLElement('<throwing/>');
+try { unset($throwing->a->b[OpaqueUnsetThrowKey()]); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+echo $throwing->asXML();
+$computedIntermediate = new SimpleXMLElement('<computed-throw/>');
+try { unset(OpaqueUnsetComputedIntermediate()->a->b[OpaqueUnsetThrowKey()]); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+$delayed = new SimpleXMLElement('<old/>'); $savedIntermediate = $delayed;
+unset($delayed->a->b[OpaqueUnsetReplaceIntermediate()]);
+echo $savedIntermediate->asXML(), $delayed->asXML();
+$computedIntermediate = new SimpleXMLElement('<computed/>');
+unset(OpaqueUnsetComputedIntermediate()->a->b[OpaqueUnsetReplaceIntermediate()]);
+echo $computedIntermediate->asXML();
+unset($page, $box, $holder, $marker, $missing, $uninitialized, $getter, $typed, $derived, $chain, $name,
+    $observed, $throwing, $error, $delayed, $savedIntermediate, $computedIntermediate);
 "###;
     let renamed = source.replace("OpaqueUnset", "EvalOpaqueUnset");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "<?xml version=\"1.0\"?>\n<p keep=\"2\"/>\n{\"j\":2}|<?xml version=\"1.0\"?>\n<o keep=\"2\"/>\n<?xml version=\"1.0\"?>\n<i keep=\"2\"/>\ncreated|null|uninitialized|get|<?xml version=\"1.0\"?>\n<g keep=\"2\"/>\n<?xml version=\"1.0\"?>\n<t><a>2</a></t>\n<?xml version=\"1.0\"?>\n<d><a>2</a></d>\n<?xml version=\"1.0\"?>\n<c><child><a>2</a></child></c>\n<?xml version=\"1.0\"?>\n<c><child><a>2</a></child><missing/></c>\n";
+    let expected = "<?xml version=\"1.0\"?>\n<p keep=\"2\"/>\n{\"j\":2}|<?xml version=\"1.0\"?>\n<o keep=\"2\"/>\n<?xml version=\"1.0\"?>\n<i keep=\"2\"/>\n{\"absent\":null}|null|uninitialized|get|<?xml version=\"1.0\"?>\n<g keep=\"2\"/>\n<?xml version=\"1.0\"?>\n<t><a>2</a></t>\n<?xml version=\"1.0\"?>\n<d><a>2</a></d>\n<?xml version=\"1.0\"?>\n<c><child><a>2</a></child></c>\n<?xml version=\"1.0\"?>\n<c><child><a>2</a></child><missing/></c>\nkey-sees:<?xml version=\"1.0\"?>\n<observe/>|<?xml version=\"1.0\"?>\n<observe><a/></observe>\nthrow-key|<?xml version=\"1.0\"?>\n<throwing/>\nroot|throw-key|<?xml version=\"1.0\"?>\n<old/>\n<?xml version=\"1.0\"?>\n<new><a/></new>\nroot|<?xml version=\"1.0\"?>\n<computed><a/></computed>\n";
     assert_bundle_with(&[
         BundleCase { name: "opaque_holders_aot", source, expected },
         BundleCase { name: "opaque_holders_eval", source: &eval, expected },
@@ -188,11 +214,28 @@ echo json_encode($child->data), '|';
 unset(OpaqueUnsetByValue()['a']); echo 'value|';
 $handle = function () use ($xml): mixed { return $xml; };
 unset($handle()['a']); echo $xml->asXML();
-unset($handle, $ref, $data, $bag, $child, $xml, $error);
+class OpaqueUnsetRefGetter {
+    public mixed $data;
+    public function __construct(SimpleXMLElement $xml) { $this->data = $xml; }
+    public function &__get(string $name): mixed { return $this->data; }
+}
+class OpaqueUnsetTypedRefGetter {
+    public SimpleXMLElement $data;
+    public function __construct(SimpleXMLElement $xml) { $this->data = $xml; }
+    public function &__get(string $name): SimpleXMLElement { return $this->data; }
+}
+function OpaqueUnsetRefGetterDrop(object $holder): void { unset($holder->value['a']); }
+$refXml = new SimpleXMLElement('<g a="1" b="2"/>');
+$refGetter = new OpaqueUnsetRefGetter($refXml); OpaqueUnsetRefGetterDrop($refGetter);
+echo $refXml->asXML();
+$typedRefXml = new SimpleXMLElement('<t a="1" b="2"/>');
+$typedRefGetter = new OpaqueUnsetTypedRefGetter($typedRefXml); OpaqueUnsetRefGetterDrop($typedRefGetter);
+echo $typedRefXml->asXML();
+unset($handle, $ref, $data, $bag, $child, $xml, $error, $refXml, $refGetter, $typedRefXml, $typedRefGetter);
 "###);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
     assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
     let message = "Unsupported unset(): array result of an unresolved or overridable call has no attached removal path";
-    assert_eq!(out.stdout, format!("{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|value|<?xml version=\"1.0\"?>\n<r b=\"2\"/>\n"));
+    assert_eq!(out.stdout, format!("{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|{message}|{{\"a\":1,\"b\":2}}|value|<?xml version=\"1.0\"?>\n<r b=\"2\"/>\n<?xml version=\"1.0\"?>\n<g b=\"2\"/>\n<?xml version=\"1.0\"?>\n<t b=\"2\"/>\n"));
 }
