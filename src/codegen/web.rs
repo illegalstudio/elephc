@@ -142,6 +142,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_concat_offset_reset(emitter);
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
+    abi::emit_call_label(emitter, "__rt_stream_registry_cleanup");
     abi::emit_call_label(emitter, "__rt_diag_reset");
     emit_gc_state_reset(emitter);
 
@@ -491,6 +492,7 @@ mod handler_reset_tests {
             let final_print_r_cap = asm.rfind("_print_r_cap").unwrap();
             let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
+            let registrations = asm.find("__rt_stream_registry_cleanup").unwrap();
             let wrapper_table = asm.find("_user_wrappers").unwrap();
             let heap = asm.find("_heap_off").unwrap();
             for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
@@ -518,7 +520,7 @@ mod handler_reset_tests {
                 );
             }
             assert!(
-                inventory < wrapper_table && wrapper_table < heap,
+                inventory < registrations && registrations < wrapper_table && wrapper_table < heap,
                 "{target:?}: fd-keyed tables must clear after inventory cleanup and before the heap reset"
             );
             for (label, position) in [

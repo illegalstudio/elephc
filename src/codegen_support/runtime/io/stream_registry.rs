@@ -2,11 +2,12 @@
 //! Releases the owned strings stored in userspace stream wrapper and filter registrations.
 //!
 //! Called from:
-//! - Wrapper unregistration and the executable's normal shutdown path.
+//! - Wrapper unregistration, full legacy request resets, and executable shutdown.
 //!
 //! Key details:
 //! - A retired row is cleared before releasing either string, so reuse cannot observe stale owners.
 //! - Filter registrations remain available until shutdown, after user close callbacks finish.
+//! - Application orphan pruning preserves registrations across requests.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
