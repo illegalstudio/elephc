@@ -241,7 +241,14 @@ Property writes can use indexed object receivers such as `$views[0]->name`.
 Object dimensions returned by a method remain writable, including
 `$xml->attributes()["id"] = "new"`. Array replacements preserve copied snapshots.
 A temporary array with no variable or property to receive its replacement raises
-`Error`; native object dimensions keep their shared object identity.
+`Error`; native object dimensions keep their shared object identity. A by-value
+`ArrayAccess::offsetGet()` array result is a disposable copy: nested writes emit
+an indirect-modification notice and do not call `offsetSet()`. Builtin `ArrayObject`
+and `ArrayIterator` getters retain writable storage, including inherited eval
+subclasses. Nested writes through a by-reference `offsetGet()` raise an explicit
+unsupported-write `Error` before invoking the getter. A native subclass overriding
+`offsetSet()` also raises an unsupported-write `Error` when a nested array must be
+written back; eval subclasses can use the builtin storage implementation directly.
 
 Supported binary operators are:
 

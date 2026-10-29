@@ -99,7 +99,7 @@ pub(in crate::interpreter) const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024
 pub(in crate::interpreter) const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
 /// Generated AOT method rows set this bit for a `function &m()` declaration (or an `&get` hook);
 /// it is property-only (private(set)) in the member-flag space, so a method row cannot confuse it.
-const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
+pub(in crate::interpreter) const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;

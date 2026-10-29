@@ -459,10 +459,21 @@ index, a compound operator, and the RHS. Magician prepares computed roots and
 keys before evaluating the RHS, then resolves live variable and property storage.
 The dimension writer retains every traversed parent, applies native object
 handlers directly, and propagates copied array replacements back through their
-index, property, static-property, or local attachment. Absent array children
-autovivify without read warnings; all intermediate owners retire in reverse order
-on normal completion and failure. A temporary array without an attachment is
-refused before mutation. The parser shares these mutation tails with `for`
+index, property, static-property, or local attachment. Ordinary overloaded dimensions
+returning a non-object insert a discard attachment and emit an indirect-modification
+notice: the disposable copy never goes back through `offsetSet`. Failed native
+write-select results also discard replacements, without duplicating their notice.
+Object-handle children preserve shared mutation. Inherited builtin `ArrayObject`
+and `ArrayIterator` getters keep write-through storage, including eval subclasses;
+writeback uses the builtin storage method rather than an eval `offsetSet` override.
+A native subclass overriding `offsetSet` raises an explicit unsupported-write Error
+when a nested array replacement needs writeback, because its bridge has no separate
+non-virtual entry. For ordinary overloaded dimensions, by-reference `offsetGet`
+is refused before invoking the getter
+with `Error: Unsupported dimension write: by-reference offsetGet`, for both eval
+and native methods. Absent array children autovivify without read warnings; all
+intermediate owners retire in reverse order on normal completion and failure.
+A temporary array without an attachment is refused before mutation. The parser shares these mutation tails with `for`
 clauses, and the property-hook and static-local visitors cover the new statement.
 
 ## Runtime script cache
