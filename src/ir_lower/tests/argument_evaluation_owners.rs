@@ -8,7 +8,7 @@
 //! - By-value owners are visible to unwinding before later arguments execute.
 //! - By-reference places are never replaced by detached evaluation temporaries.
 
-/// An owned string cast gains a pin-only root even when the PHP callee may return its parameter.
+/// An owned string cast has an independent unwind root when a callee may return its parameter.
 #[test]
 fn alias_returning_calls_root_owned_string_casts_on_all_targets() {
     use crate::ir::{Immediate, Op};
@@ -24,11 +24,11 @@ invokeOwnedStringCast('kept');
         let module = lower_for(source, target);
         let function = module.functions.iter().find(|function| function.name == "invokeOwnedStringCast").unwrap();
         let claim = function.instructions.iter().find(|inst| {
-            inst.op == Op::Acquire && inst.immediate == Some(Immediate::Bool(true))
+            matches!(inst.op, Op::EnsureOwned | Op::Acquire)
                 && function.instructions.iter().any(|producer| {
                     producer.result == inst.operands.first().copied() && producer.op == Op::Cast
                 })
-        }).expect("the fresh string cast must gain an independent evaluation owner");
+        }).expect("the fresh string cast must have an independently releasing owner");
         let value = claim.result.unwrap();
         let cast = function.instructions.iter().find(|inst| inst.result == Some(claim.operands[0])).unwrap();
         assert_eq!(cast.op, Op::Cast, "{target}");
@@ -40,6 +40,12 @@ invokeOwnedStringCast('kept');
             && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
         assert!(function.instructions.iter().any(|inst| inst.op == Op::PopCallOperandOwner
             && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        let push = function.instructions.iter().position(|inst| inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).unwrap();
+        let call = function.instructions.iter().position(|inst| inst.op == Op::Call).unwrap();
+        let pop = function.instructions.iter().position(|inst| inst.op == Op::PopCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).unwrap();
+        assert!(push < call && call < pop, "{target}: the root must cover the actual callee");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
