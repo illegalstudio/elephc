@@ -13,7 +13,19 @@ use super::*;
 /// Recognizes boxed storage whose runtime value may carry an XML dimension adapter.
 pub(super) fn supports(ctx: &LoweringContext<'_, '_>, array: &Expr) -> bool {
     ctx.classes.contains_key("SimpleXMLElement")
+        && !is_storage_receiver(array)
         && array_cast_source::array_cast_source_type_for_ir(ctx, array).codegen_repr() == PhpType::Mixed
+}
+
+/// Keeps storage expressions out of the value-only temporary array removal path.
+fn is_storage_receiver(mut receiver: &Expr) -> bool {
+    let mut wrapped = false;
+    while let ExprKind::ErrorSuppress(inner) = &receiver.kind { receiver = inner; wrapped = true; }
+    if matches!(receiver.kind, ExprKind::Variable(_)) { return wrapped; }
+    matches!(receiver.kind,
+        ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }
+        | ExprKind::NullsafePropertyAccess { .. } | ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::StaticPropertyAccess { .. })
 }
 
 /// Captures the key before loading current storage and joins the three runtime receiver kinds.

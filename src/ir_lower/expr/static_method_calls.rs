@@ -17,107 +17,13 @@ pub(super) fn lower_static_method_call(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    // `Closure::bind($closure, $newThis [, $scope])` — static form of bindTo.
+    // `Closure::bind($closure, $newThis [, $scope])` is the static form of bindTo.
     if let StaticReceiver::Named(name) = receiver {
         if name.trim_start_matches('\\') == "Closure"
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
         {
-            let closure = lower_expr(ctx, &args[0]);
-            if let (Some(new_this), Some(scope)) = (args.get(1), args.get(2)) {
-                if let Some(plan) = plan_scoped_closure_bind(ctx, &args[0], scope) {
-                    return lower_planned_scoped_closure_bind(
-                        ctx, plan, closure, new_this, scope, expr,
-                    );
-                }
-            }
-            // A dynamic eval can replace the local with a Magician-owned Closure object. Its
-            // boxed payload is not an AOT closure descriptor, so feeding it to ClosureBind would
-            // make `__rt_closure_bind` interpret the object header as descriptor metadata. Route
-            // runtime-shaped bind targets through the eval bridge, which understands both eval
-            // Closure objects and native callable cells.
-            if ctx.has_eval_barrier()
-                && matches!(
-                    ctx.builder.value_php_type(closure.value).codegen_repr(),
-                    PhpType::Mixed | PhpType::Union(_)
-                )
-            {
-                let mut operands = vec![closure.value];
-                operands.extend(args.iter().skip(1).map(|arg| lower_expr(ctx, arg).value));
-                let data = ctx.intern_string("Closure::bind");
-                return ctx.emit_value(
-                    Op::EvalStaticMethodCall,
-                    operands,
-                    Some(Immediate::Data(data)),
-                    PhpType::Mixed,
-                    Op::EvalStaticMethodCall.default_effects(),
-                    Some(expr.span),
-                );
-            }
-            // Callable identity invalidation widens an escaped closure local to boxed Mixed
-            // storage. ClosureBind consumes the descriptor payload, not the Mixed-cell address,
-            // so normalize it at the same boundary as bindTo() before publishing operand roots.
-            let closure = if matches!(
-                ctx.builder.value_php_type(closure.value).codegen_repr(),
-                PhpType::Mixed | PhpType::Union(_)
-            ) {
-                unbox_callable_param_storage(ctx, closure, Some(args[0].span))
-            } else {
-                closure
-            };
-            let result_staging = prepublish_call_result(ctx, &PhpType::Callable, expr.span);
-            let (closure, closure_owner) = root_owned_call_operand(ctx, closure, args[0].span);
-            let new_this = match args.get(1) {
-                Some(arg) => lower_expr(ctx, arg),
-                None => lower_null(ctx, expr),
-            };
-            // A suspension or other opaque writer can widen a global receiver to Mixed even
-            // though the explicit scope still proves the object representation expected by
-            // `__rt_closure_bind`. Passing the Mixed-cell address as `$this` would box that cell
-            // as an object pointer, so detach its object payload before rooting the operand.
-            let new_this = match args.get(2).and_then(|scope| {
-                static_callable_class_name(ctx, scope).and_then(|requested| {
-                    lookup_folded_name(ctx.classes.keys(), requested.trim_start_matches('\\'))
-                })
-            }) {
-                Some(scope)
-                    if matches!(
-                        ctx.builder.value_php_type(new_this.value).codegen_repr(),
-                        PhpType::Mixed | PhpType::Union(_)
-                    ) =>
-                {
-                    let receiver_type = PhpType::Object(scope);
-                    let unboxed = ctx.emit_owned_value(
-                        Op::MixedUnbox,
-                        vec![new_this.value],
-                        None,
-                        receiver_type.clone(),
-                        Op::mixed_unbox_effects(&receiver_type),
-                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
-                    );
-                    release_coerced_source_if_owned(
-                        ctx,
-                        new_this,
-                        args.get(1).map(|arg| arg.span).or(Some(expr.span)),
-                    );
-                    unboxed
-                }
-                _ => new_this,
-            };
-            let (new_this, receiver_owner) = root_owned_call_operand(
-                ctx,
-                new_this,
-                args.get(1).map_or(expr.span, |arg| arg.span),
-            );
-            let bound = emit_closure_bind(ctx, closure.value, new_this.value, expr);
-            stage_call_result(ctx, result_staging.as_ref(), bound, expr.span);
-            if let Some(slot) = receiver_owner {
-                retire_owned_call_operand(ctx, slot, expr.span);
-            }
-            if let Some(slot) = closure_owner {
-                retire_owned_call_operand(ctx, slot, expr.span);
-            }
-            return take_prepublished_call_result(ctx, result_staging, bound, expr.span);
+            return lower_static_closure_bind(ctx, args, expr);
         }
     }
 

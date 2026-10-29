@@ -7,7 +7,9 @@
 //!
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored pattern bytes and pass PCRE2 POSIX-wrapper flags downstream.
-//! - The removed `/e` modifier sets bit 30. Callers must reject that bit; PCRE2 accepts it.
+//! - The removed `/e` modifier sets bit 30. That bit is not a PCRE2 flag, and
+//!   PCRE2 would accept it. Every regex helper tests the bit after stripping
+//!   and rejects the pattern before compilation, so it never reaches `pcre2_regcomp`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 

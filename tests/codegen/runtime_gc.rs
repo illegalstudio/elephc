@@ -161,6 +161,7 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod offset_unset_key_guards;
 mod array_edge_type_errors;
 mod call_coercion_owners;
 mod eval_sparse_arrays;

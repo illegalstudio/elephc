@@ -761,6 +761,28 @@ property aliases retain directly without this scan.
 Plain local overwrites and `unset()` also retire the previous slot owner before
 calling its release helper. The EIR retirement operation records that local
 mutation and the observable effects of a potentially throwing destructor.
+
+Property element removal fetches separated storage with `PropGetForWrite` and
+removes the key in place. It never stores a container back after releasing the
+removed value, because that value's destructor may replace the property or throw.
+Owned receiver expressions and keys stay in unwind-visible EIR operand slots.
+If key conversion can invoke a warning handler, native lowering retains a snapshot
+owner of the selected hash in a temporary cleanup scope. After conversion, another
+live owner allows this snapshot to be retired before deletion, preserving ordinary
+destructor interleaving. A detached hash keeps its snapshot through deletion or
+exception unwinding. The old property value is never stored back.
+
+When a boxed property holds an `ArrayAccess` object, the native
+`__rt_mixed_object_offset_unset` helper retains the selected object across dispatch.
+A callback may clear the supplying property while still using its receiver. The
+helper guards this receiver before entering PHP or an SPL offset conversion that
+can invoke an error handler. PHP methods borrow the original boxed key, so a
+second guard protects that key during the method call. Normal cleanup retires the
+key before the receiver; an escaping throw releases both through the shared
+activation chain. SPL helpers consume the original key themselves and apply
+their own offset conversion rules. `OffsetUnset` carries conservative callback
+effects because these methods and warning handlers can observe or mutate PHP state.
+
 Ordinary executable PHP frames and library frames both publish exception-cleanup
 activations. Each PHP catch saves the current activation as the unwind stop, so
 the catching function and its callers keep their live local owners. The unwinder

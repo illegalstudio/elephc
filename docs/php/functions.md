@@ -227,8 +227,18 @@ echo $static();            // 99  (static spelling)
 echo $read();              // 7   (original is unchanged)
 ```
 
-An optional third `$scope` argument is accepted for source compatibility and
-ignored (member visibility is resolved at compile time).
+An explicit scope may be a known user class name, `Class::class`, an object,
+`null` for global visibility, or `"static"` to preserve the closure's current
+scope. The same argument is the second parameter of `bindTo()`. An object
+supplies its concrete runtime class, including when it is passed through a
+base-class parameter.
+
+For standalone accessor closures, explicit scope also works when the closure
+is supplied as a callable parameter or selected after a warning handler changes
+a global. Binding selects a function compiled for the requested visibility;
+the original and earlier bound copies keep their own scopes. Runtime strings
+that select a scope are refused by native lowering; use an object or a literal
+class scope instead.
 
 `$closure->call($newThis, ...$args)` binds `$this` and invokes the closure in a
 single step, returning its result:
@@ -255,8 +265,10 @@ echo $read();   // 250 — bound access reaches the private property
 
 Rebinding supports closures that capture `$this` and nothing else (the typical
 accessor closure, whether created inside a method or standalone). Binding a
-closure that also has `use(...)` captures aborts with a fatal error rather than
-producing an incorrectly bound closure.
+closure that also has `use(...)` captures is refused rather than producing an
+incorrectly bound closure.
+Changing the class scope of an accessor originally compiled against a concrete
+object layout is also refused when that layout cannot be retargeted safely.
 
 ## Static closures
 

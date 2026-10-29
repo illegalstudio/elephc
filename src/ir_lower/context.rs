@@ -5541,6 +5541,17 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
     operand_types: &[PhpType],
     local_type: Option<&PhpType>,
 ) -> bool {
+    // HashUnset keeps conservative EIR effects, but this lowering fact only needs actual PHP
+    // reentry. Scalar values and non-diagnostic keys cannot replace an unrelated global closure.
+    if op == Op::HashUnset {
+        let key_may_warn = operand_types.get(1).is_none_or(|key| {
+            matches!(key.codegen_repr(), PhpType::Float | PhpType::Mixed)
+        });
+        let value_may_destruct = operand_types.first()
+            .and_then(container_mutation_released_value_type)
+            .is_none_or(|value| php_type_cleanup_may_invoke_user_code(&value));
+        return key_may_warn || value_may_destruct;
+    }
     // A release-family op carries the conservative `all()` default effects, so the effects test
     // below would call every one of them a boundary. Only the payload it retires decides: freeing
     // a string or an int slot cannot re-enter PHP, while a `Mixed`, object or object-bearing
@@ -5574,7 +5585,7 @@ pub(super) fn instruction_has_opaque_user_code_boundary(
         Op::StoreGlobal | Op::StoreStaticProperty | Op::StoreReflectionStaticProperty => {
             return true;
         }
-        Op::ArraySet | Op::HashSet | Op::HashUnset | Op::HashSpread => operand_types
+        Op::ArraySet | Op::HashSet | Op::HashSpread => operand_types
             .first()
             .and_then(container_mutation_released_value_type),
         Op::ArraySetMixedKey

@@ -200,21 +200,39 @@ pub(crate) fn lower_preg_replace_callback(
         ctx,
         super::super::instruction_strict_php_profile(inst),
     )?;
+    // `[$obj, 'method']` and a runtime string name allocate a descriptor this
+    // call owns. The helper's setjmp records the cleanup chain as it stands on
+    // entry, so the record has to be published first: the helper's own rethrow
+    // stops at that record, and the caller's handler then releases it.
+    let owned_descriptor = env_bytes != 0 && callback_target.env.releases_descriptor();
+    if owned_descriptor {
+        let owner = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_temporary_stack_address(ctx.emitter, owner, 0);
+        abi::emit_push_call_operand_owner(ctx.emitter, owner, true);
+    }
+    let env_offset = if owned_descriptor {
+        abi::CALL_OPERAND_OWNER_RECORD_BYTES
+    } else {
+        0
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "x3", &callback_target.entry_label);
-            load_static_callback_env_arg(ctx, "x4", env_bytes);
+            load_static_callback_env_arg(ctx, "x4", env_bytes, env_offset);
             load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &callback_target.entry_label);
-            load_static_callback_env_arg(ctx, "rcx", env_bytes);
+            load_static_callback_env_arg(ctx, "rcx", env_bytes, env_offset);
             load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
+    if owned_descriptor {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+    }
     callback_target.release_env(ctx, env_bytes);
     super::store_if_result(ctx, inst)
 }
@@ -466,12 +484,20 @@ fn release_descriptor_callback_env_preserving_result(
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
 }
 
-/// Loads the optional callback environment argument expected by the regex runtime.
-fn load_static_callback_env_arg(ctx: &mut FunctionContext<'_>, env_reg: &str, env_bytes: usize) {
+/// Loads the callback environment pointer expected by the regex runtime.
+///
+/// `slot_offset` is the descriptor slot's distance from the stack pointer after
+/// an owner record has been pushed above it. A zero `env_bytes` passes null.
+fn load_static_callback_env_arg(
+    ctx: &mut FunctionContext<'_>,
+    env_reg: &str,
+    env_bytes: usize,
+    slot_offset: usize,
+) {
     if env_bytes == 0 {
         abi::emit_load_int_immediate(ctx.emitter, env_reg, 0);
     } else {
-        abi::emit_temporary_stack_address(ctx.emitter, env_reg, 0);
+        abi::emit_temporary_stack_address(ctx.emitter, env_reg, slot_offset);
     }
 }
 

@@ -219,3 +219,70 @@ for ($i = 0; $i < 4; $i++) {
     assert_eq!(out.stdout, "1|caught|".repeat(4));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// XML capability must not turn unsupported erased storage unsets into discarded-copy mutations.
+#[test]
+fn test_simplexml_erased_unset_storage_is_rejected() {
+    if skip_without_xml_native("test_simplexml_erased_unset_storage_is_rejected") { return; }
+    for body in [
+        "$m = json_decode('{\"a\":{\"b\":1,\"c\":2}}', true); unset($m['a']['b']);",
+        "class ErasedStaticUnset { public static mixed $data = ['a' => 1]; } unset(ErasedStaticUnset::$data['a']);",
+        "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);",
+    ] {
+        let source = format!("<?php $xml = simplexml_load_string('<r/>'); echo $xml->getName(); {body}");
+        let error = compile_source_expect_backend_error(&source);
+        assert!(error.contains("unset target shape"), "{error}");
+    }
+}
+
+/// New property removal retains native XML protocols and mutates ordinary property storage in place.
+#[test]
+fn test_simplexml_property_unset_main_integration_bundle() {
+    if skip_without_xml_native("test_simplexml_property_unset_main_integration_bundle") { return; }
+    let source = r###"<?php
+class XmlUnsetIntegrationHolder {
+    public array $items = [];
+    public mixed $bag;
+    public SimpleXMLElement $xml;
+    public readonly mixed $locked;
+    public static array $shared = [];
+    public function __construct(mixed $value) { $this->locked = $value; }
+}
+function XmlUnsetIntegrationKey(XmlUnsetIntegrationHolder $holder): int {
+    echo 'key|'; $holder->bag = [8, 9]; return 0;
+}
+$doc = new SimpleXMLElement('<r><a>x</a><a>y</a><b id="keep"/></r>');
+$holder = new XmlUnsetIntegrationHolder($doc->b);
+$holder->xml = $doc->a; $holder->bag = $doc->a;
+unset($holder->xml[0]); echo $doc->asXML();
+unset($holder->bag[0]); echo $doc->asXML();
+$holder->bag = $doc->b;
+unset($holder->bag[XmlUnsetIntegrationKey($holder)]);
+echo json_encode($holder->bag), '|', $doc->asXML();
+$nested = ['xml' => $doc->b]; unset($nested['xml']['id']); echo $doc->asXML();
+unset($holder->locked[0]); echo $doc->asXML();
+$empty = new XmlUnsetIntegrationHolder(null); unset($empty->xml[0]); echo 'quiet|';
+$holder->items = [4, 5, 6]; $copy = $holder->items;
+unset($holder->items[1]); echo json_encode($holder->items), ':', json_encode($copy), '|';
+$holder->bag = ['k' => 1, 'j' => 2]; $mixedCopy = $holder->bag;
+unset($holder->bag['k']); echo json_encode($holder->bag), ':', json_encode($mixedCopy), '|';
+XmlUnsetIntegrationHolder::$shared = [4, 5]; $staticCopy = XmlUnsetIntegrationHolder::$shared;
+unset(XmlUnsetIntegrationHolder::$shared[0]); echo json_encode(XmlUnsetIntegrationHolder::$shared), ':', json_encode($staticCopy), '|';
+XmlUnsetIntegrationHolder::$shared = [];
+unset($holder, $empty, $nested, $doc, $copy, $mixedCopy, $staticCopy);
+"###;
+    let renamed = source.replace("XmlUnsetIntegration", "EvalXmlUnsetIntegration");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "<?xml version=\"1.0\"?>\n<r><a>y</a><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\nkey|{\"1\":9}|<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b/></r>\n<?xml version=\"1.0\"?>\n<r/>\nquiet|{\"0\":4,\"2\":6}:[4,5,6]|{\"j\":2}:{\"k\":1,\"j\":2}|{\"1\":5}:[4,5]|";
+    assert_bundle_with(&[
+        BundleCase { name: "property_unset_aot", source, expected },
+        BundleCase { name: "property_unset_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+        out.stdout
+    });
+}

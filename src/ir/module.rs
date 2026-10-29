@@ -79,6 +79,19 @@ pub struct CloneOverrideApplicator {
     pub function_name: String,
 }
 
+/// One native closure entry specialized for an explicit binding visibility scope.
+#[derive(Debug, Clone)]
+pub struct ClosureScopeVariant {
+    /// Requested runtime class id, or global visibility when absent.
+    pub scope_class_id: Option<u32>,
+    /// Original and previously rebound entries with the same capture layout and body.
+    pub source_names: Vec<String>,
+    /// Function entry compiled with the requested lexical scope.
+    pub function_name: String,
+    /// Number of trailing capture parameters in the callable descriptor.
+    pub capture_count: usize,
+}
+
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -96,6 +109,8 @@ pub struct Module {
     pub functions: Vec<Function>,
     pub class_methods: Vec<Function>,
     pub closures: Vec<Function>,
+    /// Entry remapping for explicit-scope binds whose source closure is selected at runtime.
+    pub closure_scope_variants: Vec<ClosureScopeVariant>,
     pub fiber_wrappers: Vec<Function>,
     pub callback_wrappers: Vec<Function>,
     pub extern_callback_trampolines: Vec<Function>,
@@ -162,6 +177,7 @@ impl Module {
             functions: Vec::new(),
             class_methods: Vec::new(),
             closures: Vec::new(),
+            closure_scope_variants: Vec::new(),
             fiber_wrappers: Vec::new(),
             callback_wrappers: Vec::new(),
             extern_callback_trampolines: Vec::new(),

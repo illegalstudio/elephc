@@ -1,5 +1,5 @@
 //! Purpose:
-//! Lowers count, closure binding, and PHP empty semantics for concrete runtime representations.
+//! Lowers count and PHP empty semantics for concrete runtime representations.
 //!
 //! Called from:
 //! - `super` builtin and language-construct dispatch.
@@ -214,27 +214,6 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             other
         ))),
     }
-}
-
-/// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
-/// `$this` to a new receiver via `__rt_closure_bind(descriptor, new_this)`,
-/// returning the rebound closure descriptor.
-pub(in crate::codegen::lower_inst) fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "closure_bind", 2)?;
-    let descriptor = expect_operand(inst, 0)?;
-    let new_this = expect_operand(inst, 1)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(descriptor, "x0")?;
-            ctx.load_value_to_reg(new_this, "x1")?;
-        }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(descriptor, "rdi")?;
-            ctx.load_value_to_reg(new_this, "rsi")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_closure_bind");
-    store_if_result(ctx, inst)
 }
 
 /// Lowers `empty()` for concrete scalar and array-like operands.

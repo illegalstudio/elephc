@@ -28,15 +28,32 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
             closure.params.len()
         )));
     }
-    let visible_param_count = closure.params.len() - inst.operands.len();
-    let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
     let captures = closure_capture_params_from_eir(closure, inst.operands.len());
+    let descriptor_label = emit_static_closure_descriptor(ctx, closure, inst.operands.len());
+    // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure
+    // is an object and consumes an object handle from the same pool `new` draws
+    // from, including a capture-free closure whose descriptor could otherwise be static.
+    emit_runtime_closure_descriptor_with_captures(
+        ctx, &descriptor_label, &captures, &inst.operands,
+    )?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the immutable descriptor header for a closure entry and its uniform invoker.
+pub(super) fn emit_static_closure_descriptor(
+    ctx: &mut FunctionContext<'_>,
+    closure: &Function,
+    capture_count: usize,
+) -> String {
+    let visible_param_count = closure.params.len() - capture_count;
+    let signature = function_signature_from_eir_with_param_count(closure, visible_param_count);
+    let captures = closure_capture_params_from_eir(closure, capture_count);
     let owns_string_return = crate::codegen::runtime_callable_invoker::function_returns_owned_string(closure);
     let default_scope = closure.lexical_class.clone();
     let invoker_label = emit_runtime_callable_invoker_in_class(
         ctx, &signature, &captures, owns_string_return, true, default_scope.as_deref(),
     );
-    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+    callable_descriptor::static_descriptor_with_optional_invoker_meta(
         ctx.data,
         &function_symbol(&closure.name),
         Some(&closure.name),
@@ -48,24 +65,7 @@ pub(super) fn lower_closure_new(ctx: &mut FunctionContext<'_>, inst: &Instructio
             callable_descriptor::CallableDescriptorShape::Closure,
         ),
         Some(&invoker_label),
-    );
-    // Every closure gets HEAP storage, capture-free ones included. In PHP a Closure
-    // is an object and consumes an object handle from the same pool `new` draws
-    // from — `$f = function () {}; var_dump(new P());` prints `object(P)#2` — so a
-    // capture-free closure that collapsed to a static `.data` descriptor address
-    // would have no allocation to bind a handle to and no lifetime to release one
-    // at, and every `#N` after it would be off by one. Routing it through the same
-    // runtime descriptor the capturing case already uses gives the closure real
-    // storage, so `__rt_object_handle_acquire` binds a handle at creation and
-    // `__rt_callable_descriptor_release` → `__rt_heap_free` hands it back exactly
-    // when PHP destroys the Closure.
-    emit_runtime_closure_descriptor_with_captures(
-        ctx,
-        &descriptor_label,
-        &captures,
-        &inst.operands,
-    )?;
-    store_if_result(ctx, inst)
+    )
 }
 
 /// Returns the hidden closure capture params from the tail of the EIR closure ABI.
