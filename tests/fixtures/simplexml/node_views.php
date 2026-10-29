@@ -17,7 +17,10 @@ function NodeViewWrites(SimpleXMLElement $value): void {
 $nodeViewRoot = new SimpleXMLElement('<r><a id="1"/><!--note--><?target info?></r>');
 $nodeViewNodes = [$nodeViewRoot->a['id'], $nodeViewRoot->a->attributes()->id,
     $nodeViewRoot->xpath('//comment()')[0], $nodeViewRoot->xpath('//processing-instruction()')[0]];
-foreach ($nodeViewNodes as $nodeViewNode) { NodeViewWrites($nodeViewNode); }
+foreach ($nodeViewNodes as $nodeViewNode) {
+    if ($nodeViewNode instanceof SimpleXMLElement) { NodeViewWrites($nodeViewNode); }
+    else { throw new Error('Expected a SimpleXML node'); }
+}
 echo $nodeViewRoot->asXML();
 $nodeViewAttributeNodes = [$nodeViewRoot->a['id'], $nodeViewRoot->a->attributes()->id,
     $nodeViewRoot->a->attributes()['id']];
@@ -48,11 +51,15 @@ echo $nodeViewAlias->asXML(), $nodeViewAliasRoot->asXML();
 set_error_handler(function(int $level, string $message): bool { echo $level, ':', $message, '|'; return true; });
 foreach ([$nodeViewRoot->a['id'], $nodeViewRoot->xpath('//comment()')[0],
     $nodeViewRoot->xpath('//processing-instruction()')[0]] as $nodeViewInvalid) {
-    echo (int)(simplexml_import_dom($nodeViewInvalid) === null), '|';
+    if ($nodeViewInvalid instanceof SimpleXMLElement) {
+        echo (int)(simplexml_import_dom($nodeViewInvalid) === null), '|';
+    } else { throw new Error('Expected an invalid XML node'); }
 }
 restore_error_handler();
 foreach ([$nodeViewRoot->missing, new stdClass()] as $nodeViewInvalid) {
-    try { simplexml_import_dom($nodeViewInvalid); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    if (is_object($nodeViewInvalid)) {
+        try { simplexml_import_dom($nodeViewInvalid); } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+    } else { throw new Error('Expected an invalid XML object'); }
 }
 function NodeViewFilteredAttribute(string $data): void {
     $root = new SimpleXMLElement($data); $selected = $root->xpath('//@*')[0];
