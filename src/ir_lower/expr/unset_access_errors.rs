@@ -86,6 +86,17 @@ pub(super) fn is_unset_closure(
 pub(super) fn require_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
 ) {
+    // The eval class-name bridge accepts object tag 6 but not native callable tag 10.
+    let closure = is_unset_closure(ctx, object, span);
+    let closure_error = ctx.builder.create_named_block("unset.array_access.closure", Vec::new());
+    let check_interface = ctx.builder.create_named_block("unset.array_access.interface", Vec::new());
+    let closure_initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: closure.value,
+        then_target: closure_error, then_args: Vec::new(), else_target: check_interface, else_args: Vec::new() });
+    ctx.builder.position_at_end(closure_error);
+    crate::ir_lower::stmt::lower_throw_access_error(ctx, "Cannot use object of type Closure as array", span);
+    ctx.builder.position_at_end(check_interface);
+    ctx.restore_initialized_slots(closure_initial);
     let class = ctx.intern_class_name("ArrayAccess");
     let allowed = ctx.emit_value(Op::InstanceOf, vec![object.value], Some(Immediate::Data(class)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));

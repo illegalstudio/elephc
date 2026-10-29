@@ -500,6 +500,8 @@ read bridge, and compiled closure cells use the same catchable object-as-array E
 Object leaves keep native adapters or eval-aware public ArrayAccess method dispatch
 after an interface check. Property-container fetches reject compiled and eval-backed
 Closure identities after converting the name; final property removal stays quiet.
+Closure offset errors use their known class name before ordinary class lookup,
+including when compiled callable cells share a function with opaque eval.
 Receiver, converted-name and result owners remain published through these checks
 and through normal cleanup.
 
