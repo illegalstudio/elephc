@@ -33,7 +33,8 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.label("__rt_eval_release_begin");
     abi::store_at_offset(emitter, result, THROWN);
     abi::load_at_offset(emitter, result, VALUE);
-    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_mixed", result, THROWN);
+    // The generic release suppresses child decrefs for graph members swept by the collector.
+    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_decref_any", result, THROWN);
     abi::store_at_offset(emitter, result, CAUGHT);
     abi::load_at_offset(emitter, result, THROWN);
     abi::emit_branch_if_int_result_zero(emitter, "__rt_eval_release_return");
@@ -65,9 +66,9 @@ mod tests {
             // Materializing one address mentions the symbol twice on AArch64 (page and offset).
             // Count calls instead, proving release cannot bypass the containing native boundary.
             let call = if target.arch == super::super::Arch::AArch64 { "bl" } else { "call" };
-            assert!(asm.contains("__rt_decref_mixed"), "{name}");
+            assert!(asm.contains("__rt_decref_any"), "{name}");
             assert_eq!(asm.lines().filter(|line| line.trim() == format!("{call} __rt_cleanup_invoke")).count(), 1, "{name}");
-            assert!(!asm.lines().any(|line| line.trim() == format!("{call} __rt_decref_mixed")), "{name}");
+            assert!(!asm.lines().any(|line| line.trim() == format!("{call} __rt_decref_any")), "{name}");
             assert!(!asm.contains("__rt_throw_current"), "{name}");
             let caught_flag = match target.arch {
                 super::super::Arch::AArch64 => "ldur x0, [x29, #-32]",
