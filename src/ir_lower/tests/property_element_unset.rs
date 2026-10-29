@@ -266,6 +266,10 @@ try { unset($callback()['id']); } catch (Error $error) {}
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         let table = assembly.split_once("_class_offsetunset_ptrs:\n").expect("offset unset table").1;
         let table = table.split(".globl").next().unwrap();
-        assert!(table.contains("__elephc_dimension_unset"), "{name}: native unset table entry missing");
+        let class_id = module.class_infos["SimpleXMLElement"].class_id as usize;
+        let entry = table.lines().filter(|line| line.trim_start().starts_with(".quad "))
+            .nth(class_id).expect("native class row");
+        let expected = crate::names::method_symbol("SimpleXMLElement", "__elephc_dimension_unset");
+        assert!(entry.contains(&expected), "{name}: native unset table entry missing: {entry}");
     }
 }
