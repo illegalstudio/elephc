@@ -164,7 +164,14 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
+                    let param_supports_property = match effective_sig.params.get(param_idx) {
+                        Some((_, ty)) => {
+                            self.property_ref_argument_supported(arg, ty, caller_env)?
+                        }
+                        None => true,
+                    };
+                    if !lvalue || !param_supports_property {
                         let param_name = effective_sig
                             .params
                             .get(param_idx)

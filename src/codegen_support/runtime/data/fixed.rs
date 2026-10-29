@@ -67,6 +67,11 @@ pub(crate) fn emit_runtime_data_fixed(
     target: Target,
     php_version: PhpVersion,
 ) -> String {
+    // A compile-time `--ini memory_limit` lowers the allocator's runtime ceiling below the
+    // reserved heap capacity. The runtime cache key includes the same value, so one cached
+    // object never serves two different limits.
+    let memory_limit = crate::codegen_support::memory_limit_bytes()
+        .map_or(heap_size, |limit| limit.min(heap_size));
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
@@ -706,6 +711,23 @@ pub(crate) fn emit_runtime_data_fixed(
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
+    out.push_str(&format!(
+        ".globl _heap_limit\n_heap_limit:\n    .quad {}\n",
+        memory_limit
+    ));
+    out.push_str(".globl _heap_fail_request\n_heap_fail_request:\n    .quad 0\n");
+    out.push_str(&format!(
+        ".globl _heap_fatal_prefix\n_heap_fatal_prefix:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_PREFIX
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_middle\n_heap_fatal_middle:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_MIDDLE
+    ));
+    out.push_str(&format!(
+        ".globl _heap_fatal_suffix\n_heap_fatal_suffix:\n    .ascii {:?}\n",
+        super::HEAP_FATAL_SUFFIX
+    ));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");

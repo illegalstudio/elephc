@@ -67,6 +67,8 @@ mod casts_and_constants;
 mod include_paths;
 mod magic_constants;
 mod strings;
+mod uri_php_src;
+mod uri;
 mod curl;
 pub(crate) mod io;
 mod mysqli;

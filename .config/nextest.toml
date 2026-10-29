@@ -15,6 +15,28 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# The php-src ext/uri PHPT bundle compiles the vendored fixture matrix as 15 bundled programs
+# plus the isolation cases. It measures 100-320s locally and shares a shard with other codegen
+# tests on CI; give it a wider budget than the generic bundle override.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::uri_php_src::test_uri_php_src_phpt_bundle)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(=codegen::uri_php_src::test_uri_php_src_phpt_bundle)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+# The symbol-catalog join compiles one program that probes every checker-provided class,
+# natively and through one eval() host. It measures 150-260s depending on runner load; keep
+# its budget ahead of the macOS all-codegen override so that platform cannot shorten it.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::symbol_catalog)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::symbol_catalog)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
 # The embedder stack tests run whole compiler phases on a deliberately small thread stack and
 # the security-limit tests compile programs nested right up to the depth cap;
 # `eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack` (37s) and
@@ -91,6 +113,9 @@ path = "debug/libelephc_bcmath.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_random.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_uri.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_mbstring.a"

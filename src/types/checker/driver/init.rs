@@ -127,6 +127,7 @@ impl Checker {
             current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
+            reference_property_storage_widenings: HashSet::new(),
             clone_override_destinations: Default::default(),
             property_unset_destinations: Default::default(),
             scope_dynamic_mutation_targets: Default::default(),

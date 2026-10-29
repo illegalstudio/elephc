@@ -2,7 +2,7 @@
 title: "__elephc_zval_free() - internals"
 description: "Compiler internals for __elephc_zval_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1211
+  order: 1212
 ---
 
 ## `__elephc_zval_free()` - internals

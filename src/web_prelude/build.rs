@@ -4400,6 +4400,7 @@ fn decl_fn_ini_get() -> Stmt {
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_GET),
+            crate::shared_ini_prelude::memory_limit_get(),
             s_assign("__elephc_oc", e_call("__elephc_opcache_ini_string", vec![e_var("option")])),
             s_if(
                 e_binop(e_var("__elephc_oc"), BinOp::StrictNotEq, e_bool(false)),
@@ -4500,9 +4501,10 @@ fn decl_fn_elephc_session_name_valid() -> Stmt {
 fn decl_fn_ini_set() -> Stmt {
     // Core and mbstring directives first, as main routes them; they share no name with the
     // `opcache.*` arms below, so the order between the two only mirrors main's.
-    let mut body = vec![crate::shared_ini_prelude::directive(
-        elephc_builtin_contract::mbstring_abi::ini::INI_SET,
-    )];
+    let mut body = vec![
+        crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
+        crate::shared_ini_prelude::memory_limit_set(true),
+    ];
     body.extend(opcache_prelude::build::opcache_ini_set_arms());
     body.extend(vec![
             s_assign("old", e_str("")),
@@ -5348,6 +5350,9 @@ pub(crate) fn web_declarations(
         declarations.extend(opcache_prelude::ini_helper_declarations(
             php_version,
             ini_overrides,
+        ));
+        declarations.extend(crate::shared_ini_prelude::memory_limit_state_decls(
+            &crate::shared_ini_prelude::memory_limit_initial(ini_overrides),
         ));
 
         // `__elephc_ini_module_known($m)`: the KNOWN-MODULE predicate `ini_get_all`'s extension

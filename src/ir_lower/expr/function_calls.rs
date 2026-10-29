@@ -144,6 +144,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         ),
         _ => None,
     };
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let mut operands = if is_user_function {
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
@@ -200,6 +201,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::ExternCall.default_effects(),
             Some(expr.span),
         );
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         // Extern string results are copied into independent PHP storage by the C ABI
         // adapter. Scalar and pointer results own no PHP argument storage either.
         release_owned_call_arg_temporaries(
@@ -236,6 +242,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
         );
         stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         release_owned_call_arg_temporaries_with_roots(
             ctx, &operands, Some(call.value), &return_alias, sig.as_ref(), &roots, expr.span,
         );
@@ -258,12 +269,22 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             Op::EvalFunctionCall.default_effects(),
             Some(expr.span),
         );
+        super::enum_argument_guards::drain_reference_property_guards(
+            ctx,
+            reference_property_guard_mark,
+            expr.span,
+        );
         retire_call_argument_intermediates(ctx, &evaluation_intermediates);
         return call;
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     unbox_raw_word_builtin_result(ctx, call, expr.span)
 }

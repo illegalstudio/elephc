@@ -16,7 +16,7 @@
 //! - `__rt_concat_publish` derives the storage class from the pointer itself: only pointers
 //!   inside `[_concat_buf, _concat_buf + capacity)` move `_concat_off`, so heap-backed results
 //!   leave the shared scratch offset untouched with no extra flag register.
-//! - Requests larger than the configured heap capacity (`_heap_max`), including the wrapped
+//! - Requests larger than the configured heap capacity (`_heap_limit`), including the wrapped
 //!   or negative sizes produced by an overflowing size computation, reach
 //!   `__rt_alloc_overflow`; an active cdylib boundary recovers with allocation
 //!   status, while executables retain PHP's fatal behavior.
@@ -47,7 +47,7 @@ pub(crate) const FLOAT_SPILL_SLOTS: usize = 4;
 /// - Input: `x0` (AArch64) / `rax` (x86_64) = required payload bytes, interpreted as unsigned.
 /// - Output: `x0` / `rax` = destination pointer with room for at least that many bytes.
 /// - Clobbers every caller-saved register: callers must spill their live state first.
-/// - Fatals through `__rt_alloc_overflow` when the request exceeds `_heap_max`.
+/// - Fatals through `__rt_alloc_overflow` when the request exceeds `_heap_limit`.
 ///
 /// # `__rt_concat_publish`
 /// - Input/output: `x1`/`x2` (AArch64) or `rax`/`rdx` (x86_64) = result pointer and length,
@@ -91,7 +91,7 @@ fn emit_concat_reserve_aarch64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_reserve");
 
     // -- reject requests the allocator could never satisfy, including wrapped sizes --
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
+    abi::emit_symbol_address(emitter, "x9", "_heap_limit");
     emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for any single result
     emitter.instruction("cmp x0, x9");                                          // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("b.hi __rt_concat_reserve_too_large");                  // report a PHP-style allocation overflow instead of writing past any buffer
@@ -228,7 +228,7 @@ fn emit_concat_grow_aarch64(emitter: &mut Emitter) {
 
     // -- allocate the larger owned block and stamp it as an elephc string --
     emitter.instruction("mov x0, x2");                                          // pass the requested new capacity to the reservation front end
-    abi::emit_symbol_address(emitter, "x9", "_heap_max");
+    abi::emit_symbol_address(emitter, "x9", "_heap_limit");
     emitter.instruction("ldr x9, [x9]");                                        // load the configured heap capacity as the upper bound for any single result
     emitter.instruction("cmp x0, x9");                                          // is the grown capacity impossible to satisfy?
     emitter.instruction("b.hi __rt_concat_grow_too_large");                     // report a PHP-style allocation overflow instead of writing past any buffer
@@ -292,7 +292,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_concat_reserve");
 
     // -- reject requests the allocator could never satisfy, including wrapped sizes --
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
+    abi::emit_symbol_address(emitter, "r8", "_heap_limit");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for any single result
     emitter.instruction("cmp rax, r8");                                         // is the requested byte count impossible to satisfy (unsigned, so wrapped sizes are huge)?
     emitter.instruction("ja __rt_concat_reserve_too_large_x86");                // report a PHP-style allocation overflow instead of writing past any buffer
@@ -354,7 +354,7 @@ fn emit_concat_scratch_linux_x86_64(emitter: &mut Emitter) {
 
     // -- allocate the larger owned block and stamp it as an elephc string --
     emitter.instruction("mov rax, rsi");                                        // pass the requested new capacity to the allocator
-    abi::emit_symbol_address(emitter, "r8", "_heap_max");
+    abi::emit_symbol_address(emitter, "r8", "_heap_limit");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the configured heap capacity as the upper bound for any single result
     emitter.instruction("cmp rax, r8");                                         // is the grown capacity impossible to satisfy?
     emitter.instruction("ja __rt_concat_grow_too_large_x86");                   // report a PHP-style allocation overflow instead of writing past any buffer

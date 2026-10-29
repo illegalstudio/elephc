@@ -166,6 +166,125 @@ impl Checker {
         })
     }
 
+    /// Returns whether a direct property argument can bind a by-reference parameter.
+    ///
+    /// A `mixed`/union parameter receives a boxed temporary of any declared property type.
+    /// A concretely typed parameter is accepted only when the property's declared type is
+    /// compatible with it, so the temporary can carry the property's own representation and
+    /// the callee's writes can be stored back.
+    pub(crate) fn property_ref_argument_supported(
+        &mut self,
+        arg: &Expr,
+        param_ty: &PhpType,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        let property_arg = match &arg.kind {
+            ExprKind::PropertyAccess { .. } => arg,
+            ExprKind::ArrayAccess { array, .. } => {
+                let Some(property_arg) = Self::root_property_access(array) else {
+                    return Ok(true);
+                };
+                property_arg
+            }
+            _ => return Ok(true),
+        };
+        let ExprKind::PropertyAccess { object, property } = &property_arg.kind else {
+            return Ok(true);
+        };
+        let Some((class_name, addressable)) =
+            self.ref_property_slot_addressability(object, property, env)?
+        else {
+            return Ok(false);
+        };
+        let Some(info) = self.classes.get(class_name.as_str()) else {
+            return Ok(false);
+        };
+        if !addressable {
+            return Ok(false);
+        }
+        let declared = info.visible_property_is_declared(property);
+        let Some(property_ty) = info
+            .visible_property(property)
+            .map(|(_, (_, ty))| ty.codegen_repr())
+        else {
+            return Ok(false);
+        };
+        let param_ty = param_ty.codegen_repr();
+        if !declared {
+            if matches!(param_ty, PhpType::Mixed | PhpType::Union(_)) {
+                self.reference_property_storage_widenings
+                    .insert((class_name.clone(), property.clone()));
+                // An array ELEMENT binds the property's cell directly rather than using the
+                // boxed-temporary write-back, so the wideneed untyped slot must become a
+                // reference property for `LoadPropRefCell` to resolve.
+                if matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+                    self.reference_property_promotions
+                        .insert((class_name.clone(), property.clone()));
+                }
+                return Ok(true);
+            }
+            return Ok(false);
+        }
+        Ok(matches!(param_ty, PhpType::Mixed | PhpType::Union(_))
+            || Self::types_compatible(&param_ty, &property_ty)
+            || self.type_accepts(&param_ty, &property_ty))
+    }
+
+    /// Widens an untyped property that a BUILTIN receives by reference to boxed `Mixed` storage.
+    ///
+    /// Builtins bypass `property_ref_argument_supported`; `settype($obj->prop, ...)` is the
+    /// common case. Only a `mixed`/union parameter is eligible, and only an untyped slot: a
+    /// declared slot has its own storage contract.
+    pub(crate) fn widen_untyped_builtin_ref_property(
+        &mut self,
+        arg: &Expr,
+        param_ty: &PhpType,
+        env: &TypeEnv,
+    ) -> Result<(), CompileError> {
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else {
+            return Ok(());
+        };
+        if !matches!(
+            param_ty.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return Ok(());
+        }
+        // A native array property is already served by the dedicated array-place path, which
+        // promotes the slot to a reference property without changing its array layout. Widening
+        // it to boxed Mixed here would make the array mutator lowering reject the receiver.
+        let inferred = self.infer_type(arg, env)?;
+        if matches!(
+            inferred.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) || inferred.is_php_array()
+        {
+            return Ok(());
+        }
+        let Some((class_name, addressable)) =
+            self.ref_property_slot_addressability(object, property, env)?
+        else {
+            return Ok(());
+        };
+        let Some(info) = self.classes.get(class_name.as_str()) else {
+            return Ok(());
+        };
+        if addressable && !info.visible_property_is_declared(property) {
+            self.reference_property_storage_widenings
+                .insert((class_name, property.clone()));
+        }
+        Ok(())
+    }
+
+    /// Returns the property access at the root of a possibly nested array-element expression.
+    fn root_property_access<'a>(expr: &'a Expr) -> Option<&'a Expr> {
+        match &expr.kind {
+            ExprKind::PropertyAccess { .. } => Some(expr),
+            ExprKind::ArrayAccess { array, .. } => Self::root_property_access(array),
+            _ => None,
+        }
+    }
+
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
@@ -176,6 +295,9 @@ impl Checker {
             ExprKind::Variable(_) => Ok(true),
             ExprKind::ArrayAccess { array, .. } => {
                 self.is_addressable_ref_array_receiver(array, env)
+            }
+            ExprKind::PropertyAccess { object, property } => {
+                self.is_addressable_ref_property(object, property, env, false, false)
             }
             _ => Ok(false),
         }
@@ -275,7 +397,7 @@ impl Checker {
                 self.is_addressable_ref_array_receiver(array, env)
             }
             ExprKind::PropertyAccess { object, property } if holds_array_storage => {
-                self.is_addressable_ref_property(object, property, env)
+                self.is_addressable_ref_property(object, property, env, true, false)
             }
             _ => Ok(false),
         }
@@ -287,6 +409,8 @@ impl Checker {
         object: &Expr,
         property: &str,
         env: &TypeEnv,
+        promote: bool,
+        require_declared: bool,
     ) -> Result<bool, CompileError> {
         if !self.is_stable_ref_object_receiver(object, env)? {
             return Ok(false);
@@ -298,11 +422,22 @@ impl Checker {
         )? else {
             return Ok(false);
         };
-        if addressable {
+        // The direct-property argument is passed through a boxed temporary and written back
+        // after the call, so its storage (and later direct assignments) is unaffected and it
+        // must NOT become a reference property. Only a DECLARED slot has a storage contract
+        // the write-back can enforce; an untyped slot keeps the pre-existing refusal.
+        //
+        // An ARRAY ELEMENT of a property still binds the property's cell directly, so that
+        // path passes `promote = true` and keeps the reference-property promotion it needs.
+        let declared = self
+            .classes
+            .get(class_name.as_str())
+            .is_some_and(|info| info.visible_property_is_declared(property));
+        if promote && addressable {
             self.reference_property_promotions
                 .insert((class_name, property.to_string()));
         }
-        Ok(addressable)
+        Ok(addressable && (!require_declared || declared))
     }
 
     /// Resolves a stable declared property without changing its storage representation.
@@ -826,7 +961,14 @@ impl Checker {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.
                     self.record_reference_alias_root(arg);
-                    if !self.is_by_ref_argument_lvalue(arg, caller_env)? {
+                    let lvalue = self.is_by_ref_argument_lvalue(arg, caller_env)?;
+                    let param_supports_property = match sig.params.get(param_idx) {
+                        Some((_, ty)) => {
+                            self.property_ref_argument_supported(arg, ty, caller_env)?
+                        }
+                        None => true,
+                    };
+                    if !lvalue || !param_supports_property {
                         let param_name = sig
                             .params
                             .get(param_idx)

@@ -130,7 +130,7 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x10, x11, x9");                                    // bytes already written
     emitter.instruction("str x10, [sp, #8]");                                   // keep the used byte count
     emitter.instruction("add x2, x10, x1");                                     // the capacity this write needs
-    abi::emit_load_symbol_to_reg(emitter, "x12", "_heap_max", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x12", "_heap_limit", 0);
     emitter.instruction("cmp x2, x12");                                         // can the configured heap hold the result at all?
     emitter.instruction("b.hi __rt_strbuf_ensure_too_large");                   // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("lsl x2, x2, #1");                                      // double it so a long output grows a logarithmic number of times
@@ -258,7 +258,7 @@ fn emit_strbuf_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strbuf_reserve_temp ---");
     emitter.label_global("__rt_strbuf_reserve_temp");
-    abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_max", 0);
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_heap_limit", 0);
     emitter.instruction("cmp x0, x9");                                          // can the configured heap hold the result at all?
     emitter.instruction("b.hi __rt_strbuf_reserve_temp_too_large");             // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the reservation
@@ -339,7 +339,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10, rax");                                        // bytes already written
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // keep the used byte count
     emitter.instruction("add rsi, r10");                                        // the capacity this write needs
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_max", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_limit", 0);
     emitter.instruction("cmp rsi, r8");                                         // can the configured heap hold the result at all?
     emitter.instruction("ja __rt_concat_overflow");                             // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("add rsi, rsi");                                        // double it so a long output grows a logarithmic number of times
@@ -462,7 +462,7 @@ fn emit_strbuf_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strbuf_reserve_temp ---");
     emitter.label_global("__rt_strbuf_reserve_temp");
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_max", 0);
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_heap_limit", 0);
     emitter.instruction("cmp rax, r8");                                         // can the configured heap hold the result at all?
     emitter.instruction("ja __rt_concat_overflow");                             // no: PHP's fatal string-capacity error, exit 255
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer and realign the stack

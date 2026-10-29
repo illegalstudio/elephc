@@ -98,6 +98,11 @@ pub(super) fn reflection_class_metadata_for_name(
             reflection_class_is_instantiable(info, is_enum, constructor_member.as_ref());
         let is_cloneable = reflection_class_is_cloneable(class_name, info, is_enum, &ctx.module.class_infos);
         let is_iterable = reflection_class_is_iterable(info, is_enum);
+        // php-src's internal URI classes are readonly (no dynamic properties) even though
+        // elephc declares their methods in a prelude. Reflection must report the engine shape.
+        let internal_readonly = elephc_builtin_contract::INTERNAL_FINAL_CLASSES
+            .iter()
+            .any(|name| class_name.trim_start_matches('\\').eq_ignore_ascii_case(name));
         return Ok(ReflectionOwnerMetadata {
             rendered_to_string: None,
             reflected_name: Some(class_name.to_string()),
@@ -136,7 +141,7 @@ pub(super) fn reflection_class_metadata_for_name(
             is_interface: false,
             is_trait: false,
             is_enum,
-            is_readonly: info.is_readonly_class && !is_enum,
+            is_readonly: (info.is_readonly_class || internal_readonly) && !is_enum,
             is_anonymous: is_reflection_anonymous_class_name(class_name),
             is_instantiable,
             is_cloneable,
@@ -144,7 +149,7 @@ pub(super) fn reflection_class_metadata_for_name(
             modifiers: reflection_class_modifiers(
                 info.is_final,
                 info.is_abstract,
-                info.is_readonly_class,
+                info.is_readonly_class || internal_readonly,
                 is_enum,
             ),
             member_flags: ReflectionMemberFlags::default(),

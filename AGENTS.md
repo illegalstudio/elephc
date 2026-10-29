@@ -187,11 +187,11 @@ bridge.
 
 `--with-<crate>` force-enables a bridge regardless of detection. It force-links
 the staticlib (whole-archived so it is not dead-stripped) and, for crates whose
-PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`), force-injects that
+PHP surface comes from a prelude (`pdo`, `tz`, `image`, `xml`, `uri`), force-injects that
 prelude so the API is declared even when usage was not detected. The flag name is
 the bridge's `flag_name` (`crate_name` minus the `elephc-` prefix): `--with-pdo`,
 `--with-tls`, `--with-crypto`, `--with-iconv`, `--with-phar`, `--with-tz`,
-`--with-image`, `--with-curl`, `--with-xml`.
+`--with-image`, `--with-curl`, `--with-xml`, `--with-uri`.
 `--with-web` is an alias for `--web` (the full server mode, which owns the program
 entry point). An unknown `--with-<name>` is a hard CLI error listing the valid
 crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline

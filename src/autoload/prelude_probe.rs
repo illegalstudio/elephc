@@ -44,6 +44,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("xml", crate::xml_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
+    ("uri", crate::uri_prelude::program_uses_uri),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.

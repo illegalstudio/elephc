@@ -455,6 +455,32 @@ $items[] = "apple";
 echo implode(", ", $bag->items); // apple
 ```
 
+Passing a property to an untyped (`mixed`) or union-typed by-reference parameter reads it
+into a boxed temporary and writes the value back after the call. An untyped property is
+widened to boxed `Mixed` storage for the call, matching PHP's untyped semantics. The declared property type is enforced on that write-back, so
+an incompatible value raises PHP's `Cannot assign … to reference held by property …`
+`TypeError` and the property keeps its previous value:
+
+```php
+<?php
+class Box { public string $text = "old"; }
+function replace(mixed &$slot) { $slot = ["not", "text"]; }
+$box = new Box();
+try {
+    replace($box->text);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo $box->text; // old
+```
+
+A concretely typed parameter is also supported when the property's declared type is
+compatible with it, for example `int $value` passed to `int &$slot` or an array property
+passed to `array &$items`. An incompatible combination (for example a `string` property
+passed to `int &$slot`) keeps the compile-time `must be passed a variable` refusal. Array elements
+of untyped properties are widened and promoted the same way, so `bump($box->items[0])`
+writes through to the property array.
+
 Aliasing works for any declared property type, including `string` and `float`. Reassigning
 an array alias to a differently-typed literal keeps the property readable, because the new
 elements are converted to match the property's element type:

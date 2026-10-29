@@ -38,6 +38,7 @@ env:
     -p elephc-crypto
     -p elephc-bcmath
     -p elephc-random
+    -p elephc-uri
     -p elephc-mbstring
     -p elephc-iconv
     -p elephc-phar
@@ -2305,6 +2306,37 @@ jobs:
             "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
             "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
 
+  uri-ios-compile-link:
+    name: URI iOS Compile & Link (${{ matrix.elephc_target }})
+    needs: plan
+    if: needs.plan.outputs.extended == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elephc_target: ios-arm64
+            rust_target: aarch64-apple-ios
+            sdk: iphoneos
+            clang_target: arm64-apple-ios13.0
+          - elephc_target: ios-sim-arm64
+            rust_target: aarch64-apple-ios-sim
+            sdk: iphonesimulator
+            clang_target: arm64-apple-ios13.0-simulator
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust with the iOS standard library
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust_target }}
+      - name: Compile and link the URI bridge
+        run: |
+          bash scripts/ci/test_ios_uri_link.sh \
+            "${{ matrix.elephc_target }}" "${{ matrix.rust_target }}" \
+            "${{ matrix.sdk }}" "${{ matrix.clang_target }}"
+
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Run each
   # deterministic shard in one libtest process so runtime-object and bridge caches
@@ -3133,6 +3165,7 @@ jobs:
       - xml-ios-compile-link
       - fileinfo-ios-compile-link
       - tokenizer-ios-compile-link
+      - uri-ios-compile-link
       - eval-codegen-tests-macos-aarch64
       - eval-codegen-tests-linux-x86_64
       - eval-codegen-tests-linux-aarch64
@@ -3184,7 +3217,7 @@ jobs:
           extended_tier="non-codegen-tests-macos-aarch64 cli-tests-macos-aarch64
             web-tests-macos-aarch64 codegen-tests-macos-aarch64 pdo-codegen-tests-macos-aarch64
             curl-native-macos-aarch64 curl-codegen-tests-macos-aarch64
-            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link"
+            eval-codegen-tests-macos-aarch64 curl-ios-compile-link xml-ios-compile-link fileinfo-ios-compile-link tokenizer-ios-compile-link uri-ios-compile-link"
           in_list() { case " $(echo $2) " in *" $1 "*) return 0 ;; esac; return 1; }
           echo "tiers: run=$RUN_TIER extended=$EXTENDED_TIER"
           status=0

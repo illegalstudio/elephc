@@ -504,3 +504,32 @@ use super::*;
         assert!(competing.path.exists(), "competing active runtime object was pruned");
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// Verifies `_heap_limit` participates in cache identity even when the reservation is unchanged.
+    #[test]
+    fn runtime_cache_key_covers_compile_memory_limit() {
+        let target = Target::detect_host();
+        let build = b"same-emitter";
+        let unlimited = runtime_cache_key_with_build_identity(
+            128 * 1024 * 1024,
+            target,
+            80_500,
+            RuntimeFeatures::none(),
+            false,
+            build,
+        );
+        crate::codegen_support::set_ini_overrides(vec![(
+            "memory_limit".to_string(),
+            "8M".to_string(),
+        )]);
+        let limited = runtime_cache_key_with_build_identity(
+            128 * 1024 * 1024,
+            target,
+            80_500,
+            RuntimeFeatures::none(),
+            false,
+            build,
+        );
+        crate::codegen_support::set_ini_overrides(Vec::new());
+        assert_ne!(unlimited, limited, "a different runtime ceiling must not reuse a cached object");
+    }

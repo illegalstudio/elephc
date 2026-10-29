@@ -452,3 +452,188 @@ echo $copy[0], ":", $copy[1], "\n";
 "#);
     assert_eq!(out, "9:9\nupdated:updated\nnull:null\n1:2\n");
 }
+
+/// A declared property passed to a `mixed` by-reference parameter is validated against its
+/// declared type after the call: an incompatible write raises PHP's reference-held `TypeError`
+/// and leaves the property unchanged, while a compatible write is stored back.
+#[test]
+fn test_by_reference_typed_property_write_is_validated() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedPropertyReference { public string $value = "old"; }
+function write_array(mixed &$slot): void { $slot = ["new"]; }
+function write_string(mixed &$slot): void { $slot = "new"; }
+$object = new TypedPropertyReference();
+try {
+    write_array($object->value);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $object->value, "\n";
+write_string($object->value);
+echo $object->value, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property TypedPropertyReference::$value of type string\nold\nnew\n"
+    );
+}
+
+/// A by-reference array element of a declared property still binds the property's reference
+/// cell: the callee replaces the element in place.
+#[test]
+fn test_by_reference_property_array_element_writes_through() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceArrayBox { public array $items = [1]; }
+function replace_element(mixed &$slot): void { $slot = 99; }
+$box = new ReferenceArrayBox();
+replace_element($box->items[0]);
+var_dump($box->items);
+"#,
+    );
+    assert_eq!(out, "array(1) {\n  [0]=>\n  int(99)\n}\n");
+}
+
+/// Nested and nullable property receivers resolve to a single declared property, so the
+/// boxed-temporary write-back reaches them instead of dropping the callee's write.
+#[test]
+fn test_by_reference_nested_and_nullable_property_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceInner { public string $value = "inner"; }
+class ReferenceOuter { public ReferenceInner $inner; public function __construct() { $this->inner = new ReferenceInner(); } }
+function replace_text(mixed &$slot): void { $slot = "changed"; }
+$outer = new ReferenceOuter();
+replace_text($outer->inner->value);
+echo $outer->inner->value, "\n";
+function replace_nullable(?ReferenceInner $inner): void {
+    replace_text($inner->value);
+    echo $inner->value, "\n";
+}
+replace_nullable(new ReferenceInner());
+"#,
+    );
+    assert_eq!(out, "changed\nchanged\n");
+}
+
+/// The reference-held diagnostic names the class that DECLARES the property, not the
+/// receiver's subclass.
+#[test]
+fn test_by_reference_typed_property_names_declaring_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceBase { public string $value = "base"; }
+class ReferenceSubclass extends ReferenceBase {}
+function replace_with_array(mixed &$slot): void { $slot = []; }
+$value = new ReferenceSubclass();
+try {
+    replace_with_array($value->value);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+echo $value->value, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property ReferenceBase::$value of type string\nbase\n"
+    );
+}
+
+/// Under `strict_types=1`, a typed property's reference write-back rejects a value PHP's
+/// strict property typing refuses instead of weakly coercing it.
+#[test]
+fn test_by_reference_typed_property_write_back_respects_strict_types() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+class StrictReference { public int $number = 0; }
+function replace_with_float(mixed &$slot): void { $slot = 5.5; }
+$value = new StrictReference();
+try {
+    replace_with_float($value->number);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+var_dump($value->number);
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign float to reference held by property StrictReference::$number of type int\nint(0)\n"
+    );
+}
+
+/// A declared property of a concrete scalar or array type binds a by-reference parameter of
+/// the same type through a temporary and publishes the callee's mutation back.
+#[test]
+fn test_by_reference_concretely_typed_property_parameter_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class TypedReferenceBox { public int $number = 1; public string $text = "a"; public array $items = [1]; }
+function increment_reference(int &$number): void { $number++; }
+function extend_reference(string &$text): void { $text .= "!"; }
+function append_reference(array &$items): void { $items[] = 2; }
+$box = new TypedReferenceBox();
+increment_reference($box->number);
+extend_reference($box->text);
+append_reference($box->items);
+var_dump($box->number, $box->text, $box->items);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(2)\n",
+            "string(2) \"a!\"\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+        )
+    );
+}
+
+/// An untyped property is widened to boxed Mixed storage when passed by reference: a user
+/// function and a re-typing builtin both write through the temporary back into the slot.
+#[test]
+fn test_by_reference_untyped_property_widens_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedReference { public $text = "x"; public $missing; }
+function set_text(mixed &$slot): void { $slot = "42"; }
+$box = new UntypedReference();
+set_text($box->text);
+var_dump($box->text);
+settype($box->text, "int");
+var_dump($box->text);
+set_text($box->missing);
+var_dump($box->missing);
+"#,
+    );
+    assert_eq!(out, "string(2) \"42\"\nint(42)\nstring(2) \"42\"\n");
+}
+
+/// An untyped property's array element can also be passed by reference: the property is
+/// widened and promoted so the element cell is published back into the property array.
+#[test]
+fn test_by_reference_untyped_property_array_element_write_back() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedArrayReference { public $items = [1, 2]; public $missing; }
+function bump_element(mixed &$element): void { $element = 99; }
+$box = new UntypedArrayReference();
+bump_element($box->items[0]);
+var_dump($box->items);
+$box->missing = [7];
+bump_element($box->missing[0]);
+var_dump($box->missing);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [0]=>\n  int(99)\n  [1]=>\n  int(2)\n}\n",
+            "array(1) {\n  [0]=>\n  int(99)\n}\n",
+        )
+    );
+}

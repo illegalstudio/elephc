@@ -146,7 +146,7 @@ fn lower_method_call_with_binding(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, None, object, args, expr);
     }
     let magic_args;
     let (dispatch_method, args) =
@@ -174,6 +174,7 @@ fn lower_method_call_with_binding(
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
     let mut operands = vec![object.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let enum_args = singular_object_class(&ctx.builder.value_php_type(object.value))
         .and_then(|(class, _)| ctx.enums.contains_key(class).then(|| class.to_string()))
@@ -213,6 +214,11 @@ fn lower_method_call_with_binding(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &arg_values,

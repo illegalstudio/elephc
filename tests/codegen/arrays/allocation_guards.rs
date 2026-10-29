@@ -153,7 +153,7 @@ fn test_large_but_representable_allocation_still_reports_heap_exhaustion() {
     let err = compile_and_run_expect_failure(
         "<?php $a = array_fill(0, 1000000000, 7); echo count($a);",
     );
-    assert!(err.contains("heap memory exhausted"), "{}", err);
+    assert!(err.contains("Allowed memory size of"), "{}", err);
 }
 
 /// Verifies the linux-x86_64 runtime carries the same `__rt_array_new` size guard as the ARM64

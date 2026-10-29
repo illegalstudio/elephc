@@ -2,7 +2,7 @@
 title: "_imagick_fmt_from_path() - internals"
 description: "Compiler internals for _imagick_fmt_from_path(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1224
+  order: 1225
 ---
 
 ## `_imagick_fmt_from_path()` - internals

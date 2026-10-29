@@ -4379,6 +4379,168 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\InvalidUriException",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\Rfc3986\\Uri",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "enum",
+      "module": "uri",
+      "name": "Uri\\UriComparisonMode",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\UriError",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\UriException",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\WhatWg\\InvalidUrlException",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\WhatWg\\Url",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "uri",
+      "name": "Uri\\WhatWg\\UrlValidationError",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "enum",
+      "module": "uri",
+      "name": "Uri\\WhatWg\\UrlValidationErrorType",
+      "php_manual": null,
+      "since": "8.5"
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },

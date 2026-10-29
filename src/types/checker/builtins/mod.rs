@@ -248,6 +248,9 @@ impl Checker {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    if let Some((_, param_ty)) = def.params.get(index) {
+                        self.widen_untyped_builtin_ref_property(arg, param_ty, env)?;
+                    }
                     continue;
                 }
                 let param_name = def

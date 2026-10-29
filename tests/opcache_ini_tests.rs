@@ -38,9 +38,11 @@ static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 const OPCACHE_DIRECTIVE_COUNT: usize = 54;
 
 /// Shared Core and mbstring rows join the existing opcache rows in unfiltered enumeration.
+/// `memory_limit` is the one dynamic Core row, added by the shared `ini_get_all()` wrapper.
 const ALL_DIRECTIVE_COUNT: usize = OPCACHE_DIRECTIVE_COUNT
     + elephc_builtin_contract::mbstring_abi::ini::core::DIRECTIVES.len()
-    + elephc_builtin_contract::mbstring_abi::ini::catalog::DIRECTIVES.len();
+    + elephc_builtin_contract::mbstring_abi::ini::catalog::DIRECTIVES.len()
+    + 1;
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {

@@ -1280,6 +1280,7 @@ pub(crate) fn cli_ini_get_decl() -> Stmt {
         .returns(t_union(vec![TypeExpr::Str, TypeExpr::False]))
         .body(vec![
             crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_GET),
+            crate::shared_ini_prelude::memory_limit_get(),
             s_assign(
                 "__elephc_oc",
                 e_call("__elephc_opcache_ini_string", vec![e_var("option")]),
@@ -1337,9 +1338,10 @@ pub(crate) const INI_SETTABLE_DIRECTIVES: [(&str, i64, bool); 3] = [
 /// The shared Core/mbstring settings are routed first, as on main (`shared_ini_prelude`); they
 /// share no name with the `opcache.*` arms, and every compiled-in `opcache.*` key still fails.
 pub(crate) fn cli_ini_set_decl() -> Stmt {
-    let mut body = vec![crate::shared_ini_prelude::directive(
-        elephc_builtin_contract::mbstring_abi::ini::INI_SET,
-    )];
+    let mut body = vec![
+        crate::shared_ini_prelude::directive(elephc_builtin_contract::mbstring_abi::ini::INI_SET),
+        crate::shared_ini_prelude::memory_limit_set(false),
+    ];
     body.extend(opcache_ini_set_arms());
     body.push(s_return(e_bool(false)));
     function("ini_set")
@@ -1892,6 +1894,7 @@ pub(crate) fn env_override_helper_decls() -> Program {
             ])
             .build(),
         ini_quantity_decl(),
+        ini_uquantity_decl(),
         function("__elephc_ini_atoi")
             .param("v", TypeExpr::Str)
             .returns(TypeExpr::Int)
@@ -2168,13 +2171,13 @@ fn typed_env_helper(name: &str, ty: TypeExpr, normalize: Expr) -> Stmt {
         .build()
 }
 
-/// `__elephc_ini_quantity(string $v): int` — the PHP mirror of `zend_ini_parse_quantity`:
-/// trim, optional sign, optional `0x`/`0b`/`0` radix prefix, digits, then a `k`/`m`/`g` suffix.
+/// `__elephc_ini_quantity(string $v): int` — the SIGNED PHP mirror of `zend_ini_parse_quantity`
+/// used by the `opcache.*` integer directives: trim, optional sign, optional `0x`/`0b`/`0`
+/// radix prefix, digits, then a `k`/`m`/`g` suffix.
 ///
-/// It accumulates in PHP integers where the Rust side carries a `u128` (so it cannot reproduce
-/// `strtoul`'s ULONG_MAX-on-overflow result), and it does not carry the quantity DIAGNOSTICS —
-/// `ini_override_warnings` emits those at compile time. Both are unreachable for a real
-/// directive value and documented rather than modelled.
+/// It accumulates in PHP integers and does not carry diagnostics — `ini_override_warnings`
+/// emits those at compile time. `memory_limit` uses the unsigned `__elephc_ini_uquantity`
+/// below, which models the u64 result and the runtime diagnostics exactly.
 fn ini_quantity_decl() -> Stmt {
     /// `substr($v, <at>, 1)` — the one-character read this whole function is written in terms of.
     fn char_at(at: Expr) -> Expr {
@@ -2307,6 +2310,7 @@ fn ini_quantity_decl() -> Stmt {
                 None,
             ),
             s_assign("acc", e_int(0)),
+            s_assign("overflow", e_bool(false)),
             s_while(
                 e_binop(e_var("i"), BinOp::Lt, e_var("e")),
                 vec![
@@ -2323,16 +2327,55 @@ fn ini_quantity_decl() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign(
-                        "acc",
-                        e_binop(
-                            e_binop(e_var("acc"), BinOp::Mul, e_var("radix")),
-                            BinOp::Add,
-                            e_var("d"),
-                        ),
+                    // Detect a magnitude the signed accumulator cannot hold BEFORE the
+                    // multiplication promotes to float. php-src reports the u64 overflow
+                    // result (-1) and keeps scanning the remaining digits.
+                    s_if(
+                        e_not(e_var("overflow")),
+                        vec![s_if(
+                            e_binop(
+                                e_var("acc"),
+                                BinOp::Gt,
+                                e_call(
+                                    "intdiv",
+                                    vec![
+                                        e_binop(
+                                            e_int(i64::MAX),
+                                            BinOp::Sub,
+                                            e_var("d"),
+                                        ),
+                                        e_var("radix"),
+                                    ],
+                                ),
+                            ),
+                            vec![s_assign("overflow", e_bool(true))],
+                            vec![],
+                            None,
+                        )],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_not(e_var("overflow")),
+                        vec![s_assign(
+                            "acc",
+                            e_binop(
+                                e_binop(e_var("acc"), BinOp::Mul, e_var("radix")),
+                                BinOp::Add,
+                                e_var("d"),
+                            ),
+                        )],
+                        vec![],
+                        None,
                     ),
                     s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(1))),
                 ],
+            ),
+            s_if(
+                e_var("overflow"),
+                vec![s_return(e_neg(e_int(1)))],
+                vec![],
+                None,
             ),
             s_if(
                 e_var("neg"),
@@ -2357,6 +2400,555 @@ fn ini_quantity_decl() -> Stmt {
             multiplier_suffix("m", 1_048_576),
             multiplier_suffix("g", 1_073_741_824),
             s_return(e_var("acc")),
+        ])
+        .build()
+}
+
+/// `__elephc_ini_uquantity(string $v, ?string &$diag = null): int` — the PHP mirror of
+/// `zend_ini_parse_uquantity_warn`, the parser `memory_limit` actually uses.
+///
+/// `memory_limit` parses through the UNSIGNED variant: the digits are a `size_t`, `-1` is the
+/// special unlimited spelling, any other negative value keeps its magnitude and carries the
+/// out-of-range diagnostic, and the `k`/`m`/`g` factor is applied modulo 2^64. Values at or above
+/// `2^63` are returned as `-1` (effectively unlimited for the fixed arena) because a PHP `int`
+/// cannot represent them; the diagnostic still reflects the exact u64 result.
+fn ini_uquantity_decl() -> Stmt {
+    /// `substr($v, <at>, 1)` — one byte of the raw value.
+    fn char_at(at: Expr) -> Expr {
+        e_call("substr", vec![e_var("v"), at, e_int(1)])
+    }
+
+    /// Concatenates message parts left-to-right.
+    fn text(parts: Vec<Expr>) -> Expr {
+        parts
+            .into_iter()
+            .reduce(|left, right| e_binop(left, BinOp::Concat, right))
+            .expect("a diagnostic always carries text")
+    }
+
+    /// `Invalid quantity "<v>"` without the trailing explanation.
+    fn quantity_prefix() -> Expr {
+        text(vec![e_str("Invalid quantity \""), e_var("v"), e_str("\"")])
+    }
+
+    /// Sets `$diag` for an invalid `0<character>` prefix.
+    fn invalid_prefix(character: Expr) -> Vec<Stmt> {
+        vec![
+            s_assign(
+                "diag",
+                text(vec![
+                    e_str("Invalid prefix \"0"),
+                    character,
+                    e_str("\", interpreting as \"0\" for backwards compatibility"),
+                ]),
+            ),
+            s_return(e_array(vec![e_int(0), e_var("diag")])),
+        ]
+    }
+
+    /// Sets `$diag` and returns 0 for a no-leading-digits / no-base-prefix value.
+    fn no_digits(message: &str) -> Vec<Stmt> {
+        vec![
+            s_assign(
+                "diag",
+                text(vec![
+                    quantity_prefix(),
+                    e_str(&format!(
+                        ": {message}, interpreting as \"0\" for backwards compatibility"
+                    )),
+                ]),
+            ),
+            s_return(e_array(vec![e_int(0), e_var("diag")])),
+        ]
+    }
+
+    /// The out-of-range body.
+    fn overflow_diag() -> Expr {
+        text(vec![
+            quantity_prefix(),
+            e_str(": value is out of range, using overflow result for backwards compatibility"),
+        ])
+    }
+
+    /// The trailing-data body (no colon after the raw value).
+    fn trailing_diag() -> Expr {
+        text(vec![
+            quantity_prefix(),
+            e_str(", interpreting as \""),
+            e_var("prefix"),
+            e_var("raw_last"),
+            e_str("\" for backwards compatibility"),
+        ])
+    }
+
+    /// The unknown-multiplier body.
+    fn unknown_diag() -> Expr {
+        text(vec![
+            quantity_prefix(),
+            e_str(": unknown multiplier \""),
+            e_var("raw_last"),
+            e_str("\", interpreting as \""),
+            e_var("prefix"),
+            e_str("\" for backwards compatibility"),
+        ])
+    }
+
+    /// The parsed value as a PHP int: values at or above 2^63 collapse to `-1` because the
+    /// fixed arena treats them as unlimited and a PHP int cannot represent them.
+    fn unsigned_value() -> Expr {
+        e_ternary(
+            e_binop(e_var("hi"), BinOp::GtEq, e_int(HALF)),
+            e_neg(e_int(1)),
+            e_binop(
+                e_binop(e_var("hi"), BinOp::Mul, e_int(LIMB)),
+                BinOp::Add,
+                e_var("lo"),
+            ),
+        )
+    }
+
+    // 2^32 and 2^31, the limb radix and the u64 sign bit.
+    const LIMB: i64 = 4_294_967_296;
+    const HALF: i64 = 2_147_483_648;
+
+    function("__elephc_ini_uquantity")
+        .param("v", TypeExpr::Str)
+        .returns(t_array())
+        .body(vec![
+            s_assign("diag", e_str("")),
+            s_assign("n", e_call("strlen", vec![e_var("v")])),
+            s_if(
+                e_binop(e_var("n"), BinOp::StrictEq, e_int(0)),
+                vec![s_return(e_array(vec![e_int(0), e_var("diag")]))],
+                vec![],
+                None,
+            ),
+            // Trim to the half-open span [$s, $e).
+            s_assign("s", e_int(0)),
+            s_while(
+                e_binop(
+                    e_binop(e_var("s"), BinOp::Lt, e_var("n")),
+                    BinOp::And,
+                    e_call("__elephc_ini_isspace", vec![char_at(e_var("s"))]),
+                ),
+                vec![s_assign("s", e_binop(e_var("s"), BinOp::Add, e_int(1)))],
+            ),
+            s_assign("e", e_var("n")),
+            s_while(
+                e_binop(
+                    e_binop(e_var("e"), BinOp::Gt, e_var("s")),
+                    BinOp::And,
+                    e_call(
+                        "__elephc_ini_isspace",
+                        vec![char_at(e_binop(e_var("e"), BinOp::Sub, e_int(1)))],
+                    ),
+                ),
+                vec![s_assign("e", e_binop(e_var("e"), BinOp::Sub, e_int(1)))],
+            ),
+            s_if(
+                e_binop(e_var("s"), BinOp::GtEq, e_var("e")),
+                vec![s_return(e_array(vec![e_int(0), e_var("diag")]))],
+                vec![],
+                None,
+            ),
+            s_assign(
+                "neg",
+                e_binop(char_at(e_var("s")), BinOp::StrictEq, e_str("-")),
+            ),
+            s_assign("i", e_var("s")),
+            s_assign("c", char_at(e_var("i"))),
+            s_if(
+                e_binop(
+                    e_binop(e_var("c"), BinOp::StrictEq, e_str("-")),
+                    BinOp::Or,
+                    e_binop(e_var("c"), BinOp::StrictEq, e_str("+")),
+                ),
+                vec![s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(1)))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_var("i"), BinOp::GtEq, e_var("e")),
+                no_digits("no valid leading digits"),
+                vec![],
+                None,
+            ),
+            s_assign("o", e_call("ord", vec![char_at(e_var("i"))])),
+            s_if(
+                e_binop(
+                    e_binop(e_var("o"), BinOp::Lt, e_int(48)),
+                    BinOp::Or,
+                    e_binop(e_var("o"), BinOp::Gt, e_int(57)),
+                ),
+                no_digits("no valid leading digits"),
+                vec![],
+                None,
+            ),
+            // A leading zero selects octal; `0x`/`0o`/`0b` override it. A non-digit,
+            // non-prefix character after the zero is php-src's "Invalid prefix" case.
+            s_assign("radix", e_int(10)),
+            s_if(
+                e_binop(e_var("o"), BinOp::StrictEq, e_int(48)),
+                vec![
+                    s_assign("radix", e_int(8)),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("i"), BinOp::Add, e_int(1)),
+                            BinOp::Lt,
+                            e_var("e"),
+                        ),
+                        vec![
+                            s_assign(
+                                "p",
+                                e_call(
+                                    "strtolower",
+                                    vec![char_at(e_binop(
+                                        e_var("i"),
+                                        BinOp::Add,
+                                        e_int(1),
+                                    ))],
+                                ),
+                            ),
+                            s_if(
+                                e_binop(e_var("p"), BinOp::StrictEq, e_str("x")),
+                                vec![
+                                    s_assign("radix", e_int(16)),
+                                    s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(2))),
+                                ],
+                                vec![],
+                                Some(vec![s_if(
+                                    e_binop(e_var("p"), BinOp::StrictEq, e_str("o")),
+                                    vec![
+                                        s_assign("radix", e_int(8)),
+                                        s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(2))),
+                                    ],
+                                    vec![],
+                                    Some(vec![s_if(
+                                        e_binop(e_var("p"), BinOp::StrictEq, e_str("b")),
+                                        vec![
+                                            s_assign("radix", e_int(2)),
+                                            s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(2))),
+                                        ],
+                                        vec![],
+                                        Some(vec![s_if(
+                                            e_binop(
+                                                e_call(
+                                                    "__elephc_ini_digit",
+                                                    vec![e_var("p"), e_int(10)],
+                                                ),
+                                                BinOp::Lt,
+                                                e_int(0),
+                                            ),
+                                            invalid_prefix(char_at(e_binop(
+                                                e_var("i"),
+                                                BinOp::Add,
+                                                e_int(1),
+                                            ))),
+                                            vec![],
+                                            None,
+                                        )]),
+                                    )]),
+                                )]),
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_var("i"), BinOp::GtEq, e_var("e")),
+                no_digits("no digits after base prefix"),
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call(
+                        "__elephc_ini_digit",
+                        vec![char_at(e_var("i")), e_var("radix")],
+                    ),
+                    BinOp::Lt,
+                    e_int(0),
+                ),
+                no_digits("no valid leading digits"),
+                vec![],
+                None,
+            ),
+            // -- accumulate the unsigned magnitude in two 32-bit limbs --
+            s_assign("lo", e_int(0)),
+            s_assign("hi", e_int(0)),
+            s_assign("top", e_int(0)),
+            s_while(
+                e_binop(e_var("i"), BinOp::Lt, e_var("e")),
+                vec![
+                    s_assign(
+                        "d",
+                        e_call(
+                            "__elephc_ini_digit",
+                            vec![char_at(e_var("i")), e_var("radix")],
+                        ),
+                    ),
+                    s_if(
+                        e_binop(e_var("d"), BinOp::Lt, e_int(0)),
+                        vec![s_break(1)],
+                        vec![],
+                        None,
+                    ),
+                    s_assign(
+                        "lo",
+                        e_binop(
+                            e_binop(e_var("lo"), BinOp::Mul, e_var("radix")),
+                            BinOp::Add,
+                            e_var("d"),
+                        ),
+                    ),
+                    s_assign(
+                        "carry",
+                        e_call("intdiv", vec![e_var("lo"), e_int(LIMB)]),
+                    ),
+                    s_assign(
+                        "lo",
+                        e_binop(
+                            e_var("lo"),
+                            BinOp::Sub,
+                            e_binop(e_var("carry"), BinOp::Mul, e_int(LIMB)),
+                        ),
+                    ),
+                    s_assign(
+                        "hi",
+                        e_binop(
+                            e_binop(e_var("hi"), BinOp::Mul, e_var("radix")),
+                            BinOp::Add,
+                            e_var("carry"),
+                        ),
+                    ),
+                    s_assign(
+                        "carry",
+                        e_call("intdiv", vec![e_var("hi"), e_int(LIMB)]),
+                    ),
+                    s_assign(
+                        "hi",
+                        e_binop(
+                            e_var("hi"),
+                            BinOp::Sub,
+                            e_binop(e_var("carry"), BinOp::Mul, e_int(LIMB)),
+                        ),
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("top"), BinOp::StrictNotEq, e_int(0)),
+                            BinOp::Or,
+                            e_binop(e_var("carry"), BinOp::StrictNotEq, e_int(0)),
+                        ),
+                        vec![s_assign("top", e_int(1))],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(1))),
+                ],
+            ),
+            // -- suffix classification --
+            s_assign("prefix", e_str("")),
+            s_assign("raw_last", e_str("")),
+            s_assign("shift", e_int(0)),
+            s_assign("trailing", e_bool(false)),
+            s_assign("unknown", e_bool(false)),
+            s_if(
+                e_binop(e_var("i"), BinOp::Lt, e_var("e")),
+                vec![
+                    s_assign("suffix", e_var("i")),
+                    s_while(
+                        e_binop(
+                            e_binop(e_var("suffix"), BinOp::Lt, e_var("e")),
+                            BinOp::And,
+                            e_call(
+                                "__elephc_ini_isspace",
+                                vec![char_at(e_var("suffix"))],
+                            ),
+                        ),
+                        vec![s_assign(
+                            "suffix",
+                            e_binop(e_var("suffix"), BinOp::Add, e_int(1)),
+                        )],
+                    ),
+                    s_assign(
+                        "prefix",
+                        e_call(
+                            "substr",
+                            vec![e_var("v"), e_int(0), e_var("suffix")],
+                        ),
+                    ),
+                    s_assign(
+                        "raw_last",
+                        char_at(e_binop(e_var("e"), BinOp::Sub, e_int(1))),
+                    ),
+                    s_assign("last", e_call("strtolower", vec![e_var("raw_last")])),
+                    s_if(
+                        e_binop(e_var("last"), BinOp::StrictEq, e_str("k")),
+                        vec![s_assign("shift", e_int(10))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("last"), BinOp::StrictEq, e_str("m")),
+                        vec![s_assign("shift", e_int(20))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("last"), BinOp::StrictEq, e_str("g")),
+                        vec![s_assign("shift", e_int(30))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(
+                                e_binop(e_var("last"), BinOp::StrictEq, e_str("k")),
+                                BinOp::Or,
+                                e_binop(e_var("last"), BinOp::StrictEq, e_str("m")),
+                            ),
+                            BinOp::Or,
+                            e_binop(e_var("last"), BinOp::StrictEq, e_str("g")),
+                        ),
+                        vec![s_if(
+                            e_binop(
+                                e_var("suffix"),
+                                BinOp::Lt,
+                                e_binop(e_var("e"), BinOp::Sub, e_int(1)),
+                            ),
+                            vec![s_assign("trailing", e_bool(true))],
+                            vec![],
+                            None,
+                        )],
+                        vec![],
+                        Some(vec![s_assign("unknown", e_bool(true))]),
+                    ),
+                ],
+                vec![],
+                None,
+            ),
+            // -- ERANGE and the unsigned negative rules --
+            s_assign("overflow", e_binop(e_var("top"), BinOp::StrictNotEq, e_int(0))),
+            s_if(
+                e_var("overflow"),
+                vec![
+                    s_assign("lo", e_int(LIMB - 1)),
+                    s_assign("hi", e_int(LIMB - 1)),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_var("neg"),
+                    BinOp::And,
+                    e_binop(
+                        e_binop(
+                            e_binop(e_var("hi"), BinOp::StrictEq, e_int(0)),
+                            BinOp::And,
+                            e_binop(e_var("lo"), BinOp::StrictEq, e_int(1)),
+                        ),
+                        BinOp::And,
+                        e_binop(e_var("i"), BinOp::StrictEq, e_var("e")),
+                    ),
+                ),
+                vec![
+                    s_assign("lo", e_int(LIMB - 1)),
+                    s_assign("hi", e_int(LIMB - 1)),
+                ],
+                vec![],
+                Some(vec![s_if(
+                    e_var("neg"),
+                    vec![s_assign("overflow", e_bool(true))],
+                    vec![],
+                    None,
+                )]),
+            ),
+            // An unknown suffix returns before the factor is applied and before the overflow
+            // check, exactly like php-src's switch default.
+            s_if(
+                e_var("unknown"),
+                vec![
+                    s_assign("diag", unknown_diag()),
+                    s_return(e_array(vec![unsigned_value(), e_var("diag")])),
+                ],
+                vec![],
+                None,
+            ),
+            // -- apply the k/m/g factor modulo 2^64, with the unsigned overflow check --
+            s_if(
+                e_binop(e_var("shift"), BinOp::StrictNotEq, e_int(0)),
+                vec![
+                    s_if(
+                        e_binop(
+                            e_var("overflow"),
+                            BinOp::StrictEq,
+                            e_bool(false),
+                        ),
+                        vec![s_if(
+                            e_binop(
+                                e_binop(e_var("hi"), BinOp::ShiftRight, e_binop(e_int(32), BinOp::Sub, e_var("shift"))),
+                                BinOp::StrictNotEq,
+                                e_int(0),
+                            ),
+                            vec![s_assign("overflow", e_bool(true))],
+                            vec![],
+                            None,
+                        )],
+                        vec![],
+                        None,
+                    ),
+                    s_assign(
+                        "slo",
+                        e_binop(
+                            e_binop(e_var("lo"), BinOp::ShiftLeft, e_var("shift")),
+                            BinOp::BitAnd,
+                            e_int(LIMB - 1),
+                        ),
+                    ),
+                    s_assign(
+                        "shi",
+                        e_binop(
+                            e_binop(
+                                e_binop(e_var("hi"), BinOp::ShiftLeft, e_var("shift")),
+                                BinOp::BitOr,
+                                e_binop(
+                                    e_var("lo"),
+                                    BinOp::ShiftRight,
+                                    e_binop(e_int(32), BinOp::Sub, e_var("shift")),
+                                ),
+                            ),
+                            BinOp::BitAnd,
+                            e_int(LIMB - 1),
+                        ),
+                    ),
+                    s_assign("lo", e_var("slo")),
+                    s_assign("hi", e_var("shi")),
+                ],
+                vec![],
+                None,
+            ),
+            // Trailing data also returns before the overflow diagnostic.
+            s_if(
+                e_var("trailing"),
+                vec![
+                    s_assign("diag", trailing_diag()),
+                    s_return(e_array(vec![unsigned_value(), e_var("diag")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_var("overflow"),
+                vec![s_assign("diag", overflow_diag())],
+                vec![],
+                None,
+            ),
+            s_return(e_array(vec![unsigned_value(), e_var("diag")])),
         ])
         .build()
 }

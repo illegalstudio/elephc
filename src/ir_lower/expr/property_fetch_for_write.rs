@@ -341,6 +341,14 @@ fn property_is_splittable_container_slot(
     } else {
         slot_ty.is_php_array()
             || matches!(slot_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+            // An untyped property widened to boxed storage for a by-reference array element
+            // is a reference slot that holds a PHP array zval despite its Mixed representation.
+            || (slot_ty.codegen_repr() == PhpType::Mixed
+                && class_info
+                    .visible_property(property)
+                    .is_some_and(|(index, (name, _))| {
+                        class_info.property_slot_is_reference(index, name)
+                    }))
     }
 }
 

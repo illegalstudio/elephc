@@ -67,15 +67,15 @@ fn test_nested_spread_literal_merges_type_in_linear_time() {
     );
 }
 
-/// Direct scalar property references need writeback support distinct from nested array origins.
+/// A static property passed directly to a by-reference parameter keeps the
+/// "must be passed a variable" refusal. Instance properties take the copy-in/copy-out path
+/// covered by `codegen::references::test_by_reference_untyped_property_widens_storage`.
 #[test]
-fn test_error_by_ref_argument_rejects_direct_property_storage() {
-    for source in [
-        "<?php function setv(mixed &$value): void {} class Box { public mixed $value = 1; } $box = new Box(); setv($box->value);",
+fn test_error_by_ref_argument_rejects_direct_static_property_storage() {
+    expect_error(
         "<?php function setv(mixed &$value): void {} class Box { public static mixed $value = 1; } setv(Box::$value);",
-    ] {
-        expect_error(source, "must be passed a variable");
-    }
+        "must be passed a variable",
+    );
 }
 
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.

@@ -417,6 +417,13 @@ pub(crate) struct Checker {
     /// checking bodies and applied to `classes` after checking so every access lowers
     /// through the property's ref-cell. See `apply_reference_property_promotions`.
     pub reference_property_promotions: HashSet<(String, String)>,
+    /// Untyped properties that a by-reference call argument needs in boxed `Mixed` storage.
+    ///
+    /// PHP treats an untyped property as `mixed`; elephc infers a narrow storage type from its
+    /// default. Passing it to an untyped by-reference parameter would otherwise write a boxed
+    /// temporary back into that narrow slot. Recorded while checking and applied to `classes`
+    /// before lowering by `apply_reference_property_promotions`.
+    pub reference_property_storage_widenings: HashSet<(String, String)>,
     /// Classes a two-argument `clone()` in this program can hand an override array to.
     ///
     /// Recorded by the `clone` builtin's check hook, and applied to `classes` after checking by
@@ -1527,6 +1534,29 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// (borrowed cell) and are left untouched. Object-owned reference cells are also recorded
 /// in `owned_reference_properties` so the object allocates and frees them.
 fn apply_reference_property_promotions(checker: &mut Checker) {
+    let widenings = std::mem::take(&mut checker.reference_property_storage_widenings);
+    for (access_class, prop) in widenings {
+        let declaring = checker
+            .classes
+            .get(&access_class)
+            .and_then(|info| info.property_declaring_classes.get(&prop).cloned())
+            .unwrap_or_else(|| access_class.clone());
+        for info in checker.classes.values_mut() {
+            let Some(slot) = info.visible_property_index(&prop) else {
+                continue;
+            };
+            if info.property_slot_is_declared(slot, &prop)
+                || info.property_slot_is_reference(slot, &prop)
+                || !info
+                    .property_declaring_classes
+                    .get(&prop)
+                    .is_some_and(|decl| decl == &declaring)
+            {
+                continue;
+            }
+            info.properties[slot].1 = PhpType::Mixed;
+        }
+    }
     let promotions = std::mem::take(&mut checker.reference_property_promotions);
     for (access_class, prop) in promotions {
         let declaring = checker
