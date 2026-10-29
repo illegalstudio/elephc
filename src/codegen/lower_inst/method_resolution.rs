@@ -286,7 +286,7 @@ pub(super) fn store_call_result(
     Ok(())
 }
 
-/// Stores compiled results, preserving explicit cells and copying erased reference returns.
+/// Boxes a compiled PHP return while retiring only the owner its callee transfers.
 ///
 /// Runtime intrinsics do not publish the private PHP marker and keep using
 /// `store_call_result`. Consume the marker before boxing calls can clobber it.
@@ -297,15 +297,8 @@ pub(super) fn store_compiled_call_result(
     by_ref_return: bool,
 ) -> Result<()> {
     if by_ref_return {
-        if let Some(result) = inst.result {
-            if matches!(ctx.value_php_type(result)?, PhpType::Pointer(_)) {
-                ctx.store_int_result_value(result)?;
-            } else {
-                let result_ty = ctx.value_php_type(result)?.clone();
-                super::reference_return_dispatch::emit_value_snapshot(ctx, return_ty, &result_ty)?;
-                ctx.store_result_value(result)?;
-            }
-        }
+        // EIR retains the PHP payload type here, then AdoptRefCellPtr consumes this raw word.
+        if let Some(result) = inst.result { ctx.store_int_result_value(result)?; }
         return Ok(());
     }
     let Some(result) = inst.result else { return Ok(()); };

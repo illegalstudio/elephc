@@ -62,16 +62,27 @@ $text = classReferenceText(new ClassReferenceTextChild()); echo $text, "\n";
 ClassReferenceChild::$staticData = null;
 unset($object, $static, $callback, $called, $text);
 "#;
-    let source = format!("{declarations}{exercise}");
+    let aliases = r#"
+$aliasOwner = new ClassReferenceChild();
+$alias = &$aliasOwner->items(1, 2, 3, 4, 5, 6, 7, 8);
+$alias['a'] = 7; echo $aliasOwner->data['a'], "\n";
+$textOwner = new ClassReferenceTextChild();
+$textAlias = &$textOwner->text(); $textAlias = 'changed';
+echo classReferenceText($textOwner), "\n";
+unset($alias, $aliasOwner, $textAlias, $textOwner);
+"#;
+    let by_value_source = format!("{declarations}{exercise}");
+    let source = format!("{by_value_source}{aliases}");
     let quote = |body: &str| body.replace('\\', "\\\\").replace('\'', "\\'");
     let native_eval = format!("{declarations}\n$source = $argc > 0 ? '{}' : ''; eval($source);", quote(exercise))
         .replace("ClassReference", "NativeEvalClassReference").replace("classReference", "nativeEvalClassReference");
-    let renamed = source.replace("ClassReference", "EvalClassReference").replace("classReference", "evalClassReference");
+    let renamed = by_value_source.replace("ClassReference", "EvalClassReference").replace("classReference", "evalClassReference");
     let eval = format!("<?php $source = $argc > 0 ? '{}' : ''; eval($source);", quote(renamed.strip_prefix("<?php").unwrap()));
     let copy_line = "{\"a\":1,\"b\":2,\"z\":9}|{\"a\":1,\"b\":2}\n";
     let expected = format!("{}2|{}{}child\n", copy_line.repeat(3), copy_line, copy_line);
+    let aot_expected = format!("{expected}7\nchanged\n");
     assert_bundle_with(&[
-        BundleCase { name: "class_reference_override_aot", source: &source, expected: &expected },
+        BundleCase { name: "class_reference_override_aot", source: &source, expected: &aot_expected },
         BundleCase { name: "class_reference_override_native_eval", source: &native_eval, expected: &expected },
         BundleCase { name: "class_reference_override_eval", source: &eval, expected: &expected },
     ], |source| {
