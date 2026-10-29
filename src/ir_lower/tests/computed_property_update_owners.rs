@@ -31,12 +31,17 @@ function updateOwnerNumericMask(int|float $value): int { return $value & 7; }
 echo updateOwnerNumericMask($argc);
 class UpdateOwnerRegistry {
     public array $handlers = [];
+    public mixed $weights = [1.5, 2.5];
+    public function step(): void { $this->weights[0]++; --$this->weights[1]; }
     public function registry(): self { return $this; }
 }
 $registry = new UpdateOwnerRegistry();
 $registry->registry()->handlers['save'][] = 'first';
 $registry->registry()->handlers['save'][] = 'second';
 echo count($registry->handlers['save']);
+$registry->step();
+$registry->weights[0]++;
+echo json_encode($registry->weights);
 $xml = new SimpleXMLElement('<r><a>1</a></r>');
 $xml->a += 1;
 "#;

@@ -1018,6 +1018,7 @@ fn updated_array_property_push_type(
 ///   for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
+/// - A `Mixed` slot keeps its representation and validates its runtime payload when writing.
 fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
@@ -1029,7 +1030,7 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() {
+    if prop_ty.is_php_array() || prop_ty == &PhpType::Mixed {
         return Ok(prop_ty.clone());
     }
     match prop_ty {

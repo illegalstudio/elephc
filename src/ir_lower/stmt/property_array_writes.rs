@@ -435,7 +435,9 @@ fn lower_property_array_assign_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
     value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
-    if object_property_type(ctx, object.value, property).is_some_and(|ty| ty.is_php_array()) {
+    if object_property_type(ctx, object.value, property)
+        .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
+    {
         lower_php_array_property_write(
             ctx,
             object,
