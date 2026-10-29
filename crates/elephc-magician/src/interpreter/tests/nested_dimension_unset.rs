@@ -55,6 +55,7 @@ unset($old, $replacement, $nestedUnsetRows, $nestedUnsetIndex, $error);
     let mut values = FakeOps::default();
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
+    assert!(context.set_global_scope(&mut scope));
     let result =
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
     eval_release_value(&mut context, &mut values, result).unwrap();
