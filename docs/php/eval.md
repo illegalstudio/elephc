@@ -186,6 +186,11 @@ makes it one shared value everywhere.
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
+Opaque eval rejects indexed increment/decrement, including `$a[0]++`,
+`--Store::$items[0]`, and `$object->items[$key]--`. Use indexed `+=` and `-=`
+for numeric updates. Compiled code supports indexed increment/decrement,
+including PHP's distinct null and alphanumeric string behavior.
+
 `foreach` supports value-only and key-value iteration over indexed and
 associative arrays, plus eval-declared and generated/AOT `Iterator` and
 `IteratorAggregate` objects. Eval associative arrays preserve PHP insertion

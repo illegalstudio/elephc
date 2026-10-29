@@ -22,7 +22,12 @@ echo json_encode(StaticMixedDimensionStore::$items), ':', json_encode($copy), "\
 StaticMixedDimensionStore::$items = null;
 unset($copy);
 "#;
-    let renamed = source.replace("StaticMixedDimensionStore", "EvalStaticMixedDimensionStore");
+    // Opaque eval supports numeric compound indexed writes; indexed incdec stays in AOT.
+    let eval_source = source.replace(
+        "StaticMixedDimensionStore::$items[0]++; --StaticMixedDimensionStore::$items[1];",
+        "StaticMixedDimensionStore::$items[0] += 1; StaticMixedDimensionStore::$items[1] -= 1;",
+    );
+    let renamed = eval_source.replace("StaticMixedDimensionStore", "EvalStaticMixedDimensionStore");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = "{\"0\":2,\"1\":2,\"mark\":\"kept\"}:[1,3]\n";
