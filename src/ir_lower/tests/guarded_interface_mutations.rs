@@ -17,7 +17,14 @@ use std::path::Path;
 fn guarded_interface_mutations_preserve_storage_on_all_targets() {
     let source = r#"<?php
 interface Root {}
-class Label implements Root { public int $value = 1; }
+class Label implements Root {
+    public int $value = 1;
+    public function read(): int { return $this->value; }
+}
+function invoke_reflected(Label $label): mixed {
+    $reflection = new ReflectionMethod(Label::class, 'read');
+    return $reflection->invoke($label);
+}
 class MagicChild extends Label {
     public function __unset(string $name): void { throw new Error("stop"); }
 }
@@ -90,6 +97,12 @@ try { locked_static(); } catch (Error $error) { echo "locked"; }
         let mut module = super::lower_source_at_for_target(
             source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
         );
+        let reflected = module.functions.iter().find(|function| function.name == "invoke_reflected").unwrap();
+        let call = reflected.instructions.iter().find(|inst| inst.op == Op::MethodCall
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(name))
+                if module.data.strings[name.as_raw() as usize] == "read")).unwrap();
+        assert_eq!(reflected.value(call.operands[0]).unwrap().php_type, PhpType::Object("Label".into()),
+            "{target}: a reflected target must not inherit the reflector's receiver view");
         for (name, op) in [
             ("write", Op::PropSet), ("clear", Op::PropUnset),
             ("dynamic", Op::DynamicPropSet), ("dynamic", Op::DynamicPropUnset),

@@ -623,7 +623,8 @@ pub(super) fn lower_magic_property_unset(
     )];
     let method = native_property_method_for_value(ctx, object.value, property,
         elephc_builtin_contract::ObjectProperty::Unset).unwrap_or("__unset");
-    lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, expr);
+    // Preserve the receiver selected by the runtime-subclass or native-property guard.
+    lower_method_call_with_receiver_direct(ctx, object, method, &args, Op::MethodCall, expr);
 }
 
 /// Lowers `__unset` for nullable receivers, doing nothing when the receiver is null.
@@ -668,7 +669,8 @@ pub(super) fn lower_nullable_magic_property_unset(
     )];
     let method = native_property_method_for_value(ctx, object.value, property,
         elephc_builtin_contract::ObjectProperty::Unset).unwrap_or("__unset");
-    lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, expr);
+    // Preserve the receiver selected by the runtime-subclass or native-property guard.
+    lower_method_call_with_receiver_direct(ctx, object, method, &args, Op::MethodCall, expr);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);

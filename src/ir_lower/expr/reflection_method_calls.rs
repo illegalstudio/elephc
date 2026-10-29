@@ -98,7 +98,8 @@ pub(super) fn lower_reflection_instance_method_invoke(
             expr,
         );
     }
-    lower_method_call_with_receiver(
+    // The source receiver is the ReflectionMethod object; this is its selected target.
+    lower_method_call_with_receiver_direct(
         ctx,
         object,
         reflected_method,
