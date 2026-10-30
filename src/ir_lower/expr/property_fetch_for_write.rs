@@ -190,6 +190,20 @@ pub(crate) fn lower_nested_assignment_property_source(
     lower_property_write_source(ctx, object, property, expr, Some(mode)).value
 }
 
+/// Admits only property roots whose nested update protocol operates on an attached boxed cell.
+pub(crate) fn nested_property_has_boxed_root(
+    ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
+) -> bool {
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, object);
+    let Some((class, _)) = singular_object_class(&ty) else {
+        return matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    };
+    class.is_empty() || ctx.interfaces.contains_key(class)
+        || crate::types::builtin_classes::native_property_method(class, property,
+            elephc_builtin_contract::ObjectProperty::WriteSelect, ctx.classes).is_some()
+        || property_is_splittable_container_slot(ctx, class, property, true)
+}
+
 /// Selects borrowed slot access only for the stable storage shape required by its consumer.
 fn lower_property_write_source(
     ctx: &mut LoweringContext<'_, '_>,

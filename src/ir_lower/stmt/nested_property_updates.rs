@@ -18,6 +18,12 @@ pub(super) fn named_property_root(target: &Expr) -> Option<(&Expr, &str)> {
     Some((object, property))
 }
 
+/// Checks attached boxed storage before capturing any operands or changing their evaluation order.
+pub(super) fn attached_property_root(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
+    named_property_root(target).is_some_and(|(object, property)|
+        crate::ir_lower::expr::nested_property_has_boxed_root(ctx, object, property))
+}
+
 /// Settles a compound RHS before the first element read, including expression-result captures.
 pub(super) fn capture_compound_rhs(
     ctx: &mut LoweringContext<'_, '_>, value: &mut Expr,
@@ -38,7 +44,7 @@ pub(crate) fn lower_nested_property_compound_expression(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr,
     result: Option<&Expr>, prelude: &[Stmt], conditional: Option<&str>, span: Span,
 ) -> Option<LoweredValue> {
-    if conditional.is_some() || named_property_root(target).is_none()
+    if conditional.is_some() || !attached_property_root(ctx, target)
         || !matches!(&target.kind, ExprKind::ArrayAccess { array, .. }
             if matches!(array.kind, ExprKind::ArrayAccess { .. })) { return None; }
     let ExprKind::Variable(result_name) = &value.kind else { return None; };

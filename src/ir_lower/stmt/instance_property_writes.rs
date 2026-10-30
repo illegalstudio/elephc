@@ -430,7 +430,7 @@ fn lower_property_assign_value(
 }
 
 /// Writes an ordinary slot, hook, or magic property after native XML dispatch is excluded.
-fn lower_property_assign_without_native(
+pub(super) fn lower_property_assign_without_native(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     value_expr: &Expr, lowered_value: LoweredValue, preserve_property_operand: bool, span: Span,
 ) {

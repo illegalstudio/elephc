@@ -25,7 +25,7 @@ pub(crate) enum PropertyDimensionFetchMode { Write, ReadWrite }
 pub(super) fn guard_property_dimension_readwrite(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &str, span: Span,
 ) {
-    if !runtime_receivers::may_need_null_guard(ctx, property)
+    if !runtime_receivers::may_need_guard(ctx, property, PropertyDimensionFetchMode::ReadWrite)
         || !matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) { return; }
     let object = lower_expr(ctx, object);
     let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
@@ -45,7 +45,7 @@ pub(crate) fn guard_property_dimension_fetch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
     mode: PropertyDimensionFetchMode,
 ) {
-    if !runtime_receivers::may_need_null_guard(ctx, property) { return; }
+    if !runtime_receivers::may_need_guard(ctx, property, mode) { return; }
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span);
     match mode {
         PropertyDimensionFetchMode::Write => runtime_receivers::guard_write(ctx, object, property, span),
@@ -276,7 +276,7 @@ pub(super) fn lower_property_array_assign_with_update(
     let index_expression = index;
     let delayed_incdec = match update {
         PropertyElementUpdate::IncDec(increment) if (ctx.classes.contains_key("SimpleXMLElement")
-            || runtime_receivers::may_need_null_guard(ctx, property))
+            || runtime_receivers::may_need_guard(ctx, property, PropertyDimensionFetchMode::ReadWrite))
             && !known_buffer_property(ctx, object, property) => Some(increment),
         _ => None,
     };

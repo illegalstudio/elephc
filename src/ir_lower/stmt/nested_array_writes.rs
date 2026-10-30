@@ -9,7 +9,7 @@
 //! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
-use super::nested_property_updates::{named_property_root, capture_compound_rhs};
+use super::nested_property_updates::{attached_property_root, capture_compound_rhs};
 
 /// Writes an expression's captured nested update without repeating its key diagnoses.
 pub(crate) fn lower_nested_array_assign_after_read(
@@ -50,7 +50,7 @@ pub(super) fn lower_nested_array_assign(
     if static_update
         && (nested_target_has_static_array_root(ctx, target)
             || nested_target_has_local_array_root(ctx, target)
-            || named_property_root(target).is_some())
+            || attached_property_root(ctx, target))
     {
         let mut sources = Vec::new();
         let target = super::nested_write_sources::capture_update_target(ctx, target, &mut sources);
@@ -62,7 +62,7 @@ pub(super) fn lower_nested_array_assign(
             lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
         } else if nested_static_root_is_boxed(ctx, &target)
             || nested_target_has_local_array_root(ctx, &target)
-            || named_property_root(&target).is_some() {
+            || attached_property_root(ctx, &target) {
             lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
         } else {
             let mut value = value.clone();

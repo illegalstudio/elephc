@@ -72,3 +72,98 @@ nestedGuardExpression($box); nestedGuardPrefix($box);
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
 }
+
+/// Concrete object containers keep offsetGet lowering on locals, this and expression updates.
+#[test]
+fn concrete_object_property_nested_updates_on_every_target() {
+    let source = r#"<?php
+class UnitNestedObjectAccess implements ArrayAccess {
+    public ArrayObject $child;
+    public function __construct() { $this->child = new ArrayObject([1 => 5]); }
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return $this->child; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class ObjectFetchRoots {
+    public UnitNestedObjectAccess $custom;
+    public SplFixedArray $rows;
+    public ArrayObject $data;
+    public function __construct() {
+        $this->rows = new SplFixedArray(1); $this->rows[0] = [1 => 5];
+        $this->data = new ArrayObject(['k' => [1]]); $this->custom = new UnitNestedObjectAccess();
+    }
+    public function step(): void {
+        $this->rows[0][1] += 2;
+        $result = ($this->data['k'][0] += 4);
+        $this->rows[0][1]++;
+        $this->custom[0][1] += 2; $result = ($this->custom[0][1] += 2); $this->custom[0][1]++;
+    }
+}
+$holder = new ObjectFetchRoots();
+$holder->rows[0][1] += 2;
+$result = ($holder->data['k'][0] += 4);
+$holder->rows[0][1]++;
+$holder->custom[0][1] += 2; $result = ($holder->custom[0][1] += 2); $holder->custom[0][1]++;
+$holder->step();
+function nullableObjectFetchRoot(?ObjectFetchRoots $holder): void { $holder->rows[0][1] += 2; }
+nullableObjectFetchRoot($argc > 0 ? $holder : null);
+function computedObjectFetchRoot(): ObjectFetchRoots { return new ObjectFetchRoots(); }
+$result = (computedObjectFetchRoot()->rows[0][1] += 2);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Concrete inferred array slots retain a loud refusal instead of entering a boxed runtime ABI.
+#[test]
+fn concrete_inferred_property_nested_update_stays_refused() {
+    let source = "<?php class InferredFetchRoot { public $grid = [[0]]; } \
+        $box = new InferredFetchRoot(); $box->grid[0][0] += 1;";
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let error = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .expect_err("concrete property arrays need an explicit storeback protocol");
+        assert!(format!("{error:?}").contains("runtime_call array set with receiver PHP type Array"),
+            "{target}: {error:?}");
+    }
+}
+
+/// W initialization publishes a legal array before the normal fetch while RW remains a read.
+#[test]
+fn property_array_autovivification_modes_on_every_target() {
+    let source = r#"<?php
+class InitFetchRoot { public ?array $items; }
+function initFetchWrite(InitFetchRoot $box): void { $box->items[0] = 1; }
+function initFetchReadWrite(InitFetchRoot $box): void { $box->items[0] += 1; }
+initFetchWrite(new InitFetchRoot()); initFetchReadWrite(new InitFetchRoot());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let write = module.functions.iter().find(|f| f.name == "initFetchWrite").unwrap();
+        let store = write.instructions.iter().position(|inst| inst.op == Op::PropSet)
+            .expect("W fetch must initialize a legal array-bearing slot");
+        let fetch = write.instructions.iter().position(|inst| inst.op == Op::PropGetForWrite)
+            .expect("W fetch retains its normal attached COW writer");
+        assert!(store < fetch, "{target}: initialization must precede the mutable fetch");
+        let read = module.functions.iter().find(|f| f.name == "initFetchReadWrite").unwrap();
+        let first_read = read.instructions.iter().position(|inst| inst.op == Op::PropGet)
+            .expect("RW fetch retains an ordinary property read");
+        assert!(read.instructions.iter().position(|inst| inst.op == Op::PropSet)
+            .is_none_or(|store| first_read < store), "{target}: RW cannot initialize before reading");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}

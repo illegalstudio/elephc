@@ -250,3 +250,130 @@ restore_error_handler();
     assert_eq!(out.stdout, expected, "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Legal W initialization shares declaration/access checks without relaxing RW or foreach reads.
+#[test]
+fn test_property_uninitialized_array_autovivification_bundle() {
+    let source = r#"<?php
+class AutoInitNullable { public ?array $items; }
+class AutoInitArray { public array $items; }
+class AutoInitMixed { public mixed $items; }
+class AutoInitIterable { public iterable $items; }
+class AutoInitUnion { public array|ArrayObject $items; }
+class AutoInitPrivate {
+    public private(set) array $items;
+    public function fill(): void { $this->items[] = AutoInitRhs(); }
+}
+function AutoInitRhs(): string { echo 'rhs|'; return 'x'; }
+function AutoInitWrite(mixed $box, int $mode): void {
+    if ($mode === 0) { $box->items[0] = AutoInitRhs(); }
+    elseif ($mode === 1) { $box->items[] = AutoInitRhs(); }
+    elseif ($mode === 2) { $box->items[0][1] = AutoInitRhs(); }
+    else { $box->items[0][] = AutoInitRhs(); }
+    echo json_encode($box->items), '|';
+}
+function AutoInitReadWrite(mixed $box): void {
+    try { $box->items[0] += 1; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+    echo (int)isset($box->items), '|';
+}
+for ($mode = 0; $mode < 4; $mode++) {
+    AutoInitWrite(new AutoInitNullable(), $mode);
+    AutoInitWrite(new AutoInitArray(), $mode);
+    AutoInitWrite(new AutoInitMixed(), $mode);
+    AutoInitWrite(new AutoInitIterable(), $mode);
+    AutoInitWrite(new AutoInitUnion(), $mode);
+}
+$private = new AutoInitPrivate(); $private->fill(); echo json_encode($private->items), '|'; unset($private);
+AutoInitReadWrite(new AutoInitNullable());
+AutoInitReadWrite(new AutoInitArray());
+AutoInitReadWrite(new AutoInitMixed());
+AutoInitReadWrite(new AutoInitIterable());
+AutoInitReadWrite(new AutoInitUnion());
+"#;
+    let expected = ["rhs|[\"x\"]|", "rhs|[\"x\"]|", "rhs|[{\"1\":\"x\"}]|", "rhs|[[\"x\"]]|"]
+        .iter().map(|out| out.repeat(5)).collect::<String>() + "rhs|[\"x\"]|";
+    let expected = ["Nullable", "Array", "Mixed", "Iterable", "Union"].iter().fold(expected, |out, class|
+        out + &format!("Error:Typed property AutoInit{class}::$items must not be accessed before initialization|0|"));
+    let renamed = source.replace("AutoInit", "EvalAutoInit");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php class NativeAutoInitArray {{ public ?array $items; }} \
+        $nativeAutoInit = new NativeAutoInitArray(); $source = $argc > 0 ? \
+        '{body} EvalAutoInitWrite($nativeAutoInit, 2);' : ''; eval($source); unset($nativeAutoInit);");
+    let eval_expected = expected.replace("AutoInit", "EvalAutoInit") + "rhs|[{\"1\":\"x\"}]|";
+    let aot = format!("{source} \
+        $coalesced = new AutoInitArray(); $coalesced->items[0] ??= 'fallback'; \
+        echo json_encode($coalesced->items), '|'; unset($coalesced); \
+        $foreach = new AutoInitArray(); try {{ foreach ($foreach->items as &$element) {{}} }} \
+        catch (Throwable $error) {{ echo get_class($error), ':', (int)isset($foreach->items), '|'; }} \
+        unset($foreach, $element, $error);");
+    let aot_expected = expected + "[\"fallback\"]|Error:0|";
+    assert_bundle_with(&[
+        BundleCase { name: "uninitialized_array_writes_aot", source: &aot, expected: &aot_expected },
+        BundleCase { name: "uninitialized_array_writes_eval", source: &eval, expected: &eval_expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
+/// Concrete ArrayAccess fields retain valid nested updates through local and this receivers.
+#[test]
+fn test_property_concrete_object_nested_updates() { verify_concrete_object_updates(false); }
+
+/// XML dispatch keeps concrete ArrayAccess properties on their established object path.
+#[test]
+fn test_property_concrete_object_nested_xml_updates() {
+    if skip_without_xml_native("test_property_concrete_object_nested_xml_updates") { return; }
+    verify_concrete_object_updates(true);
+}
+
+/// Object children share identity through every supported ordinary object-container field.
+fn verify_concrete_object_updates(xml: bool) {
+    let source = r#"<?php
+class ConcreteNestedAccess implements ArrayAccess {
+    private ArrayObject $child;
+    public function __construct() { $this->child = new ArrayObject([1 => 5]); }
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return $this->child; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+    public function value(): int { return $this->child[1]; }
+}
+class ConcreteNestedHolder {
+    public SplFixedArray $rows;
+    public ArrayObject $data;
+    public ConcreteNestedAccess $custom;
+    public function __construct() {
+        $this->rows = new SplFixedArray(1); $this->rows[0] = new ArrayObject([1 => 5]);
+        $this->data = new ArrayObject(['k' => [1]]); $this->custom = new ConcreteNestedAccess();
+    }
+    public function step(): void {
+        $this->rows[0][1] += 2;
+        echo ($this->rows[0][1] += 2), '|';
+        $this->rows[0][1]++; echo $this->rows[0][1], '|';
+        $this->data['k'][0] += 4;
+        echo ($this->data['k'][0] += 2), '|';
+        $this->data['k'][0]++; echo $this->data['k'][0], '|';
+        $this->custom[0][1] += 2;
+        echo ($this->custom[0][1] += 2), '|';
+        $this->custom[0][1]++; echo $this->custom->value(), '|';
+    }
+}
+$box = new ConcreteNestedHolder();
+$box->rows[0][1] += 2; echo $box->rows[0][1], '|';
+echo ($box->data['k'][0] += 4), '|';
+$box->custom[0][1]++; echo $box->custom->value(), '|';
+unset($box);
+$box = new ConcreteNestedHolder(); $box->step(); unset($box);
+"#;
+    let source = if xml {
+        source.replace("<?php", "<?php function ConcreteObjectXmlCapability(): void { simplexml_load_string('<r/>'); }")
+    } else { source.to_string() };
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7|5|6|9|10|7|8|9|10|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
