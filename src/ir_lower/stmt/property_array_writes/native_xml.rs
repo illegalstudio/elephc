@@ -168,7 +168,10 @@ fn write_rooted(
     let pins = if boxed { crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span) } else { vec![] };
     if let Some(index) = index {
         write_ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed);
-    } else { ordinary_append(ctx, object, property, value, span); }
+    } else {
+        guard_property_dimension_write(ctx, object, property, span);
+        ordinary_append(ctx, object, property, value, span);
+    }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if boxed { crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span)); }
     jump(ctx, merge);

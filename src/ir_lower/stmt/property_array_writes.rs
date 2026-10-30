@@ -17,6 +17,10 @@ mod runtime_receivers;
 pub(super) use incdec::native as lower_native_incdec;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
+/// Selects declaration initialization rules for a property used as a dimension container.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum PropertyDimensionFetchMode { Write, ReadWrite }
+
 /// Guards a stabilized expression increment receiver before its prelude reads the element.
 pub(super) fn guard_property_dimension_readwrite(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &str, span: Span,
@@ -33,14 +37,25 @@ pub(super) fn guard_property_dimension_readwrite(
 pub(crate) fn guard_property_dimension_write(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
 ) {
+    guard_property_dimension_fetch(ctx, object, property, span, PropertyDimensionFetchMode::Write);
+}
+
+/// Keeps the owning receiver visible across either write-only or read-modify-write validation.
+pub(crate) fn guard_property_dimension_fetch(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
+    mode: PropertyDimensionFetchMode,
+) {
     if !runtime_receivers::may_need_null_guard(ctx, property) { return; }
     let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span);
-    runtime_receivers::guard_write(ctx, object, property, span);
+    match mode {
+        PropertyDimensionFetchMode::Write => runtime_receivers::guard_write(ctx, object, property, span),
+        PropertyDimensionFetchMode::ReadWrite => runtime_receivers::guard_readwrite(ctx, object, property, span),
+    }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// Defers storage-only receiver chains while preserving early evaluation of computed receivers.
-fn deferred_property_receiver(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
+pub(super) fn deferred_property_receiver(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
     match &object.kind {
         ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
         ExprKind::PropertyAccess { object, .. } => deferred_property_receiver(ctx, object),
@@ -76,7 +91,8 @@ pub(super) fn lower_property_array_push(
     };
     receiver.narrow_for_array(ctx, property, &[value.value], span);
     if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
-        .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
+        .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
+            PropertyDimensionFetchMode::Write).map(native_xml::Fetch::known)) {
         native_xml::write(ctx, receiver.value, child, property, None, value, None, span, false);
         receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
@@ -297,8 +313,12 @@ pub(super) fn lower_property_array_assign_with_update(
         (receiver, index, value)
     };
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);
+    let fetch_mode = if delayed_incdec.is_some() || compound.is_some() {
+        PropertyDimensionFetchMode::ReadWrite
+    } else { PropertyDimensionFetchMode::Write };
     if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
-        .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span).map(native_xml::Fetch::known)) {
+        .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
+            fetch_mode).map(native_xml::Fetch::known)) {
         if let Some(increment) = delayed_incdec {
             native_xml::dispatch(ctx, child, span,
                 |ctx, child| incdec::native(ctx, child, index, increment, span),
@@ -324,6 +344,7 @@ pub(super) fn lower_property_array_assign_with_update(
 /// Reads a native XML child through its write-fetch while the parent lease protects the receiver.
 fn lower_native_dimension_property(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, object: &Expr, property: &str, span: Span,
+    mode: PropertyDimensionFetchMode,
 ) -> Option<LoweredValue> {
     let ty = ctx.builder.value_php_type(receiver.value);
     let (class, _) = crate::ir_lower::expr::singular_object_class(&ty)?;
@@ -346,6 +367,7 @@ fn lower_native_dimension_property(
     if native_property {
         return Some(crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, borrowed, property, &expression));
     }
+    guard_property_dimension_fetch(ctx, receiver, property, span, mode);
     Some(crate::ir_lower::expr::lower_property_get_from_value(
         ctx, borrowed, property, Op::PropGet, &expression,
     ))

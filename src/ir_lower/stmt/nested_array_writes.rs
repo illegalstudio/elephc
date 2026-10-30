@@ -9,6 +9,7 @@
 //! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
+use super::nested_property_updates::{named_property_root, capture_compound_rhs};
 
 /// Writes an expression's captured nested update without repeating its key diagnoses.
 pub(crate) fn lower_nested_array_assign_after_read(
@@ -48,22 +49,20 @@ pub(super) fn lower_nested_array_assign(
         Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }));
     if static_update
         && (nested_target_has_static_array_root(ctx, target)
-            || nested_target_has_local_array_root(ctx, target))
+            || nested_target_has_local_array_root(ctx, target)
+            || named_property_root(target).is_some())
     {
         let mut sources = Vec::new();
-        let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
+        let target = super::nested_write_sources::capture_update_target(ctx, target, &mut sources);
         let mut value = value.clone();
-        if let ExprKind::BinaryOp { right, .. } = &mut value.kind {
-            // PHP settles computed dimensions and the RHS before obtaining the writable parent.
-            // Bare variable dimensions are still captured by the subsequent read, after the RHS.
-            *right = Box::new(super::nested_write_sources::capture(ctx, right, &mut sources));
-        }
+        capture_compound_rhs(ctx, &mut value, &mut sources);
         let mut snapshots = Vec::new();
         let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots, true);
         if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
             lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
         } else if nested_static_root_is_boxed(ctx, &target)
-            || nested_target_has_local_array_root(ctx, &target) {
+            || nested_target_has_local_array_root(ctx, &target)
+            || named_property_root(&target).is_some() {
             lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
         } else {
             let mut value = value.clone();
@@ -284,7 +283,11 @@ fn lower_boxed_nested_update_from_parent(
             ExprKind::PreIncrement(temp.clone())
         } else { ExprKind::PreDecrement(temp.clone()) }, span),
         ElementUpdate::Compound => {
-            let ExprKind::BinaryOp { op, right, .. } = &source_value.kind else { unreachable!() };
+            let operation = match &source_value.kind {
+                ExprKind::Assignment { value, prelude, .. } if prelude.is_empty() => value.as_ref(),
+                _ => source_value,
+            };
+            let ExprKind::BinaryOp { op, right, .. } = &operation.kind else { unreachable!() };
             Expr::new(ExprKind::BinaryOp {
                 left: Box::new(Expr::new(ExprKind::Variable(temp.clone()), span)),
                 op: op.clone(), right: right.clone(),
@@ -329,6 +332,11 @@ fn lower_static_update_parent(
     span: Span,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
+        if let ExprKind::PropertyAccess { object, property } = &read.kind {
+            return crate::ir_lower::expr::lower_nested_assignment_property_source(
+                ctx, object, property, read, PropertyDimensionFetchMode::ReadWrite,
+            );
+        }
         return lower_expr(ctx, read);
     };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
@@ -652,7 +660,7 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
         }
         if let ExprKind::PropertyAccess { object, property } = &expr.kind {
             return crate::ir_lower::expr::lower_nested_assignment_property_source(
-                ctx, object, property, expr,
+                ctx, object, property, expr, PropertyDimensionFetchMode::Write,
             );
         }
         return lower_expr(ctx, expr);

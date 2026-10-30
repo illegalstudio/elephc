@@ -22,6 +22,9 @@ pub(super) fn lower_assignment_expr(
     if let Some(result) = native_xml_updates::lower_assignment(
         ctx, target, value, result_target, prelude, conditional_value_temp, expr,
     ) { return result; }
+    if let Some(result) = crate::ir_lower::stmt::lower_nested_property_compound_expression(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr.span,
+    ) { return result; }
     let incdec = super::ordinary_property_incdec::captured_arithmetic(
         target, value, result_target, prelude, conditional_value_temp,
     );

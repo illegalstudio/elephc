@@ -47,6 +47,8 @@ mod loops;
 mod array_write_core;
 mod buffer_element_updates;
 mod nested_array_writes;
+mod nested_property_updates;
+pub(crate) use nested_property_updates::lower_nested_property_compound_expression;
 mod nested_write_guards;
 mod nested_scalar_writes;
 mod static_false_parent;
@@ -92,7 +94,9 @@ use declarations::*;
 use instance_property_writes::*;
 use static_property_writes::*;
 use property_array_writes::*;
-pub(crate) use property_array_writes::guard_property_dimension_write;
+pub(crate) use property_array_writes::{
+    guard_property_dimension_write, guard_property_dimension_fetch, PropertyDimensionFetchMode,
+};
 use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;

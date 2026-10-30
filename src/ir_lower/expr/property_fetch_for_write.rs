@@ -131,7 +131,7 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     property: &str,
     expr: &Expr,
 ) -> ByRefForeachPropertySource {
-    lower_property_write_source(ctx, object, property, expr, false)
+    lower_property_write_source(ctx, object, property, expr, None)
 }
 
 /// Returns whether a by-reference foreach may bind a synthetic origin to this property slot.
@@ -185,8 +185,9 @@ pub(crate) fn lower_nested_assignment_property_source(
     object: &Expr,
     property: &str,
     expr: &Expr,
+    mode: crate::ir_lower::stmt::PropertyDimensionFetchMode,
 ) -> LoweredValue {
-    lower_property_write_source(ctx, object, property, expr, true).value
+    lower_property_write_source(ctx, object, property, expr, Some(mode)).value
 }
 
 /// Selects borrowed slot access only for the stable storage shape required by its consumer.
@@ -195,11 +196,12 @@ fn lower_property_write_source(
     object: &Expr,
     property: &str,
     expr: &Expr,
-    mixed_root: bool,
+    mode: Option<crate::ir_lower::stmt::PropertyDimensionFetchMode>,
 ) -> ByRefForeachPropertySource {
+    let mixed_root = mode.is_some();
     let object_value = lower_expr(ctx, object);
-    if mixed_root {
-        crate::ir_lower::stmt::guard_property_dimension_write(ctx, object_value, property, expr.span);
+    if let Some(mode) = mode {
+        crate::ir_lower::stmt::guard_property_dimension_fetch(ctx, object_value, property, expr.span, mode);
     }
     let object_type = ctx.builder.value_php_type(object_value.value);
     let native = native_property_method_for_value(ctx, object_value.value, property,

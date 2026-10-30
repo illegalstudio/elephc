@@ -21,9 +21,24 @@ pub(super) struct WriteSource {
 pub(super) fn capture_target(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, sources: &mut Vec<WriteSource>,
 ) -> Expr {
+    capture_target_inner(ctx, target, sources, false)
+}
+
+/// Keeps storage-only property receivers late while freezing computed update inputs once.
+pub(super) fn capture_update_target(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, sources: &mut Vec<WriteSource>,
+) -> Expr {
+    capture_target_inner(ctx, target, sources, true)
+}
+
+/// Shares dimension capture while preserving the caller's receiver-selection timing.
+fn capture_target_inner(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, sources: &mut Vec<WriteSource>,
+    late_receiver: bool,
+) -> Expr {
     let kind = match &target.kind {
         ExprKind::ArrayAccess { array, index } => {
-            let array = capture_target(ctx, array, sources);
+            let array = capture_target_inner(ctx, array, sources, late_receiver);
             let index = if matches!(index.kind, ExprKind::Variable(_)
                 | ExprKind::IntLiteral(_) | ExprKind::StringLiteral(_))
             {
@@ -32,7 +47,10 @@ pub(super) fn capture_target(
             ExprKind::ArrayAccess { array: Box::new(array), index: Box::new(index) }
         }
         ExprKind::PropertyAccess { object, property } => ExprKind::PropertyAccess {
-            object: Box::new(capture(ctx, object, sources)), property: property.clone(),
+            object: Box::new(if late_receiver
+                && super::property_array_writes::deferred_property_receiver(ctx, object) {
+                object.as_ref().clone()
+            } else { capture(ctx, object, sources) }), property: property.clone(),
         },
         _ => return target.clone(),
     };

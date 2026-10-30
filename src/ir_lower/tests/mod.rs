@@ -17,6 +17,7 @@ use crate::ir::{print_module, Terminator};
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod computed_property_update_owners;
+mod property_dimension_fetch_modes;
 mod alias_call_string_owners;
 mod method_receiver_owners;
 mod conditional_assignment_owners;
