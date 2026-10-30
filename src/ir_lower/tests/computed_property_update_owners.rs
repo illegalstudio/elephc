@@ -7,6 +7,46 @@
 //! Key details:
 //! - Ordinary getters and Stringable names coexist with the native XML protocol.
 
+/// Null typed slots are tested before mutation and their temporary read lease is retired.
+#[test]
+fn erased_nullable_property_dimension_guards_on_every_target() {
+    use crate::ir::{Op, ValueDef};
+    let source = r#"<?php
+class NullableDimensionSlot { public ?ArrayObject $items = null; }
+class ReadonlyNullableDimensionSlot {
+    public readonly ?ArrayObject $items;
+    public function __construct() { $this->items = null; }
+}
+function writeNullableDimensionSlot(mixed $box): void { $box->items[0] = 'x'; }
+writeNullableDimensionSlot(new NullableDimensionSlot());
+writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "writeNullableDimensionSlot").unwrap();
+        let guards = function.instructions.iter().filter(|inst| inst.op == Op::IsNull
+            && inst.operands.first().and_then(|value| function.value(*value))
+                .and_then(|value| match value.def {
+                    ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                    _ => None,
+                }).is_some_and(|producer| producer.op == Op::PropGet)).collect::<Vec<_>>();
+        assert_eq!(guards.len(), 2, "{target}: nullable declared slots require payload guards");
+        for guard in guards {
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::Release
+                && inst.operands == guard.operands), "{target}: the guard must retire its property read");
+        }
+        assert!(module.data.strings.iter().any(|message|
+            message == "Cannot auto-initialize an array inside property NullableDimensionSlot::$items of type ?ArrayObject"));
+        assert!(module.data.strings.iter().any(|message|
+            message == "Cannot indirectly modify readonly property ReadonlyNullableDimensionSlot::$items"));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Computed updates validate and emit for scalar operands and concrete string getters.
 #[test]
 fn computed_property_update_storage_on_every_target() {

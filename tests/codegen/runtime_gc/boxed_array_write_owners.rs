@@ -10,6 +10,27 @@
 
 use crate::support::*;
 
+/// Concrete hash stores retire fresh boxed keys while preserving borrowed keys and moved values.
+#[test]
+fn test_concrete_hash_writes_retire_owned_mixed_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function hashWriteOwnedKey(): mixed { return str_repeat('owned', 2); }
+$keys = ['first', 7];
+for ($pass = 0; $pass < 3; $pass++) {
+    $out = ['seed' => 0];
+    for ($i = 0; $i < 2; $i++) { $out[$keys[$i]] = $i + 1; }
+    $out[hashWriteOwnedKey()] = 3;
+    $borrowed = hashWriteOwnedKey(); $out[$borrowed] = 4;
+    echo json_encode($out), '|', $borrowed, '|';
+    unset($out, $borrowed);
+}
+unset($keys);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"seed\":0,\"first\":1,\"7\":2,\"ownedowned\":4}|ownedowned|".repeat(3));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A nested append probe must not retire the concrete array still stored in a property.
 #[test]
 fn test_static_receiver_grok_concrete_property_append_probe() {

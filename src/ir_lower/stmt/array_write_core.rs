@@ -433,6 +433,12 @@ pub(super) fn lower_concrete_array_set_values(
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
     release_persisted_string_operand(ctx, index, span);
+    if op == Op::HashSet && matches!(ctx.builder.value_php_type(index.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_))
+    {
+        // Hash key normalization borrows the box; inserted string bytes are persisted separately.
+        crate::ir_lower::ownership::release_if_owned(ctx, index, Some(span));
+    }
     release_persisted_string_operand(ctx, value, span);
 }
 
