@@ -29,3 +29,10 @@ echo "version loaded (" . $ok . "): " . library_version() . "\n";
 // `require` of a config file yields the file's `return` value.
 $settings = require 'settings.php';
 echo "settings: " . $settings["name"] . " / " . $settings["answer"] . "\n";
+
+// An include is an expression anywhere: a call argument, an operand, a `??=` value.
+$merged = array_replace(require 'settings.php', ["answer" => 43]);
+echo "merged: " . $merged["name"] . " / " . $merged["answer"] . "\n";
+$cached = null;
+$cached ??= require 'settings.php';
+echo "cached: " . $cached["name"] . "\n";

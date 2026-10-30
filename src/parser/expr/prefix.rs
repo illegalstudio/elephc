@@ -89,6 +89,9 @@ pub(super) fn parse_prefix(
             }
         }, 35),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+            parse_include_value(tokens, pos, span)
+        }
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
@@ -458,6 +461,34 @@ fn parse_unary(
     *pos += 1;
     let inner = parse_expr_bp(tokens, pos, bp)?;
     Ok(Expr::new(ctor(Box::new(inner)), span))
+}
+
+/// Parses `include`/`include_once`/`require`/`require_once` in expression position.
+///
+/// PHP gives the include keywords the lowest precedence above `throw`, so the path is a whole
+/// expression: `require __DIR__ . '/en.php'` includes the concatenation and
+/// `1 + require 'a' . 'b'` is `1 + (require ('a' . 'b'))`. A parenthesized path is an ordinary
+/// grouped expression, so `require ('a') . 'b'` includes `'ab'` as PHP does.
+///
+/// The node is `ExprKind::IncludeValue`, which `crate::resolver` expands into the included
+/// file's statements (or rejects with a diagnostic when the position cannot be lowered).
+pub(crate) fn parse_include_value(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    let (once, required) = match tokens[*pos].0 {
+        Token::Include => (false, false),
+        Token::IncludeOnce => (true, false),
+        Token::Require => (false, true),
+        _ => (true, true),
+    };
+    *pos += 1;
+    let path = parse_expr(tokens, pos)?;
+    Ok(Expr::new(
+        ExprKind::IncludeValue { path: Box::new(path), once, required },
+        span,
+    ))
 }
 
 /// Parses a `clone` expression. PHP 8.5 makes `clone` a regular function, so a `(` right

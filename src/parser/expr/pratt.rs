@@ -173,10 +173,6 @@ fn parse_expr_bp_inner(
                     .get(*pos)
                     .map(|(token, metadata)| (token.clone(), metadata.span))
                 {
-                    Some((Token::Identifier(name), name_span)) => {
-                        *pos += 1;
-                        Expr::new(ExprKind::StringLiteral(name), name_span)
-                    }
                     Some((Token::Variable(name), var_span)) => {
                         *pos += 1;
                         Expr::new(ExprKind::Variable(name), var_span)
@@ -190,7 +186,20 @@ fn parse_expr_bp_inner(
                         *pos += 1;
                         member
                     }
-                    _ => {
+                    // PHP 8's semi-reserved rule: any keyword is a method or constant name after
+                    // `::` (`$factory::new()`, `$option::match($x)`, `$cls::DEFAULT`); `class`
+                    // is the class-name fetch handled above.
+                    Some((token, name_span)) => {
+                        let Some(name) = crate::parser::keyword_name::bareword_name_from_token(
+                            &token,
+                            &tokens[*pos].1,
+                        ) else {
+                            return Err(CompileError::new(span, "Expected method name after '::'"));
+                        };
+                        *pos += 1;
+                        Expr::new(ExprKind::StringLiteral(name), name_span)
+                    }
+                    None => {
                         return Err(CompileError::new(span, "Expected method name after '::'"));
                     }
                 };

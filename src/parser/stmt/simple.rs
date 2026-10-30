@@ -19,7 +19,7 @@ use super::{expect_semicolon, expect_token};
 
 /// Parses `include`/`require` (with optional `_once`) statements.
 ///
-/// Consumes the keyword, optionally the parentheses, then the path expression.
+/// Consumes the keyword, then the path expression (a parenthesized path is a grouped expression).
 /// Produces a `StmtKind::Include` with `once` and `required` flags set.
 /// The path expression is preserved for resolver include discovery.
 pub(super) fn parse_include(
@@ -31,20 +31,9 @@ pub(super) fn parse_include(
 ) -> Result<Stmt, CompileError> {
     *pos += 1; // consume include/require keyword
 
-    // Support both: include 'file.php'; and include('file.php');
-    let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
-    if has_parens {
-        *pos += 1;
-    }
-
+    // `include ('file.php');` needs no special case: the parentheses are an ordinary grouped
+    // expression, which also makes `include ('a') . 'b';` include `'ab'` as PHP does.
     let path = parse_expr(tokens, pos)?;
-
-    if has_parens {
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-            return Err(CompileError::new(span, "Expected ')' after include path"));
-        }
-        *pos += 1;
-    }
 
     expect_semicolon(tokens, pos)?;
     Ok(Stmt::new(
@@ -73,33 +62,14 @@ pub(in crate::parser::stmt) fn try_parse_value_include(
     tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
-    let (once, required) = match tokens.get(*pos).map(|(token, _)| token) {
-        Some(Token::Include) => (false, false),
-        Some(Token::IncludeOnce) => (true, false),
-        Some(Token::Require) => (false, true),
-        Some(Token::RequireOnce) => (true, true),
-        _ => return Ok(None),
-    };
+    if !matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce)
+    ) {
+        return Ok(None);
+    }
     let span = tokens[*pos].1.span;
-    *pos += 1; // consume the include/require keyword
-
-    let has_parens = *pos < tokens.len() && tokens[*pos].0 == Token::LParen;
-    if has_parens {
-        *pos += 1;
-    }
-    let path = parse_expr(tokens, pos)?;
-    if has_parens {
-        expect_token(tokens, pos, &Token::RParen, "Expected ')' after include path")?;
-    }
-
-    Ok(Some(Expr::new(
-        ExprKind::IncludeValue {
-            path: Box::new(path),
-            once,
-            required,
-        },
-        span,
-    )))
+    crate::parser::expr::parse_include_value(tokens, pos, span).map(Some)
 }
 
 /// Parses `echo` statements with one or more comma-separated expressions.

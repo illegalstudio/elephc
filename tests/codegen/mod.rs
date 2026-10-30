@@ -95,6 +95,7 @@ mod pcntl;
 mod xml;
 mod tokenizer;
 mod arrays;
+mod parser_prefix_forms;
 mod calendar;
 mod call_counters;
 mod callables;

@@ -24,6 +24,12 @@ pub(super) struct ResolveState {
     pub(super) const_imports: HashMap<String, String>,
     /// Invocation-level symbols used to select `ifdef` branches in every physical file.
     pub(super) conditional_defines: HashSet<String>,
+    /// Names declared `static $x;` so far in the function body being resolved (and the blocks
+    /// it encloses, which resolve with a clone); cleared on entering a nested function, method
+    /// or closure body (`engine::resolve_function_body`). `value_include_hoist` refuses a
+    /// conditional include whose value would be stored into one of them; see
+    /// `hoist_value_includes`.
+    pub(super) static_locals: HashSet<String>,
 }
 
 impl ResolveState {
