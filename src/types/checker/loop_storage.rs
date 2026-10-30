@@ -6,13 +6,14 @@
 //!
 //! Key details:
 //! - The analysis iterates assignment and array-growth evidence until local types stop changing.
-//! - Two entry shapes are reported. Array locals whose stable representation needs boxed payloads
+//! - Array locals whose stable representation needs boxed payloads
 //!   (or a boxed whole value) get that representation; a local that enters holding `null` and is
 //!   assigned something else inside the body gets boxed `Mixed`, so the header holds both the
 //!   entering null and the value the back edge carries in (issue #562). Ordinary scalar-flow
 //!   inference remains checker-owned.
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
+//! - Tagged nullable integers gain boxed contracts when loop writes can produce a float or Mixed.
 //! - An `(array)` cast inside a literal uses the same `ArrayCast` classification as the checker,
 //!   so a loop-carried array of those casts does not collapse to `array<int>`.
 
@@ -25,7 +26,8 @@ use crate::types::{
 };
 
 /// Source recorded for a local assignment that may affect a later loop-carried array rebind.
-enum AssignedValue<'a> {
+#[derive(Clone)]
+pub(super) enum AssignedValue<'a> {
     /// An ordinary assignment whose RHS can be inferred under the evolving environment.
     Expr(&'a Expr),
     /// A binding whose semantic type is declared by its enclosing control-flow construct.
@@ -57,25 +59,51 @@ struct ArrayWrite<'a> {
     skippable: bool,
 }
 
-/// Computes stable storage types for array locals already present at loop entry.
+/// Computes representation changes for locals already present at loop entry.
 ///
 /// `infer_value` receives the evolving fixed-point environment, so a promotion can cascade
 /// through intermediate locals and through later iterations. The result contains only locals
 /// that require an up-front representation contract: indexed/associative arrays with boxed
-/// `mixed` payloads, or whole-value `mixed` when the container kind itself can vary.
-pub fn loop_carried_storage_types(
+/// `mixed` payloads, boxed values that started null, or tagged integers widened by writes.
+/// `tagged_integer_locals` includes physical nullable storage hidden by a coalesced read view.
+#[cfg(test)]
+fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
     entry: &TypeEnv,
     packed_counter: Option<&str>,
+    tagged_integer_locals: &HashSet<String>,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
-    let mut assignments = Vec::new();
-    collect_value_assignments(body, &mut assignments);
-    if let Some(update) = update {
-        collect_value_assignment_stmt(update, &mut assignments);
-    }
+    analyze_loop_storage(body, update, None, entry, packed_counter,
+        tagged_integer_locals, infer_value).contracts
+}
 
+/// Assignment values and executable calls collected without entering nested function bodies.
+#[derive(Clone, Default)]
+pub(super) struct LoopWrites<'a> {
+    pub values: Vec<(&'a str, AssignedValue<'a>)>,
+    pub calls: Vec<&'a Expr>,
+    pub references: Vec<&'a str>,
+    pub containers: Vec<&'a str>,
+}
+
+/// Stable physical contracts and the evidence used to reason about iteration entry reads.
+pub(super) struct LoopStorageAnalysis {
+    pub contracts: Vec<(String, PhpType)>,
+    pub fixed: TypeEnv,
+}
+
+/// Computes loop storage while exposing the same write evidence to read-flow analysis.
+pub(super) fn analyze_loop_storage<'a>(
+    body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
+    entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
+    infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+) -> LoopStorageAnalysis {
+    let mut assignments = LoopWrites::default();
+    collect_value_assignments(body, &mut assignments);
+    if let Some(update) = update { collect_value_assignment_stmt(update, &mut assignments); }
+    if let Some(condition) = condition { collect_value_assignments_from_expr(condition, &mut assignments); }
     let mut writes = Vec::new();
     collect_array_writes(body, &mut writes, false);
     if let Some(update) = update {
@@ -91,10 +119,11 @@ pub fn loop_carried_storage_types(
     loop {
         let previous = fixed.clone();
         apply_assignment_evidence(
-            &assignments,
+            &assignments.values,
             &mut fixed,
             infer_value,
             &mut whole_mixed_sources,
+            tagged_integer_locals,
         );
         apply_array_write_evidence(
             &writes,
@@ -113,6 +142,12 @@ pub fn loop_carried_storage_types(
         .iter()
         .filter_map(|(name, entry_ty)| {
             let fixed_ty = fixed.get(name)?;
+            if tagged_integer_locals.contains(name)
+                && fixed_ty.codegen_repr() == PhpType::Mixed
+                && join_tagged_numeric_flow_type(fixed_ty, fixed_ty).is_some()
+            {
+                return Some((name.clone(), fixed_ty.clone()));
+            }
             if is_array_like(entry_ty) {
                 return representation_contract(
                     entry_ty,
@@ -125,7 +160,7 @@ pub fn loop_carried_storage_types(
         })
         .collect::<Vec<_>>();
     contracts.sort_by(|left, right| left.0.cmp(&right.0));
-    contracts
+    LoopStorageAnalysis { contracts, fixed }
 }
 
 /// Applies every collected local assignment monotonically to one fixed-point iteration.
@@ -134,17 +169,26 @@ fn apply_assignment_evidence(
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
     whole_mixed_sources: &mut HashSet<String>,
+    tagged_integer_locals: &HashSet<String>,
 ) {
     for (name, source) in assignments {
         let incoming = match source {
+            AssignedValue::Expr(expr) if tagged_integer_locals.contains(*name) => infer_value(expr, env)
+                .or_else(|| precise_scalar_expr_type(expr)).unwrap_or(PhpType::Mixed),
             AssignedValue::Expr(expr) => infer_storage_value_type(expr, env, infer_value)
                 .or_else(|| precise_scalar_expr_type(expr))
                 .unwrap_or(PhpType::Mixed),
             AssignedValue::Known(ty) => ty.clone(),
             AssignedValue::Opaque => PhpType::Mixed,
-            // PHP's `++` keeps an int an int and a float a float. On anything else it is not
-            // arithmetic at all — `++` on a string is a string increment, on null it yields 1 —
-            // so those stay as unknown as they were.
+            // A checked update can overflow a tagged integer to float. Preserve its null
+            // alternative so the loop contract widens storage without inventing a read guard.
+            AssignedValue::Increment(variable) if tagged_integer_locals.contains(*variable) => {
+                env.get(*variable).and_then(|ty|
+                    join_tagged_numeric_flow_type(ty,
+                        &PhpType::Union(vec![PhpType::Int, PhpType::Float])))
+                    .unwrap_or(PhpType::Mixed)
+            }
+            // Keep the existing bounded raw-counter approximation used by array inference.
             AssignedValue::Increment(variable) => match env.get(*variable) {
                 Some(PhpType::Int) => PhpType::Int,
                 Some(PhpType::Float) => PhpType::Float,
@@ -160,10 +204,32 @@ fn apply_assignment_evidence(
         let merged = env
             .get(*name)
             .cloned()
-            .map(|existing| join_loop_flow_type(existing, incoming.clone()))
+            .map(|existing| {
+                if tagged_integer_locals.contains(*name) {
+                    if let Some(joined) = join_tagged_numeric_flow_type(&existing, &incoming) {
+                        return joined;
+                    }
+                }
+                join_loop_flow_type(existing, incoming.clone())
+            })
             .unwrap_or(incoming);
         env.insert((*name).to_string(), merged);
     }
+}
+
+/// Joins the numeric alternatives of a tagged local without erasing its nullable read type.
+fn join_tagged_numeric_flow_type(left: &PhpType, right: &PhpType) -> Option<PhpType> {
+    let members = |ty: &PhpType| match ty {
+        PhpType::Union(members) => members.clone(),
+        _ => vec![ty.clone()],
+    };
+    let source: Vec<_> = members(left).into_iter().chain(members(right)).collect();
+    if source.iter().any(|ty| !matches!(ty, PhpType::Int | PhpType::Float | PhpType::Void)) {
+        return None;
+    }
+    let joined: Vec<_> = [PhpType::Int, PhpType::Float, PhpType::Void].into_iter()
+        .filter(|ty| source.contains(ty)).collect();
+    Some(if joined.len() == 1 { joined[0].clone() } else { PhpType::Union(joined) })
 }
 
 /// Applies indexed-array growth and element-write evidence to one fixed-point iteration.
@@ -631,7 +697,7 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
 /// Collects local assignments from every statement in source traversal order.
 fn collect_value_assignments<'a>(
     statements: &'a [Stmt],
-    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+    out: &mut LoopWrites<'a>,
 ) {
     for statement in statements {
         collect_value_assignment_stmt(statement, out);
@@ -639,35 +705,39 @@ fn collect_value_assignments<'a>(
 }
 
 /// Collects local assignments from one statement and its executable nested bodies.
-fn collect_value_assignment_stmt<'a>(
+pub(super) fn collect_value_assignment_stmt<'a>(
     statement: &'a Stmt,
-    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+    out: &mut LoopWrites<'a>,
 ) {
     match &statement.kind {
         StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
             collect_value_assignments_from_expr(value, out);
-            out.push((name, AssignedValue::Expr(value)));
+            out.values.push((name, AssignedValue::Expr(value)));
         }
         StmtKind::RefAssign { target, source } => {
             collect_value_assignments_from_expr(source, out);
-            out.push((target, AssignedValue::Opaque));
+            out.values.push((target, AssignedValue::Opaque));
+            if let ExprKind::Variable(name) = &source.kind { out.references.push(name); }
         }
         StmtKind::ListUnpack { vars, value } => {
             collect_value_assignments_from_expr(value, out);
-            out.extend(
+            out.values.extend(
                 vars.iter()
                     .map(|name| (name.as_str(), AssignedValue::Opaque)),
             );
         }
-        StmtKind::ArrayAssign { index, value, .. } => {
+        StmtKind::ArrayAssign { array, index, value } => {
+            out.containers.push(array);
             collect_value_assignments_from_expr(index, out);
             collect_value_assignments_from_expr(value, out);
         }
         StmtKind::NestedArrayAssign { target, value } => {
+            if let Some(root) = local_container_write_root(target) { out.containers.push(root); }
             collect_value_assignments_from_expr(target, out);
             collect_value_assignments_from_expr(value, out);
         }
-        StmtKind::ArrayPush { value, .. } => {
+        StmtKind::ArrayPush { array, value } => {
+            out.containers.push(array);
             collect_value_assignments_from_expr(value, out);
         }
         StmtKind::PropertyAssign { object, value, .. }
@@ -702,9 +772,9 @@ fn collect_value_assignment_stmt<'a>(
         } => {
             collect_value_assignments_from_expr(array, out);
             if let Some(key_var) = key_var {
-                out.push((key_var, AssignedValue::Opaque));
+                out.values.push((key_var, AssignedValue::Opaque));
             }
-            out.push((value_var, AssignedValue::Opaque));
+            out.values.push((value_var, AssignedValue::Opaque));
             collect_value_assignments(body, out);
         }
         StmtKind::If {
@@ -788,7 +858,7 @@ fn collect_value_assignment_stmt<'a>(
                     } else {
                         PhpType::Object("Throwable".to_string())
                     };
-                    out.push((variable, AssignedValue::Known(catch_type)));
+                    out.values.push((variable, AssignedValue::Known(catch_type)));
                 }
                 collect_value_assignments(&catch.body, out);
             }
@@ -813,10 +883,22 @@ fn collect_value_assignment_stmt<'a>(
 }
 
 /// Collects assignment expressions and increment/decrement writes from an expression tree.
-fn collect_value_assignments_from_expr<'a>(
+pub(super) fn collect_value_assignments_from_expr<'a>(
     expr: &'a Expr,
-    out: &mut Vec<(&'a str, AssignedValue<'a>)>,
+    out: &mut LoopWrites<'a>,
 ) {
+    if let ExprKind::Closure { capture_refs, .. } = &expr.kind {
+        out.references.extend(capture_refs.iter().map(String::as_str));
+    }
+    if matches!(expr.kind,
+        ExprKind::FunctionCall { .. } | ExprKind::MethodCall { .. }
+        | ExprKind::NullsafeMethodCall { .. } | ExprKind::NullsafeDynamicMethodCall { .. }
+        | ExprKind::StaticMethodCall { .. } | ExprKind::ClosureCall { .. }
+        | ExprKind::ExprCall { .. } | ExprKind::NewObject { .. }
+        | ExprKind::NewScopedObject { .. } | ExprKind::NewGeneric { .. }
+        | ExprKind::NewDynamic { .. } | ExprKind::NewDynamicObject { .. }
+        | ExprKind::Closure { .. })
+    { out.calls.push(expr); }
     match &expr.kind {
         ExprKind::Assignment {
             target,
@@ -828,7 +910,9 @@ fn collect_value_assignments_from_expr<'a>(
             collect_value_assignments(prelude, out);
             collect_value_assignments_from_expr(value, out);
             if let ExprKind::Variable(name) = &target.kind {
-                out.push((name, AssignedValue::Expr(value)));
+                out.values.push((name, AssignedValue::Expr(value)));
+            } else if matches!(target.kind, ExprKind::ArrayAccess { .. }) {
+                if let Some(root) = local_container_write_root(target) { out.containers.push(root); }
             }
             collect_value_assignments_from_expr(target, out);
             if let Some(result_target) = result_target {
@@ -838,10 +922,20 @@ fn collect_value_assignments_from_expr<'a>(
         ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)
         | ExprKind::PreDecrement(name)
-        | ExprKind::PostDecrement(name) => out.push((name, AssignedValue::Increment(name))),
+        | ExprKind::PostDecrement(name) => out.values.push((name, AssignedValue::Increment(name))),
         _ => visit_child_expressions(expr, &mut |child| {
             collect_value_assignments_from_expr(child, out)
         }),
+    }
+}
+
+/// Finds a local container whose payload an indexed or nested target can mutate.
+fn local_container_write_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::ArrayAccess { array, .. } | ExprKind::ErrorSuppress(array)
+        | ExprKind::NamedArg { value: array, .. } => local_container_write_root(array),
+        _ => None,
     }
 }
 
@@ -1536,7 +1630,8 @@ mod tests {
         entry.insert("b".to_string(), PhpType::Pointer(Some("B".to_string())));
         entry.insert("c".to_string(), PhpType::Pointer(Some("C".to_string())));
         let mut infer = |_expr: &Expr, _env: &TypeEnv| -> Option<PhpType> { None };
-        let contracts = loop_carried_storage_types(&body, None, &entry, None, &mut infer);
+        let contracts = loop_carried_storage_types(&body, None, &entry, None,
+            &std::collections::HashSet::new(), &mut infer);
         assert_eq!(
             contracts,
             vec![(

@@ -151,7 +151,7 @@ impl ExceptionFlowAnalysis {
     /// `iterable`, and `callable` positions stay conservative. Array types recurse into their
     /// children because retiring a container retires the children it owns. The scalar arms are
     /// the precision that keeps a scalar-returning callee from resurrecting a catch.
-    fn type_destruction_throws(&self, php_type: &PhpType) -> ThrownTypes {
+    pub(super) fn type_destruction_throws(&self, php_type: &PhpType) -> ThrownTypes {
         match php_type {
             PhpType::Object(_)
             | PhpType::Mixed
@@ -247,7 +247,7 @@ impl ExceptionFlowAnalysis {
                 .combined(self.temporary_destruction_throws(right, class_context)),
             ExprKind::FunctionCall { name, .. } => self
                 .function_returns
-                .get(name.as_str())
+                .get(self.canonical_exception_function_name(name.as_str()))
                 .map(|return_type| self.type_destruction_throws(return_type))
                 .unwrap_or_else(|| self.any_destructor_throws()),
             ExprKind::StaticMethodCall {

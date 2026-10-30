@@ -8,7 +8,7 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -57,8 +57,7 @@ impl Checker {
                     ));
                     continue;
                 }
-                self.function_variant_groups
-                    .insert(name.clone(), variants.clone());
+                self.publish_function_variants(name.clone(), variants.clone());
                 continue;
             }
             if let StmtKind::FunctionDecl {
@@ -123,7 +122,7 @@ impl Checker {
                 if variadic.is_some() {
                     ref_flags.push(*variadic_by_ref);
                 }
-                self.fn_decls.insert(
+                self.publish_function_declaration(
                     name.clone(),
                     FnDecl {
                         type_params: type_params.clone(),
@@ -150,39 +149,20 @@ impl Checker {
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
     /// extern. Resolution is case-insensitive via PHP symbol key matching.
     pub(crate) fn has_function_decl_folded(&self, name: &str) -> bool {
-        if self.fn_decls.contains_key(name)
-            || self.function_variant_groups.contains_key(name)
-            || self.extern_functions.contains_key(name)
-        {
-            return true;
-        }
-        let key = php_symbol_key(name);
-        self.fn_decls
-            .keys()
-            .any(|existing| php_symbol_key(existing) == key)
-            || self
-                .function_variant_groups
-                .keys()
-                .any(|existing| php_symbol_key(existing) == key)
-            || self
-                .extern_functions
-                .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+        self.indexed_declared_function_name(name).is_some()
     }
 
     /// Returns the canonical (case-matching) name of a user function identified by `name` by
     /// case-insensitive lookup in `functions`, `function_variant_groups`, and `fn_decls`. Returns
     /// `None` if no matching function exists.
     pub(crate) fn canonical_function_name_folded(&self, name: &str) -> Option<String> {
-        folded_map_key(&self.functions, name)
-            .or_else(|| folded_map_key(&self.function_variant_groups, name))
-            .or_else(|| folded_map_key(&self.fn_decls, name))
+        self.indexed_function_name(name)
     }
 
     /// Returns the canonical (case-matching) name of an extern function identified by `name` by
     /// case-insensitive lookup in `extern_functions`. Returns `None` if no matching extern exists.
     pub(crate) fn canonical_extern_function_name_folded(&self, name: &str) -> Option<String> {
-        folded_map_key(&self.extern_functions, name)
+        self.indexed_extern_function_name(name)
     }
 
     /// Resolves type signatures for all user functions that were not already resolved during the
@@ -356,7 +336,7 @@ impl Checker {
                     }
                 }
             }
-            self.functions.insert(name.to_string(), provisional);
+            self.publish_function_signature(name.to_string(), provisional);
         }
 
         for variant in &variants {
@@ -412,7 +392,7 @@ impl Checker {
                 ));
             }
         }
-        self.functions.insert(name.to_string(), first);
+        self.publish_function_signature(name.to_string(), first);
         self.completed_function_signatures.insert(name.to_string());
         Ok(())
     }
@@ -472,19 +452,4 @@ impl Checker {
                 || seen.insert((error.span, error.file.clone(), error.message.clone()))
         });
     }
-}
-
-/// Performs a case-insensitive PHP symbol key lookup on `map` and returns the canonical (case-
-/// matching) key if one exists. Used to translate case-insensitive names to their actual declared
-/// spelling.
-fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
-    // A spelling that is itself a key is the canonical one: a case-insensitive symbol table
-    // never holds two spellings of one name, so the scan below could only find this same key.
-    if map.contains_key(name) {
-        return Some(name.to_string());
-    }
-    let key = php_symbol_key(name);
-    map.keys()
-        .find(|existing| php_symbol_key(existing) == key)
-        .cloned()
 }

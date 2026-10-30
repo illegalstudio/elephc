@@ -38,6 +38,14 @@ function requireQuantity(int|false $value): int
     return $value; // int|false has narrowed to int
 }
 
+function queryQuantity(?string $raw, ?int $default = null): int
+{
+    if ($raw === null && $default !== null) {
+        return $default;
+    }
+    return 0;
+}
+
 class Cart
 {
     public function __construct(public ?Money $discount)
@@ -77,6 +85,7 @@ file_put_contents($dir . "/alpha.meta", "a");
 echo render(7), "\n";
 echo render(new Money(1299)), "\n";
 echo "quantity ", requireQuantity(3), "\n";
+echo "fallback ", queryQuantity(null, 5), "\n";
 echo "discount ", (new Cart(new Money(250)))->requireDiscount()->format(), "\n";
 
 foreach (metaFiles($dir) as $path) {

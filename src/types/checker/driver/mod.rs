@@ -87,6 +87,7 @@ pub(super) fn check_types_impl(
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
+    checker.exception_analysis = Some(crate::optimize::CheckerExceptionAnalysis::new(program));
     checker.strict_locals = options.strict_locals;
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those

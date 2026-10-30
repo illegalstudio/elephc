@@ -119,8 +119,10 @@ pub(super) fn declarations() -> Program {
             .returns(TypeExpr::Str).returning(decimal(e_var("_bcinteger"))).build(),
         function("__elephc_bcnumber_operand").param("_bcoperand", t_mixed()).returns(TypeExpr::Str)
             .body(vec![
-                s_if(e_binop(global_call("is_float", vec![e_var("_bcoperand")]), BinOp::Or,
-                    global_call("is_bool", vec![e_var("_bcoperand")])),
+                // Keep the operand mixed at the coercive int-parameter boundary, including diagnostics.
+                s_assign("_bcoperand_kind", global_call("gettype", vec![e_var("_bcoperand")])),
+                s_if(e_binop(e_binop(e_var("_bcoperand_kind"), BinOp::StrictEq, e_str("double")), BinOp::Or,
+                    e_binop(e_var("_bcoperand_kind"), BinOp::StrictEq, e_str("boolean"))),
                     vec![s_return(global_call("__elephc_bcnumber_integer", vec![e_var("_bcoperand")]))], vec![], None),
                 s_return(decimal(e_var("_bcoperand"))),
             ]).build(),

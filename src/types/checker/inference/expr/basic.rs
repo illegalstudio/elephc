@@ -71,7 +71,9 @@ impl Checker {
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
                 Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
-                Some(PhpType::Int) => Ok(PhpType::Mixed),
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                    PhpType::Int
+                } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
                 // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
@@ -293,23 +295,13 @@ impl Checker {
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
                 // narrowing is safe to scope to each branch's inference.
-                let (then_ty, else_ty) = if let Some(guard) =
-                    self.guard_narrowing(condition, env)?
-                {
-                    let mut then_env = env.clone();
-                    then_env.insert(guard.var.clone(), guard.then_ty);
-                    let mut else_env = env.clone();
-                    else_env.insert(guard.var, guard.else_ty);
-                    (
-                        self.match_arm_result_type(then_expr, &then_env)?,
-                        self.match_arm_result_type(else_expr, &else_env)?,
-                    )
-                } else {
-                    (
-                        self.match_arm_result_type(then_expr, env)?,
-                        self.match_arm_result_type(else_expr, env)?,
-                    )
-                };
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+                let guards = self.guard_narrowings(condition, env)?;
+                let then_ty = self.with_flow_narrowings(&guards, true, &mut then_env,
+                    |checker, env| checker.match_arm_result_type(then_expr, env))?;
+                let else_ty = self.with_flow_narrowings(&guards, false, &mut else_env,
+                    |checker, env| checker.match_arm_result_type(else_expr, env))?;
                 let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
                 if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
                     return Ok(buffer);
@@ -331,23 +323,8 @@ impl Checker {
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(PhpType::Void)
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Void),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.validate_finally_throw_type(&thrown_ty, expr.span)?;
+                Ok(PhpType::Void)
             }
             ExprKind::Cast { target, expr } => {
                 let source_ty = self.infer_type(expr, env)?;

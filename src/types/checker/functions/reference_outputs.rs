@@ -223,19 +223,26 @@ impl Checker {
         call_span: Span,
         env: &TypeEnv,
     ) {
+        // A narrowed value can still occupy a nullable or union slot. Use that slot for
+        // layout decisions and restore its full view after a callee can write through it.
+        let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
+        let actual = guarded_storage.as_ref().unwrap_or(actual);
         let output_ty = if expected.is_php_array()
             && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             PhpType::php_array()
         } else if (expected.codegen_repr() == PhpType::Mixed
             || matches!(expected, PhpType::Object(_)))
-            && actual.codegen_repr() != PhpType::Mixed
+            && (actual.codegen_repr() != PhpType::Mixed
+                || (guarded_storage.is_some() && matches!(expected, PhpType::Object(_) | PhpType::Mixed)))
         {
             PhpType::Mixed
         } else if crate::types::is_nullable_pointer_type(expected)
             && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
         {
             expected.clone()
+        } else if let Some(storage) = guarded_storage {
+            storage
         } else {
             return;
         };
@@ -309,6 +316,7 @@ impl Checker {
         let key = (self.current_loop_storage_scope.clone(), span);
         if let Some(outputs) = self.boxed_reference_outputs.remove(&key) {
             for (name, output_ty) in outputs {
+                self.record_local_storage_effect(&name, &output_ty);
                 env.insert(name, output_ty);
             }
         }
