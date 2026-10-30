@@ -121,13 +121,20 @@ pub(super) fn lower_prop_get_nonnull(
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
+    let mode = property_fetch_mode(inst);
+    // An interface declares no properties, so a read the checker accepted on one went through a
+    // narrowing (`if ($answer instanceof Shape)`): dispatch on the runtime class.
+    if receiver_is_interface(ctx, object)? {
+        if let Some(candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)? {
+            return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
+        }
+    }
     // php does not answer this name from a declared slot on the receiver's STATIC class: it is a
     // strict ancestor's private slot, which php 7.4 made invisible here, or an undeclared name the
     // class keeps in its per-instance hash. Either way the runtime class decides what happens, and
     // it can decide something of a different KIND: a subclass that redeclares the name public
     // answers from its own slot, one that declares `__get` answers the accessor, and each class
     // lays its hash out at its own offset and reports its own name.
-    let mode = property_fetch_mode(inst);
     if let Some(plan) = dynamic_property_runtime_plan_for_object(
         ctx,
         object,
@@ -143,6 +150,14 @@ pub(super) fn lower_prop_get_nonnull(
             DispatchStackCleanup::NONE,
             |ctx, arm| emit_dynamic_plan_read(ctx, inst, object, property, arm, mode),
         );
+    }
+    // The static class has no slot or hash route for the name, but a subclass declares it: the
+    // checker narrowed the receiver (`if ($answer instanceof Shape)`), so dispatch on the runtime
+    // class.
+    if receiver_class_lacks_property(ctx, object, property)? {
+        if let Some(candidates) = narrowed_receiver_property_candidates(ctx, property, mode, inst)? {
+            return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates, mode);
+        }
     }
     let slot = resolve_property_slot(ctx, object, property, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
@@ -161,6 +176,48 @@ pub(super) fn lower_prop_get_nonnull(
         ctx.emitter.label(&read_done);
     }
     store_if_result(ctx, inst)
+}
+
+/// Reports whether an object receiver's static type is an interface (which has no class layout).
+fn receiver_is_interface(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    Ok(ctx.module.interface_infos.contains_key(normalized)
+        && !ctx.module.class_infos.contains_key(normalized))
+}
+
+/// Reports whether an object receiver's static class has no property slot under `property` at
+/// all, its own or inherited.
+fn receiver_class_lacks_property(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<bool> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(false);
+    };
+    Ok(ctx
+        .module
+        .class_infos
+        .get(class_name.trim_start_matches('\\'))
+        .is_some_and(|class_info| class_info.properties.iter().all(|(name, _)| name != property)))
+}
+
+/// Returns the runtime-class arms for a read on a narrowed receiver, or `None` when no class
+/// declares the name or keeps it in its hash (the ordinary missing-property path then reports it).
+fn narrowed_receiver_property_candidates(
+    ctx: &FunctionContext<'_>,
+    property: &str,
+    mode: PropertyFetchMode,
+    inst: &Instruction,
+) -> Result<Option<Vec<MixedPropertyReadCandidate>>> {
+    let candidates = declared_mixed_property_candidates(ctx, property, mode, inst)?;
+    if candidates.is_empty() && mixed_class_hash_arms(ctx, property, &[])?.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(candidates))
 }
 
 /// Resolves the reference-cell slot a statically typed receiver exposes, or emits php's refusal.

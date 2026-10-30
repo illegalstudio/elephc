@@ -501,6 +501,12 @@ fn property_result_type(
         };
     }
     let Some(class_info) = ctx.classes.get(normalized) else {
+        // An interface has no properties, so a read the checker accepted on one went through a
+        // narrowing (`if ($answer instanceof Shape)`). Codegen dispatches it on the runtime
+        // class, which hands back a boxed result, as for an untyped receiver.
+        if ctx.interfaces.contains_key(normalized) {
+            return PhpType::Mixed;
+        }
         return fallback_expr_type(expr);
     };
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
@@ -535,6 +541,16 @@ fn property_result_type(
         // The clone-override hash answers an undeclared name exactly like the attribute's does,
         // so both reserve the same boxed `mixed` result rather than a declared slot type.
         if class_info.dynamic_property_hash_is_name_addressable() {
+            return if nullable {
+                nullable_result_type(PhpType::Mixed)
+            } else {
+                PhpType::Mixed
+            };
+        }
+        // No slot, accessor or hash answers the name on the static class, so the checker
+        // narrowed the receiver to a subclass that declares it, and codegen reads it from the
+        // runtime class into a boxed result.
+        if class_info.properties.iter().all(|(name, _)| name != property) {
             return if nullable {
                 nullable_result_type(PhpType::Mixed)
             } else {

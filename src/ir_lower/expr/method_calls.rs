@@ -270,7 +270,32 @@ pub(super) fn method_call_argument_signature(
     if method_is_fiber_start(ctx, object, method) {
         return crate::ir_lower::fibers::start_sig_for_expr(ctx, object_expr);
     }
-    method_signature(ctx, object, method)
+    method_signature(ctx, object, method).or_else(|| narrowed_receiver_argument_signature(ctx, object, method))
+}
+
+/// Returns the signature that normalizes the arguments of a method the receiver's static class
+/// does not declare: the checker accepted the call because it narrowed the receiver
+/// (`if ($response instanceof Page) { $response->with($blocks) }`), and codegen dispatches it
+/// on the runtime class as for a `mixed` receiver. Its arguments take the signature every
+/// declaring class shares, as a `mixed` receiver's do, so an owned argument (`new Conn()`, a
+/// retained property read) is released after the call; without one it was handed over raw and
+/// never released. `None` for a class that routes the call through `__call`, or when the
+/// declaring classes disagree.
+fn narrowed_receiver_argument_signature(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<FunctionSig> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty()
+        || ctx.has_eval_barrier()
+        || class_method_signature(ctx, normalized, &php_symbol_key("__call")).is_some()
+    {
+        return None;
+    }
+    common_dynamic_method_signature(ctx, &php_symbol_key(method))
 }
 
 /// Returns true when a method call targets PHP's built-in `Fiber::start()`.

@@ -15,6 +15,46 @@
 
 use crate::support::*;
 
+/// The object a narrowed receiver's call returns is destructed like any other: a method the
+/// receiver's static interface does not declare dispatches through a boxed `Mixed` result,
+/// and that box owns the returned object, whether the result is chained, bound or discarded.
+#[test]
+fn test_destruct_result_of_narrowed_receiver_call() {
+    let out = compile_and_run(
+        r#"<?php
+interface Response {}
+final class Doc implements Response {
+    public function __construct(private string $name) {}
+    public function __destruct() { echo "destruct ", $this->name, "\n"; }
+    public function with(string $step): self { return new self($this->name . '+' . $step); }
+    public function name(): string { return $this->name; }
+}
+function chained(Response $response): string {
+    if ($response instanceof Doc) { return $response->with('chained')->name(); }
+    return '';
+}
+function bound(Response $response): string {
+    if ($response instanceof Doc) { $next = $response->with('bound'); return $next->name(); }
+    return '';
+}
+function discarded(Response $response): void {
+    if ($response instanceof Doc) { $response->with('discarded'); }
+    echo "after discard\n";
+}
+echo chained(new Doc('a')), "\n";
+echo bound(new Doc('b')), "\n";
+discarded(new Doc('c'));
+echo "end\n";
+"#,
+    );
+    // `bound` releases its locals as codegen orders them; PHP destroys `$response` before `$next`.
+    assert_eq!(
+        out,
+        "destruct a+chained\ndestruct a\na+chained\ndestruct b+bound\ndestruct b\nb+bound\n\
+         destruct c+discarded\nafter discard\ndestruct c\nend\n"
+    );
+}
+
 /// A destructor fires at function scope exit, before control returns to the
 /// caller's following statement.
 #[test]
@@ -208,4 +248,50 @@ echo "|fin";
 "#,
     );
     assert_eq!(out, "count:3|fin");
+}
+
+/// A method only the narrowed class declares (`if ($r instanceof Doc) { $r->take($x) }`)
+/// dispatches on the runtime class, as for a `mixed` receiver, and its arguments are released
+/// after the call. They were handed over without the caller's release, so an object passed
+/// straight in (a `new` expression, a property read) was never destructed: in a `--web`
+/// handler a page's blocks and the connection they held outlived every request.
+#[test]
+fn test_narrowed_receiver_call_releases_its_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+final class Conn { public function __construct(public int $n) {} public function __destruct() { echo "close {$this->n}\n"; } }
+interface Response { public function done(): string; }
+final class Doc implements Response {
+    public function take(Conn $c): self { return new self(); }
+    public function done(): string { return "doc"; }
+}
+final class Handler {
+    public function __construct(private Conn $conn) {}
+    public function handle(Response $r, int $n): string {
+        if ($r instanceof Doc) {
+            return $r->take($this->conn)->done() . " " . $r->take(new Conn($n + 10))->done();
+        }
+        return $r->done();
+    }
+    public function direct(Response $r, int $n): string {
+        if ($r instanceof Doc) {
+            return $r->take(new Conn($n + 20))->done();
+        }
+        return $r->done();
+    }
+}
+function request(int $n): void {
+    $h = new Handler(new Conn($n));
+    echo $h->handle(new Doc(), $n), "\n";
+    echo $h->direct(new Doc(), $n), "\n";
+}
+request(1);
+request(2);
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "close 11\ndoc doc\nclose 21\ndoc\nclose 1\nclose 12\ndoc doc\nclose 22\ndoc\nclose 2\nend\n"
+    );
 }
