@@ -139,6 +139,13 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // reached a top-level local.
     super::enum_singletons::emit_enum_slot_resets(emitter, module);
 
+    // Every root of the previous request is released above, so an object that only a
+    // reference cycle keeps alive is garbage. PHP destructs it at request shutdown; a
+    // collection here runs its destructor (a PDO connection closes) before the arena
+    // wipe, instead of leaking its native resources into the next request.
+    emitter.comment("collect the previous request's cycles so their destructors run");
+    abi::emit_call_label(emitter, "__rt_gc_collect_cycles_explicit");
+
     emit_concat_offset_reset(emitter);
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");

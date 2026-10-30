@@ -15,6 +15,28 @@
 
 use crate::support::*;
 
+/// Objects that only a reference cycle keeps alive are destructed at program end, after
+/// the acyclic ones, as PHP's shutdown destructs every object still alive.
+#[test]
+fn test_destruct_cycle_at_program_end() {
+    let out = compile_and_run(
+        r#"<?php
+final class Node {
+    public ?Node $next = null;
+    public function __construct(private string $name) {}
+    public function __destruct() { echo "destruct ", $this->name, "\n"; }
+}
+$a = new Node('a');
+$b = new Node('b');
+$a->next = $b;
+$b->next = $a;
+$c = new Node('c');
+echo "end of script\n";
+"#,
+    );
+    assert_eq!(out, "end of script\ndestruct c\ndestruct a\ndestruct b\n");
+}
+
 /// A destructor fires at function scope exit, before control returns to the
 /// caller's following statement.
 #[test]

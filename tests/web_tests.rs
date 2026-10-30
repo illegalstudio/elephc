@@ -592,6 +592,53 @@ fn web_pool_reuses_and_recycles_handler_children() {
     let _ = server.wait();
 }
 
+/// Regression: an object that only a reference cycle keeps alive is destructed when its
+/// request ends, as PHP's shutdown does, so a pooled handler does not leak what its
+/// destructor releases (an open PDO connection, one per request) into later requests.
+#[test]
+fn web_pool_destructs_request_cycles_before_the_next_request() {
+    let dir = make_test_dir("web_pool_cycle_destruct");
+    let log = dir.join("destructed.log");
+    let source = format!(
+        r#"<?php
+final class Node {{
+    public ?Node $next = null;
+    public function __construct(private string $name) {{}}
+    public function __destruct() {{
+        file_put_contents('{log}', $this->name, FILE_APPEND);
+    }}
+}}
+$seen = file_exists('{log}') ? file_get_contents('{log}') : '';
+echo 'seen:', $seen, ';';
+$a = new Node('a');
+$b = new Node('b');
+$a->next = $b;
+$b->next = $a;
+"#,
+        log = log.display()
+    );
+    let bin = compile_isolated_web(&dir, &source, "app", "pool");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_args(
+        &bin,
+        &addr,
+        "1",
+        &["--handler-concurrency", "1", "--max-handler-requests", "0"],
+    );
+
+    assert!(raw_response_body(&http_get(&addr, "/")).contains("seen:;"));
+    let response = http_get(&addr, "/");
+    let second = raw_response_body(&response);
+    assert!(
+        second.contains("seen:ab;") || second.contains("seen:ba;"),
+        "the first request's cycle was not destructed before the second: {second}"
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
 /// Regression: concurrent pool traffic must tolerate handlers that close immediately
 /// after a framed response, while still keeping SIGPIPE contained as an I/O error.
 #[test]
