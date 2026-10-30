@@ -16,6 +16,7 @@ fn test_computed_indexed_name_owners_bundle() {
 class ScopedIndexedBox {
     public array $items = [0];
     public function receiver(): self { echo 'r|'; return $this; }
+    public function erased(): mixed { echo 'r|'; return $this; }
 }
 class ScopedIndexedName {
     public function __toString(): string { echo 's|'; return 'items'; }
@@ -25,6 +26,7 @@ function makeScopedIndexedName(int $kind): mixed { echo 'n|'; return $kind === 0
 function scopedIndexedKey(): int { echo 'k|'; return 0; }
 function scopedIndexedValue(): int { echo 'v|'; return 2; }
 $box = new ScopedIndexedBox();
+$copy = $box->items;
 for ($kind = 0; $kind < 2; $kind++) {
     $box->receiver()->{makeScopedIndexedName($kind)}[scopedIndexedKey()] += scopedIndexedValue();
     echo json_encode($box->items), '|';
@@ -33,7 +35,14 @@ for ($kind = 0; $kind < 2; $kind++) {
     --$box->receiver()->{makeScopedIndexedName($kind)}[scopedIndexedKey()];
     echo json_encode($box->items), '|';
 }
-unset($box);
+$box->erased()->{makeScopedIndexedName(0)}[scopedIndexedKey()] += scopedIndexedValue();
+echo json_encode($box->items), '|';
+$box->erased()->{makeScopedIndexedName(0)}[scopedIndexedKey()]++;
+echo json_encode($box->items), '|';
+--$box->erased()->{makeScopedIndexedName(0)}[scopedIndexedKey()];
+echo json_encode($box->items), '|';
+echo 'copy:', json_encode($copy), '|';
+unset($box, $copy);
 "#;
     let renamed = source.replace("ScopedIndexed", "EvalScopedIndexed").replace("scopedIndexed", "evalScopedIndexed");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
@@ -41,6 +50,8 @@ unset($box);
     let expected = concat!(
         "r|n|k|v|[2]|r|n|k|[3]|r|n|k|[2]|",
         "r|n|k|v|s|d|[4]|r|n|k|s|d|[5]|r|n|k|s|d|[4]|",
+        "r|n|k|v|[6]|r|n|k|[7]|r|n|k|[6]|",
+        "copy:[0]|",
     );
     assert_bundle_with(&[
         BundleCase { name: "computed_names_aot", source, expected },

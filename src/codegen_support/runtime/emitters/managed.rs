@@ -204,6 +204,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
+    arrays::emit_mixed_bit_not(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
     arrays::emit_foreach_non_iterable_warning(emitter);

@@ -60,26 +60,10 @@ pub(super) fn lower_nested_array_assign(
         if runtime_property { capture_compound_rhs(ctx, &mut value, &mut sources); }
         let target = super::nested_write_sources::capture_update_target(ctx, target, &mut sources);
         if !runtime_property { capture_compound_rhs(ctx, &mut value, &mut sources); }
-        let mut snapshots = Vec::new();
-        let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots, true);
-        if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
-            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
-        } else if nested_static_root_is_boxed(ctx, &target)
-            || nested_target_has_local_array_root(ctx, &target)
-            || attached_property_root(ctx, &target) {
-            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
-        } else {
-            let mut value = value.clone();
-            match &mut value.kind {
-                ExprKind::BinaryOp { left, .. } => *left = Box::new(read),
-                ExprKind::Assignment { prelude, .. } => {
-                    if let StmtKind::Assign { value, .. } = &mut prelude[0].kind { *value = read; }
-                }
-                _ => unreachable!("classified element updates have a captured read"),
-            }
-            lower_nested_array_assign_inner(ctx, &write, &value, span, true);
+        let value = super::nested_runtime_property_updates::with_read(&value, &target);
+        if !runtime_property || !super::nested_runtime_property_updates::lower(ctx, &target, &value, span) {
+            lower_captured_update(ctx, &target, &value, span);
         }
-        retire_update_keys(ctx, snapshots, span);
         super::nested_write_sources::retire(ctx, sources, span);
         return;
     }
@@ -114,6 +98,36 @@ pub(super) fn lower_nested_array_assign(
     if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
         lower_nested_array_assign_inner(ctx, &write, value, span, static_update);
     } else { lower_nested_array_assign_inner(ctx, target, value, span, static_update); }
+}
+
+/// Uses the established attached parent and native incdec kernels after inputs are captured.
+pub(super) fn lower_captured_update(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
+    let update = desugared_element_update(value, span, |read| read == target)
+        .expect("captured update retains its canonical self-read");
+    let mut snapshots = Vec::new();
+    let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots, true);
+    if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
+        lower_boxed_static_nested_update(ctx, &read, &write, update, value, value.span);
+    } else if nested_static_root_is_boxed(ctx, target)
+        || nested_target_has_local_array_root(ctx, target)
+        || attached_property_root(ctx, target)
+        || runtime_property_root(target).is_some() {
+        lower_boxed_static_nested_update(ctx, &read, &write, update, value, value.span);
+    } else {
+        let value = super::nested_runtime_property_updates::with_read(value, &read);
+        lower_nested_array_assign_inner(ctx, &write, &value, span, true);
+    }
+    retire_update_keys(ctx, snapshots, span);
+}
+
+/// Returns the runtime-name root without inspecting unrelated dimensions or captured operands.
+pub(super) fn runtime_property_root(target: &Expr) -> Option<(&Expr, &Expr)> {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::DynamicPropertyAccess { object, property } = &root.kind else { return None; };
+    Some((object, property))
 }
 
 /// Releases key snapshots without widening their already allocated PHP storage.

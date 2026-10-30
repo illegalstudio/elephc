@@ -130,6 +130,8 @@ pub enum RuntimeCallTarget {
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
+    /// Complements a borrowed PHP value, preserving string bytes and implicit float diagnostics.
+    MixedBitNot,
     /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
     ExceptionGuardOwned,
     /// Removes an owned-value guard without releasing the value on the normal path.
@@ -237,7 +239,8 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
-            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite
+            | RuntimeCallTarget::MixedBitNot => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
@@ -333,6 +336,7 @@ impl RuntimeCallTarget {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
+            RuntimeCallTarget::MixedBitNot => "mixed.bit_not",
             RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",

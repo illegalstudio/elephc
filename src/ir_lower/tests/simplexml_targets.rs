@@ -102,7 +102,13 @@ $xml = new SimpleXMLElement('<r/>');
                     if module.data.strings[id.as_raw() as usize] == "__elephc_bitnot")),
                 "{target}: {name} must retain the native refusal adapter");
         }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let boxed = module.functions.iter().find(|f| f.name == "nativeBoxedBitnot").unwrap();
+        assert!(boxed.instructions.iter().any(|inst|
+            inst.op == crate::ir::Op::RuntimeCall && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedBitNot))),
+            "{target}: boxed bitnot needs a typed scalar fallback");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_mixed_bit_not"), "{target}: fallback must reach the backend");
     }
 }
 

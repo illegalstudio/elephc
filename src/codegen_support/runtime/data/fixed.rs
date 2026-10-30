@@ -207,6 +207,12 @@ pub(crate) fn emit_runtime_data_fixed(
     // (unlike the argument-type diagnostics, which spell the type as `bool`).
     out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
     out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(".globl _bit_not_prefix\n_bit_not_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::arrays::BIT_NOT_PREFIX));
+    out.push_str(".p2align 3\n.globl _bit_not_type_rows\n_bit_not_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::arrays::BIT_NOT_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}, {len}\n"));
+    }
     out.push_str(&format!(
         ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
     ));

@@ -82,6 +82,12 @@ pub(super) fn lower(
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, true)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::MixedBitNot => {
+            let value = expect_operand(inst, 0)?;
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_bit_not");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),

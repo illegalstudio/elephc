@@ -201,6 +201,7 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
 mod mixed_reference;
@@ -551,6 +552,7 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+pub(crate) use mixed_bit_not::{emit_mixed_bit_not, BIT_NOT_PREFIX, BIT_NOT_TYPE_ROWS};
 /// Emit boxed-Mixed-to-array cast helper.
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.

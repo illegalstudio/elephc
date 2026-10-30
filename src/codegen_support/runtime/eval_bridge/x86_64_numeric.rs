@@ -267,19 +267,8 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed round result to Rust
 
     label_c_global(emitter, "__elephc_eval_value_bit_not");
-    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
-    emitter.instruction("sub rsp, 16");                                         // keep stack alignment for the cast and boxing calls
-    emitter.instruction("mov rax, rdi");                                        // move the boxed operand into mixed_cast_int input
-    emitter.instruction("call __rt_mixed_cast_int");                            // cast the boxed operand to a PHP integer
-    emitter.instruction("not rax");                                             // compute bitwise complement of the integer payload
-    emitter.instruction("mov rdi, rax");                                        // move the complement into mixed value_lo
-    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
-    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
-    emitter.instruction("call __rt_mixed_from_value");                          // box the bitwise NOT result into a Mixed cell
-    emitter.instruction("add rsp, 16");                                         // release the bitwise NOT wrapper slots
-    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
-    emitter.instruction("ret");                                                 // return the boxed bitwise NOT result to Rust
+    emitter.instruction("mov rax, rdi");                                        // pass the borrowed C operand through the runtime result register
+    emitter.instruction("jmp __rt_mixed_bit_not");                              // share PHP scalar complement semantics with typed EIR calls
 
     label_c_global(emitter, "__elephc_eval_value_bitwise");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls

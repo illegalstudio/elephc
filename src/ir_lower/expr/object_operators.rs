@@ -495,8 +495,16 @@ fn lower_dynamic_numeric_cast(
 ) -> LoweredValue {
     let Some((class, method)) = handlers.first() else {
         if bit_not {
-            return ctx.emit_value(Op::RuntimeCall, vec![input.value], None, PhpType::Mixed,
+            let at = span.unwrap_or_else(Span::dummy);
+            let operand = box_operand(ctx, input, at);
+            let pins = pin_in_flight_owners(ctx, &[input.value, operand.value], at);
+            let result = ctx.emit_owned_value(Op::RuntimeCall, vec![operand.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedBitNot)), PhpType::Mixed,
                 Effects::all(), span);
+            unpin_in_flight_owners(ctx, pins, at);
+            if operand.value != input.value { release_binary_operand_temporary(ctx, operand, at); }
+            release_binary_operand_temporary(ctx, input, at);
+            return result;
         }
         let at = span.unwrap_or_else(Span::dummy);
         let operand = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {

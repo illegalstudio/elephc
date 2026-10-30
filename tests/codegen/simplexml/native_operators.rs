@@ -10,6 +10,50 @@
 
 use crate::support::*;
 
+/// Mixed native refusal keeps scalar byte complements, conversion diagnostics and fresh owners.
+#[test]
+fn test_simplexml_bitnot_scalar_fallback_bundle() {
+    if skip_without_xml_native("test_simplexml_bitnot_scalar_fallback_bundle") { return; }
+    let source = r#"<?php
+$xml = new SimpleXMLElement('<r/>');
+function scalarNativeBitnot(mixed $value): mixed { return ~$value; }
+function reportScalarNativeBitnot(mixed $value): void {
+    try {
+        $result = scalarNativeBitnot($value);
+        echo is_string($result) ? bin2hex($result) : $result, '|';
+    } catch (TypeError $error) { echo $error->getMessage(), '|'; }
+}
+set_error_handler(function(int $severity, string $message): bool { echo $message, '|'; return true; });
+reportScalarNativeBitnot(5); reportScalarNativeBitnot('A'); reportScalarNativeBitnot(1.5);
+reportScalarNativeBitnot(true); reportScalarNativeBitnot(false); reportScalarNativeBitnot(null);
+reportScalarNativeBitnot([]); reportScalarNativeBitnot(new stdClass());
+restore_error_handler();
+$source = str_repeat('A', 70000);
+$result = scalarNativeBitnot($source);
+echo strlen($result), ':', ord($result[0]), ':', ord($result[69999]), ':', ord($source[0]), '|';
+unset($xml, $source, $result);
+"#;
+    let renamed = source.replace("ScalarNativeBitnot", "EvalScalarNativeBitnot")
+        .replace("scalarNativeBitnot", "evalScalarNativeBitnot");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $code = $argc > 0 ? '{body}' : ''; eval($code);");
+    let expected = concat!(
+        "-6|be|Implicit conversion from float 1.5 to int loses precision|-2|",
+        "Cannot perform bitwise not on true|Cannot perform bitwise not on false|",
+        "Cannot perform bitwise not on null|Cannot perform bitwise not on array|",
+        "Cannot perform bitwise not on stdClass|70000:190:190:65|",
+    );
+    assert_bundle_with(&[
+        BundleCase { name: "bitnot_scalar_aot", source, expected },
+        BundleCase { name: "bitnot_scalar_eval", source: &eval, expected },
+    ], |source| {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    });
+}
+
 /// Bitwise NOT refuses native XML and subclasses through typed AOT and runtime eval dispatch.
 #[test]
 fn test_simplexml_bitnot_refusal_bundle() {

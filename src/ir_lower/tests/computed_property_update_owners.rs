@@ -7,6 +7,42 @@
 //! Key details:
 //! - Ordinary getters and Stringable names coexist with the native XML protocol.
 
+/// Runtime names keep the declared property's attached COW fetch for typed and erased receivers.
+#[test]
+fn computed_runtime_name_array_updates_publish_the_declared_slot_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class RuntimeNameArraySlot {
+    public array $items = [0];
+    public function typed(): self { return $this; }
+    public function erased(): mixed { return $this; }
+}
+function runtimeArraySlotName(): string { return 'items'; }
+function writeRuntimeArrayTyped(RuntimeNameArraySlot $box): void {
+    $box->typed()->{runtimeArraySlotName()}[0] += 2;
+}
+function writeRuntimeArrayErased(RuntimeNameArraySlot $box): void {
+    $box->erased()->{runtimeArraySlotName()}[0] += 2;
+}
+$box = new RuntimeNameArraySlot();
+writeRuntimeArrayTyped($box); writeRuntimeArrayErased($box);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for name in ["writeRuntimeArrayTyped", "writeRuntimeArrayErased"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite
+                && matches!(inst.immediate, Some(Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == "items")),
+                "{target}: {name} must mutate the actual declared slot\n{}",
+                crate::ir::print_function(function));
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// A statement's indexed read and write borrow the same computed receiver until scope cleanup.
 #[test]
 fn computed_indexed_update_preserves_scoped_receiver_on_every_target() {

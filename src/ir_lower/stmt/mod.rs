@@ -48,6 +48,7 @@ mod array_write_core;
 mod buffer_element_updates;
 mod nested_array_writes;
 mod nested_property_updates;
+mod nested_runtime_property_updates;
 pub(crate) use nested_property_updates::lower_nested_property_compound_expression;
 mod nested_write_guards;
 mod nested_scalar_writes;

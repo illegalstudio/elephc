@@ -10,6 +10,56 @@
 
 use crate::support::*;
 
+/// Computed XML indexed incdec keeps native no-writeback with one name conversion per update.
+#[test]
+fn test_simplexml_computed_indexed_incdec_bundle() {
+    if skip_without_xml_native("test_simplexml_computed_indexed_incdec_bundle") { return; }
+    let mut source = String::from(r#"<?php
+class ComputedXmlChild extends SimpleXMLElement {}
+class ComputedXmlName {
+    public function __toString(): string { echo 's|'; return 'a'; }
+    public function __destruct() { echo 'd|'; }
+}
+function computedXmlName(int $kind): mixed { echo 'f|'; return $kind === 0 ? 'a' : new ComputedXmlName(); }
+function computedXmlTyped(SimpleXMLElement $node): SimpleXMLElement { echo 'g|'; return $node; }
+function computedXmlMixed(mixed $node): mixed { echo 'g|'; return $node; }
+function computedXmlChild(ComputedXmlChild $node): ComputedXmlChild { echo 'g|'; return $node; }
+"#);
+    for (suffix, ty) in [("Typed", "SimpleXMLElement"), ("Mixed", "mixed"), ("Child", "ComputedXmlChild")] {
+        source.push_str(&format!(r#"
+function updateComputedXml{suffix}({ty} $node, int $kind): void {{
+    computedXml{suffix}($node)->{{computedXmlName($kind)}}[0]++;
+    echo (string)$node->a, '|';
+    --computedXml{suffix}($node)->{{computedXmlName($kind)}}[0];
+    echo (string)$node->a, '|';
+    computedXml{suffix}($node)->{{computedXmlName($kind)}}[0] += 2;
+    echo (string)$node->a, '|';
+}}
+"#));
+    }
+    source.push_str(r#"
+for ($kind = 0; $kind < 2; $kind++) {
+    updateComputedXmlTyped(new SimpleXMLElement('<r><a>5</a></r>'), $kind);
+    updateComputedXmlMixed(new SimpleXMLElement('<r><a>5</a></r>'), $kind);
+    updateComputedXmlChild(new ComputedXmlChild('<r><a>5</a></r>'), $kind);
+}
+"#);
+    let renamed = source.replace("ComputedXml", "EvalComputedXml").replace("computedXml", "evalComputedXml");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $code = $argc > 0 ? '{body}' : ''; eval($code);");
+    let expected = ["g|f|5|g|f|5|g|f|7|".repeat(3),
+        "g|f|s|d|5|g|f|s|d|5|g|f|s|d|7|".repeat(3)].concat();
+    assert_bundle_with(&[
+        BundleCase { name: "computed_xml_incdec_aot", source: &source, expected: &expected },
+        BundleCase { name: "computed_xml_incdec_eval", source: &eval, expected: &expected },
+    ], |source| {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    });
+}
+
 /// Local, static and array-held XML incdec selects without writing its numeric result back.
 #[test]
 fn test_simplexml_dimension_incdec_places() {
