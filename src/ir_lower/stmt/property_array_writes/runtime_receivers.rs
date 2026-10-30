@@ -120,7 +120,14 @@ fn dispatch(
     mut apply: impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue, bool),
 ) -> bool {
     let ty = ctx.builder.value_php_type(object.value);
-    if !(include_dynamic && matches!(ty.codegen_repr(), PhpType::Object(_)))
+    let concrete_class = match ty.codegen_repr() {
+        PhpType::Object(class) if !class.is_empty() && !ctx.interfaces.contains_key(&class) =>
+            Some(class.trim_start_matches('\\').to_string()),
+        _ => None,
+    };
+    let dynamic_dispatch = include_dynamic && concrete_class.as_ref().is_some_and(|class|
+        object_type_property_type(ctx, &PhpType::Object(class.clone()), property).is_none());
+    if !dynamic_dispatch
         && !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && !matches!(ty.codegen_repr(), PhpType::Object(class)
             if class.is_empty() || ctx.interfaces.contains_key(&class)) {
@@ -134,6 +141,10 @@ fn dispatch(
         return false;
     }
     let mut classes: Vec<_> = ctx.classes.iter().filter_map(|(name, info)| {
+        if concrete_class.as_ref().is_some_and(|base|
+            name != base && !crate::types::class_inherits_from(ctx.classes, name, base)) {
+            return None;
+        }
         if include_dynamic && dynamic_slot(info, name, property) {
             return Some((name.clone(), None, true));
         }

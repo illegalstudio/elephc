@@ -61,7 +61,7 @@ $dynamicSnapshot = $dynamic->items; $dynamicClone = clone $dynamic;
 appendStorageInterface($dynamic, 1);
 echo implode(',', $dynamicSnapshot), ':', implode(',', $dynamicClone->items), ':', implode(',', $dynamic->items), '|';
 class AppendStorageDeprecated {}
-$plain = new AppendStorageDeprecated(); $reserved = clone $plain;
+$plain = new AppendStorageDeprecated(); $reserved = clone($plain, []);
 set_error_handler(function(int $level, string $message): bool { throw new Exception('blocked'); });
 try { appendStorageMixed($plain, 1); }
 catch (Throwable $error) { echo $error->getMessage(), ':'; }

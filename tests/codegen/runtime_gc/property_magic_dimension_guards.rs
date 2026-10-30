@@ -85,7 +85,8 @@ magicFetchWrite(new MagicFetchPrivateSet(), true);
     let native = format!("{source}\n{capability}");
     let renamed = source.replace("MagicFetch", "EvalMagicFetch").replace("magicFetch", "evalMagicFetch");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = format!("<?php {capability} $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let eval_capability = capability.replace("magicFetchXmlCapability", "evalMagicFetchXmlCapability");
+    let eval = format!("<?php {eval_capability} $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let eval_expected = expected.replace("MagicFetch", "EvalMagicFetch");
     assert_bundle_with(&[
         BundleCase { name: "magic_declaration_aot", source: &native, expected },

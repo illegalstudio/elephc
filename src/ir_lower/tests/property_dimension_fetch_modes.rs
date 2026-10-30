@@ -176,12 +176,24 @@ interface AttachedAppendMarker {}
 class AttachedAppendDeclared implements AttachedAppendMarker { public array $items = []; }
 #[AllowDynamicProperties]
 class AttachedAppendDynamic implements AttachedAppendMarker {}
+class AttachedAppendDynamicChild extends AttachedAppendDynamic {}
+#[AllowDynamicProperties]
+class AttachedAppendUnrelated {}
+class AttachedAppendDeprecated {}
 function attachedAppendMixed(mixed $box): void { $box->items[] = 1; }
 function attachedAppendObject(object $box): void { $box->items[] = 2; }
 function attachedAppendInterface(AttachedAppendMarker $box): void { $box->items[] = 3; }
+function attachedAppendKnown(AttachedAppendDynamic $box): void { $box->items[] = 4; }
+function attachedAppendDeclared(AttachedAppendDeclared $box): void { $box->items[] = 5; }
+function attachedAppendDeprecated(AttachedAppendDeprecated $box): void { $box->items[] = 6; }
 attachedAppendMixed(new AttachedAppendDeclared());
 attachedAppendObject(new stdClass());
 attachedAppendInterface(new AttachedAppendDynamic());
+attachedAppendKnown(new AttachedAppendDynamicChild());
+attachedAppendDeclared(new AttachedAppendDeclared());
+$plain = new AttachedAppendDeprecated(); $reserved = clone($plain, []);
+attachedAppendDeprecated($plain);
+echo get_class(new AttachedAppendUnrelated());
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -196,6 +208,33 @@ attachedAppendInterface(new AttachedAppendDynamic());
                 crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite))),
                 "{target}: {name} must select an attached dynamic cell");
         }
+        let direct = module.functions.iter().find(|f| f.name == "attachedAppendDeclared").unwrap();
+        assert!(direct.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite),
+            "{target}: known declared array must keep its attached direct writer");
+        assert!(!direct.instructions.iter().any(|inst| matches!(inst.immediate,
+            Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::GetClass)
+                | crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite)))),
+            "{target}: known declared array must not emit a runtime class ladder or hash arm");
+        let known = module.functions.iter().find(|f| f.name == "attachedAppendKnown").unwrap();
+        let classes: Vec<_> = known.instructions.iter().filter_map(|inst| match inst.immediate {
+            Some(crate::ir::Immediate::Data(id)) if inst.op == Op::ConstStr =>
+                Some(module.data.strings[id.as_raw() as usize].as_str()),
+            _ => None,
+        }).collect();
+        for class in ["AttachedAppendDynamic", "AttachedAppendDynamicChild"] {
+            assert!(classes.contains(&class), "{target}: known receiver must retain {class}");
+        }
+        for class in ["stdClass", "AttachedAppendUnrelated", "AttachedAppendDeclared", "AttachedAppendDeprecated"] {
+            assert!(!classes.contains(&class), "{target}: known receiver must exclude unrelated {class}");
+        }
+        let deprecated = &module.class_infos["AttachedAppendDeprecated"];
+        assert!(deprecated.dynamic_property_hash_is_name_addressable()
+            && deprecated.dynamic_property_creation_is_deprecated(),
+            "{target}: clone-with must reserve a deprecated ordinary hash");
+        let write = module.functions.iter().find(|f| f.name == "attachedAppendDeprecated").unwrap();
+        assert!(write.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite))),
+            "{target}: deprecated hash case must reach the attached fetch");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
