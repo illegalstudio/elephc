@@ -552,8 +552,10 @@ unsafe extern "C" {
         right: *mut RuntimeCell,
         op: u64,
     ) -> *mut RuntimeCell;
-    /// Returns the boxed bitwise complement of the input value.
-    pub(super) fn __elephc_eval_value_bit_not(value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Borrows a value and publishes an owned complement, returning protected native status.
+    pub(super) fn __elephc_eval_value_bit_not_v1(
+        value: *mut RuntimeCell, result: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Returns the boxed concatenation of the supplied PHP values.
     pub(super) fn __elephc_eval_value_concat(
         left: *mut RuntimeCell,

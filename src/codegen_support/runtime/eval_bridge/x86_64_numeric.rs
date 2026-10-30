@@ -266,10 +266,6 @@ pub(super) fn emit_x86_64_numeric(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed round result to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_bit_not");
-    emitter.instruction("mov rax, rdi");                                        // pass the borrowed C operand through the runtime result register
-    emitter.instruction("jmp __rt_mixed_bit_not");                              // share PHP scalar complement semantics with typed EIR calls
-
     label_c_global(emitter, "__elephc_eval_value_bitwise");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer

@@ -25,6 +25,24 @@ pub(super) fn lower_assignment_expr(
     if let Some(result) = crate::ir_lower::stmt::lower_nested_property_compound_expression(
         ctx, target, value, result_target, prelude, conditional_value_temp, expr.span,
     ) { return result; }
+    let mut old_capture = None;
+    let result = lower_ordinary_assignment_expr(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr, &mut old_capture,
+    );
+    super::ordinary_property_incdec::finish_old_capture(ctx, old_capture, result, expr.span)
+}
+
+/// Lowers an ordinary write while keeping a boxed scalar snapshot alive through every return.
+fn lower_ordinary_assignment_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    result_target: Option<&Expr>,
+    prelude: &[Stmt],
+    conditional_value_temp: Option<&str>,
+    expr: &Expr,
+    old_capture: &mut Option<crate::ir::LocalSlotId>,
+) -> LoweredValue {
     let incdec = super::ordinary_property_incdec::captured_arithmetic(
         target, value, result_target, prelude, conditional_value_temp,
     );
@@ -63,6 +81,14 @@ pub(super) fn lower_assignment_expr(
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
             continue;
+        }
+        if let Some((_, old)) = incdec {
+            if let Some(slot) = super::ordinary_property_incdec::lower_old_capture(
+                ctx, target, stmt, old, expr.span,
+            ) {
+                *old_capture = Some(slot);
+                continue;
+            }
         }
         if conditional_value_temp.is_none() && lower_property_write_prelude(ctx, target, stmt, expr.span) {
             continue;

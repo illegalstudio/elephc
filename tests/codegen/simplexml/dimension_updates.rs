@@ -11,6 +11,7 @@
 use crate::support::*;
 
 /// Computed XML indexed incdec keeps native no-writeback with one name conversion per update.
+/// Opaque eval calls compiled incdec helpers and interprets supported indexed compound writes.
 #[test]
 fn test_simplexml_computed_indexed_incdec_bundle() {
     if skip_without_xml_native("test_simplexml_computed_indexed_incdec_bundle") { return; }
@@ -45,8 +46,24 @@ for ($kind = 0; $kind < 2; $kind++) {
 }
 "#);
     let renamed = source.replace("ComputedXml", "EvalComputedXml").replace("computedXml", "evalComputedXml");
-    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
-    let eval = format!("<?php $code = $argc > 0 ? '{body}' : ''; eval($code);");
+    let (setup, _) = renamed.split_once("for ($kind = 0; $kind < 2; $kind++)").unwrap();
+    let mut setup = setup.to_string();
+    let mut calls = String::from("for ($kind = 0; $kind < 2; $kind++) {\n");
+    for (suffix, class) in [("Typed", "SimpleXMLElement"), ("Mixed", "SimpleXMLElement"), ("Child", "EvalComputedXmlChild")] {
+        // The compiled helper keeps actual ++/--; the compound operation stays inside eval.
+        let compound = format!("    evalComputedXml{suffix}($node)->{{evalComputedXmlName($kind)}}[0] += 2;\n    echo (string)$node->a, '|';\n");
+        assert!(setup.contains(&compound));
+        setup = setup.replace(&compound, "");
+        calls.push_str(&format!(r#"
+    $node = new {class}('<r><a>5</a></r>');
+    updateEvalComputedXml{suffix}($node, $kind);
+    evalComputedXml{suffix}($node)->{{evalComputedXmlName($kind)}}[0] += 2;
+    echo (string)$node->a, '|';
+"#));
+    }
+    calls.push_str("}\nunset($node);\n");
+    let body = calls.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("{setup}\n$code = $argc > 0 ? '{body}' : ''; eval($code);");
     let expected = ["g|f|5|g|f|5|g|f|7|".repeat(3),
         "g|f|s|d|5|g|f|s|d|5|g|f|s|d|7|".repeat(3)].concat();
     assert_bundle_with(&[

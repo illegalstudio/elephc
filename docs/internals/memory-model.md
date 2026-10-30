@@ -365,6 +365,13 @@ first discovers those effects, then persists fresh transient strings and places 
 records before the window, retiring them after the consumer. This covers whole strings as well as persisted byte views;
 non-throwing scalar windows introduce no owner slots that could inhibit integer sinking or CSE.
 
+Ordinary property increment/decrement captures a boxed scalar union, such as
+`?float` or `int|float`, in compiler-managed hidden storage. The capture clones
+the old scalar cell before the property changes, and an operand-owner record
+protects it across a throwing write. A postfix result acquires its own owner
+before the snapshot is retired. Concrete scalar captures keep their existing
+storage, and opaque or object operands retain their ordinary dispatch path.
+
 ## The string buffer (scratch pad)
 
 ```asm

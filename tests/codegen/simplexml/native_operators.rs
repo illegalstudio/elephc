@@ -28,6 +28,10 @@ reportScalarNativeBitnot(5); reportScalarNativeBitnot('A'); reportScalarNativeBi
 reportScalarNativeBitnot(true); reportScalarNativeBitnot(false); reportScalarNativeBitnot(null);
 reportScalarNativeBitnot([]); reportScalarNativeBitnot(new stdClass());
 restore_error_handler();
+set_error_handler(function(int $severity, string $message): bool { throw new RuntimeException('bitnot-handler'); });
+try { scalarNativeBitnot(1.5); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+restore_error_handler();
 $source = str_repeat('A', 70000);
 $result = scalarNativeBitnot($source);
 echo strlen($result), ':', ord($result[0]), ':', ord($result[69999]), ':', ord($source[0]), '|';
@@ -41,7 +45,7 @@ unset($xml, $source, $result);
         "-6|be|Implicit conversion from float 1.5 to int loses precision|-2|",
         "Cannot perform bitwise not on true|Cannot perform bitwise not on false|",
         "Cannot perform bitwise not on null|Cannot perform bitwise not on array|",
-        "Cannot perform bitwise not on stdClass|70000:190:190:65|",
+        "Cannot perform bitwise not on stdClass|bitnot-handler|70000:190:190:65|",
     );
     assert_bundle_with(&[
         BundleCase { name: "bitnot_scalar_aot", source, expected },

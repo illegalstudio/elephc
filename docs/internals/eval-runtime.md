@@ -305,6 +305,13 @@ after the callback returns from Rust. These versioned symbols have no legacy
 aliases, so incompatible prebuilt Magician archives fail at link time instead
 of calling a different argument ABI. The eval-context layout version is separate.
 
+Scalar bitwise NOT uses `__elephc_eval_value_bit_not_v1(value, result_out)`.
+Its native handler contains both TypeError and exceptions from float-conversion
+diagnostic callbacks below the Rust activation. Status zero publishes an owned
+Mixed result; status two leaves a pending Throwable for the interpreter's normal
+catch machinery. The callback restores exception, call-frame, diagnostic, and
+GC suppression state before returning. There is no unprotected legacy alias.
+
 The Rust-only `RuntimeCellHandle` records whether an expression borrows a stored
 cell or transfers an owner. Native C-ABI arguments and by-reference slots remain
 raw cell pointers, never the Rust handle structure. Core adapters and scalar

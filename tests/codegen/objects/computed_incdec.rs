@@ -44,7 +44,12 @@ echo json_encode($box->items), '|';
 echo 'copy:', json_encode($copy), '|';
 unset($box, $copy);
 "#;
-    let renamed = source.replace("ScopedIndexed", "EvalScopedIndexed").replace("scopedIndexed", "evalScopedIndexed");
+    // Opaque eval supports indexed compound writes; its indexed incdec grammar is separate.
+    let eval_source = source.replace("[scopedIndexedKey()]++;", "[scopedIndexedKey()] += 1;")
+        .replace("--$box->receiver()", "$box->receiver()")
+        .replace("--$box->erased()", "$box->erased()")
+        .replace("[scopedIndexedKey()];", "[scopedIndexedKey()] -= 1;");
+    let renamed = eval_source.replace("ScopedIndexed", "EvalScopedIndexed").replace("scopedIndexed", "evalScopedIndexed");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = concat!(

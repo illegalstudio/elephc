@@ -45,6 +45,41 @@ pub(super) fn scalar_operand(ctx: &LoweringContext<'_, '_>, old: &str) -> bool {
     scalar_storage(&ctx.local_type(old))
 }
 
+/// Captures a boxed scalar union without widening a generated PHP local to Mixed storage.
+pub(super) fn lower_old_capture(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, stmt: &Stmt, old: &str, span: Span,
+) -> Option<crate::ir::LocalSlotId> {
+    let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
+    if name != old || value != target || ctx.has_local_slot(old) { return None; }
+    // Receiver/name preludes have already run, so declared property types are available here.
+    let ty = array_cast_source_type_for_ir(ctx, value);
+    if !scalar_storage(&ty) || ty.codegen_repr() != PhpType::Mixed { return None; }
+    let value = lower_expr(ctx, value);
+    // Clone the scalar cell, as a PHP assignment does: a setter or a reference alias may
+    // replace the property's cell while the postfix result must keep the old payload.
+    let value = crate::ir_lower::ownership::copy_assignment_value(ctx, value, Some(span));
+    let ty = ctx.builder.value_php_type(value.value);
+    let slot = ctx.declare_local_with_kind(old, ty.clone(), crate::ir::LocalKind::HiddenTemp);
+    ctx.store_local(old, value, ty, Some(span));
+    ctx.mark_local_initialized(old);
+    register_owned_call_operand(ctx, slot, span);
+    Some(slot)
+}
+
+/// Acquires a borrowed postfix result before retiring its expression-scoped scalar snapshot.
+pub(super) fn finish_old_capture(
+    ctx: &mut LoweringContext<'_, '_>, slot: Option<crate::ir::LocalSlotId>,
+    result: LoweredValue, span: Span,
+) -> LoweredValue {
+    let Some(slot) = slot else { return result; };
+    if ctx.builder.insertion_block_is_terminated() { return result; }
+    let result = if ctx.value_is_owning_temporary(result) { result } else {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, result, Some(span))
+    };
+    retire_owned_call_operand(ctx, slot, span);
+    result
+}
+
 /// A folded prefix can reread ordinary storage after weak property coercion, without user code.
 pub(super) fn plain_prefix_readback(ctx: &LoweringContext<'_, '_>, target: &Expr) -> bool {
     let (object, property) = match &target.kind {

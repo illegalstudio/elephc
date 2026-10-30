@@ -112,6 +112,16 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
                     && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),
                     "{target}, xml={xml}, {name}: scalar property updates must not gain Mixed PHP locals\n{}",
                     crate::ir::print_function(function));
+                if matches!(name, "optionalfloatpost" | "optionalfloatpre" | "numericpost" | "numericpre") {
+                    let slot = function.locals.iter().find(|local| local.kind == crate::ir::LocalKind::HiddenTemp
+                        && local.name.as_deref().is_some_and(|name| name.contains("__elephc_incdec_old_")))
+                        .unwrap_or_else(|| panic!("{target}, xml={xml}, {name}: the scalar snapshot needs compiler storage"));
+                    for op in [Op::PushCallOperandOwner, Op::PopCallOperandOwner, Op::ReleaseLocalSlot] {
+                        assert!(placed(function).any(|inst| inst.op == op
+                            && inst.immediate == Some(Immediate::LocalSlot(slot.id))),
+                            "{target}, xml={xml}, {name}: snapshot ownership needs {op:?}");
+                    }
+                }
             }
             let opaque = method(&module, "InlinePropertyCounter::mixedpost");
             assert!(opaque.locals.iter().any(|local| local.name.as_deref()

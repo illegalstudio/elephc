@@ -248,9 +248,6 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the round wrapper frame
     emitter.instruction("ret");                                                 // return the boxed round result to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_bit_not");
-    emitter.instruction("b __rt_mixed_bit_not");                                // share PHP scalar complement semantics with typed EIR calls
-
     label_c_global(emitter, "__elephc_eval_value_bitwise");
     emitter.instruction("sub sp, sp, #48");                                     // allocate wrapper slots for right operand, opcode, and left integer
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls
