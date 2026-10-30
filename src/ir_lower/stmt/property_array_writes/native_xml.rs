@@ -24,8 +24,8 @@ impl Fetch {
 
 /// Captures a native write-fetch or a null sentinel after every dimension operand runs.
 pub(super) fn fetch(
-    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str,
-    span: Span,
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, expression: &Expr, property: &str,
+    span: Span, mode: PropertyDimensionFetchMode,
 ) -> Option<Fetch> {
     if property.starts_with("__elephc_") || !ctx.classes.contains_key("SimpleXMLElement") { return None; }
     let ty = ctx.builder.value_php_type(receiver.value);
@@ -57,8 +57,9 @@ pub(super) fn fetch(
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(ordinary);
     ctx.restore_initialized_slots(initial);
-    let null = lower_expr(ctx, &Expr::new(ExprKind::Null, span));
-    crate::ir_lower::expr::store_value_into_temp(ctx, &temp, PhpType::Mixed, null, span);
+    let child = native_property_children::fetch(ctx, receiver, expression, property, span, mode)
+        .unwrap_or_else(|| lower_expr(ctx, &Expr::new(ExprKind::Null, span)));
+    crate::ir_lower::expr::store_value_into_temp(ctx, &temp, PhpType::Mixed, child, span);
     jump(ctx, merge);
     let ordinary_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);

@@ -25,11 +25,28 @@ class XmlHandoffThrow extends SimpleXMLElement {
         if ($this->getName() === 'r') { throw new Exception('parent'); }
     }
 }
-class XmlHandoffHolder {
+interface XmlHandoffHolderMarker {}
+class XmlHandoffHolder implements XmlHandoffHolderMarker {
     public SimpleXMLElement $items;
     public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
-    public function __destruct() { echo 'holder:', $this->items->asXML(), '|'; }
+    public function __destruct() { echo 'holder:', count($this->items), ':', $this->items->asXML(), '|'; }
 }
+class XmlHandoffNullableHolder {
+    public ?SimpleXMLElement $items;
+    public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+    public function __destruct() { echo 'nullable-holder:', count($this->items), ':', $this->items->asXML(), '|'; }
+}
+function XmlHandoffHeldNullable(): mixed { return new XmlHandoffNullableHolder(); }
+class XmlHandoffHolderThrow extends XmlHandoffHolder {
+    public function __destruct() {
+        echo 'holder-throw:', count($this->items), ':', $this->items->asXML(), '|';
+        throw new Exception('holder');
+    }
+}
+function XmlHandoffHeldMixed(): mixed { return new XmlHandoffHolder(); }
+function XmlHandoffHeldObject(): object { return new XmlHandoffHolder(); }
+function XmlHandoffHeldInterface(): XmlHandoffHolderMarker { return new XmlHandoffHolder(); }
+function XmlHandoffHeldThrowing(): mixed { return new XmlHandoffHolderThrow(); }
 function XmlHandoffHeld(): XmlHandoffHolder { return new XmlHandoffHolder(); }
 function XmlHandoffKnown(): XmlHandoffNode { return new XmlHandoffNode('<r><item>1</item></r>'); }
 function XmlHandoffMixed(): mixed { return new XmlHandoffNode('<r><item>1</item></r>'); }
@@ -42,10 +59,24 @@ XmlHandoffObject()->item[0] = 3; echo 'object|';
 XmlHandoffInterface()->item[0] += 2; echo 'interface|';
 try { XmlHandoffThrowing()->item[] = 2; }
 catch (Throwable $error) { echo 'caught:', $error->getMessage(), '|'; }
-XmlHandoffHeld()->items[] = 2; echo 'held|';
+XmlHandoffHeld()->items[] = 2; echo 'held-known-append|';
+XmlHandoffHeld()->items[0] = 3; echo 'held-known-index|';
+XmlHandoffHeld()->items[0] .= 'x'; echo 'held-known-compound|';
+XmlHandoffHeldMixed()->items[] = 2; echo 'held-mixed-append|';
+XmlHandoffHeldMixed()->items[0] = 3; echo 'held-mixed-index|';
+XmlHandoffHeldMixed()->items[0] .= 'x'; echo 'held-mixed-compound|';
+XmlHandoffHeldObject()->items[] = 2; echo 'held-object-append|';
+XmlHandoffHeldObject()->items[0] = 3; echo 'held-object-index|';
+XmlHandoffHeldObject()->items[0] .= 'x'; echo 'held-object-compound|';
+XmlHandoffHeldInterface()->items[] = 2; echo 'held-interface-append|';
+XmlHandoffHeldInterface()->items[0] = 3; echo 'held-interface-index|';
+XmlHandoffHeldInterface()->items[0] .= 'x'; echo 'held-interface-compound|';
+try { XmlHandoffHeldThrowing()->items[] = 2; }
+catch (Throwable $error) { echo 'caught:', $error->getMessage(), '|'; }
+XmlHandoffHeldNullable()->items[] = 2; echo 'nullable-held|';
 echo 'done|';
 "#;
-    let expected = "destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>1</item>|known|destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>1</item>|mixed|destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>3</item>|object|destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>3</item>|destroy:<item>3</item>|interface|throw-destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|throw-destroy:<item>1</item>|caught:parent|holder:<item>1</item>|held|done|";
+    let expected = "destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>1</item>|known|destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>1</item>|mixed|destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>3</item>|object|destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|destroy:<item>3</item>|destroy:<item>3</item>|interface|throw-destroy:<?xml version=\"1.0\"?><r><item>1</item></r>|throw-destroy:<item>1</item>|caught:parent|holder:1:<item>1</item>|held-known-append|holder:1:<item>1</item>|held-known-index|holder:1:<item>1</item>|held-known-compound|holder:1:<item>1</item>|held-mixed-append|holder:1:<item>1</item>|held-mixed-index|holder:1:<item>1</item>|held-mixed-compound|holder:1:<item>1</item>|held-object-append|holder:1:<item>1</item>|held-object-index|holder:1:<item>1</item>|held-object-compound|holder:1:<item>1</item>|held-interface-append|holder:1:<item>1</item>|held-interface-index|holder:1:<item>1</item>|held-interface-compound|holder-throw:1:<item>1</item>|caught:holder|nullable-holder:1:<item>1</item>|nullable-held|done|";
     let renamed = source.replace("XmlHandoff", "EvalXmlHandoff");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");

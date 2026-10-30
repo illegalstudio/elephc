@@ -436,25 +436,43 @@ fn native_xml_temporary_parent_handoff_on_every_target() {
     let source = r#"<?php
 interface TargetXmlHandoffMarker {}
 class TargetXmlHandoffNode extends SimpleXMLElement implements TargetXmlHandoffMarker {}
-class TargetXmlHandoffHolder {
+class TargetXmlHandoffHolder implements TargetXmlHandoffMarker {
     public SimpleXMLElement $items;
     public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
 }
+class TargetXmlHandoffNullableHolder {
+    public ?SimpleXMLElement $items;
+    public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+}
+function targetXmlHandoffNullableHolder(): mixed { return new TargetXmlHandoffNullableHolder(); }
 function targetXmlHandoffKnown(): TargetXmlHandoffNode { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
 function targetXmlHandoffMixed(): mixed { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
 function targetXmlHandoffObject(): object { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
 function targetXmlHandoffInterface(): TargetXmlHandoffMarker { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
 function targetXmlHandoffHolder(): TargetXmlHandoffHolder { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffHolderMixed(): mixed { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffHolderObject(): object { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffHolderInterface(): TargetXmlHandoffMarker { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffErasedAppend(): void { targetXmlHandoffHolderMixed()->items[] = 2; }
 targetXmlHandoffKnown()->item[] = 2;
 targetXmlHandoffMixed()->item[] = 2;
 targetXmlHandoffObject()->item[0] = 3;
 targetXmlHandoffInterface()->item[0] += 2;
 targetXmlHandoffMixed()->item[0]++;
 targetXmlHandoffHolder()->items[] = 2;
+targetXmlHandoffErasedAppend();
+targetXmlHandoffHolderObject()->items[0] = 3;
+targetXmlHandoffHolderInterface()->items[0] .= 'x';
+targetXmlHandoffNullableHolder()->items[] = 2;
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "targetXmlHandoffErasedAppend").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGet
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "items")),
+            "{target}: erased temporary holders must select their declared XML child before mutation");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

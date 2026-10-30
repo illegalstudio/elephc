@@ -104,13 +104,8 @@ fn write_selected(
     )?;
     if let Some(current) = native {
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
-        // Publish the child before a parent destructor can throw. Remove each released capture
-        // first so the outer error cleanup cannot release it for a second time.
         operands.push(current);
-        for root in receiver_roots.iter().rev() {
-            let owner = operands.remove(*root);
-            eval_release_value(context, values, owner)?;
-        }
+        retire_native_parent(operands, receiver_roots, context, values)?;
         return match write_value(current, index, op, assigned, operands, context, values)? {
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
@@ -127,12 +122,32 @@ fn write_selected(
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     operands.push(current);
+    if super::super::runtime_ops::simplexml_properties::is_native(values, current, "")? {
+        retire_native_parent(operands, receiver_roots, context, values)?;
+        return match write_value(current, index, op, assigned, operands, context, values)? {
+            None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
+        };
+    }
     if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
         if dynamic {
             super::property_append_fetch::write(object, property, array, context, values)?;
         } else {
             eval_property_set_result(object, property, array, context, values)?;
         }
+    }
+    Ok(())
+}
+
+/// Retires receiver captures after its selected native child is independently rooted.
+fn retire_native_parent(
+    operands: &mut Vec<RuntimeCellHandle>, receiver_roots: &[usize],
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    // Remove each capture before releasing it so throwing destructors cannot cause a second
+    // release during outer cleanup. Reversed indices preserve every remaining capture index.
+    for root in receiver_roots.iter().rev() {
+        let owner = operands.remove(*root);
+        eval_release_value(context, values, owner)?;
     }
     Ok(())
 }
