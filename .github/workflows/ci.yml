@@ -134,7 +134,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-macos-aarch64
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -356,7 +356,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-container-linux-x86_64
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -564,7 +564,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-container-linux-aarch64
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2335,7 +2335,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-curl-${{ matrix.elephc_target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2401,7 +2401,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2460,7 +2460,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-xml-${{ matrix.elephc_target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2893,7 +2893,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-builtins-docs
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3083,7 +3083,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-curl-feature
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3161,7 +3161,7 @@ jobs:
         # 4 GB entries per platform plus every other job's into the repository's
         # 10 GB allowance, so main's entries were evicted before the next run
         # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.2, 2026-08-06
         with:
           prefix-key: rust-deps-managed-native-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
