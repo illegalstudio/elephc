@@ -424,9 +424,9 @@ impl Checker {
                     // `unset($a)` on an eligible local KILLS the binding, which is what PHP
                     // does: a later read is "Undefined variable" and a later assignment binds
                     // fresh, at whatever type it likes. Ineligible names (conditional depth,
-                    // reference-aliased, `global`, `static`, declared-typed) keep today's
-                    // typing no-op. Iterating the SOURCE args keeps the recorded span on a node
-                    // EIR lowering actually visits.
+                    // reference-aliased, `global`, `static`, declared-typed) keep the binding
+                    // but invalidate its temporary read facts. Iterating the SOURCE args keeps
+                    // the recorded span on a node EIR lowering actually visits.
                     //
                     // ONLY from statement position. `unset` is a statement in PHP's grammar, but
                     // elephc's parser also accepts it as an expression, so this arm is reachable
@@ -475,6 +475,7 @@ impl Checker {
                             // rest of the program reaching storage the environment no longer knows.
                             // Lowering refuses to abandon the same slots, from the same collected
                             // set — see `Checker::top_level_binding_is_program_global`.
+                            self.invalidate_local_flow_narrowing(var, env);
                             if env.contains_key(var)
                                 && self.local_binding_is_killable(var)
                                 && !self.top_level_binding_is_program_global(var)

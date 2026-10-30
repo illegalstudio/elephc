@@ -13,6 +13,23 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+class ConditionalUnsetTarget {}
+function conditionalUnsetTarget(?ConditionalUnsetTarget $value, int $key) {
+    $value ??= new ConditionalUnsetTarget();
+    if ($key > 1) { unset($value); }
+    return $value;
+}
+function guardedUnsetTarget(?ConditionalUnsetTarget $value, int $key) {
+    if ($value === null) { throw new RuntimeException('missing'); }
+    if ($key > 1) { unset($value); }
+    return $value;
+}
+function fallbackAfterUnsetTarget(?ConditionalUnsetTarget $value, int $key, ?ConditionalUnsetTarget $default) {
+    $value ??= new ConditionalUnsetTarget();
+    if ($key > 1) { unset($value); }
+    $value ??= $default;
+    return $value;
+}
 class RecoalesceTarget { public function __construct(public readonly string $name = 'dflt') {} }
 function repeatedCoalesceTarget(?RecoalesceTarget $value, ?RecoalesceTarget $default): string {
     $value = $value ?? new RecoalesceTarget();

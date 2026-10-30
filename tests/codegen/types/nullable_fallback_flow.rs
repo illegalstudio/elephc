@@ -9,6 +9,82 @@
 
 use super::*;
 
+/// Conditional unset retires a coalesced receiver proof before an inferred return or new fallback.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_unset_runtime() {
+    let source = r#"<?php
+class ConditionalUnsetBox { public function __construct(public readonly string $name = 'live') {} }
+function unsetObject(?ConditionalUnsetBox $box, int $key) {
+    $box = $box ?? new ConditionalUnsetBox();
+    if ($key > 1) { unset($box); }
+    return $box;
+}
+function fallbackAfterUnset(?ConditionalUnsetBox $box, int $key, ?ConditionalUnsetBox $default) {
+    $box = $box ?? new ConditionalUnsetBox();
+    if ($key > 1) { unset($box); }
+    $box = $box ?? $default;
+    return $box;
+}
+function initializeInteger(int $key): int {
+    if ($key > 1) { $value = 5; }
+    $value = $value ?? 7;
+    return $value;
+}
+function guardedUnset(?ConditionalUnsetBox $box, int $key) {
+    if ($box === null) { throw new RuntimeException('missing'); }
+    if ($key > 1) { unset($box); }
+    return $box;
+}
+var_dump(unsetObject(null, 1) === null, unsetObject(null, 2) === null);
+var_dump(fallbackAfterUnset(null, 1, null) === null, fallbackAfterUnset(null, 2, null) === null);
+var_dump(initializeInteger(1), initializeInteger(2));
+var_dump(guardedUnset(new ConditionalUnsetBox(), 1) === null, guardedUnset(new ConditionalUnsetBox(), 2) === null);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for source in [source.to_string(), source.replace("$box = $box ??", "$box ??=")
+                .replace("$value = $value ??", "$value ??=")]
+            {
+                assert_nullable_flow_heap_output(&source, "bool(false)\nbool(true)\nbool(false)\nbool(true)\nint(7)\nint(5)\nbool(false)\nbool(true)\n");
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// An unconditional fallback defines a conditional binding; a skipped fallback cannot prove that.
+#[test]
+fn test_nullable_fallback_flow_review_conditional_coalesce_binding_runtime() {
+    let source = r#"<?php
+class ConditionalBindingBox {}
+function nullableBinding(int $key): ?ConditionalBindingBox { return $key > 2 ? new ConditionalBindingBox() : null; }
+function boundOutside(int $key) {
+    if ($key > 1) { $box = nullableBinding($key); }
+    $box = $box ?? new ConditionalBindingBox();
+    $box = $box ?? nullableBinding(1);
+    return $box;
+}
+function boundInside(int $key) {
+    if ($key > 1) {
+        $box = nullableBinding($key);
+        $box = $box ?? new ConditionalBindingBox();
+    }
+    $box = $box ?? nullableBinding(1);
+    return $box;
+}
+var_dump(boundOutside(1) === null, boundOutside(2) === null);
+var_dump(boundInside(1) === null, boundInside(2) === null);
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for source in [source.to_string(), source.replace("$box = $box ??", "$box ??=")] {
+                assert_nullable_flow_heap_output(&source, "bool(false)\nbool(false)\nbool(true)\nbool(false)\n");
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Repeated coalescing preserves a proven value and skips nullable defaults in both forms.
 #[test]
 fn test_nullable_fallback_flow_review_recoalesce_runtime() {

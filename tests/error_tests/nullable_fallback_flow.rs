@@ -9,6 +9,29 @@
 
 use super::*;
 
+/// Possibly absent raw bindings retain compatibility diagnostics instead of false non-null returns.
+#[test]
+fn test_nullable_fallback_flow_review_maybe_unbound_coalesce() {
+    for assignment in ["$value = $value ??", "$value ??="] {
+        for prefix in [
+            "if ($key > 1) { $value = 5; }",
+            "$value = 5; if ($key > 1) { unset($value); }",
+        ] {
+            expect_error(&format!("<?php function run(int $key) {{ {prefix} {assignment} 'fallback'; return $value; }}"),
+                "null coalescing assignment");
+        }
+        for prefix in [
+            "if ($key > 1) { $value = new MaybeBoundBox(); }",
+            "foreach ([1, 2] as $key) { if ($key > 1) { $value = new MaybeBoundBox(); } }",
+        ] {
+            expect_error(&format!("<?php class MaybeBoundBox {{}} function maybeBox(): ?MaybeBoundBox {{ return null; }} function run(int $key) {{ {prefix} {assignment} maybeBox(); return $value; }}"),
+                "null coalescing assignment");
+        }
+        expect_error(&format!("<?php function run(?int $value, int $key) {{ $value ??= 7; if ($key > 1) {{ unset($value); }} {assignment} 'fallback'; return $value; }}"),
+            "null coalescing assignment");
+    }
+}
+
 /// A skipped nullable default keeps a non-null read but still receives diagnostic checking.
 #[test]
 fn test_nullable_fallback_flow_review_recoalesce_contracts() {

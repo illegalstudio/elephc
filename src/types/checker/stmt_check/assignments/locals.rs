@@ -189,10 +189,14 @@ fn check_assign_value_type(
                 } else if type_is_definitely_non_null(&existing)
                     && checker.local_flow_read_is_stable(name)
                 {
-                    // Validate an unreachable default without publishing its local writes.
+                    // Only a retained coalescing proof justifies skipping compatibility.
+                    // A bare non-null type can also belong to a possibly undefined local.
+                    let coalesced = checker.guarded_union_types.get(name)
+                        .is_some_and(|storage| storage.coalesced);
                     let mut default_env = env.clone();
-                    checker.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    return Ok(existing);
+                    let ty = checker.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    if coalesced { return Ok(existing); }
+                    ty
                 } else {
                     let mut flow = checker.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();

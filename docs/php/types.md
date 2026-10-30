@@ -288,7 +288,7 @@ function fallback(?string $raw, ?int $default = null): int {
 }
 ```
 
-Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type when the current value may be null. After a stable non-null fact, another coalescing assignment keeps that fact and skips its default, even when the default is nullable. The skipped expression is still checked for diagnostics.
+Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type when the current value may be null. After a retained non-null coalescing fact, another coalescing assignment keeps that fact and skips its default, even when the default is nullable. The skipped expression is still checked for diagnostics. An `unset` invalidates the fact, including inside a conditional branch. A non-null type alone does not prove that a conditionally initialized variable exists; other possibly undefined locals still receive assignment compatibility checks.
 
 Existing locals assigned inside nullsafe arguments or dynamic member names keep the skipped and evaluated alternatives in following reads. The assignment runs only when the receiver is non-null.
 
