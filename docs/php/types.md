@@ -447,6 +447,8 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- A dimension write to an explicitly unset, accessible typed array property in a class with `__get` or `__set` treats the slot as never initialized and creates an array. PHP can invoke `__get` for the unset slot. Never-initialized declared properties initialize without calling magic methods, matching PHP.
+
 - `+=`, `.=` and `++`/`--` refuse to create an array inside a null typed property whose declaration excludes arrays, raising a `TypeError` before mutation. PHP 8.5 can instead leave an array in a field declared as `?ArrayObject`, `?string` or another incompatible type. Elephc preserves the declared type so later typed reads remain safe. The same guard applies to supported dimension-write syntax in opaque `eval()`. Initialize the object first or declare an array-bearing type, such as `ArrayObject|array|null`.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - Dynamic property names accept statically typed strings, integers, and `mixed` values. A statically typed `Stringable` object is still rejected rather than converted through `__toString()` as PHP does.

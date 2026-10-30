@@ -119,6 +119,8 @@ mod literal_builtin_elements;
 #[path = "runtime_gc/mixed_receiver_property_writes.rs"]
 mod mixed_receiver_property_writes;
 mod property_dimension_fetch_modes;
+mod property_magic_dimension_guards;
+mod property_append_storage;
 #[path = "runtime_gc/assoc_literal_spreads.rs"]
 mod assoc_literal_spreads;
 mod nested_nullable_property_compound;

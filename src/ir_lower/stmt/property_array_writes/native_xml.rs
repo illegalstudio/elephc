@@ -169,8 +169,7 @@ fn write_rooted(
     if let Some(index) = index {
         write_ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed);
     } else {
-        guard_property_dimension_write(ctx, object, property, span);
-        ordinary_append(ctx, object, property, value, span);
+        lower_property_array_push_value(ctx, object, property, value, span);
     }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if boxed { crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span)); }
@@ -192,6 +191,30 @@ fn native_write(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, index: O
             array_write_core::lower_boxed_array_set_values(ctx, child, index, stored, span, diagnosed);
         });
     } else { array_write_core::lower_boxed_array_set_values(ctx, child, index, value, span, diagnosed); }
+}
+
+/// Fetches an attached dynamic cell with hash and payload COW before retaining its write lease.
+pub(super) fn attached_append(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
+) {
+    let data = ctx.intern_string(property);
+    let name = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
+        Op::ConstStr.default_effects(), Some(span));
+    let array = ctx.emit_owned_value(Op::RuntimeCall, vec![object.value, name.value],
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashFetchForWrite)), PhpType::Mixed,
+        effects_lookup::runtime_effects(), Some(span));
+    let (array, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![array.value], None, PhpType::Mixed,
+        Op::Borrow.default_effects(), Some(span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    if !super::super::native_dimension_append::lower(ctx, borrowed, value, span, |ctx, array, value| {
+        ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
+            Op::MixedArrayAppend.default_effects(), Some(span));
+    }) {
+        ctx.emit_void(Op::MixedArrayAppend, vec![borrowed.value, value.value], None,
+            Op::MixedArrayAppend.default_effects(), Some(span));
+    }
+    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
 }
 
 /// Appends through an ordinary runtime property with an independent COW cell and explicit writeback.

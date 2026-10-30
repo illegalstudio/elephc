@@ -167,3 +167,70 @@ initFetchWrite(new InitFetchRoot()); initFetchReadWrite(new InitFetchRoot());
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
 }
+
+/// Erased append selects attached declared or hash cells on every supported ABI.
+#[test]
+fn erased_property_append_uses_attached_storage_on_every_target() {
+    let source = r#"<?php
+interface AttachedAppendMarker {}
+class AttachedAppendDeclared implements AttachedAppendMarker { public array $items = []; }
+#[AllowDynamicProperties]
+class AttachedAppendDynamic implements AttachedAppendMarker {}
+function attachedAppendMixed(mixed $box): void { $box->items[] = 1; }
+function attachedAppendObject(object $box): void { $box->items[] = 2; }
+function attachedAppendInterface(AttachedAppendMarker $box): void { $box->items[] = 3; }
+attachedAppendMixed(new AttachedAppendDeclared());
+attachedAppendObject(new stdClass());
+attachedAppendInterface(new AttachedAppendDynamic());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["attachedAppendMixed", "attachedAppendObject", "attachedAppendInterface"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite),
+                "{target}: {name} must select the declared array slot");
+            assert!(function.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite))),
+                "{target}: {name} must select an attached dynamic cell");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Declared fields in magic classes retain a write initialization probe on every target.
+#[test]
+fn magic_property_dimension_guards_on_every_target() {
+    let source = r#"<?php
+class MagicAttachedArray {
+    private array $items;
+    public function __get(string $name): mixed { return null; }
+    public function add(): void { $this->items[] = 1; }
+}
+class MagicAttachedNull {
+    public ?ArrayObject $items = null;
+    public function __set(string $name, mixed $value): void {}
+}
+function magicAttachedWrite(mixed $box): void { $box->items[0] = 1; }
+(new MagicAttachedArray())->add(); magicAttachedWrite(new MagicAttachedNull());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let add = module.class_methods.iter().find(|f| f.name == "MagicAttachedArray::add").unwrap();
+        assert!(add.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
+            "{target}: accessible magic-class slot must retain its initialization probe");
+        assert!(add.instructions.iter().any(|inst| inst.op == Op::PropSet),
+            "{target}: first append must initialize the declared array");
+        let write = module.functions.iter().find(|f| f.name == "magicAttachedWrite").unwrap();
+        assert!(write.instructions.iter().any(|inst| inst.op == Op::IsNull),
+            "{target}: nullable object slot in a magic class must reject array initialization");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}

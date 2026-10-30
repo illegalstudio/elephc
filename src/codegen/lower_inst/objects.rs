@@ -190,6 +190,7 @@ mod property_resolution;
 mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
+mod property_hash_fetch_for_write;
 mod property_stores;
 mod property_hook_writes;
 mod property_store_values;
@@ -268,6 +269,7 @@ pub(super) use known_property_reads::{
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_hash_fetch_for_write::lower_property_hash_fetch_for_write;
 pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{

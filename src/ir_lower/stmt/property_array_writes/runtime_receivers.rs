@@ -2,12 +2,12 @@
 //! Resolves declared array-property writes whose receiver has lost its concrete class.
 //!
 //! Called from:
-//! - The indexed property writer after receiver, key and value evaluation.
+//! - Indexed and append property writers after receiver, key and value evaluation.
 //!
 //! Key details:
 //! - Exact runtime classes prevent an ancestor arm from bypassing a subclass hook.
 //! - Ordinary declared slots reuse their typed COW writer without invoking a magic setter.
-//! - Other receivers retain the existing stdClass and dynamic-property fallback.
+//! - Ordinary dynamic appends reuse attached hash cells; accessor fallbacks retain writeback.
 
 use super::*;
 
@@ -30,23 +30,54 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     index: LoweredValue, value: LoweredValue, span: Span, diagnosed: bool,
 ) -> bool {
-    dispatch(ctx, object, property, span, FetchMode::Write, false, |ctx, receiver| {
+    dispatch(ctx, object, property, span, FetchMode::Write, false, false, |ctx, receiver, _| {
         lower_property_array_assign_value_direct(ctx, receiver, property, index, value, span, diagnosed);
     })
+}
+
+/// Selects exact declared or ordinary dynamic storage before an erased receiver append.
+pub(super) fn lower_append(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value: LoweredValue, span: Span,
+) -> bool {
+    dispatch(ctx, object, property, span, FetchMode::Write, false, true, |ctx, receiver, selected| {
+        if selected { lower_property_array_push_value_direct(ctx, receiver, property, value, span); }
+        else { native_xml::ordinary_append(ctx, receiver, property, value, span); }
+    })
+}
+
+/// Recognizes undeclared names with ordinary hash storage and no PHP accessor protocol.
+fn dynamic_slot(info: &crate::types::ClassInfo, class: &str, property: &str) -> bool {
+    (crate::types::checker::builtin_stdclass::is_stdclass(class)
+        || info.dynamic_property_hash_is_name_addressable())
+        && info.visible_property(property).is_none()
+        // Property hashes retain numeric names as strings; array helpers normalize such keys.
+        && property.parse::<i64>().is_err()
+        && !info.methods.contains_key("__get") && !info.methods.contains_key("__set")
+        && !info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
+}
+
+/// Returns whether a selected concrete receiver addresses ordinary dynamic property storage.
+pub(super) fn has_dynamic_slot(
+    ctx: &LoweringContext<'_, '_>, object: ValueId, property: &str,
+) -> bool {
+    let PhpType::Object(class) = ctx.builder.value_php_type(object).codegen_repr() else { return false; };
+    let class = class.trim_start_matches('\\');
+    ctx.classes.get(class).is_some_and(|info| dynamic_slot(info, class, property))
 }
 
 /// Refuses invalid null slots before a compound read can warn or mutate a readonly property.
 pub(super) fn guard_readwrite(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
 ) {
-    dispatch(ctx, object, property, span, FetchMode::ReadWrite, true, |_, _| {});
+    dispatch(ctx, object, property, span, FetchMode::ReadWrite, true, false, |_, _, _| {});
 }
 
 /// Refuses invalid null initialization before append or nested write traversal selects storage.
 pub(super) fn guard_write(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
 ) {
-    dispatch(ctx, object, property, span, FetchMode::Write, true, |_, _| {});
+    dispatch(ctx, object, property, span, FetchMode::Write, true, false, |_, _, _| {});
 }
 
 /// Recognizes work for one fetch mode without evaluating any PHP input.
@@ -63,7 +94,6 @@ fn slot_guard(
     property: &str, mode: FetchMode,
 ) -> Option<SlotGuard> {
     if !info.declared_properties.contains(property)
-        || info.methods.contains_key("__get") || info.methods.contains_key("__set")
         || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
         || !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, class, info, property)
     { return None; }
@@ -86,11 +116,12 @@ fn slot_guard(
 /// Shares exact-class selection between final stores and guards that precede element reads.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
-    mode: FetchMode, guard_only: bool,
-    mut apply: impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
+    mode: FetchMode, guard_only: bool, include_dynamic: bool,
+    mut apply: impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue, bool),
 ) -> bool {
     let ty = ctx.builder.value_php_type(object.value);
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    if !(include_dynamic && matches!(ty.codegen_repr(), PhpType::Object(_)))
+        && !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && !matches!(ty.codegen_repr(), PhpType::Object(class)
             if class.is_empty() || ctx.interfaces.contains_key(&class)) {
         if let PhpType::Object(class) = ty.codegen_repr() {
@@ -103,8 +134,10 @@ fn dispatch(
         return false;
     }
     let mut classes: Vec<_> = ctx.classes.iter().filter_map(|(name, info)| {
-        if info.methods.contains_key("__get") || info.methods.contains_key("__set")
-            || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
+        if include_dynamic && dynamic_slot(info, name, property) {
+            return Some((name.clone(), None, true));
+        }
+        if info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
             || !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, name, info, property)
         { return None; }
         // Use the writer's own classifier, which excludes inherited native XML properties.
@@ -174,7 +207,7 @@ fn dispatch(
         if let Some(guard) = null_error {
             apply_slot_guard(ctx, receiver, property, &guard, span, mode);
         }
-        apply(ctx, if writable { receiver } else { object });
+        apply(ctx, if writable { receiver } else { object }, writable);
         if !ctx.builder.insertion_block_is_terminated() {
             merged = merged.intersection(&ctx.initialized_slots_snapshot()).copied().collect();
             ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
@@ -185,7 +218,7 @@ fn dispatch(
     ctx.builder.terminate(Terminator::Br { target: missing, args: vec![] });
     ctx.builder.position_at_end(missing);
     ctx.restore_initialized_slots(initial);
-    apply(ctx, object);
+    apply(ctx, object, false);
     merged = merged.intersection(&ctx.initialized_slots_snapshot()).copied().collect();
     ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
     ctx.builder.position_at_end(done);

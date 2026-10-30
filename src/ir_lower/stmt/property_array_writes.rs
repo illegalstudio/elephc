@@ -107,7 +107,18 @@ pub(super) fn lower_property_array_push(
 fn lower_property_array_push_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
 ) {
-    guard_property_dimension_write(ctx, object, property, span);
+    if runtime_receivers::lower_append(ctx, object, property, value, span) { return; }
+    lower_property_array_push_value_direct(ctx, object, property, value, span);
+}
+
+/// Uses the already selected class without repeating runtime dispatch on its fallback.
+fn lower_property_array_push_value_direct(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
+) {
+    if runtime_receivers::has_dynamic_slot(ctx, object.value, property) {
+        native_xml::attached_append(ctx, object, property, value, span);
+        return;
+    }
     if object_property_type(ctx, object.value, property)
         .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
     {

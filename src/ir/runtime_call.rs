@@ -93,6 +93,8 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches an owned attached cell from a known ordinary dynamic-property hash.
+    PropertyHashFetchForWrite,
     /// Fetches a parent whose key conversion was diagnosed by the update's preceding read.
     ArrayFetchForWriteAlreadyDiagnosed,
     /// Fetches through a pending append parent, preserving a payload-only survivor selected
@@ -198,6 +200,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::PropertyHashFetchForWrite => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -292,6 +298,7 @@ impl RuntimeCallTarget {
                 "object.exception_catch_host_replacement"
             }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::PropertyHashFetchForWrite => "object.property_hash_fetch_for_write",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
             RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
