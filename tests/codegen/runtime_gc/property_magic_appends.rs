@@ -52,6 +52,27 @@ class AppendMagicNoHash {
     public function __get(string $name): mixed { echo 'get-nohash|'; return [5]; }
 }
 class AppendMagicCreate {}
+class AppendMagicProtected {
+    protected array $items = [1];
+    public function size(): int { return count($this->items); }
+    public function appendAllowed(): void { $this->items[] = 3; }
+}
+class AppendMagicPrivate {
+    private array $items = [1];
+    public function size(): int { return count($this->items); }
+    public function appendAllowed(): void { $this->items[] = 3; }
+}
+class AppendMagicProtectedGetter {
+    protected array $items = [1];
+    public function size(): int { return count($this->items); }
+    public function __get(string $name): mixed { echo 'unexpected-visibility-get|'; return [9]; }
+}
+class AppendMagicPrivateGetter {
+    private array $items = [1];
+    public function size(): int { return count($this->items); }
+    public function __get(string $name): mixed { echo 'unexpected-visibility-get|'; return [9]; }
+}
+
 function AppendMagicMixed(mixed $box): void { $box->items[] = 2; }
 function AppendMagicObject(object $box): void { $box->items[] = 2; }
 function AppendMagicInterface(AppendMagicMarker $box): void { $box->items[] = 2; }
@@ -105,16 +126,51 @@ set_error_handler(function(int $level, string $message) use ($created): bool {
 AppendMagicMixed($created);
 restore_error_handler();
 echo json_encode(get_object_vars($created)['items']), '|';
+$visibilityProtected = new AppendMagicProtected();
+try { AppendMagicMixed($visibilityProtected); }
+catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityProtected->size(), '|';
+$visibilityPrivate = new AppendMagicPrivate();
+try { AppendMagicMixed($visibilityPrivate); }
+catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityPrivate->size(), '|';
+$visibilityProtectedGetter = new AppendMagicProtectedGetter();
+try { AppendMagicMixed($visibilityProtectedGetter); }
+catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityProtectedGetter->size(), '|';
+$visibilityPrivateGetter = new AppendMagicPrivateGetter();
+try { AppendMagicMixed($visibilityPrivateGetter); }
+catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityPrivateGetter->size(), '|';
+$visibilityProtected->appendAllowed(); $visibilityPrivate->appendAllowed();
+echo $visibilityProtected->size(), ':', $visibilityPrivate->size(), '|';
 restore_error_handler();
 "#;
-    let expected = "1:[1,2,2,2]|0:[2,2,2]|8192:Creation of dynamic property AppendMagicT::$items is deprecated|1:[3,2]|Error:Unsupported property append through an overloaded __get()|absent:[5]|Error:Unsupported property append through an overloaded __get()|absent:null|Error:Unsupported property append through an overloaded __get()|absent:false|Error:Unsupported property append through an overloaded __get()|absent:7|Error:Unsupported property append through an overloaded __get()|absent:\"s\"|Error:Unsupported property append through an overloaded __get()|2|[7,2]|[2]|Error:Unsupported property append through an overloaded __get()|1|Error:Unsupported property append through an overloaded __get()|absent|readonly-blocked|2|create-warning|[\"handler\",2]|";
+    let expected = "1:[1,2,2,2]|0:[2,2,2]|8192:Creation of dynamic property AppendMagicT::$items is deprecated|1:[3,2]|Error:Unsupported property append through an overloaded __get()|absent:[5]|Error:Unsupported property append through an overloaded __get()|absent:null|Error:Unsupported property append through an overloaded __get()|absent:false|Error:Unsupported property append through an overloaded __get()|absent:7|Error:Unsupported property append through an overloaded __get()|absent:\"s\"|Error:Unsupported property append through an overloaded __get()|2|[7,2]|[2]|Error:Unsupported property append through an overloaded __get()|1|Error:Unsupported property append through an overloaded __get()|absent|readonly-blocked|2|create-warning|[\"handler\",2]|Error:Cannot access protected property AppendMagicProtected::$items|1|Error:Cannot access private property AppendMagicPrivate::$items|1|Error:Unsupported property append through an overloaded __get()|1|Error:Unsupported property append through an overloaded __get()|1|2:2|";
     let native_capability = if xml { "function AppendMagicXmlCapability(): void { simplexml_load_string('<r/>'); }" } else { "" };
     let eval_capability = if xml { "function AppendMagicEvalXmlCapability(): void { simplexml_load_string('<r/>'); }" } else { "" };
     let native = format!("{source}\n{native_capability}");
     let renamed = source.replace("AppendMagic", "EvalAppendMagic");
+    // The AOT parser rejects runtime-name appends; eval has its own supported syntax path.
+    let runtime_names = r#"function EvalAppendMagicNamed(mixed $box, string $name): void { $box->{$name}[] = 2; }
+try { EvalAppendMagicNamed($visibilityProtected, 'items'); }
+catch (Throwable $error) { echo 'named:', get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityProtected->size(), '|';
+try { EvalAppendMagicNamed($visibilityPrivate, 'items'); }
+catch (Throwable $error) { echo 'named:', get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityPrivate->size(), '|';
+try { EvalAppendMagicNamed($visibilityProtectedGetter, 'items'); }
+catch (Throwable $error) { echo 'named:', get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityProtectedGetter->size(), '|';
+try { EvalAppendMagicNamed($visibilityPrivateGetter, 'items'); }
+catch (Throwable $error) { echo 'named:', get_class($error), ':', $error->getMessage(), '|'; }
+echo $visibilityPrivateGetter->size(), '|';
+"#;
+    let renamed = format!("{renamed}\n{runtime_names}");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php {eval_capability} $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let eval_expected = expected.replace("AppendMagic", "EvalAppendMagic");
+    let named_expected = "named:Error:Cannot access protected property EvalAppendMagicProtected::$items|2|named:Error:Cannot access private property EvalAppendMagicPrivate::$items|2|named:Error:Unsupported property append through an overloaded __get()|1|named:Error:Unsupported property append through an overloaded __get()|1|";
+    let eval_expected = format!("{}{named_expected}", expected.replace("AppendMagic", "EvalAppendMagic"));
     assert_bundle_with(&[
         BundleCase { name: "magic_append_native", source: &native, expected },
         BundleCase { name: "magic_append_eval", source: &eval, expected: &eval_expected },

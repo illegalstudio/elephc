@@ -37,7 +37,7 @@ pub(super) fn select(
             inaccessible = true;
         }
     }
-    if values.object_dynamic_property_exists(object, property)? {
+    if !inaccessible && values.object_dynamic_property_exists(object, property)? {
         return Ok(Some(values.property_get(object, property)?));
     }
     let native = context.class_native_parent_name(&class).unwrap_or_else(|| class.clone());
