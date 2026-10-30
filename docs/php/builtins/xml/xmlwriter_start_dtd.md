@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd()"
 description: "Starts a DTD."
 sidebar:
-  order: 1079
+  order: 1130
 ---
 
 ## xmlwriter_start_dtd()

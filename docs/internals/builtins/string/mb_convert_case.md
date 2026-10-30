@@ -2,7 +2,7 @@
 title: "mb_convert_case() - internals"
 description: "Compiler internals for mb_convert_case(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 855
+  order: 906
 ---
 
 ## `mb_convert_case()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_convert_case.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_convert_case.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

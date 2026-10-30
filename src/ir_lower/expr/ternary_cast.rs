@@ -110,9 +110,11 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
-    if let Some(result) = object_operators::lower_object_numeric_cast(ctx, value, target, Some(expr.span)) {
-        release_binary_operand_temporary(ctx, value, expr.span);
-        return result;
+    if matches!(target, CastType::Int | CastType::Float) {
+        if let Some(result) = object_operators::lower_object_cast(ctx, value, target, expr) {
+            release_binary_operand_temporary(ctx, value, expr.span);
+            return result;
+        }
     }
     if matches!(target, CastType::Bool) {
         if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {

@@ -287,6 +287,11 @@ impl Scanner<'_> {
         for helper in crate::builtins::xml::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
+        // The GMP registry builtins' EIR lowerings call their prelude helpers directly;
+        // root the whole family next to that lowering contract.
+        for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
+            self.record_callable(helper);
+        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {
@@ -1210,10 +1215,16 @@ impl Scanner<'_> {
             if let Some(method) = operators.json {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
-            for (_, method) in operators.casts {
+            for (_, method) in operators.native_casts {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
             for (_, method) in operators.arithmetic {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            for (_, method) in operators.bitwise {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
+            }
+            for (_, method) in operators.shift {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
             }
             if let Some(method) = operators.compare {
@@ -1221,6 +1232,14 @@ impl Scanner<'_> {
             }
             if let Some(method) = operators.boolean {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
+            if let Some(casts) = operators.casts {
+                for method in [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+                }
             }
         }
         if key

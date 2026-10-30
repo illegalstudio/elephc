@@ -33,7 +33,7 @@
 //! - Place types are resolved statically (no IR is emitted before the decision), so a shape
 //!   this module cannot resolve falls through to the pre-existing lowering unchanged.
 
-use crate::ir::{Immediate, Op};
+use crate::ir::{Immediate, Op, PhpTypePredicate, RuntimeCallTarget, RuntimeFnId, Terminator, ValueId};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind};
@@ -56,6 +56,514 @@ struct RefPlacePlan {
     place: Expr,
     temp: String,
     temp_type: PhpType,
+    /// The temporary was promoted to a boxed Mixed ref cell for the callee ABI.
+    promoted: bool,
+    /// `Class::$property` label used by PHP's typed-reference assignment diagnostic.
+    place_label: String,
+    /// Pre-call snapshot taken at the argument's source position, for typed property places.
+    snapshot: Option<String>,
+}
+
+/// One rewritten call: arguments that now name hidden locals plus the write-back plans.
+pub(super) struct RefPlaceRewrite {
+    pub(super) args: Vec<Expr>,
+    plans: Vec<RefPlacePlan>,
+}
+
+/// Rewrites a direct user method/constructor call whose by-reference argument is a property
+/// with the parameter's exact storage type.
+///
+/// Unlike the builtin array rewrite, this path is not limited to containers: a typed
+/// `GMP &$a` parameter can receive a `GMP` property through the same read/mutate/write-back
+/// sequence, because the hidden temporary carries the property's declared type unchanged.
+pub(super) fn rewrite_typed_property_ref_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<RefPlaceRewrite> {
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let mut call_args = args.to_vec();
+    let mut plans = Vec::new();
+    let variadic_by_ref = sig
+        .variadic
+        .as_ref()
+        .is_some_and(|_| {
+            crate::types::signatures::variadic_param_index(sig)
+                .and_then(|index| sig.ref_params.get(index))
+                .copied()
+                .unwrap_or(false)
+        });
+    let regular_count = crate::types::call_args::regular_param_count(sig);
+    for (index, arg) in args.iter().enumerate() {
+        let (place_arg, expected_ty) =
+            if let Some((param_index, place_arg)) = ref_param_binding(sig, index, arg) {
+                let Some((_, expected_ty)) = sig.params.get(param_index) else {
+                    continue;
+                };
+                (place_arg, expected_ty.clone())
+            } else if variadic_by_ref
+                && index >= regular_count
+                && !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_))
+            {
+                (arg, PhpType::Mixed)
+            } else {
+                continue;
+            };
+        match &place_arg.kind {
+            // `stabilize_place` retains a nested receiver in a synthetic local, so the
+            // rewrite targets the same object PHP resolved when it bound the reference.
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {}
+            _ => continue,
+        }
+        let Some(place_ty) = static_place_type(ctx, place_arg) else {
+            continue;
+        };
+        // The call ABI boxes typed references as Mixed; the write-back narrows the cell back
+        // to the property's declared storage before the ordinary assignment runs.
+        let accepted = crate::types::param_binding::by_ref_property_storage_compatible(
+            &expected_ty,
+            &place_ty,
+        );
+        if !accepted {
+            continue;
+        }
+        let place = stabilize_place(ctx, place_arg);
+        let value_type = static_place_type(ctx, &place)
+            .map(normalize_value_php_type)
+            .unwrap_or(PhpType::Mixed);
+        let variadic_tail = variadic_by_ref && index >= regular_count;
+        let promoted = variadic_tail
+            || matches!(
+                value_type.codegen_repr(),
+                PhpType::Object(_) | PhpType::Mixed
+            );
+        // A variadic collector transports reference markers in a boxed array, so its property
+        // places always travel as boxed Mixed cells. Fixed scalar/string/array slots are passed
+        // by address and must stay unboxed; fixed object/mixed slots need the same boxed cell.
+        let temp_type = if variadic_tail { PhpType::Mixed } else { value_type.clone() };
+        let temp = ctx.declare_synthetic_php_local(temp_type.clone());
+        if promoted {
+            ctx.promote_local_mixed_ref_cell(&temp, Some(place_arg.span));
+        }
+        // The snapshot and the hidden reference value are taken at THIS argument's source
+        // position, not while planning the call: `g(noise(), $box->n)` must observe the
+        // mutation `noise()` performed before the reference binds.
+        let snapshot = ctx.declare_synthetic_php_local(value_type.clone());
+        let prelude = vec![crate::parser::ast::Stmt::new(
+            crate::parser::ast::StmtKind::Assign {
+                name: snapshot.clone(),
+                value: place.clone(),
+            },
+            place_arg.span,
+        )];
+        let assignment = Expr::new(
+            ExprKind::Assignment {
+                target: Box::new(Expr::new(
+                    ExprKind::Variable(temp.clone()),
+                    place_arg.span,
+                )),
+                value: Box::new(Expr::new(
+                    ExprKind::Variable(snapshot.clone()),
+                    place_arg.span,
+                )),
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+            },
+            arg.span,
+        );
+        call_args[index] = match &arg.kind {
+            ExprKind::NamedArg { name, .. } => Expr::new(
+                ExprKind::NamedArg {
+                    name: name.clone(),
+                    value: Box::new(assignment),
+                },
+                arg.span,
+            ),
+            _ => assignment,
+        };
+        plans.push(RefPlacePlan {
+            index,
+            place_label: property_place_label(ctx, place_arg),
+            place,
+            temp,
+            temp_type: value_type,
+            promoted,
+            snapshot: Some(snapshot),
+        });
+    }
+    if plans.is_empty() {
+        return None;
+    }
+    Some(RefPlaceRewrite {
+        args: call_args,
+        plans,
+    })
+}
+
+/// Formats the `Class::$property` label php-src uses in typed-reference diagnostics.
+fn property_place_label(ctx: &LoweringContext<'_, '_>, place: &Expr) -> String {
+    match &place.kind {
+        ExprKind::PropertyAccess { object, property } => {
+            let class = place_object_class_name(ctx, object)
+                .and_then(|class| {
+                    ctx.classes
+                        .get(class.as_str())
+                        .map(|info| {
+                            info.property_declaring_classes
+                                .get(property)
+                                .cloned()
+                                .unwrap_or(class)
+                        })
+                })
+                .unwrap_or_else(|| "object".to_string());
+            format!("{}::${}", class.trim_start_matches('\\'), property)
+        }
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            let class = super::static_receiver_class_name(ctx, receiver)
+                .unwrap_or_else(|| "static".to_string());
+            format!("{}::${}", class.trim_start_matches('\\'), property)
+        }
+        _ => format!("${}", "value"),
+    }
+}
+
+/// Narrows a boxed reference result back to the property's declared storage.
+fn lower_place_writeback_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    mixed: LoweredValue,
+    property_ty: &PhpType,
+    span: crate::span::Span,
+) -> LoweredValue {
+    let span = Some(span);
+    match property_ty.codegen_repr() {
+        // Container hashes and untyped properties share boxed Mixed storage already.
+        PhpType::Mixed | PhpType::AssocArray { .. } => mixed,
+        PhpType::Object(_) | PhpType::Array(_) => ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![mixed.value],
+            None,
+            property_ty.clone(),
+            Op::mixed_unbox_effects(property_ty),
+            span,
+        ),
+        PhpType::Str => super::coerce_to_string_at_span(ctx, mixed, span),
+        PhpType::Int => super::coerce_to_int_at_span(ctx, mixed, span),
+        PhpType::Float => super::coerce_to_float_at_span(ctx, mixed, span),
+        PhpType::Bool => super::lower_truthy_bool(ctx, mixed, span),
+        _ => mixed,
+    }
+}
+
+/// Writes every rewritten place back and retires the hidden temporary.
+pub(super) fn finish_ref_place_rewrite(
+    ctx: &mut LoweringContext<'_, '_>,
+    rewrite: RefPlaceRewrite,
+    span: crate::span::Span,
+) {
+    for plan in rewrite.plans {
+        // The callee wrote through a boxed ref cell. Narrow it back to the property's
+        // declared storage before the ordinary assignment runs.
+        let needs_typed_local = plan.promoted
+            && !matches!(
+                plan.temp_type.codegen_repr(),
+                PhpType::Mixed | PhpType::AssocArray { .. }
+            );
+        let next = needs_typed_local
+            .then(|| ctx.builder.create_named_block("ref.writeback.next", vec![]));
+        if needs_typed_local {
+            guard_typed_writeback(ctx, &plan, span);
+        }
+        let writeback = if needs_typed_local {
+            let temp_value = ctx.load_local(&plan.temp, Some(span));
+            let converted =
+                lower_place_writeback_value(ctx, temp_value, &plan.temp_type, span);
+            let name = ctx.declare_synthetic_php_local(plan.temp_type.clone());
+            ctx.store_local(&name, converted, plan.temp_type.clone(), Some(span));
+            Some(name)
+        } else {
+            None
+        };
+        let value_name = writeback.as_deref().unwrap_or(&plan.temp);
+        let value = Expr::new(ExprKind::Variable(value_name.to_string()), plan.place.span);
+        let release_writeback = |ctx: &mut LoweringContext<'_, '_>| {
+            release_plan_local(ctx, &plan.temp, &plan.temp_type, span);
+            if let Some(writeback) = &writeback {
+                release_plan_local(ctx, writeback, &plan.temp_type, span);
+            }
+            if let Some(snapshot) = &plan.snapshot {
+                release_plan_local(ctx, snapshot, &plan.temp_type, span);
+            }
+        };
+        if let Some(snapshot) = &plan.snapshot {
+            // A second path (for example `$this->n = 7` inside the callee) may have changed
+            // the property while the hidden reference temp was live. PHP's real reference
+            // keeps that later write; only write the temp back when the property still holds
+            // the value observed when the reference bound.
+            let unchanged = Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(plan.place.clone()),
+                    op: crate::parser::ast::BinOp::StrictEq,
+                    right: Box::new(Expr::new(
+                        ExprKind::Variable(snapshot.clone()),
+                        plan.place.span,
+                    )),
+                },
+                plan.place.span,
+            );
+            let condition = lower_expr(ctx, &unchanged).value;
+            let write = ctx.builder.create_named_block("ref.writeback.unchanged", vec![]);
+            let skip = ctx.builder.create_named_block("ref.writeback.changed", vec![]);
+            let merge = ctx.builder.create_named_block("ref.writeback.merge", vec![]);
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: condition,
+                then_target: write,
+                then_args: Vec::new(),
+                else_target: skip,
+                else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(write);
+            lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+            release_writeback(ctx);
+            super::merge_temps::branch_to(ctx, merge);
+            ctx.builder.position_at_end(skip);
+            release_writeback(ctx);
+            super::merge_temps::branch_to(ctx, merge);
+            ctx.builder.position_at_end(merge);
+        } else {
+            lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+            release_writeback(ctx);
+        }
+        if let Some(next) = next {
+            ctx.builder.terminate(Terminator::Br {
+                target: next,
+                args: Vec::new(),
+            });
+            ctx.builder.position_at_end(next);
+        }
+    }
+}
+
+/// Rejects a boxed reference value that PHP's typed property would not accept.
+///
+/// A variadic or `mixed` by-reference parameter can assign any value through the reference
+/// held by a typed property. php-src checks that value against the property type at the
+/// assignment site, so a mismatched object would otherwise be unboxed as a raw pointer.
+fn guard_typed_writeback(
+    ctx: &mut LoweringContext<'_, '_>,
+    plan: &RefPlacePlan,
+    span: crate::span::Span,
+) {
+    // Read the current cell without taking ownership: the collector and the write-back still
+    // need the same reference storage.
+    let loaded = ctx.load_local(&plan.temp, Some(span));
+    // Integer properties need php-src's weak int acceptance, including the finite i64
+    // range check: a numeric string or float outside [-2^63, 2^63) is rejected instead of
+    // being truncated into the reference cell.
+    let condition = if matches!(
+        plan.temp_type.codegen_repr(),
+        PhpType::Int | PhpType::Narrow(_)
+    ) {
+        let temp = Expr::new(ExprKind::Variable(plan.temp.clone()), span);
+        let accepted = crate::types::param_binding::runtime_weak_int_param_acceptance(&temp);
+        Some(lower_expr(ctx, &accepted).value)
+    } else {
+        writeback_accepts_type(ctx, loaded.value, &plan.temp_type, span)
+    };
+    let Some(condition) = condition else {
+        return;
+    };
+    let accepted = ctx.builder.create_named_block("ref.writeback.accepted", vec![]);
+    let rejected = ctx.builder.create_named_block("ref.writeback.rejected", vec![]);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition,
+        then_target: accepted,
+        then_args: Vec::new(),
+        else_target: rejected,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected);
+    emit_typed_reference_error(ctx, plan, span);
+    ctx.builder.position_at_end(accepted);
+}
+
+/// Builds php-src's weak typed-property acceptance predicate with pure EIR reads.
+///
+/// Builtin predicates such as `is_int()` lower to calls whose argument cleanup can retire an
+/// owned view of a promoted reference cell. These opcodes read the borrowed cell and never
+/// release it.
+fn writeback_accepts_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: ValueId,
+    ty: &PhpType,
+    span: crate::span::Span,
+) -> Option<ValueId> {
+    let predicate = |ctx: &mut LoweringContext<'_, '_>, predicate: PhpTypePredicate| {
+        ctx.emit_value(
+            Op::TypePredicate,
+            vec![value],
+            Some(Immediate::TypePredicate(predicate)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(span),
+        )
+        .value
+    };
+    let or = |ctx: &mut LoweringContext<'_, '_>, left: ValueId, right: ValueId| {
+        ctx.emit_value(
+            Op::IBitOr,
+            vec![left, right],
+            None,
+            PhpType::Bool,
+            Op::IBitOr.default_effects(),
+            Some(span),
+        )
+        .value
+    };
+    match ty.codegen_repr() {
+        // Integer and float properties accept numeric strings, floats and bools in PHP's
+        // weak mode. The i64 range check is omitted (out-of-range numeric strings are a
+        // separate parity gap), but this still keeps object and array payloads away from
+        // the unbox path.
+        PhpType::Int | PhpType::Float | PhpType::Narrow(_) => {
+            let numeric = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::IsNumeric,
+                ))),
+                PhpType::Bool,
+                crate::ir_lower::effects_lookup::runtime_effects(),
+                Some(span),
+            );
+            let boolean = predicate(ctx, PhpTypePredicate::Bool);
+            Some(or(ctx, numeric.value, boolean))
+        }
+        PhpType::Str => {
+            let stringable_class = ctx.intern_class_name("Stringable");
+            let stringable = ctx.emit_value(
+                Op::InstanceOf,
+                vec![value],
+                Some(Immediate::Data(stringable_class)),
+                PhpType::Bool,
+                Op::InstanceOf.default_effects(),
+                Some(span),
+            );
+            let scalar = predicate(ctx, PhpTypePredicate::Scalar);
+            Some(or(ctx, scalar, stringable.value))
+        }
+        PhpType::Bool | PhpType::False => Some(predicate(ctx, PhpTypePredicate::Scalar)),
+        PhpType::Object(class) if class.is_empty() => {
+            Some(predicate(ctx, PhpTypePredicate::Object))
+        }
+        PhpType::Object(class) => {
+            let class_name = ctx.intern_class_name(class.as_str());
+            Some(
+                ctx.emit_value(
+                    Op::InstanceOf,
+                    vec![value],
+                    Some(Immediate::Data(class_name)),
+                    PhpType::Bool,
+                    Op::InstanceOf.default_effects(),
+                    Some(span),
+                )
+                .value,
+            )
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            Some(predicate(ctx, PhpTypePredicate::Array))
+        }
+        PhpType::Iterable => Some(predicate(ctx, PhpTypePredicate::Iterable)),
+        PhpType::Resource(_) => Some(predicate(ctx, PhpTypePredicate::Resource)),
+        PhpType::Callable => Some(
+            ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::IsCallable,
+                ))),
+                PhpType::Bool,
+                crate::ir_lower::effects_lookup::runtime_effects(),
+                Some(span),
+            )
+            .value,
+        ),
+        PhpType::Void | PhpType::Never => Some(
+            ctx.emit_value(
+                Op::IsNull,
+                vec![value],
+                None,
+                PhpType::Bool,
+                Op::IsNull.default_effects(),
+                Some(span),
+            )
+            .value,
+        ),
+        PhpType::Union(members) => {
+            let mut predicates = members
+                .iter()
+                .map(|member| writeback_accepts_type(ctx, value, member, span))
+                .collect::<Option<Vec<_>>>()?;
+            let first = predicates.pop()?;
+            Some(predicates.into_iter().fold(first, |left, right| {
+                or(ctx, left, right)
+            }))
+        }
+        // `mixed` accepts everything, and buffer/pointer/packed storage has no PHP-visible
+        // assignment guard in this path.
+        _ => None,
+    }
+}
+
+/// Throws php-src's `Cannot assign ... to reference held by property ...` TypeError.
+fn emit_typed_reference_error(
+    ctx: &mut LoweringContext<'_, '_>,
+    plan: &RefPlacePlan,
+    span: crate::span::Span,
+) {
+    // The property still holds its pre-call value; the rejected type belongs to the boxed
+    // reference cell the callee wrote. Read that cell, not the place.
+    let rejected = Expr::new(ExprKind::Variable(plan.temp.clone()), span);
+    let given = super::enum_argument_guards::runtime_debug_type(&rejected, span);
+    let expected = crate::types::diagnostic_names::php_type_name(&plan.temp_type);
+    let literal = |text: &str| Expr::new(ExprKind::StringLiteral(text.to_string()), span);
+    let message = [
+        literal("Cannot assign "),
+        given,
+        literal(" to reference held by property "),
+        literal(&plan.place_label),
+        literal(" of type "),
+        literal(&expected),
+    ]
+    .into_iter()
+    .reduce(|left, right| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: crate::parser::ast::BinOp::Concat,
+                right: Box::new(right),
+            },
+            span,
+        )
+    })
+    .expect("the diagnostic always has a prefix and expected type");
+    let exception = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![message],
+            },
+            span,
+        ),
+    );
+    // The throw unwinds the frame, which retires the reference cell; releasing the slot
+    // here as well would race the unwind cleanup that already owns it.
+    ctx.builder.terminate(Terminator::Throw {
+        value: exception.value,
+    });
 }
 
 /// Lowers a builtin call whose by-reference array argument is a non-local place.
@@ -159,9 +667,12 @@ pub(super) fn lower_builtin_ref_place_call(
         };
         plans.push(RefPlacePlan {
             index,
+            place_label: property_place_label(ctx, place_arg),
             place,
             temp,
             temp_type: value_type,
+            promoted: false,
+            snapshot: None,
         });
     }
     // Every rewritten argument now names a plain local (directly, or as the value of the named
@@ -177,22 +688,73 @@ pub(super) fn lower_builtin_ref_place_call(
     }));
     let result = lower_function_call(ctx, name, &call_args, expr);
     for plan in plans {
-        let value = Expr::new(ExprKind::Variable(plan.temp.clone()), plan.place.span);
-        lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
-        // The write-back retains into the place, so the temporary's own reference has to
-        // retire here. Holding it to the end of the enclosing scope would keep the replaced
-        // array alive past the statement that replaced it, and a destructor PHP runs at the
-        // assignment would only fire after the surrounding `try` had already exited.
-        let slot = ctx.declare_local(&plan.temp, plan.temp_type);
-        ctx.emit_void(
-            Op::ReleaseLocalSlot,
-            Vec::new(),
-            Some(Immediate::LocalSlot(slot)),
-            Op::ReleaseLocalSlot.default_effects(),
-            Some(expr.span),
-        );
+        let writeback = |ctx: &mut LoweringContext<'_, '_>| {
+            let value = Expr::new(ExprKind::Variable(plan.temp.clone()), plan.place.span);
+            lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+        };
+        if let Some(snapshot) = &plan.snapshot {
+            // A second path (for example `$this->n = 7` inside the callee) may have changed
+            // the property while the hidden reference temp was live. PHP's real reference
+            // would keep that later write; only write the temp back when the property still
+            // holds the value it had when the reference bound.
+            let unchanged = Expr::new(
+                ExprKind::BinaryOp {
+                    left: Box::new(plan.place.clone()),
+                    op: crate::parser::ast::BinOp::StrictEq,
+                    right: Box::new(Expr::new(
+                        ExprKind::Variable(snapshot.clone()),
+                        plan.place.span,
+                    )),
+                },
+                plan.place.span,
+            );
+            let condition = lower_expr(ctx, &unchanged).value;
+            let write = ctx.builder.create_named_block("ref.writeback.unchanged", vec![]);
+            let skip = ctx.builder.create_named_block("ref.writeback.changed", vec![]);
+            let merge = ctx.builder.create_named_block("ref.writeback.merge", vec![]);
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: condition,
+                then_target: write,
+                then_args: Vec::new(),
+                else_target: skip,
+                else_args: Vec::new(),
+            });
+            ctx.builder.position_at_end(write);
+            writeback(ctx);
+            release_plan_local(ctx, &plan.temp, &plan.temp_type, expr.span);
+            release_plan_local(ctx, snapshot, &plan.temp_type, expr.span);
+            super::merge_temps::branch_to(ctx, merge);
+            ctx.builder.position_at_end(skip);
+            release_plan_local(ctx, &plan.temp, &plan.temp_type, expr.span);
+            release_plan_local(ctx, snapshot, &plan.temp_type, expr.span);
+            super::merge_temps::branch_to(ctx, merge);
+            ctx.builder.position_at_end(merge);
+        } else {
+            writeback(ctx);
+            release_plan_local(ctx, &plan.temp, &plan.temp_type, expr.span);
+        }
     }
     Some(result)
+}
+
+/// Releases one hidden reference/snapshot local after its write-back path is done.
+fn release_plan_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    ty: &PhpType,
+    span: crate::span::Span,
+) {
+    // The write-back retains into the place, so the temporary's own reference has to retire
+    // here. Holding it to the end of the enclosing scope would keep the replaced value alive
+    // past the statement that replaced it.
+    let slot = ctx.declare_local(name, ty.clone());
+    ctx.emit_void(
+        Op::ReleaseLocalSlot,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        Op::ReleaseLocalSlot.default_effects(),
+        Some(span),
+    );
 }
 
 /// Normalizes an unrestricted declared-array property before `usort()` mutates it.

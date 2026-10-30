@@ -262,6 +262,7 @@ pub(super) fn lower_runtime_object_prop_set(
                         *hash_offset,
                         16,
                         0,
+                        inst.span.map_or(0, |span| span.line),
                     )?;
                     lower_runtime_allow_dynamic_prop_set(ctx, value, *hash_offset, 16, 0, 32)
                 }
@@ -276,6 +277,7 @@ pub(super) fn lower_runtime_object_prop_set(
                         None,
                         16,
                         32,
+                        inst.span.map_or(0, |span| span.line),
                     )
                 }
                 // A class in this subtree with no hash cannot hold the name at all. php would
@@ -362,6 +364,7 @@ pub(super) fn lower_mixed_named_prop_set(
                     property,
                     *hash_offset,
                     0,
+                    inst.span.map_or(0, |span| span.line),
                 )?;
                 lower_stacked_named_dynamic_prop_set(ctx, value, property, *hash_offset, 0)?;
                 abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -482,6 +485,7 @@ fn emit_runtime_name_stacked_write_arm(
                     property,
                     *hash_offset,
                     16,
+                    inst.span.map_or(0, |span| span.line),
                 )?;
                 lower_stacked_named_dynamic_prop_set(ctx, value, property, *hash_offset, 16)?;
                 abi::emit_release_temporary_stack(ctx.emitter, 32);
@@ -512,6 +516,7 @@ fn emit_runtime_name_stacked_write_arm(
                     recursive_refusal.as_deref(),
                     16,
                     32,
+                    inst.span.map_or(0, |span| span.line),
                 )?;
                 abi::emit_jump(ctx.emitter, done_label);
                 Ok(())
@@ -903,6 +908,7 @@ fn lower_runtime_magic_set(
     recursive_refusal: Option<&str>,
     receiver_stack_offset: usize,
     staged_stack_bytes: usize,
+    line: u32,
 ) -> Result<()> {
     let target = resolve_method_call_target(ctx, class_name, "__set", 3)?;
     emit_runtime_magic_set_call(
@@ -916,6 +922,7 @@ fn lower_runtime_magic_set(
         recursive_refusal,
         receiver_stack_offset,
         staged_stack_bytes,
+        line,
     )
 }
 
@@ -928,6 +935,7 @@ pub(super) fn lower_direct_magic_set(
     class_name: &str,
     hash_offset: Option<usize>,
     recursive_refusal: Option<&str>,
+    line: u32,
 ) -> Result<()> {
     let object_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(object, object_reg)?;
@@ -945,6 +953,7 @@ pub(super) fn lower_direct_magic_set(
         recursive_refusal,
         16,
         32,
+        line,
     )
 }
 
@@ -966,6 +975,7 @@ fn emit_runtime_magic_set_call(
     recursive_refusal: Option<&str>,
     receiver_stack_offset: usize,
     staged_stack_bytes: usize,
+    line: u32,
 ) -> Result<()> {
     let existing_label = ctx.next_label("runtime_magic_set_existing");
     let recursive_label = ctx.next_label("runtime_magic_set_recursive");
@@ -1035,6 +1045,7 @@ fn emit_runtime_magic_set_call(
                 hash_offset,
                 receiver_stack_offset,
                 0,
+                line,
             )?;
             lower_runtime_allow_dynamic_prop_set(
                 ctx,
@@ -1333,6 +1344,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
             None,
             16,
             32,
+            inst.span.map_or(0, |span| span.line),
         )?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -1342,7 +1354,14 @@ pub(super) fn lower_runtime_mixed_prop_set(
         // The arm matched this runtime class, so the offset and the class php names in its
         // creation notice are both its own. The store helper takes the runtime key from the
         // stacked block and releases that block itself.
-        emit_dynamic_property_creation_deprecation(ctx, &arm.class_name, arm.hash_offset, 16, 0)?;
+        emit_dynamic_property_creation_deprecation(
+            ctx,
+            &arm.class_name,
+            arm.hash_offset,
+            16,
+            0,
+            inst.span.map_or(0, |span| span.line),
+        )?;
         lower_runtime_allow_dynamic_prop_set(ctx, value, arm.hash_offset, 16, 0, 32)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -1378,6 +1397,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
                     &candidate.property,
                     *hash_offset,
                     16,
+                    inst.span.map_or(0, |span| span.line),
                 )?;
                 lower_stacked_named_dynamic_prop_set(
                     ctx,
@@ -1403,6 +1423,7 @@ pub(super) fn lower_runtime_mixed_prop_set(
                     Some(message),
                     16,
                     32,
+                    inst.span.map_or(0, |span| span.line),
                 )?;
                 abi::emit_jump(ctx.emitter, &done_label);
             }

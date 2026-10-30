@@ -64,7 +64,7 @@ fn eval_bitwise_result(
             return Err(status);
         }
     };
-    let result = values.bitwise(op, left_cast.unwrap_or(left), right_cast.unwrap_or(right));
+    let result = values.bitwise_dispatch(op, left_cast.unwrap_or(left), right_cast.unwrap_or(right));
     let left_release = left_cast.map(|value| values.release(value)).transpose();
     let right_release = right_cast.map(|value| values.release(value)).transpose();
     result.and_then(|result| left_release.and(right_release).map(|_| result))
@@ -178,11 +178,17 @@ pub(super) fn eval_cast_expr(
             }
             EvalCastType::Int => {
                 if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Int)? { return Ok(result); }
-                values.cast_int(args[0])
+                match eval_object_scalar_adapter(args[0], "__elephc_to_int", context, values)? {
+                    Some(value) => Ok(value),
+                    None => values.cast_int(args[0]),
+                }
             }
             EvalCastType::Float => {
                 if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Float)? { return Ok(result); }
-                values.cast_float(args[0])
+                match eval_object_scalar_adapter(args[0], "__elephc_to_float", context, values)? {
+                    Some(value) => Ok(value),
+                    None => values.cast_float(args[0]),
+                }
             }
             EvalCastType::String => {
                 let value = eval_string_context_value(args[0], context, values)?;
@@ -192,7 +198,15 @@ pub(super) fn eval_cast_expr(
                 } else { Ok(()) };
                 result.and_then(|result| released.map(|()| result))
             }
-            EvalCastType::Bool => values.cast_bool(args[0]),
+            EvalCastType::Bool => match eval_object_scalar_adapter(
+                args[0],
+                "__elephc_to_bool",
+                context,
+                values,
+            )? {
+                Some(value) => Ok(value),
+                None => values.cast_bool(args[0]),
+            },
         }
     })
 }

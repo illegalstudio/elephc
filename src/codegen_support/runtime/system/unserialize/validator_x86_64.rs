@@ -109,6 +109,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_validate_ref_x");                        // validate the back-reference index
     emitter.instruction("cmp r8d, 82");                                         // by-reference marker (R)?
     emitter.instruction("je __rt_unser_validate_ref_x");                        // r and R share one index grammar
+    emitter.instruction("mov rdx, rsi");                                         // unknown type markers report the value start
     emitter.instruction("jmp __rt_unser_validate_at_fail_x");                   // unknown type marker
 
     emitter.label("__rt_unser_validate_null_x");
@@ -218,6 +219,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jae __rt_unser_validate_at_fail_x");                   // truncated string envelope
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // base after helper call
     emitter.instruction("cmp BYTE PTR [rdi + r8], 34");                         // exact opening quote
+    emitter.instruction("mov rdx, r8");                                         // report the opening-quote cursor on failure
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // the payload must be quoted
     emitter.instruction("add r8, 1");                                           // raw payload position
     emitter.instruction("mov r10, r9");                                         // start the remaining count from end
@@ -226,12 +228,15 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_unser_validate_at_fail_x");                    // no room for quote and semicolon
     emitter.instruction("sub r10, 2");                                          // room left for payload bytes alone
     emitter.instruction("cmp r11, r10");                                        // declared payload fits?
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // report the source end on truncation
     emitter.instruction("ja __rt_unser_validate_at_fail_x");                    // declared length overruns the input
     emitter.instruction("add r8, r11");                                         // closing quote position
     emitter.instruction("cmp BYTE PTR [rdi + r8], 34");                         // exact closing quote
+    emitter.instruction("mov rdx, r8");                                         // report the closing-quote cursor on failure
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // payload must end at the declared length
     emitter.instruction("add r8, 1");                                           // semicolon position
     emitter.instruction("cmp BYTE PTR [rdi + r8], 59");                         // terminating semicolon
+    emitter.instruction("mov rdx, r8");                                         // report the missing-semicolon cursor
     emitter.instruction("jne __rt_unser_validate_at_fail_x");                   // unterminated string envelope
     emitter.instruction("lea rdx, [r8 + 1]");                                   // position after semicolon
     emitter.instruction("jmp __rt_unser_validate_at_ok_x");                     // string value fully bounded
@@ -411,7 +416,6 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return success and the new cursor to the caller
     emitter.label("__rt_unser_validate_at_fail_x");
     emitter.instruction("xor eax, eax");                                        // report malformed/truncated wire data
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // preserve original position on failure
     emitter.instruction("leave");                                               // restore the frame on the failure path
     emitter.instruction("ret");                                                 // return the failure flag to the caller
 }

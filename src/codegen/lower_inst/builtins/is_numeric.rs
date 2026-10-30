@@ -36,7 +36,9 @@ pub(crate) fn lower_is_numeric(
             ctx.load_value_to_result(value)?;
             emit_string_is_numeric(ctx);
         }
-        PhpType::Bool | PhpType::Void | PhpType::Never => emit_static_bool(ctx, false),
+        PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::Object(_) => {
+            emit_static_bool(ctx, false)
+        }
         PhpType::TaggedScalar => {
             // A tagged scalar is int|null: null is not numeric, an integer is (#1999).
             let false_case = ctx.next_label("isnum_tagged_false");

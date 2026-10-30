@@ -2,7 +2,7 @@
 title: "is_resource()"
 description: "Checks whether a variable is a resource."
 sidebar:
-  order: 997
+  order: 1048
 ---
 
 ## is_resource()

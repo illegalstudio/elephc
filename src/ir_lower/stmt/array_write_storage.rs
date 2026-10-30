@@ -44,6 +44,21 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     // Loading here also gives the ordinary parent guards the RHS-updated storage type.
     // Append's final-storage normalization mutates a bound box directly. Other indexed
     // writers still require the detached cell published by load_array_local_for_write.
+    // PHP 8 auto-vivifies a missing variable on `$a[] = ...`. The checker admitted the
+    // write, so declare a generic boxed array local before loading it for the append.
+    if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {
+        let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+        ctx.declare_local(array, array_ty.clone());
+        let empty = ctx.emit_value(
+            Op::ArrayNew,
+            Vec::new(),
+            Some(crate::ir::Immediate::Capacity(0)),
+            array_ty.clone(),
+            Op::ArrayNew.default_effects(),
+            Some(span),
+        );
+        ctx.store_local(array, empty, array_ty, Some(span));
+    }
     let array_value = if ctx.is_ref_bound_local(array) {
         ctx.load_local(array, Some(span))
     } else {

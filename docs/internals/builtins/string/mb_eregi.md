@@ -2,7 +2,7 @@
 title: "mb_eregi() - internals"
 description: "Compiler internals for mb_eregi(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 876
+  order: 927
 ---
 
 ## `mb_eregi()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_eregi.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_eregi.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

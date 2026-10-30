@@ -324,9 +324,7 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "hexdec",
     "join",
     "octdec",
-    "serialize",
     "substr_count",
-    "unserialize",
     "zval_free",
     "zval_pack",
     "zval_type",
@@ -373,13 +371,14 @@ mod tests {
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // The shared INI helper is internal but participates in both runtime registries.
-        // Sixty-four of these are the `xml_*` / `xmlwriter_*` contracts, which eval binds
-        // through forwarding homes (see `eval_support`).
+        // The sixty-four `xml_*` / `xmlwriter_*` contracts, which eval binds
+        // through forwarding homes (see `eval_support`), and the fifty-one `gmp_*`
+        // contracts, which forward to the compiled GMP prelude helpers.
         // Plus the four `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64`
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 705 + curl_surface);
+        assert_eq!(eval_registry, 758 + curl_surface);
         // Compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -398,11 +397,11 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes SimpleXML allocation/diagnostics and its abstract-class probe.
-        assert_eq!(eval_internal, 135);
+        // Also includes the SimpleXML allocation and diagnostic adapters.
+        assert_eq!(eval_internal, 136);
         // 30 registry builtins awaiting eval homes, plus the 325 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 361);
+        assert_eq!(eval_pending, 359);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -412,7 +411,7 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries.
-        assert_eq!(aot_registry, 774);
+        assert_eq!(aot_registry, 826);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 427 + curl_surface);
@@ -462,17 +461,14 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         // Includes the internal tokenizer ParseError location operation.
         // Includes the five native heap metric operations.
-        assert_eq!(shared_runtime, 89);
+        assert_eq!(shared_runtime, 91);
         // Heap usage queries keep a TypeError adapter for non-scalar flags.
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters.
-        assert_eq!(interpreter_adapter, 612 + curl_surface);
-        // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
-        // call from AOT code and have no eval execution route of their own. So do the four
-        // internal aliases the extension-hosting prelude calls.
-        // The merged catalog has 135 internal surfaces plus 361 pending eval implementations.
-        assert_eq!(unsupported, 496);
+        // interpreter adapters, plus the GMP and SimpleXML forwarding homes.
+        assert_eq!(interpreter_adapter, 663 + curl_surface);
+        // Internal compiler surfaces and pending eval bindings remain unavailable.
+        assert_eq!(unsupported, 495);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

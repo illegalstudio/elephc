@@ -100,9 +100,10 @@ mod tests {
     /// BUMPED TO 21: both branches' deferred-default expressions and retained readonly
     /// setter contracts now share generic declarations and caller-scope access masks.
     /// BUMPED TO 22: retained token streams distinguish reserved qualified-name segments.
-    /// BUMPED TO 23: array casts coexist with cached reserved-name tokens.
+    /// BUMPED TO 23 on the SimpleXML branch: array casts.
     /// BUMPED TO 24: retained method reference-return flags and dimension-write statements.
-    const RECORDED_FINGERPRINT: u64 = 3427359242301516132;
+    /// BUMPED TO 25: main's assignment expressions coexist with the SimpleXML layout.
+    const RECORDED_FINGERPRINT: u64 = 2197268351027289912;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

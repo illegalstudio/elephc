@@ -174,12 +174,27 @@ pub(super) fn lower_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    let receiver_class = match ctx.builder.value_php_type(object.value).codegen_repr() {
+        PhpType::Object(class_name) => Some(class_name.trim_start_matches('\\').to_string()),
+        _ => None,
+    };
     // A concrete local load may later unbox physical Mixed storage after eval widens
     // its slot. Acquiring a root is safe for both borrowed and independently owned loads.
     let (object, receiver_owner) = root_method_receiver(ctx, object, expr.span);
     let mut operands = vec![object.value];
     begin_call_argument_evaluation(ctx);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let call_description = receiver_class
+        .map(|class_name| format!("{class_name}::{dispatch_method}"))
+        .unwrap_or_else(|| dispatch_method.to_string());
+    let previous_description = ctx.call_description.replace(call_description);
+    let ref_place_rewrite = sig.as_ref().and_then(|signature| {
+        super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+    });
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(args, |rewrite| rewrite.args.as_slice());
+    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.call_description = previous_description;
     let mut arg_values = arg_values;
     if method_is_fiber_start(ctx, object.value, dispatch_method) {
         for argument in &mut arg_values {
@@ -228,6 +243,9 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    if let Some(rewrite) = ref_place_rewrite {
+        super::ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
     if let Some(owner) = receiver_owner {
         retire_owned_call_operand(ctx, owner, expr.span);
     } else {

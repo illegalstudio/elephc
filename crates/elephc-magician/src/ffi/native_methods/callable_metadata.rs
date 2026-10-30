@@ -233,6 +233,7 @@ fn native_callable_type_variant(
         "bool" => EvalParameterTypeVariant::Bool,
         "callable" => EvalParameterTypeVariant::Callable,
         "false" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("false")),
+        "true" => EvalParameterTypeVariant::Generic(elephc_generics::Type::atom("true")),
         "float" => EvalParameterTypeVariant::Float,
         "int" => EvalParameterTypeVariant::Int,
         "iterable" => EvalParameterTypeVariant::Iterable,
@@ -280,4 +281,24 @@ pub(super) fn split_three_part_property_key(
 fn native_callable_take_string_bytes(bytes: &[u8], offset: &mut usize) -> Option<Vec<u8>> {
     let len = usize::try_from(native_attribute_take_u32(bytes, offset)?).ok()?;
     Some(native_attribute_take_bytes(bytes, offset, len)?.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the native ABI type grammar keeps `false` as its literal generic atom rather
+    /// than treating it as a class name. This is what makes `GMP|false` return values accept
+    /// `gmp_invert()`'s no-inverse answer.
+    #[test]
+    fn native_return_type_spec_recognizes_false_literal() {
+        let ty = native_callable_type_from_spec("GMP|false", NativeCallableTypePosition::Return)
+            .expect("GMP|false return type");
+        assert_eq!(ty.variants().len(), 2);
+        assert!(matches!(
+            &ty.variants()[1],
+            EvalParameterTypeVariant::Generic(atom)
+                if atom == &elephc_generics::Type::atom("false")
+        ));
+    }
 }

@@ -2,7 +2,7 @@
 title: "memory_get_peak_usage() - internals"
 description: "Compiler internals for memory_get_peak_usage(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 654
+  order: 705
 ---
 
 ## `memory_get_peak_usage()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/memory_get_peak_usage.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/memory_get_peak_usage.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

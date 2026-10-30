@@ -91,7 +91,19 @@ pub(super) fn lower_static_method_call(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
     begin_call_argument_evaluation(ctx);
+    let ref_place_rewrite = sig.as_ref().and_then(|signature| {
+        ref_place_args::rewrite_typed_property_ref_args(ctx, signature, call_args)
+    });
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(call_args, |rewrite| rewrite.args.as_slice());
+    let callee_description = static_receiver_class_name(ctx, receiver)
+        .unwrap_or_else(|| receiver_name(receiver).to_string());
+    let previous_description = ctx
+        .call_description
+        .replace(format!("{callee_description}::{dispatch_method}"));
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.call_description = previous_description;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
@@ -128,6 +140,9 @@ pub(super) fn lower_static_method_call(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    if let Some(rewrite) = ref_place_rewrite {
+        ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
     let call = take_prepublished_call_result(ctx, result_staging, call, expr.span);
     finish_reference_return_value(ctx, call, reference_staging, expr.span)
 }

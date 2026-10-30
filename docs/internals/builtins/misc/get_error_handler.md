@@ -2,7 +2,7 @@
 title: "get_error_handler() - internals"
 description: "Compiler internals for get_error_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 639
+  order: 690
 ---
 
 ## `get_error_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/get_error_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/get_error_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:708](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L708) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

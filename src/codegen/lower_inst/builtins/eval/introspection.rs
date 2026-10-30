@@ -132,6 +132,82 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_class_relation(
     store_if_result(ctx, inst)
 }
 
+/// Resolves an object's class name through its owning eval context when one exists.
+///
+/// The object payload pointer is expected in the architecture's integer result register
+/// (`x0`/`rax`) and is restored there on the fallback path so the compiled class-name tables
+/// can answer for ordinary AOT objects. A successful lookup leaves the PHP string in the
+/// target's string result registers and jumps to `done_label`; `fallback_label` continues the
+/// caller's table lookup.
+pub(in crate::codegen::lower_inst::builtins) fn emit_context_free_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    lookup_kind: i64,
+    fallback_label: &str,
+    done_label: &str,
+) {
+    let arch = ctx.emitter.target.arch;
+    let status_reg = abi::int_result_reg(ctx.emitter);
+    let found_label = ctx.next_label("eval_dynamic_class_found");
+    let not_found_label = ctx.next_label("eval_dynamic_class_not_found");
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_store_to_sp(ctx.emitter, status_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_reg_move(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        status_reg,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        lookup_kind,
+    );
+    abi::emit_temporary_stack_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        0,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_dynamic_object_class_name");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    match arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {status_reg}, #0"));          // status 0 resolves an eval-declared class
+            ctx.emitter.instruction(&format!("b.eq {found_label}"));            // publish the eval class name
+            ctx.emitter.instruction(&format!("cmp {status_reg}, #1"));          // status 1 means no owning eval context
+            ctx.emitter.instruction(&format!("b.eq {not_found_label}"));        // restore the object and fall back
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {status_reg}, 0"));           // status 0 resolves an eval-declared class
+            ctx.emitter.instruction(&format!("je {found_label}"));              // publish the eval class name
+            ctx.emitter.instruction(&format!("cmp {status_reg}, 1"));           // status 1 means no owning eval context
+            ctx.emitter.instruction(&format!("je {not_found_label}"));          // restore the object and fall back
+        }
+    }
+    emit_eval_status_check(ctx);
+    abi::emit_jump(ctx.emitter, &not_found_label);
+
+    ctx.emitter.label(&not_found_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        status_reg,
+        EVAL_TEMP_CELL_OFFSET,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, fallback_label);
+
+    ctx.emitter.label(&found_label);
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        status_reg,
+        EVAL_RESULT_VALUE_CELL_OFFSET,
+    );
+    emit_owned_eval_class_name_string(ctx);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    abi::emit_jump(ctx.emitter, done_label);
+}
+
 /// Transfers boxed class-name results or detaches native strings before retiring their bridge cell.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_class_name(
     ctx: &mut FunctionContext<'_>,

@@ -109,14 +109,38 @@ pub(super) fn collect_object_reference_entry_checks(
     }
 }
 
-/// Finds hints whose by-reference entry check may reject a previously retyped cell.
-fn params_have_object_reference(params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)]) -> bool {
-    params.iter().any(|(_, hint, _, by_ref)| {
-        matches!(hint, Some(TypeExpr::False)) || (*by_ref && matches!(hint, Some(TypeExpr::Named(name)) if !matches!(
-            name.as_str().to_ascii_lowercase().as_str(),
-            "mixed" | "callable" | "closure" | "array" | "string" | "void"
-        )))
-    })
+/// Finds parameter hints that can reject a `Class|false` / `Class|null` argument.
+///
+/// A class-typed parameter runs the union guard at the call boundary whether it is by-value
+/// or by-reference, and a literal `false` parameter always checks its argument. Checker
+/// metadata narrows this down; without it the declaration is the conservative source.
+fn params_have_object_reference(
+    params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)],
+) -> bool {
+    params
+        .iter()
+        .any(|(_, hint, _, _)| hint.as_ref().is_some_and(type_hint_is_class))
+}
+
+/// Returns whether a declared parameter hint names a class or interface type.
+fn type_hint_is_class(hint: &TypeExpr) -> bool {
+    match hint {
+        TypeExpr::False | TypeExpr::GenericClass { .. } | TypeExpr::Intersection(_) => true,
+        TypeExpr::Named(name) => !matches!(
+            name.as_str()
+                .trim_start_matches('\\')
+                .to_ascii_lowercase()
+                .as_str(),
+            "mixed" | "callable" | "closure" | "array" | "object" | "iterable"
+                | "string" | "int" | "float" | "bool" | "null" | "true" | "static"
+                | "self" | "parent" | "void" | "never"
+        ),
+        TypeExpr::Nullable(inner) | TypeExpr::Array(inner) | TypeExpr::Buffer(inner) => {
+            type_hint_is_class(inner)
+        }
+        TypeExpr::Union(members) => members.iter().any(type_hint_is_class),
+        _ => false,
+    }
 }
 
 /// Attaches stable lexical class references to raw callable body collections.

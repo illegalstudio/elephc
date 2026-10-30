@@ -30,8 +30,8 @@ categories = ["compilers", "command-line-utilities"]
 # see crates/elephc-curl/build.rs for how its own gated tests opt into a real
 # link.
 [workspace]
-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
-default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-monitoring-contract", "crates/elephc-process-context", "crates/elephc-generics", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-bcmath", "crates/elephc-gmp", "crates/elephc-iconv", "crates/elephc-mbstring", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-probe", "crates/elephc-instr", "crates/elephc-image", "crates/elephc-web", "crates/elephc-pcntl", "crates/elephc-magician", "crates/elephc-curl", "crates/elephc-xml", "crates/elephc-fileinfo", "crates/elephc-tokenizer", "crates/elephc-tokenizer-engine", "crates/elephc-random", "crates/elephc-zend"]
 resolver = "2"
 
 [[bin]]
@@ -106,6 +106,7 @@ elephc-tls = { path = "crates/elephc-tls" }
 elephc-pdo = { path = "crates/elephc-pdo" }
 elephc-crypto = { path = "crates/elephc-crypto" }
 elephc-bcmath = { path = "crates/elephc-bcmath" }
+elephc-gmp = { path = "crates/elephc-gmp" }
 elephc-mbstring = { path = "crates/elephc-mbstring" }
 elephc-phar = { path = "crates/elephc-phar" }
 elephc-tz = { path = "crates/elephc-tz" }
@@ -126,6 +127,9 @@ serde_json = "1"
 # success coverage does not depend on outbound network access.
 rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
 rustls-pemfile = "2"
+# The php-src GMP PHPT runner compiles `--EXPECTF--` placeholders into an anchored
+# pattern; `regex` is already in the lock through the workspace's existing tooling.
+regex = "1"
 
 [features]
 # Keeps the codegen test package and its PDO dev-dependency on the same libpq

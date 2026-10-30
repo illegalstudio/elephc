@@ -1940,3 +1940,18 @@ fn live_blocks(stderr: &str) -> Option<u64> {
         .and_then(|word| word.strip_prefix("live_blocks="))
         .and_then(|n| n.parse().ok())
 }
+
+/// Verifies malformed payload warnings name the failure cursor, not always offset zero.
+#[test]
+fn test_unserialize_warning_reports_the_failure_offset() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(unserialize('s:5:"abcde"'));
+var_dump(unserialize('a:1:{i:0;i:1;'));
+var_dump(unserialize('x:1;'));
+"#,
+    );
+    assert!(out.stderr.contains("Error at offset 11 of 11 bytes"), "{}", out.stderr);
+    assert!(out.stderr.contains("Error at offset 13 of 13 bytes"), "{}", out.stderr);
+    assert!(out.stderr.contains("Error at offset 0 of 4 bytes"), "{}", out.stderr);
+}

@@ -70,7 +70,7 @@ use unset_access_errors::{is_unset_closure, require_unset_array_access, reject_u
 mod native_xml_empty;
 mod callable_probes;
 mod descriptor_invoke;
-mod call_operand_owners;
+pub(crate) mod call_operand_owners;
 mod pending_owners;
 mod descriptor_args;
 mod descriptor_unpack;

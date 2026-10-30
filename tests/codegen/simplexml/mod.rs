@@ -34,6 +34,7 @@ mod node_views;
 mod dom_cache;
 mod debug;
 mod debug_owners;
+mod native_operators;
 
 /// Verifies SimpleXML parsing and properties against PHP's observable output.
 #[test]

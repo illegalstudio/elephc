@@ -48,6 +48,7 @@ pub fn resolve_for_compilation(
     let cache = CacheLayout::from_environment(&cwd).map_err(|error| {
         let search_root = source
             .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
             .and_then(|parent| std::fs::canonicalize(parent).ok())
             .unwrap_or_else(|| cwd.clone());
         match discover_for_source(source).ok().flatten() {

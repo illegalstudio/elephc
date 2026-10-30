@@ -92,48 +92,58 @@ pub(super) fn lower_dynamic_object_negate(
     Some(lower_dynamic_operator_plans(ctx, zero, &BinOp::Sub, value, expr, true, &plans, true, scalar))
 }
 
-/// Tries every applicable internal class before taking the ordinary scalar/object path.
+/// Tries left-hand native handlers before right-hand handlers and the ordinary scalar path.
 fn lower_dynamic_operator_plans(
     ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
     expr: &Expr, consume: bool, plans: &[crate::types::object_operators::ObjectOperatorPlan], negate: bool,
     scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
 ) -> LoweredValue {
-    let Some((plan, rest)) = plans.split_first() else { return scalar(ctx); };
-    let plan = *plan;
-    let result_type = if plan.comparison { plan.result_type(op) } else { PhpType::Mixed };
-    let class_name = ctx.intern_class_name(plan.class.name);
-    let left_instance = ctx.emit_value(Op::InstanceOf, vec![lhs.value], Some(Immediate::Data(class_name)),
-        PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
-    let right_instance = ctx.emit_value(Op::InstanceOf, vec![rhs.value], Some(Immediate::Data(class_name)),
-        PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
-    let condition = ctx.emit_value(Op::IBitOr, vec![left_instance.value, right_instance.value], None,
-        PhpType::Bool, Op::IBitOr.default_effects(), Some(expr.span));
+    let result_type = if plans[0].comparison { plans[0].result_type(op) } else { PhpType::Mixed };
     let temp = ctx.declare_owned_hidden_temp(result_type.clone());
     let initialized = ctx.initialized_slots_snapshot();
-    let object_block = ctx.builder.create_named_block("object.operator", vec![]);
     let scalar_block = ctx.builder.create_named_block("object.scalar", vec![]);
     let merge = ctx.builder.create_named_block("object.merge", vec![]);
-    ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
-        then_target: object_block, then_args: vec![], else_target: scalar_block, else_args: vec![] });
-    ctx.builder.position_at_end(object_block);
-    let (object_lhs, object_op) = if negate && plan.class.operators.is_some_and(|operators|
-        operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
-    ) { (lower_int_literal(ctx, -1, expr), &BinOp::Mul) } else { (lhs, op) };
-    let value = emit_object_binary_plan(ctx, plan, object_lhs, object_op, rhs, expr, consume);
-    store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
-    branch_to(ctx, merge);
-    let object_initialized = ctx.initialized_slots_snapshot();
-    ctx.builder.position_at_end(scalar_block);
+    let mut call_initialized: Option<HashSet<LocalSlotId>> = None;
+    let checks = plans.len() * 2;
+    let mut emitted = 0;
+    for left_precedence in [true, false] {
+        for plan in plans.iter().copied() {
+            emitted += 1;
+            let operand = if left_precedence { lhs.value } else { rhs.value };
+            let class_name = ctx.intern_class_name(plan.class.name);
+            let instance = ctx.emit_value(Op::InstanceOf, vec![operand], Some(Immediate::Data(class_name)),
+                PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
+            let call_block = ctx.builder.create_named_block("object.operator", vec![]);
+            let next_check = if emitted == checks { scalar_block }
+                else { ctx.builder.create_named_block("object.check", vec![]) };
+            ctx.builder.terminate(Terminator::CondBr { cond: instance.value,
+                then_target: call_block, then_args: vec![], else_target: next_check, else_args: vec![] });
+            ctx.builder.position_at_end(call_block);
+            let (object_lhs, object_op) = if negate && plan.class.operators.is_some_and(|operators|
+                operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
+            ) { (lower_int_literal(ctx, -1, expr), &BinOp::Mul) } else { (lhs, op) };
+            let value = emit_object_binary_plan(ctx, plan, object_lhs, object_op, rhs, expr, consume);
+            store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
+            branch_to(ctx, merge);
+            let snapshot = ctx.initialized_slots_snapshot();
+            call_initialized = Some(match call_initialized {
+                Some(previous) => previous.intersection(&snapshot).copied().collect(),
+                None => snapshot,
+            });
+            ctx.builder.position_at_end(next_check);
+        }
+    }
     ctx.restore_initialized_slots(initialized.clone());
     let scalar_pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
-    let value = lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, rest, negate, scalar);
+    let value = scalar(ctx);
     unpin_in_flight_owners(ctx, scalar_pins, expr.span);
     store_value_into_temp(ctx, &temp, result_type, value, expr.span);
     branch_to(ctx, merge);
     let scalar_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(merge);
+    let call_initialized = call_initialized.unwrap_or_else(|| initialized.clone());
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initialized,
-        object_initialized, true, scalar_initialized, true));
+        call_initialized, true, scalar_initialized, true));
     take_owned_temp(ctx, &temp, expr.span)
 }
 
@@ -224,13 +234,143 @@ pub(crate) fn append_hidden_arguments(
     actual_count: usize, expr: &Expr,
 ) -> Vec<LoweredValue> {
     let Some(signature) = signature else { return vec![] };
-    if !crate::func_args::sig_collects_surplus_args(signature) { return vec![]; }
     if crate::func_args::sig_has_hidden_argc_param(signature) {
         operands.push(lower_int_literal(ctx, actual_count as i64, expr).value);
     }
+    if !crate::func_args::sig_collects_surplus_args(signature) { return vec![]; }
     let tail = lower_variadic_tail_array(ctx, signature, &[], actual_count);
     operands.push(tail.value);
     vec![tail]
+}
+
+/// Lowers `~$object` for an internal class as `-x - 1`, PHP's `mpz_com` identity.
+pub(super) fn lower_object_bitnot(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr,
+) -> Option<LoweredValue> {
+    let ty = ctx.builder.value_php_type(value.value);
+    crate::types::object_operators::operator_class(&ty)?;
+    let zero = lower_int_literal(ctx, 0, expr);
+    let negative = lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr)?;
+    let one = lower_int_literal(ctx, 1, expr);
+    lower_object_binary_values(ctx, negative, &BinOp::Sub, one, expr)
+}
+
+/// Calls an internal class's scalar cast adapter for an explicit `(int)`/`(float)` cast.
+pub(super) fn lower_object_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    target: &crate::parser::ast::CastType,
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    use crate::parser::ast::CastType;
+    let cast = match target {
+        CastType::Int => crate::types::object_operators::ObjectCast::Int,
+        CastType::Float => crate::types::object_operators::ObjectCast::Float,
+        _ => return None,
+    };
+    let result_type = match target {
+        CastType::Int => PhpType::Int,
+        CastType::Float => PhpType::Float,
+        _ => unreachable!("object cast target checked above"),
+    };
+    let ty = ctx.builder.value_php_type(value.value);
+    if let Some(class) = crate::types::object_operators::cast_class_with_classes(&ty, ctx.classes) {
+        crate::types::object_operators::cast_method(class, cast)?;
+        return Some(emit_cast_method(ctx, class, cast, value, expr));
+    }
+    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return None;
+    }
+    let mut class_names: Vec<String> = ctx.classes.keys().cloned().collect();
+    class_names.sort();
+    let classes: Vec<_> = class_names
+        .iter()
+        .filter_map(|name| elephc_builtin_contract::lookup_class(name))
+        .filter(|class| crate::types::object_operators::cast_method(class, cast).is_some())
+        .collect();
+    if classes.is_empty() {
+        return None;
+    }
+    let temp = ctx.declare_owned_hidden_temp(result_type.clone());
+    let initialized = ctx.initialized_slots_snapshot();
+    let scalar_block = ctx.builder.create_named_block("cast.scalar", vec![]);
+    let merge = ctx.builder.create_named_block("cast.merge", vec![]);
+    let mut call_initialized: Option<HashSet<LocalSlotId>> = None;
+    for (index, class) in classes.iter().enumerate() {
+        let class_name = ctx.intern_class_name(class.name);
+        let instance = ctx.emit_value(
+            Op::InstanceOf,
+            vec![value.value],
+            Some(Immediate::Data(class_name)),
+            PhpType::Bool,
+            Op::InstanceOf.default_effects(),
+            Some(expr.span),
+        );
+        let call_block = ctx.builder.create_named_block("cast.object", vec![]);
+        let next_check = if index + 1 == classes.len() {
+            scalar_block
+        } else {
+            ctx.builder.create_named_block("cast.check", vec![])
+        };
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: instance.value,
+            then_target: call_block,
+            then_args: vec![],
+            else_target: next_check,
+            else_args: vec![],
+        });
+        ctx.builder.position_at_end(call_block);
+        let result = emit_cast_method(ctx, class, cast, value, expr);
+        store_value_into_temp(ctx, &temp, result_type.clone(), result, expr.span);
+        branch_to(ctx, merge);
+        let snapshot = ctx.initialized_slots_snapshot();
+        call_initialized = Some(match call_initialized {
+            Some(previous) => previous.intersection(&snapshot).copied().collect(),
+            None => snapshot,
+        });
+        ctx.builder.position_at_end(next_check);
+    }
+    ctx.restore_initialized_slots(initialized.clone());
+    let php_type = cast_php_type(target, &ty);
+    let result = ctx.emit_value(
+        Op::Cast,
+        vec![value.value],
+        Some(Immediate::CastTarget(value_ir_type(&php_type))),
+        php_type,
+        Op::Cast.default_effects(),
+        Some(expr.span),
+    );
+    store_value_into_temp(ctx, &temp, result_type, result, expr.span);
+    branch_to(ctx, merge);
+    let scalar_initialized = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(merge);
+    let call_initialized = call_initialized.unwrap_or_else(|| initialized.clone());
+    ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
+        &initialized,
+        call_initialized,
+        true,
+        scalar_initialized,
+        true,
+    ));
+    Some(take_owned_temp(ctx, &temp, expr.span))
+}
+
+/// Emits one class's cast adapter call for an already selected class.
+fn emit_cast_method(
+    ctx: &mut LoweringContext<'_, '_>,
+    class: &'static elephc_builtin_contract::ClassContract,
+    cast: crate::types::object_operators::ObjectCast,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let method = crate::types::object_operators::cast_method(class, cast)
+        .expect("cast adapter was selected by cast_method");
+    let result_type = match cast {
+        crate::types::object_operators::ObjectCast::Int => PhpType::Int,
+        crate::types::object_operators::ObjectCast::Float => PhpType::Float,
+        _ => unreachable!("explicit cast only selects int/float"),
+    };
+    emit_guarded_adapter(ctx, value, class.name, method, result_type, Some(expr.span))
 }
 
 /// Calls an internal class's truthiness adapter while retaining the input for its caller.

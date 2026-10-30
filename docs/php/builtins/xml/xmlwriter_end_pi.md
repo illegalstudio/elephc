@@ -2,7 +2,7 @@
 title: "xmlwriter_end_pi()"
 description: "Ends the current processing instruction."
 sidebar:
-  order: 1066
+  order: 1117
 ---
 
 ## xmlwriter_end_pi()

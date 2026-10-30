@@ -2,7 +2,7 @@
 title: "xml_set_default_handler()"
 description: "Sets the default handler that receives everything no other handler claims."
 sidebar:
-  order: 1048
+  order: 1099
 ---
 
 ## xml_set_default_handler()
