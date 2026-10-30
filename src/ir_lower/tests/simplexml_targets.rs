@@ -429,3 +429,33 @@ target_test!(simplexml_target_ios, "ios-arm64");
 target_test!(simplexml_target_ios_sim, "ios-sim-arm64");
 target_test!(simplexml_target_linux_arm, "linux-aarch64");
 target_test!(simplexml_target_linux_x86, "linux-x86_64");
+
+/// Temporary native parents hand off independently owned children on every supported target.
+#[test]
+fn native_xml_temporary_parent_handoff_on_every_target() {
+    let source = r#"<?php
+interface TargetXmlHandoffMarker {}
+class TargetXmlHandoffNode extends SimpleXMLElement implements TargetXmlHandoffMarker {}
+class TargetXmlHandoffHolder {
+    public SimpleXMLElement $items;
+    public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+}
+function targetXmlHandoffKnown(): TargetXmlHandoffNode { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffMixed(): mixed { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffObject(): object { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffInterface(): TargetXmlHandoffMarker { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffHolder(): TargetXmlHandoffHolder { return new TargetXmlHandoffHolder(); }
+targetXmlHandoffKnown()->item[] = 2;
+targetXmlHandoffMixed()->item[] = 2;
+targetXmlHandoffObject()->item[0] = 3;
+targetXmlHandoffInterface()->item[0] += 2;
+targetXmlHandoffMixed()->item[0]++;
+targetXmlHandoffHolder()->items[] = 2;
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}

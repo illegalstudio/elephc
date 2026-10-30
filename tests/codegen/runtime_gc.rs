@@ -120,6 +120,7 @@ mod literal_builtin_elements;
 mod mixed_receiver_property_writes;
 mod property_dimension_fetch_modes;
 mod property_magic_dimension_guards;
+mod property_magic_appends;
 mod property_append_storage;
 #[path = "runtime_gc/assoc_literal_spreads.rs"]
 mod assoc_literal_spreads;

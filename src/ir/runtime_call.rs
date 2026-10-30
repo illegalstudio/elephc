@@ -95,6 +95,8 @@ pub enum RuntimeCallTarget {
     ArrayFetchForWrite,
     /// Fetches an owned attached cell from a known ordinary dynamic-property hash.
     PropertyHashFetchForWrite,
+    /// Tests an ordinary dynamic-property hash entry without invoking PHP accessors.
+    PropertyHashContains,
     /// Fetches a parent whose key conversion was diagnosed by the update's preceding read.
     ArrayFetchForWriteAlreadyDiagnosed,
     /// Fetches through a pending append parent, preserving a payload-only survivor selected
@@ -200,6 +202,10 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::PropertyHashContains => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
+                result: IrType::I64,
+            }),
             RuntimeCallTarget::PropertyHashFetchForWrite => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
                 result: IrType::Heap(IrHeapKind::Mixed),
@@ -299,6 +305,7 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::PropertyHashFetchForWrite => "object.property_hash_fetch_for_write",
+            RuntimeCallTarget::PropertyHashContains => "object.property_hash_contains",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
             RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {

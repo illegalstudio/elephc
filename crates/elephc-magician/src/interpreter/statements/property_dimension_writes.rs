@@ -26,8 +26,10 @@ pub(super) fn eval_property_dimension_write(
     scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let mut operands = Vec::new();
+    let mut receiver_roots = Vec::new();
     let mut result = (|| {
         let mut receiver = Some(prepare_property_write_receiver(object, &mut operands, context, scope, values)?);
+        receiver_roots.extend(0..operands.len());
         let property = match property {
             DimensionProperty::Literal(name) => PreparedPropertyName::Literal(name.to_string()),
             DimensionProperty::Dynamic(name) => PreparedPropertyName::Dynamic(
@@ -35,8 +37,8 @@ pub(super) fn eval_property_dimension_write(
         };
         let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
         let early = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
-            let object = finish_property_write_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?, &mut operands, context, scope, values)?;
-            operands.push(object);
+            let object = finish_dimension_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?,
+                &mut operands, &mut receiver_roots, context, scope, values)?;
             Some(object)
         };
         let property = match property {
@@ -44,17 +46,30 @@ pub(super) fn eval_property_dimension_write(
             PreparedPropertyName::Dynamic(name) => finish_name(name, &mut operands, context, scope, values)?,
         };
         let object = if let Some(object) = early { object } else {
-            let object = finish_property_write_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?, &mut operands, context, scope, values)?;
-            operands.push(object);
+            let object = finish_dimension_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?,
+                &mut operands, &mut receiver_roots, context, scope, values)?;
             object
         };
-        write_selected(object, &property, key, op, assigned, &mut operands, context, values)
+        write_selected(object, &property, key, op, assigned, &mut operands, &receiver_roots, context, values)
     })();
     for operand in operands.into_iter().rev() {
         let released = eval_release_value(context, values, operand);
         if result.is_ok() { result = released; }
     }
     result
+}
+
+/// Records receiver-only captures so a native child can outlive its retired parent.
+fn finish_dimension_receiver(
+    plan: super::property_write_receivers::PreparedWriteReceiver<'_>, operands: &mut Vec<RuntimeCellHandle>,
+    roots: &mut Vec<usize>, context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let start = operands.len();
+    let object = finish_property_write_receiver(plan, operands, context, scope, values)?;
+    operands.push(object);
+    roots.extend(start..operands.len());
+    Ok(object)
 }
 
 /// Evaluates a computed key before the RHS and a variable key after it, each exactly once.
@@ -81,13 +96,31 @@ pub(super) fn stage_operands(
 fn write_selected(
     object: RuntimeCellHandle, property: &str, index: Option<RuntimeCellHandle>,
     op: Option<EvalBinOp>, assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
-    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+    receiver_roots: &[usize], context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     validate_property_write_receiver(object, property, "modify", context, values)?;
-    let current = match super::super::runtime_ops::simplexml_properties::invoke(
+    let native = super::super::runtime_ops::simplexml_properties::invoke(
         values, object, property, elephc_builtin_contract::ObjectProperty::WriteFetch, None,
-    )? {
-        Some(child) => child,
+    )?;
+    if let Some(current) = native {
+        let current = if current.is_borrowed() { values.retain(current)? } else { current };
+        // Publish the child before a parent destructor can throw. Remove each released capture
+        // first so the outer error cleanup cannot release it for a second time.
+        operands.push(current);
+        for root in receiver_roots.iter().rev() {
+            let owner = operands.remove(*root);
+            eval_release_value(context, values, owner)?;
+        }
+        return match write_value(current, index, op, assigned, operands, context, values)? {
+            None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
+        };
+    }
+    let selected = if index.is_none() && op.is_none() {
+        super::property_append_fetch::select(object, property, context, values)?
+    } else { None };
+    let dynamic = selected.is_some();
+    let current = match selected {
+        Some(current) => current,
         None => property_dimension_guards::ordinary_property(object, property,
             if op.is_some() { property_dimension_guards::DimensionFetchMode::ReadWrite }
             else { property_dimension_guards::DimensionFetchMode::Write }, context, values)?,
@@ -95,7 +128,11 @@ fn write_selected(
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     operands.push(current);
     if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
-        eval_property_set_result(object, property, array, context, values)?;
+        if dynamic {
+            super::property_append_fetch::write(object, property, array, context, values)?;
+        } else {
+            eval_property_set_result(object, property, array, context, values)?;
+        }
     }
     Ok(())
 }

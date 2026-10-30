@@ -11,6 +11,7 @@ use super::*;
 use crate::parser::ast::BinOp;
 
 mod native_xml;
+mod magic_append;
 mod compound;
 mod incdec;
 mod runtime_receivers;
@@ -93,8 +94,7 @@ pub(super) fn lower_property_array_push(
     if let Some(child) = native_xml::fetch(ctx, receiver.value, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
             PropertyDimensionFetchMode::Write).map(native_xml::Fetch::known)) {
-        native_xml::write(ctx, receiver.value, child, property, None, value, None, span, false);
-        receiver.finish(ctx, span);
+        native_xml::write(ctx, receiver, child, property, None, value, None, span, false);
         retire_property_write_roots(ctx, roots, span);
         return;
     }
@@ -331,14 +331,13 @@ pub(super) fn lower_property_array_assign_with_update(
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
             fetch_mode).map(native_xml::Fetch::known)) {
         if let Some(increment) = delayed_incdec {
-            native_xml::dispatch(ctx, child, span,
+            native_xml::dispatch(ctx, receiver, child, span,
                 |ctx, child| incdec::native(ctx, child, index, increment, span),
-                |ctx| incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, span));
+                |ctx, object| incdec::ordinary(ctx, object, property, index, index_expression, increment, span));
         } else {
-            native_xml::write(ctx, receiver.value, child, property, Some(index), value,
+            native_xml::write(ctx, receiver, child, property, Some(index), value,
                 compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
         }
-        receiver.finish(ctx, span);
         retire_property_write_roots(ctx, roots, span);
         return;
     }

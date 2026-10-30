@@ -595,7 +595,7 @@ pub(crate) fn eval_property_set_result(
 }
 
 /// Returns whether an eval or seeded native class inherits permission for dynamic properties.
-fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalContext) -> bool {
+pub(super) fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalContext) -> bool {
     let mut current = class_name.trim_start_matches('\\').to_string();
     let mut visited = std::collections::HashSet::new();
     while visited.insert(current.to_ascii_lowercase()) {
@@ -629,7 +629,7 @@ fn eval_class_allows_dynamic_properties(class_name: &str, context: &ElephcEvalCo
 }
 
 /// Writes a public dynamic entry without resolving an inaccessible declared slot of the same name.
-fn eval_write_public_dynamic_property(
+pub(super) fn eval_write_public_dynamic_property(
     object: RuntimeCellHandle,
     identity: u64,
     class_name: &str,

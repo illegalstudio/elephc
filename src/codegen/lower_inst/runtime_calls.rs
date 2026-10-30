@@ -54,6 +54,9 @@ pub(super) fn lower(
         RuntimeCallTarget::ExceptionCatchHostReplacement => {
             lower_exception_catch_host_replacement(ctx, inst)
         }
+        RuntimeCallTarget::PropertyHashContains => {
+            super::objects::lower_property_hash_contains(ctx, inst)
+        }
         RuntimeCallTarget::PropertyHashFetchForWrite => {
             super::objects::lower_property_hash_fetch_for_write(ctx, inst)
         }

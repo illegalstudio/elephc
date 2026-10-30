@@ -20,6 +20,7 @@ mod nested_unset;
 mod opaque_writes;
 mod dimension_writes;
 mod dimension_owners;
+mod receiver_handoff;
 mod dimension_updates;
 mod diagnostics;
 mod dom_and_iterator;

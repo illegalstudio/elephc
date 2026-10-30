@@ -38,6 +38,7 @@ mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
 mod property_dimension_writes;
+mod property_append_fetch;
 mod property_dimension_guards;
 mod property_dimension_unset;
 mod property_write_receivers;

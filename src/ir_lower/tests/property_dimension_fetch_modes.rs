@@ -176,20 +176,21 @@ interface AttachedAppendMarker {}
 class AttachedAppendDeclared implements AttachedAppendMarker { public array $items = []; }
 #[AllowDynamicProperties]
 class AttachedAppendDynamic implements AttachedAppendMarker {}
-class AttachedAppendDynamicChild extends AttachedAppendDynamic {}
+#[AllowDynamicProperties]
+class AttachedAppendStdChild extends stdClass {}
 #[AllowDynamicProperties]
 class AttachedAppendUnrelated {}
 class AttachedAppendDeprecated {}
 function attachedAppendMixed(mixed $box): void { $box->items[] = 1; }
 function attachedAppendObject(object $box): void { $box->items[] = 2; }
 function attachedAppendInterface(AttachedAppendMarker $box): void { $box->items[] = 3; }
-function attachedAppendKnown(AttachedAppendDynamic $box): void { $box->items[] = 4; }
+function attachedAppendKnown(stdClass $box): void { $box->items[] = 4; }
 function attachedAppendDeclared(AttachedAppendDeclared $box): void { $box->items[] = 5; }
-function attachedAppendDeprecated(AttachedAppendDeprecated $box): void { $box->items[] = 6; }
+function attachedAppendDeprecated(mixed $box): void { $box->items[] = 6; }
 attachedAppendMixed(new AttachedAppendDeclared());
 attachedAppendObject(new stdClass());
 attachedAppendInterface(new AttachedAppendDynamic());
-attachedAppendKnown(new AttachedAppendDynamicChild());
+attachedAppendKnown(new AttachedAppendStdChild());
 attachedAppendDeclared(new AttachedAppendDeclared());
 $plain = new AttachedAppendDeprecated(); $reserved = clone($plain, []);
 attachedAppendDeprecated($plain);
@@ -221,10 +222,10 @@ echo get_class(new AttachedAppendUnrelated());
                 Some(module.data.strings[id.as_raw() as usize].as_str()),
             _ => None,
         }).collect();
-        for class in ["AttachedAppendDynamic", "AttachedAppendDynamicChild"] {
+        for class in ["stdClass", "AttachedAppendStdChild"] {
             assert!(classes.contains(&class), "{target}: known receiver must retain {class}");
         }
-        for class in ["stdClass", "AttachedAppendUnrelated", "AttachedAppendDeclared", "AttachedAppendDeprecated"] {
+        for class in ["AttachedAppendDynamic", "AttachedAppendUnrelated", "AttachedAppendDeclared", "AttachedAppendDeprecated"] {
             assert!(!classes.contains(&class), "{target}: known receiver must exclude unrelated {class}");
         }
         let deprecated = &module.class_infos["AttachedAppendDeprecated"];
@@ -232,6 +233,9 @@ echo get_class(new AttachedAppendUnrelated());
             && deprecated.dynamic_property_creation_is_deprecated(),
             "{target}: clone-with must reserve a deprecated ordinary hash");
         let write = module.functions.iter().find(|f| f.name == "attachedAppendDeprecated").unwrap();
+        assert!(write.instructions.iter().any(|inst| inst.op == Op::ConstStr && matches!(inst.immediate,
+            Some(crate::ir::Immediate::Data(id)) if module.data.strings[id.as_raw() as usize] == "AttachedAppendDeprecated")),
+            "{target}: mixed writer must contain the deprecated class arm");
         assert!(write.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite))),
             "{target}: deprecated hash case must reach the attached fetch");
@@ -269,6 +273,50 @@ function magicAttachedWrite(mixed $box): void { $box->items[0] = 1; }
         let write = module.functions.iter().find(|f| f.name == "magicAttachedWrite").unwrap();
         assert!(write.instructions.iter().any(|inst| inst.op == Op::IsNull),
             "{target}: nullable object slot in a magic class must reject array initialization");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Existing getter-class entries and explicit missing-getter refusals lower on every ABI.
+#[test]
+fn magic_property_append_fetches_on_every_target() {
+    let source = r#"<?php
+interface MagicAppendTarget {}
+#[AllowDynamicProperties]
+class MagicAppendSet implements MagicAppendTarget {
+    public function __set(string $name, mixed $value): void { $this->$name = $value; }
+}
+#[AllowDynamicProperties]
+class MagicAppendValue implements MagicAppendTarget {
+    public function __get(string $name): mixed { return [1]; }
+}
+class MagicAppendReference implements MagicAppendTarget {
+    public array $backing = [1];
+    public function &__get(string $name): mixed { return $this->backing; }
+}
+function magicAppendMixed(mixed $box): void { $box->items[] = 2; }
+function magicAppendObject(object $box): void { $box->items[] = 2; }
+function magicAppendInterface(MagicAppendTarget $box): void { $box->items[] = 2; }
+magicAppendMixed(new MagicAppendSet());
+magicAppendObject(new MagicAppendValue());
+magicAppendInterface(new MagicAppendReference());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["magicAppendMixed", "magicAppendObject", "magicAppendInterface"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::PropertyHashContains))),
+                "{target}: {name} must distinguish a stored null from a missing getter entry");
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::ConstStr && matches!(inst.immediate,
+                Some(crate::ir::Immediate::Data(id)) if module.data.strings[id.as_raw() as usize] ==
+                    "Unsupported property append through an overloaded __get()")),
+                "{target}: {name} must explicitly diagnose missing getter storage");
+        }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

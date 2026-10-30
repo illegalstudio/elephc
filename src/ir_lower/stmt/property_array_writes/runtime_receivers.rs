@@ -41,8 +41,11 @@ pub(super) fn lower_append(
     value: LoweredValue, span: Span,
 ) -> bool {
     dispatch(ctx, object, property, span, FetchMode::Write, false, true, |ctx, receiver, selected| {
-        if selected { lower_property_array_push_value_direct(ctx, receiver, property, value, span); }
-        else { native_xml::ordinary_append(ctx, receiver, property, value, span); }
+        if selected {
+            if !magic_append::lower(ctx, receiver, property, value, span) {
+                lower_property_array_push_value_direct(ctx, receiver, property, value, span);
+            }
+        } else { native_xml::ordinary_append(ctx, receiver, property, value, span); }
     })
 }
 
@@ -53,7 +56,7 @@ fn dynamic_slot(info: &crate::types::ClassInfo, class: &str, property: &str) -> 
         && info.visible_property(property).is_none()
         // Property hashes retain numeric names as strings; array helpers normalize such keys.
         && property.parse::<i64>().is_err()
-        && !info.methods.contains_key("__get") && !info.methods.contains_key("__set")
+        && !info.methods.contains_key("__get")
         && !info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
 }
 
@@ -145,7 +148,8 @@ fn dispatch(
             name != base && !crate::types::class_inherits_from(ctx.classes, name, base)) {
             return None;
         }
-        if include_dynamic && dynamic_slot(info, name, property) {
+        if include_dynamic && (dynamic_slot(info, name, property)
+            || magic_append::is_candidate(ctx, name, info, property)) {
             return Some((name.clone(), None, true));
         }
         if info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
@@ -340,18 +344,26 @@ pub(super) fn fallback(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     index: LoweredValue, value: LoweredValue, span: Span,
 ) {
-    let ty = ctx.builder.value_php_type(object.value);
     let mut roots = Vec::new();
-    let object = if matches!(&ty, PhpType::Object(class)
+    let object = box_opaque_receiver(ctx, object, span, &mut roots);
+    let data = ctx.intern_string(property);
+    ctx.emit_void(Op::RuntimeCall, vec![object.value, index.value, value.value],
+        Some(Immediate::Data(data)), effects_lookup::runtime_effects(), Some(span));
+    retire_property_write_roots(ctx, roots, span);
+}
+
+/// Boxes erased object handles once and roots the box across the ordinary runtime fallback.
+pub(super) fn box_opaque_receiver(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span,
+    roots: &mut Vec<LocalSlotId>,
+) -> LoweredValue {
+    let ty = ctx.builder.value_php_type(object.value);
+    if matches!(&ty, PhpType::Object(class)
         if class.is_empty() || ctx.interfaces.contains_key(class)) {
         let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
-        root_property_write_value(ctx, boxed, span, &mut roots)
-    } else { object };
-    let data = ctx.intern_string(property);
-    ctx.emit_void(Op::RuntimeCall, vec![object.value, index.value, value.value],
-        Some(Immediate::Data(data)), effects_lookup::runtime_effects(), Some(span));
-    retire_property_write_roots(ctx, roots, span);
+        root_property_write_value(ctx, boxed, span, roots)
+    } else { object }
 }
