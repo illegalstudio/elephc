@@ -9,6 +9,13 @@
 
 use super::*;
 
+/// A raw container write on a catch break remains in the following return contract.
+#[test]
+fn test_nullable_fallback_flow_review_raw_loop_exit_contract() {
+    expect_error("<?php function rows(array $input): array<int> { $rows = []; foreach ($input as $key) { try { throw new RuntimeException('stop'); } catch (Exception $error) { $rows = ['x']; break; } } return $rows; }",
+        "returns array<string>");
+}
+
 /// A preceding switch arm's array layout remains part of the following return contract.
 #[test]
 fn test_nullable_fallback_flow_review_switch_array_exit_contract() {

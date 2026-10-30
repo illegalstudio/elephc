@@ -9,6 +9,74 @@
 
 use super::*;
 
+/// Raw writes on nested jumps survive restored try, catch and switch entry snapshots.
+#[test]
+fn test_nullable_fallback_flow_review_raw_loop_exits_runtime() {
+    let source = r#"<?php
+function rawTryBreak(int $n) {
+    $value = 1;
+    for ($i = 0; $i < 3; $i++) {
+        if ($i != $n) { continue; }
+        try { $value = 2.5; break; } catch (Exception $error) {}
+    }
+    return $value;
+}
+function rawCatchBreak(int $n) {
+    $value = 1;
+    for ($i = 0; $i < 3; $i++) {
+        try { if ($i == $n) { throw new Exception('stop'); } $value = 3; }
+        catch (Exception $error) { $value = 2.5; break; }
+    }
+    return $value;
+}
+function rawForeachCatch(array $input) {
+    $value = 1;
+    foreach ($input as $item) {
+        try { if ($item > 1) { throw new Exception('stop'); } }
+        catch (Exception $error) { $value = 2.5; break; }
+    }
+    return $value;
+}
+function rawSwitchBreak(int $key) {
+    $value = 1;
+    foreach ([1] as $_) {
+        switch ($key) { case 1: $value = 2.5; break 2; default: break; }
+    }
+    return $value;
+}
+function rawWhileContinue(int $n) {
+    $value = 1; $i = 0;
+    while ($i < 3) {
+        $i++;
+        try { if ($i == $n) { throw new Exception('stop'); } }
+        catch (Exception $error) { $value = 2.5; continue; }
+    }
+    return $value;
+}
+function rawSwitchContinue(array $input) {
+    $value = 1;
+    foreach ($input as $item) {
+        switch ($item) { case 5: $value = 2.5; continue 2; default: break; }
+    }
+    return $value;
+}
+function rawDoBreak(int $n) {
+    $value = 1;
+    do {
+        try { if ($n > 0) { throw new Exception('stop'); } }
+        catch (Exception $error) { $value = 2.5; break; }
+    } while (false);
+    return $value;
+}
+var_dump(rawTryBreak(1), rawCatchBreak(1), rawForeachCatch([1, 5]), rawSwitchBreak(1));
+var_dump(rawWhileContinue(2), rawSwitchContinue([1, 5]), rawDoBreak(1));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, &"float(2.5)\n".repeat(7));
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Checks PHP output and the ownership balance of a nullable flow fixture.
 fn assert_nullable_flow_heap_output(source: &str, expected: &str) {
     let out = compile_and_run_with_heap_debug(source);

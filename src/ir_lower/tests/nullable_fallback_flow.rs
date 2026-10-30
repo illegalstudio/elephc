@@ -13,6 +13,15 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+function rawLoopExitTarget(int $key) {
+    $value = 1;
+    foreach ([1] as $_) {
+        try {
+            switch ($key) { case 1: $value = 2.5; break 2; default: break; }
+        } catch (Exception $error) { $value = 3.5; continue; }
+    }
+    return $value;
+}
 function rawSwitchExitTarget(int $key) {
     $value = 1;
     switch ($key) { case 1: $value = 2.5; break; default: $value = 3; }

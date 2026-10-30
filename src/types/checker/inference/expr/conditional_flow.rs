@@ -129,11 +129,11 @@ impl Checker {
         }
     }
 
-    /// Excludes property facts from loop exits, since iterations can invalidate those reads.
+    /// Tracks every local on loop exits, excluding property facts that iterations invalidate.
     pub(in crate::types::checker) fn snapshot_loop_flow(&self, env: &TypeEnv) -> ConditionalFlow {
         let mut locals = env.clone();
         Self::purge_property_narrowings(&mut locals);
-        self.snapshot_conditional_flow(&locals)
+        self.snapshot_conditional_flow_inputs(&locals, true)
     }
 
     /// Restores an alternative's entry contracts without discarding other checker metadata.
