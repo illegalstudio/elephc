@@ -93,12 +93,15 @@ fn slot(
         readonly: flags & EVAL_REFLECTION_MEMBER_FLAG_READONLY != 0, write_visibility }))
 }
 
-/// Recognizes real ordinary storage while keeping overloaded getter results on their shared path.
-pub(super) fn native_child_uses_storage(
-    object: RuntimeCellHandle, property: &str, current: RuntimeCellHandle,
-    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    if slot(object, property, context, values)?.is_some() { return Ok(true); }
+/// Distinguishes a plain field, existing hash entry and already supported XML-typed hook.
+enum NativeStorage { Plain, Dynamic, Hook(String), Deferred }
+
+/// Describes storage without reading a property or invoking a getter.
+fn native_storage(
+    object: RuntimeCellHandle, property: &str, context: &ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<NativeStorage, EvalStatus> {
+    if slot(object, property, context, values)?.is_some() { return Ok(NativeStorage::Plain); }
     let identity = values.object_identity(object)?;
     let dynamic = context.dynamic_object_class(identity).map(|class| class.name().to_string());
     let class = match &dynamic {
@@ -106,12 +109,16 @@ pub(super) fn native_child_uses_storage(
     };
     if let Some((owner, declared)) = eval_dynamic_property_for_access(&class, property, context) {
         if declared.has_get_hook() {
-            let ty = declared.property_type().cloned();
-            return native_hook_storage(&owner, property, ty.as_ref(), current, context, values);
+            let native = !declared.is_static()
+                && validate_eval_member_access(&owner, declared.visibility(), context).is_ok()
+                && native_hook_type(declared.property_type(), context);
+            return Ok(if native { NativeStorage::Hook(owner) } else { NativeStorage::Deferred });
         }
         if declared.has_set_hook() {
-            return Ok(!declared.is_static()
-                && validate_eval_member_access(&owner, declared.visibility(), context).is_ok());
+            return Ok(if !declared.is_static() && !declared.is_virtual()
+                && validate_eval_member_access(&owner, declared.visibility(), context).is_ok() {
+                NativeStorage::Plain
+            } else { NativeStorage::Deferred });
         }
     }
     let native = if dynamic.is_some() {
@@ -121,31 +128,78 @@ pub(super) fn native_child_uses_storage(
         let get = property_hook_get_method(property);
         if values.reflection_method_flags(&owner, &get)?.is_some_and(|flags|
             flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0) {
-            let ty = context.native_property_type(&owner, property);
-            return native_hook_storage(&owner, property, ty.as_ref(), current, context, values);
+            let native = !is_static && validate_eval_member_access(&owner, read, context).is_ok()
+                && native_hook_type(context.native_property_type(&owner, property).as_ref(), context);
+            return Ok(if native { NativeStorage::Hook(owner) } else { NativeStorage::Deferred });
         }
         let set = property_hook_set_method(property);
         if values.reflection_method_flags(&owner, &set)?.is_some_and(|flags|
             flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0) {
-            return Ok(!is_static && validate_eval_member_access(&owner, read, context).is_ok());
+            return Ok(if !is_static && !values.reflection_property_flags(&owner, property)?
+                .is_some_and(|flags| flags & EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL != 0)
+                && validate_eval_member_access(&owner, read, context).is_ok() {
+                NativeStorage::Plain
+            } else { NativeStorage::Deferred });
         }
     }
-    values.object_dynamic_property_exists(object, property)
+    Ok(NativeStorage::Dynamic)
 }
 
-/// Preserves one-fetch behavior of XML-typed hooks, refusing their null result before writeback.
-fn native_hook_storage(
-    owner: &str, property: &str, ty: Option<&EvalParameterType>, current: RuntimeCellHandle,
+/// Recognizes the same singular native XML declaration used by AOT's existing hook fetch.
+fn native_hook_type(ty: Option<&EvalParameterType>, context: &ElephcEvalContext) -> bool {
+    ty.is_some_and(|ty| !ty.is_intersection() && matches!(ty.variants(),
+        [EvalParameterTypeVariant::Class(class)] if context.class_is_a(class, "SimpleXMLElement", false)
+            || reflection_instantiation::native_class_is_a(class, "SimpleXMLElement", context)))
+}
+
+/// Reads an actual native child before a late key, leaving ordinary callbacks and guards untouched.
+pub(super) fn probe_native_child(
+    object: RuntimeCellHandle, property: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let storage = native_storage(object, property, context, values)?;
+    let current = match &storage {
+        NativeStorage::Plain => instance_property_access::eval_property_read_result(
+            object, property, context, values, None, true)?,
+        NativeStorage::Dynamic if values.object_dynamic_property_exists(object, property)? =>
+            values.property_get(object, property)?,
+        NativeStorage::Hook(_) => eval_property_get_result(object, property, context, values)?,
+        _ => return Ok(None),
+    };
+    let current = if current.is_borrowed() { values.retain(current)? } else { current };
+    let native = super::super::runtime_ops::simplexml_properties::is_native(values, current, "");
+    match native {
+        Ok(true) => Ok(Some(current)),
+        result => {
+            let released = eval_release_value(context, values, current);
+            if let Err(status) = result { return Err(status); }
+            released?;
+            if let NativeStorage::Hook(owner) = storage {
+                return eval_throw_error(&format!("Indirect modification of {}::${property} is not allowed",
+                    owner.trim_start_matches('\\')), context, values);
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// Recognizes real storage while keeping generic overloaded getter results on their shared path.
+pub(super) fn native_child_uses_storage(
+    object: RuntimeCellHandle, property: &str, current: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    let native = ty.is_some_and(|ty| !ty.is_intersection() && matches!(ty.variants(),
-        [EvalParameterTypeVariant::Class(class)] if context.class_is_a(class, "SimpleXMLElement", false)
-            || reflection_instantiation::native_class_is_a(class, "SimpleXMLElement", context)));
-    if native && values.type_tag(current)? == EVAL_TAG_NULL {
-        return eval_throw_error(&format!("Indirect modification of {}::${property} is not allowed",
-            owner.trim_start_matches('\\')), context, values);
+    match native_storage(object, property, context, values)? {
+        NativeStorage::Plain => Ok(true),
+        NativeStorage::Dynamic => values.object_dynamic_property_exists(object, property),
+        NativeStorage::Deferred => Ok(false),
+        NativeStorage::Hook(owner) => {
+            if values.type_tag(current)? == EVAL_TAG_NULL {
+                return eval_throw_error(&format!("Indirect modification of {}::${property} is not allowed",
+                    owner.trim_start_matches('\\')), context, values);
+            }
+            Ok(true)
+        }
     }
-    Ok(native)
 }
 
 /// Rejects null storage mutation before warning-producing element reads or autovivification.

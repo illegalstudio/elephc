@@ -142,7 +142,7 @@ GenericXmlBorrowed($borrowed);
 echo 'borrowed:', count($borrowed->items), '|'; unset($borrowed);
 class GenericXmlHook {
     private ?SimpleXMLElement $alias;
-    public ?SimpleXMLElement $items { get { echo 'hook-get|'; return $this->items; } }
+    public ?SimpleXMLElement $items { get { global $genericKey; $genericKey = 1; echo 'hook-get|'; return $this->items; } }
     public function __construct(?SimpleXMLElement $node) { $this->items = $node; $this->alias = $node; }
     public function __destruct() { echo 'hook-drop|'; if ($this->alias !== null) { $this->alias[0] = 'D'; } }
 }
@@ -169,8 +169,16 @@ $keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
 GenericXmlKeyMake($keyRoot->item)->items[$genericKey] .= 'S';
 echo 'compound-key:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
 GenericXmlMutate($root->item)->items[0] .= 'S'; echo 'compound-final:', $root->item[0], '|';
+$genericKey = 0;
+$keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
+GenericXmlHookKnown($keyRoot->item)->items[$genericKey] = 'S';
+echo 'hook-key-known:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
+$genericKey = 0;
+$keyRoot = new SimpleXMLElement('<r><item>A</item><item>B</item></r>');
+GenericXmlHookErased($keyRoot->item)->items[$genericKey] = 'S';
+echo 'hook-key-erased:', $keyRoot->item[0], ':', $keyRoot->item[1], ':', $genericKey, '|';
 "#;
-    let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|";
+    let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|";
     let renamed = source.replace("GenericXml", "EvalGenericXml");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");

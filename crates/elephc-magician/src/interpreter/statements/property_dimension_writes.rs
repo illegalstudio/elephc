@@ -115,11 +115,20 @@ fn write_selected(
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
     }
-    let selected = if index.is_none() && late_index.is_none() && op.is_none() {
+    let probed = if late_index.is_some() {
+        property_dimension_guards::probe_native_child(object, property, context, values)?
+    } else { None };
+    // Only a native child needs its key after parent retirement. Other storage retains its
+    // previous key-before-getter order, without running ordinary accessors twice.
+    let index = if probed.is_none() {
+        finish_dimension_index(index, late_index, operands, context, scope, values)?
+    } else { index };
+    let late_index = if probed.is_none() { None } else { late_index };
+    let selected = if probed.is_none() && index.is_none() && late_index.is_none() && op.is_none() {
         super::property_append_fetch::select(object, property, context, values)?
     } else { None };
     let dynamic = selected.is_some();
-    let current = match selected {
+    let current = match probed.or(selected) {
         Some(current) => current,
         None => property_dimension_guards::ordinary_property(object, property,
             if op.is_some() { property_dimension_guards::DimensionFetchMode::ReadWrite }
