@@ -1048,16 +1048,16 @@ pub(super) fn eval_magic_property_get(
         return Err(EvalStatus::RuntimeFatal);
     }
     let property = values.string(property_name)?;
-    eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_values(
         &declaring_class,
         object_class_name,
         &method,
         object,
-        positional_args(vec![property]),
+        positional_args(vec![property.borrowed()]),
         context,
         values,
-    )
-    .map(Some)
+    );
+    finish_magic_property_name(result, property, context, values).map(Some)
 }
 
 /// Dispatches an undefined or inaccessible eval property write through `__set()`.
@@ -1091,11 +1091,12 @@ pub(super) fn eval_magic_property_set(
             object_class_name,
             &method,
             object,
-            positional_args(vec![property, value]),
+            positional_args(vec![property.borrowed(), value]),
             context,
             values,
-        )?;
-        values.release(result)
+        );
+        let result = finish_magic_property_name(result, property, context, values)?;
+        release_expr_result(result, context, values)
     })();
     let popped = values.native_magic_set_guard_pop(native_node.as_mut().get_mut());
     result.and(popped).map(|()| true)
@@ -1121,13 +1122,30 @@ pub(super) fn eval_magic_property_isset(
         object_class_name,
         &method,
         object,
-        positional_args(vec![property]),
+        positional_args(vec![property.borrowed()]),
         context,
         values,
-    )?;
-    let truthy = values.truthy(result)?;
-    values.release(result)?;
-    Ok(Some(truthy))
+    );
+    let result = finish_magic_property_name(result, property, context, values)?;
+    let truthy = values.truthy(result);
+    let released = release_expr_result(result, context, values);
+    truthy.and_then(|truthy| released.map(|()| Some(truthy)))
+}
+
+/// Retires a synthesized magic-property name while preserving an independently owned result.
+fn finish_magic_property_name(
+    result: Result<RuntimeCellHandle, EvalStatus>, property: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let released = release_expr_result(property, context, values);
+    match (result, released) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Dispatches an undefined or inaccessible eval property unset through `__unset()`.

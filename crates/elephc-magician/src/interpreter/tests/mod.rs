@@ -73,6 +73,7 @@ mod native_scope;
 mod null_object_boundaries;
 mod opcache_script_cache;
 mod operand_ownership;
+mod magic_property_owners;
 mod operand_string_sources;
 mod operand_shared_runtime;
 mod native_ref_cleanup;

@@ -419,7 +419,8 @@ fn collect_class_static_method_slots(
         if !method_signature_supported(sig) || !method_return_supported(&sig.return_type) {
             continue;
         }
-        if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), true)) {
+        if !emitted_methods.contains(&(impl_class.to_string(), method.clone(), true))
+            && !super::intrinsic_static_descriptor_entry_supported(impl_class, method) {
             continue;
         }
         slots.push(EvalStaticMethodSlot {
@@ -2845,6 +2846,24 @@ mod source_entry_tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
     use crate::types::FunctionSig;
+
+    /// Intrinsic static factories enter the same eval bridge as emitted PHP static methods.
+    #[test]
+    fn intrinsic_static_factory_has_an_eval_method_slot_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                "<?php $factory = SplFixedArray::fromArray(...); $factory([1]);",
+                std::path::Path::new("main.php"), std::path::Path::new("."), target,
+            );
+            let slots = collect_eval_static_method_slots(&module);
+            let slot = slots.iter().find(|slot| slot.class_name == "SplFixedArray"
+                && slot.method.eq_ignore_ascii_case("fromArray")).expect("eval factory slot");
+            assert_eq!(slot.params.len(), 2, "{name}: caller-visible arguments");
+            assert_eq!(slot.entry_symbol, static_method_symbol("SplFixedArray", "fromarray"), "{name}");
+            assert!(slot.return_uses_marker && !slot.by_ref_return, "{name}: owned native result ABI");
+        }
+    }
 
     /// Builds a fixed-arity signature with the given parameter types.
     fn signature(params: Vec<(String, PhpType)>) -> FunctionSig {

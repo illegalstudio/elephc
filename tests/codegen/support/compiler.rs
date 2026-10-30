@@ -872,6 +872,11 @@ fn compile_and_capture_per_argv(
         argvs,
     );
 
+    if heap_debug {
+        for output in &outputs {
+            super::diagnostics::preserve_heap_failure(source, &user_asm, output);
+        }
+    }
     let _ = fs::remove_dir_all(&dir);
     (outputs, user_asm)
 }
