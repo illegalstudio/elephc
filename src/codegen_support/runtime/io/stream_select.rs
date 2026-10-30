@@ -10,6 +10,7 @@
 //!   `timespec` + signal mask). The helper sets up six argument registers so a
 //!   single `svc` works after `linux_transform` remaps the syscall number.
 //! - Descriptor sets are word-0-only bitmaps: descriptors must be below 64.
+//! - A set passed as `null` arrives as a zero array pointer and is skipped on both passes.
 //!   The three resource arrays are compacted in place to the ready subset.
 
 use crate::codegen_support::{emit::Emitter, platform::{Arch, Platform}};
@@ -90,6 +91,7 @@ fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, s
     let done_l = format!("__rt_stream_select_build_{}_done", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
+    emitter.instruction(&format!("cbz x9, {}", done_l));                        // a null set (no array) adds no descriptors
     emitter.instruction("ldr x10, [x9]");                                       // load the array length
     emitter.instruction("ldr x4, [x9, #-8]");                                   // load the packed indexed-array kind word
     emitter.instruction("lsr x4, x4, #8");                                      // shift the value_type tag into the low byte
@@ -152,8 +154,10 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     let unbox_l = format!("__rt_stream_select_keep_{}_unbox", suffix);
     let after_unbox_l = format!("__rt_stream_select_keep_{}_after_unbox", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done", suffix);
+    let absent_l = format!("__rt_stream_select_keep_{}_absent", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
+    emitter.instruction(&format!("cbz x9, {}", absent_l));                      // a null set has no array to compact
     emitter.instruction("ldr x10, [x9]");                                       // load the array length
     emitter.instruction(&format!("ldr x14, [sp, #{}]", fds_off));               // load the post-select bitmap word
     emitter.instruction("ldr x4, [x9, #-8]");                                   // load the packed indexed-array kind word
@@ -213,6 +217,7 @@ fn emit_compact_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     emitter.instruction(&format!("b {}", loop_l));                              // continue compacting the array
     emitter.label(&done_l);
     emitter.instruction("str x13, [x9]");                                       // store the compacted array length
+    emitter.label(&absent_l);
 }
 
 /// Emits the Linux x86_64 stream runtime helper for stream select.
@@ -276,6 +281,8 @@ fn emit_build_fdset_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffi
     let done_l = format!("__rt_stream_select_build_{}_done_x86", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));    // load the resource array pointer
+    emitter.instruction("test r11, r11");                                       // is this set absent (a null argument)?
+    emitter.instruction(&format!("jz {}", done_l));                             // a null set adds no descriptors
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the array length
     emitter.instruction("mov r12, QWORD PTR [r11 - 8]");                        // load the packed indexed-array kind word
     emitter.instruction("shr r12, 8");                                          // shift the value_type tag into the low byte
@@ -329,8 +336,11 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     let unbox_l = format!("__rt_stream_select_keep_{}_unbox_x86", suffix);
     let after_unbox_l = format!("__rt_stream_select_keep_{}_after_unbox_x86", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done_x86", suffix);
+    let absent_l = format!("__rt_stream_select_keep_{}_absent_x86", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));    // load the resource array pointer
+    emitter.instruction("test r11, r11");                                       // is this set absent (a null argument)?
+    emitter.instruction(&format!("jz {}", absent_l));                           // a null set has no array to compact
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the array length
     emitter.instruction(&format!("mov r8, QWORD PTR [rbp - {}]", fds_off));     // load the post-select bitmap word
     emitter.instruction("mov r12, QWORD PTR [r11 - 8]");                        // load the packed indexed-array kind word
@@ -386,4 +396,5 @@ fn emit_compact_x86(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &
     emitter.instruction(&format!("jmp {}", loop_l));                            // continue compacting the array
     emitter.label(&done_l);
     emitter.instruction("mov QWORD PTR [r11], r9");                             // store the compacted array length
+    emitter.label(&absent_l);
 }
