@@ -22,6 +22,10 @@ pub enum ObjectArithmetic {
 /// PHP result domain produced by an internal arithmetic adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectArithmeticResult { Object, Number }
+
+/// PHP tries native binary handlers before falling back to numeric object conversion.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ObjectOperandDispatch { Handler, NumericConversion }
 /// Bitwise operation supported by an internal class handler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectBitwise {
@@ -98,6 +102,8 @@ pub struct ClassOperators {
     pub arithmetic: &'static [(ObjectArithmetic, &'static str)],
     /// Whether arithmetic produces another class instance or a PHP integer/float.
     pub arithmetic_result: ObjectArithmeticResult,
+    /// Whether binary adapters implement a native handler or numeric conversion fallback.
+    pub operand_dispatch: ObjectOperandDispatch,
     /// Public compiler adapters for `&`, `|`, and `^`.
     pub bitwise: &'static [(ObjectBitwise, &'static str)],
     /// Public compiler adapters for `<<` and `>>`.
@@ -164,6 +170,7 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
         (ObjectArithmetic::Pow, "__elephc_pow"),
     ],
     arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
     bitwise: &[],
     shift: &[],
     compare: Some("__elephc_compare"),
@@ -188,6 +195,7 @@ pub const GMP_OPERATORS: ClassOperators = ClassOperators {
     json: None,
     native_casts: &[],
     arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
     arithmetic: &[
         (ObjectArithmetic::Add, "__elephc_add"),
         (ObjectArithmetic::Sub, "__elephc_sub"),
@@ -237,6 +245,7 @@ pub static SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
         (ObjectArithmetic::Div, "__elephc_div"), (ObjectArithmetic::Mod, "__elephc_mod"),
         (ObjectArithmetic::Pow, "__elephc_pow")],
     arithmetic_result: ObjectArithmeticResult::Number,
+    operand_dispatch: ObjectOperandDispatch::NumericConversion,
     bitwise: &[],
     shift: &[],
     casts: None,
@@ -259,6 +268,7 @@ mod tests {
             native_casts: &[],
             arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],
             arithmetic_result: ObjectArithmeticResult::Object,
+            operand_dispatch: ObjectOperandDispatch::Handler,
             bitwise: &[(ObjectBitwise::And, "synthetic_and")],
             shift: &[(ObjectShift::Left, "synthetic_shl")],
             compare: None,

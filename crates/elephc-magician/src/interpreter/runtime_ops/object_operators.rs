@@ -10,7 +10,7 @@
 //! - Strict identity bypasses dispatch; class-name and comparison temporaries are released.
 
 use super::*;
-use elephc_builtin_contract::{ClassContract, ObjectArithmetic, ObjectArithmeticResult};
+use elephc_builtin_contract::{ClassContract, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectOperandDispatch};
 
 /// Resolves the actual runtime class without retaining a transient class-name cell.
 fn operator_class(
@@ -73,9 +73,8 @@ pub(super) fn arithmetic(
     values: &mut (impl RuntimeValueOps + ?Sized), operation: ObjectArithmetic,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    let class = operator_class(values, left)?.or(operator_class(values, right)?);
-    let Some(class) = class else { return Ok(None) };
-    let Some(method) = class.operators.and_then(|ops| ops.arithmetic_method(operation)) else { return Ok(None) };
+    let Some((class, method)) = binary_method(values, left, right,
+        |ops| ops.arithmetic_method(operation))? else { return Ok(None); };
     values.operator_static_call(class.name, method, vec![left, right]).map(Some)
 }
 
@@ -90,9 +89,8 @@ pub(super) fn bitwise(
         EvalBinOp::BitXor => elephc_builtin_contract::ObjectBitwise::Xor,
         _ => return Ok(None),
     };
-    let class = operator_class(values, left)?.or(operator_class(values, right)?);
-    let Some(class) = class else { return Ok(None) };
-    let Some(method) = class.operators.and_then(|ops| ops.bitwise_method(operation)) else { return Ok(None) };
+    let Some((class, method)) = binary_method(values, left, right,
+        |ops| ops.bitwise_method(operation))? else { return Ok(None); };
     values.operator_static_call(class.name, method, vec![left, right]).map(Some)
 }
 
@@ -106,10 +104,50 @@ pub(super) fn shift(
         EvalBinOp::ShiftRight => elephc_builtin_contract::ObjectShift::Right,
         _ => return Ok(None),
     };
-    let class = operator_class(values, left)?.or(operator_class(values, right)?);
-    let Some(class) = class else { return Ok(None) };
-    let Some(method) = class.operators.and_then(|ops| ops.shift_method(operation)) else { return Ok(None) };
+    let Some((class, method)) = binary_method(values, left, right,
+        |ops| ops.shift_method(operation))? else { return Ok(None); };
     values.operator_static_call(class.name, method, vec![left, right]).map(Some)
+}
+
+/// Falls through missing operations while trying both handlers before numeric conversion.
+fn binary_method(
+    values: &mut (impl RuntimeValueOps + ?Sized), left: RuntimeCellHandle, right: RuntimeCellHandle,
+    method: impl Fn(&ClassOperators) -> Option<&'static str>,
+) -> Result<Option<(&'static ClassContract, &'static str)>, EvalStatus> {
+    let candidates = [operator_class(values, left)?, operator_class(values, right)?];
+    for dispatch in [ObjectOperandDispatch::Handler, ObjectOperandDispatch::NumericConversion] {
+        for class in candidates.into_iter().flatten() {
+            if let Some(operators) = class.operators.filter(|ops| ops.operand_dispatch == dispatch) {
+                if let Some(method) = method(operators) { return Ok(Some((class, method))); }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Runs native bitwise handlers before numeric casts and retires independent cast cells.
+pub(super) fn bitwise_result(
+    values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,
+    left: RuntimeCellHandle, right: RuntimeCellHandle,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = shift(values, op, left, right)? { return Ok(result); }
+    if let Some(result) = bitwise(values, op, left, right)? { return Ok(result); }
+    let left_cast = numeric_cast(values, left, elephc_builtin_contract::ObjectCast::Int)?;
+    let right_cast = match numeric_cast(values, right, elephc_builtin_contract::ObjectCast::Int) {
+        Ok(value) => value,
+        Err(status) => {
+            if let Some(value) = left_cast { let _ = values.release(value); }
+            return Err(status);
+        }
+    };
+    let result = values.bitwise(op, left_cast.unwrap_or(left), right_cast.unwrap_or(right));
+    let left_release = left_cast.map(|value| values.release(value)).transpose();
+    let right_release = right_cast.map(|value| values.release(value)).transpose();
+    match (result, left_release.and(right_release)) {
+        (Err(status), _) => Err(status),
+        (Ok(result), Err(status)) => { let _ = values.release(result); Err(status) },
+        (Ok(result), Ok(_)) => Ok(result),
+    }
 }
 
 /// Applies PHP's internal-class `~$value` identity as `0 - value - 1`.

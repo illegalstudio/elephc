@@ -41,7 +41,24 @@ pub(super) fn begin_group(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) -> O
     if !body.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. } if scoped_name(name))) {
         return None;
     }
-    Some(begin(ctx, None, false))
+    Some(begin(ctx, None, group_reuses_write_target(body)))
+}
+
+/// Keeps computed receiver and key captures available for both halves of an indexed update.
+fn group_reuses_write_target(body: &[Stmt]) -> bool {
+    let Some(stmt) = body.last() else { return false; };
+    match &stmt.kind {
+        StmtKind::PropertyArrayAssign { object, property, index, value } =>
+            super::stmt::desugared_element_update(value, stmt.span, |read| {
+                matches!(&read.kind, ExprKind::ArrayAccess { array, index: read_index }
+                    if read_index.as_ref() == index
+                        && matches!(&array.kind, ExprKind::PropertyAccess { object: read_object, property: read_property }
+                            if read_object == object && read_property == property))
+            }).is_some(),
+        StmtKind::NestedArrayAssign { target, value } =>
+            super::stmt::desugared_element_update(value, stmt.span, |read| read == target).is_some(),
+        _ => false,
+    }
 }
 
 /// Records a stack boundary while the conditional probe keeps its existing independent owner.

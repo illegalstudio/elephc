@@ -343,6 +343,17 @@ echo $doc->saveXML();
                     if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
         }), "{target}: missing arithmetic adapter {expected}");
     }
+    let adapter_positions = |class: &str| arithmetic.instructions.iter().enumerate().filter_map(|(position, inst)| {
+        (inst.op == crate::ir::Op::StaticMethodCall && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings.get(id.as_raw() as usize) == Some(&format!("{class}::__elephc_add"))))
+            .then_some(position)
+    }).collect::<Vec<_>>();
+    let native = adapter_positions("BcMath\\Number");
+    let conversion = adapter_positions("SimpleXMLElement");
+    assert_eq!(native.len(), 2, "{target}: both operands must offer their native handler");
+    assert_eq!(conversion.len(), 2, "{target}: both operands retain numeric conversion fallback");
+    assert!(native.iter().max() < conversion.iter().min(),
+        "{target}: both native handler candidates must precede XML numeric conversion");
     for name in ["xmlMixedNegation", "xmlTypedNegation", "xmlSubclassNegation", "xmlUnionNegation"] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let method = elephc_builtin_contract::lookup_class("SimpleXMLElement").unwrap().operators.unwrap()

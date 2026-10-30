@@ -972,10 +972,12 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
-        updated_array_property_push_type(checker, &nonnull, property_has_declared_type,
-            class_name, property, val_ty, span)?;
-        return Ok(prop_ty.clone());
+    if property_has_declared_type {
+        if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
+            updated_array_property_push_type(checker, &nonnull, true,
+                class_name, property, val_ty, span)?;
+            return Ok(prop_ty.clone());
+        }
     }
     if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
@@ -1056,10 +1058,12 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
-        updated_array_property_assign_type(checker, &nonnull, property_has_declared_type,
-            class_name, property, index, normalized_idx_ty, val_ty, span)?;
-        return Ok(prop_ty.clone());
+    if property_has_declared_type {
+        if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
+            updated_array_property_assign_type(checker, &nonnull, true,
+                class_name, property, index, normalized_idx_ty, val_ty, span)?;
+            return Ok(prop_ty.clone());
+        }
     }
     if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());

@@ -65,7 +65,7 @@ pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_A
 pub use module::PhpModule;
 pub use object_operators::{
     ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
-    ObjectCast, ObjectDimension, ObjectOrdering, ObjectProperty, ObjectPropertyUpdate,
+    ObjectCast, ObjectDimension, ObjectOperandDispatch, ObjectOrdering, ObjectProperty, ObjectPropertyUpdate,
     ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
 };
 pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;

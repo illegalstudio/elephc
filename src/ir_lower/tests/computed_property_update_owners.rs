@@ -7,6 +7,47 @@
 //! Key details:
 //! - Ordinary getters and Stringable names coexist with the native XML protocol.
 
+/// A statement's indexed read and write borrow the same computed receiver until scope cleanup.
+#[test]
+fn computed_indexed_update_preserves_scoped_receiver_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class ReusableWriteCapture {
+    public array $items = [1];
+    public function receiver(): mixed { return $this; }
+}
+function reusableCaptureIncrement(ReusableWriteCapture $box): void { $box->receiver()->items[0]++; }
+function reusableCaptureDecrement(ReusableWriteCapture $box): void { --$box->receiver()->items[0]; }
+function reusableCaptureCompound(ReusableWriteCapture $box): void { $box->receiver()->items[0] += 2; }
+$box = new ReusableWriteCapture();
+reusableCaptureIncrement($box); reusableCaptureDecrement($box); reusableCaptureCompound($box);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["reusableCaptureIncrement", "reusableCaptureDecrement", "reusableCaptureCompound"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            let receiver = function.locals.iter().find(|slot| {
+                slot.name.as_deref().is_some_and(|name| name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX))
+                    && slot.php_type.codegen_repr() == crate::types::PhpType::Mixed
+            }).expect("computed mixed receiver needs a scoped capture");
+            let loads = function.instructions.iter().enumerate().filter_map(|(position, inst)|
+                (inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(receiver.id)))
+                    .then_some(position)).collect::<Vec<_>>();
+            let cleanup = function.instructions.iter().position(|inst|
+                inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(receiver.id)))
+                .expect("the receiver must retire after the update");
+            assert!(loads.len() >= 2 && loads.iter().all(|load| *load < cleanup),
+                "{target}: {name} consumed the receiver before both update halves\n{}",
+                crate::ir::print_function(function));
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Null typed slots are tested before mutation and their temporary read lease is retired.
 #[test]
 fn erased_nullable_property_dimension_guards_on_every_target() {

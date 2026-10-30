@@ -92,7 +92,7 @@ pub(super) fn lower_dynamic_object_negate(
     Some(lower_dynamic_operator_plans(ctx, zero, &BinOp::Sub, value, expr, true, &plans, true, scalar))
 }
 
-/// Tries left-hand native handlers before right-hand handlers and the ordinary scalar path.
+/// Tries native handlers in operand order before numeric conversions and the scalar path.
 fn lower_dynamic_operator_plans(
     ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
     expr: &Expr, consume: bool, plans: &[crate::types::object_operators::ObjectOperatorPlan], negate: bool,
@@ -104,34 +104,38 @@ fn lower_dynamic_operator_plans(
     let scalar_block = ctx.builder.create_named_block("object.scalar", vec![]);
     let merge = ctx.builder.create_named_block("object.merge", vec![]);
     let mut call_initialized: Option<HashSet<LocalSlotId>> = None;
-    let checks = plans.len() * 2;
+    let mut candidates = [true, false].into_iter().flat_map(|left|
+        plans.iter().copied().map(move |plan| (left, plan))).collect::<Vec<_>>();
+    if !plans[0].comparison {
+        // Stable sorting preserves left-first order within each dispatch protocol.
+        candidates.sort_by_key(|(_, plan)| plan.class.operators.unwrap().operand_dispatch);
+    }
+    let checks = candidates.len();
     let mut emitted = 0;
-    for left_precedence in [true, false] {
-        for plan in plans.iter().copied() {
-            emitted += 1;
-            let operand = if left_precedence { lhs.value } else { rhs.value };
-            let class_name = ctx.intern_class_name(plan.class.name);
-            let instance = ctx.emit_value(Op::InstanceOf, vec![operand], Some(Immediate::Data(class_name)),
-                PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
-            let call_block = ctx.builder.create_named_block("object.operator", vec![]);
-            let next_check = if emitted == checks { scalar_block }
-                else { ctx.builder.create_named_block("object.check", vec![]) };
-            ctx.builder.terminate(Terminator::CondBr { cond: instance.value,
-                then_target: call_block, then_args: vec![], else_target: next_check, else_args: vec![] });
-            ctx.builder.position_at_end(call_block);
-            let (object_lhs, object_op) = if negate && plan.class.operators.is_some_and(|operators|
-                operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
-            ) { (lower_int_literal(ctx, -1, expr), &BinOp::Mul) } else { (lhs, op) };
-            let value = emit_object_binary_plan(ctx, plan, object_lhs, object_op, rhs, expr, consume);
-            store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
-            branch_to(ctx, merge);
-            let snapshot = ctx.initialized_slots_snapshot();
-            call_initialized = Some(match call_initialized {
-                Some(previous) => previous.intersection(&snapshot).copied().collect(),
-                None => snapshot,
-            });
-            ctx.builder.position_at_end(next_check);
-        }
+    for (left_precedence, plan) in candidates {
+        emitted += 1;
+        let operand = if left_precedence { lhs.value } else { rhs.value };
+        let class_name = ctx.intern_class_name(plan.class.name);
+        let instance = ctx.emit_value(Op::InstanceOf, vec![operand], Some(Immediate::Data(class_name)),
+            PhpType::Bool, Op::InstanceOf.default_effects(), Some(expr.span));
+        let call_block = ctx.builder.create_named_block("object.operator", vec![]);
+        let next_check = if emitted == checks { scalar_block }
+            else { ctx.builder.create_named_block("object.check", vec![]) };
+        ctx.builder.terminate(Terminator::CondBr { cond: instance.value,
+            then_target: call_block, then_args: vec![], else_target: next_check, else_args: vec![] });
+        ctx.builder.position_at_end(call_block);
+        let (object_lhs, object_op) = if negate && plan.class.operators.is_some_and(|operators|
+            operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
+        ) { (lower_int_literal(ctx, -1, expr), &BinOp::Mul) } else { (lhs, op) };
+        let value = emit_object_binary_plan(ctx, plan, object_lhs, object_op, rhs, expr, consume);
+        store_value_into_temp(ctx, &temp, result_type.clone(), value, expr.span);
+        branch_to(ctx, merge);
+        let snapshot = ctx.initialized_slots_snapshot();
+        call_initialized = Some(match call_initialized {
+            Some(previous) => previous.intersection(&snapshot).copied().collect(),
+            None => snapshot,
+        });
+        ctx.builder.position_at_end(next_check);
     }
     ctx.restore_initialized_slots(initialized.clone());
     let scalar_pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);

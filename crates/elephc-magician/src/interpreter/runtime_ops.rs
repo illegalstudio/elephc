@@ -116,13 +116,7 @@ pub trait RuntimeValueOps {
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        if let Some(result) = object_operators::shift(self, op, left, right)? {
-            return Ok(result);
-        }
-        if let Some(result) = object_operators::bitwise(self, op, left, right)? {
-            return Ok(result);
-        }
-        self.bitwise(op, left, right)
+        object_operators::bitwise_result(self, op, left, right)
     }
 
     /// Applies the shared internal-class handler before scalar bitwise NOT.
