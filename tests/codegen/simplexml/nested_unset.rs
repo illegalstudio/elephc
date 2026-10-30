@@ -37,7 +37,12 @@ function orderedUnsetKey(SimpleXMLElement $replacement): string {
     echo 'key|'; $orderedUnsetRows = [$replacement]; return 'id';
 }
 function orderedUnsetIndex(): int { echo 'inner|'; return 0; }
-function orderedUnsetRoot(): array { global $orderedUnsetRows; echo 'root|'; return $orderedUnsetRows; }
+function orderedUnsetRoot(): array {
+    global $orderedUnsetRows;
+    echo 'root|';
+    if (!is_array($orderedUnsetRows)) { throw new Error('expected array'); }
+    return $orderedUnsetRows;
+}
 function orderedUnsetLateKey(): string {
     global $orderedUnsetPosition;
     echo 'late|'; $orderedUnsetPosition = 1; return 'id';
@@ -45,11 +50,13 @@ function orderedUnsetLateKey(): string {
 function orderedUnsetFailKey(): string { echo 'fail|'; throw new Error('stop'); }
 $old = new SimpleXMLElement('<old id="old"/>');
 $replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old];
-unset($orderedUnsetRows[orderedUnsetIndex()][orderedUnsetKey($replacement)]);
+unset($orderedUnsetRows[orderedUnsetIndex()][orderedUnsetKey(
+    $replacement instanceof SimpleXMLElement ? $replacement : throw new Error('expected XML'))]);
 echo isset($old['id']) ? 'old' : '-', ':', isset($replacement['id']) ? 'new' : '-', "\n";
 $old = new SimpleXMLElement('<old id="old"/>');
 $replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old];
-unset(orderedUnsetRoot()[0][orderedUnsetKey($replacement)]);
+unset(orderedUnsetRoot()[0][orderedUnsetKey(
+    $replacement instanceof SimpleXMLElement ? $replacement : throw new Error('expected XML'))]);
 echo isset($old['id']) ? 'old' : '-', ':', isset($replacement['id']) ? 'new' : '-', "\n";
 $old = new SimpleXMLElement('<old id="old"/>');
 $replacement = new SimpleXMLElement('<new id="new"/>'); $orderedUnsetRows = [$old, $replacement];

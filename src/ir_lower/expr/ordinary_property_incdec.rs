@@ -59,7 +59,7 @@ pub(super) fn plain_prefix_readback(ctx: &LoweringContext<'_, '_>, target: &Expr
     let Some((class, _)) = property_access::singular_object_class(&ty) else { return false; };
     let Some(info) = ctx.classes.get(class) else { return false; };
     if !info.properties.iter().any(|(name, _)| name == property)
-        || info.property_hooks.contains_key(property) { return false; }
+        || info.property_hooks.get(property).is_some_and(|hooks| hooks.any()) { return false; }
     // A runtime subclass may provide magic access after an unset. Keep that original
     // captured-result path rather than introducing an observable second getter call.
     !ctx.classes.iter().any(|(candidate, info)| {

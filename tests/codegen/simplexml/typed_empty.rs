@@ -242,7 +242,7 @@ fn test_simplexml_erased_unset_storage_is_rejected() {
         "class ErasedDynamicUnset { public mixed $data = ['a' => 1]; } $h = new ErasedDynamicUnset(); $name = $argc > 0 ? 'data' : 'other'; unset($h->{$name}['a']);",
         "function erasedRefSeed(): mixed { return ['a' => 1, 'b' => 2]; } function &erasedRefUnset(mixed &$data): mixed { return $data; } $data = erasedRefSeed(); unset(erasedRefUnset($data)['a']);",
         "class ErasedMethodRefUnset { public mixed $data = ['a' => 1, 'b' => 2]; public function &bag(): mixed { return $this->data; } } $h = new ErasedMethodRefUnset(); unset($h->bag()['a']);",
-        "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { return self::$data; } } unset(ErasedStaticRefUnset::bag()['a']);",
+        "class ErasedStaticRefUnset { public static mixed $data = ['a' => 1, 'b' => 2]; public static function &bag(): mixed { $value = self::$data; return $value; } } unset(ErasedStaticRefUnset::bag()['a']);",
     ] {
         let source = format!("<?php $xml = simplexml_load_string('<r/>'); echo $xml->getName(); {body}");
         let error = compile_source_expect_backend_error(&source);

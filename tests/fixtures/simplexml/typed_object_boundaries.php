@@ -21,6 +21,7 @@ function acceptIterableBoundaryXml(iterable $nodes): void { echo 'iterable|'; }
 function variadicBoundaryXml(int $prefix, SimpleXMLElement ...$nodes): void { echo 'variadic|'; }
 function orderedVariadicBoundaryXml(SimpleXMLElement $first, SimpleXMLElement ...$nodes): void { echo 'entered|'; }
 function referenceVariadicBoundaryXml(SimpleXMLElement &...$nodes): void { echo 'reference_variadic|'; }
+function referenceStorageBoundaryXml(mixed $node): mixed { return $node; }
 function returnIterableBoundaryXml(SimpleXMLElement $root): iterable { return $root->missing->child; }
 function returnBoundaryXml(SimpleXMLElement $root): SimpleXMLElement {
     return $root->missing->child;
@@ -105,8 +106,7 @@ try { variadicBoundaryXml(1, $root, $root->missing->child); } catch (TypeError $
 $arguments = [$root, $root->missing->child];
 try { variadicBoundaryXml(1, ...$arguments); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { variadicBoundaryXml(1, good: $root, bad: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
-$referenceMissing = [$root->missing->child];
-$referenceMissingElement =& $referenceMissing[0];
+$referenceMissingElement = referenceStorageBoundaryXml($root->missing->child);
 try { referenceVariadicBoundaryXml($referenceMissingElement); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { orderedVariadicBoundaryXml($root->missing->child, $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
 try { orderedVariadicBoundaryXml($root->missing->child, bad: $root->missing->child); } catch (TypeError $error) { reportBoundaryXml($error); }
@@ -173,8 +173,7 @@ acceptPeerBoundaryXml($root->present);
 acceptNullableUnionBoundaryXml($root->missing->child);
 acceptIterableBoundaryXml($root);
 variadicBoundaryXml(1, $root, named: $root);
-$referencePresent = [$root];
-$referencePresentElement =& $referencePresent[0];
+$referencePresentElement = referenceStorageBoundaryXml($root);
 referenceVariadicBoundaryXml($referencePresentElement);
 echo "done\n";
 } else { throw new Error("Expected the original boundary XML root"); }

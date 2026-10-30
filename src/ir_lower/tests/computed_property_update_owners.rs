@@ -54,7 +54,8 @@ $xml->a += 1;
         let numeric = module.functions.iter().find(|function| function.name == "updateOwnerNumericMask").unwrap();
         assert!(!numeric.instructions.iter().any(|inst| matches!(inst.op,
             crate::ir::Op::InstanceOf | crate::ir::Op::PushCallOperandOwner)),
-            "{target}: scalar coercion must not gain native dispatch or operand owners");
+            "{target}: scalar coercion must not gain native dispatch or operand owners\n{}",
+            crate::ir::print_function(numeric));
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

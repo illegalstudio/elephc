@@ -20,7 +20,7 @@ class ReferenceOverrideChild extends ReferenceOverrideParent {
     public mixed $data = [1, 2];
     public static mixed $staticData = null;
     public function &items(): mixed { return $this->data; }
-    public static function &staticItems(): mixed { return self::$staticData; }
+    public static function &staticItems(): mixed { $value = self::$staticData; return $value; }
 }
 class ReferenceOverrideStable { public function plain(): mixed { return [3]; } }
 function readReferenceOverride(ReferenceOverrideParent $value): mixed { return $value->items(); }

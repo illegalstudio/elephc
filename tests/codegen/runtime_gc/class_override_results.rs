@@ -28,7 +28,7 @@ class ClassReferenceChild extends ClassReferenceParent {
         if ($a + $b + $c + $d + $e + $f + $g + $h !== 36) { throw new RuntimeException('arguments'); }
         return $this->data;
     }
-    public static function &staticItems(): mixed { return self::$staticData; }
+    public static function &staticItems(): mixed { $value = self::$staticData; return $value; }
 }
 class ClassReferenceTextParent { public function text(): string { return 'parent'; } }
 class ClassReferenceTextChild extends ClassReferenceTextParent {

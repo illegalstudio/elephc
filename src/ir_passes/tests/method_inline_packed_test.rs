@@ -105,7 +105,8 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
                 let function = method(&module, &format!("InlinePropertyCounter::{name}"));
                 assert!(!function.locals.iter().any(|local| local.name.as_deref()
                     .is_some_and(|name| name.contains("__elephc_incdec_new_"))),
-                    "{target}, xml={xml}, {name}: the checked sum must feed the property directly");
+                    "{target}, xml={xml}, {name}: the checked sum must feed the property directly\n{}",
+                    crate::ir::print_function(function));
                 assert!(!function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::PhpLocal
                     && local.php_type == crate::types::PhpType::Mixed
                     && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),

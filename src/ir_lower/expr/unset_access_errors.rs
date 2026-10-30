@@ -25,8 +25,8 @@ pub(super) fn is_unset_closure(
                 Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
                 PhpType::Str, target.effects(), Some(span));
             let closure = lower_expr(ctx, &Expr::new(ExprKind::StringLiteral("Closure".into()), span));
-            let result = ctx.emit_value(Op::StrEq, vec![name.value, closure.value], None,
-                PhpType::Bool, Op::StrEq.default_effects(), Some(span));
+            let result = ctx.emit_value(Op::StrictEq, vec![name.value, closure.value], None,
+                PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
             crate::ir_lower::ownership::release_if_owned(ctx, name, Some(span));
             result
         }

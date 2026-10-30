@@ -18,7 +18,7 @@ pub(super) fn lower_compare(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
     let rhs = lower_expr(ctx, right);
     unpin_in_flight_owners(ctx, left_pins, left.span);
     if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {

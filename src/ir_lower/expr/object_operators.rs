@@ -21,15 +21,25 @@ pub(super) fn can_contain_object(ty: &PhpType) -> bool {
 
 /// Captures a by-value left operand before later source expressions can replace its storage.
 pub(super) fn capture_left_operand(
-    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span,
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
 ) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
     if ctx.builder.value_defining_op(value.value) == Some(Op::StrCharAt) {
         let captured = crate::ir_lower::ownership::persist_string_byte_view(ctx, value, Some(span));
         let pins = pin_in_flight_owners(ctx, &[captured.value], span);
         return (captured, pins);
     }
+    let ty = ctx.builder.value_php_type(value.value);
+    // A scalar literal cannot replace the borrowed numeric box before the operator reads it.
+    // Keep owning temporaries and every potentially reentrant RHS on the published-owner path.
+    if !ctx.value_is_owning_temporary(value)
+        && matches!(right.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_) | ExprKind::Null)
+        && matches!(&ty, PhpType::Union(members) if members.iter().all(|member|
+            matches!(member, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Void)))
+    {
+        return (value, Vec::new());
+    }
     if ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
-        let ty = ctx.builder.value_php_type(value.value);
         let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, ty,
                 Op::MixedClone.default_effects(), Some(span))

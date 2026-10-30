@@ -32,7 +32,7 @@ class NativeEvalReferenceReturns {
     public function &arrayValue(): array { return $this->rows; }
     public function &objectValue(): stdClass { return $this->node; }
     public function &mixedValue(): mixed { return $this->boxed; }
-    public static function &staticValue(): array { return self::$staticRows; }
+    public static function &staticValue(): array { $value = self::$staticRows; return $value; }
 }
 $receiver = new NativeEvalReferenceReturns();
 $source = $argc > 0 ? '

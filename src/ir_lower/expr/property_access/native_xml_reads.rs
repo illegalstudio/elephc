@@ -17,7 +17,7 @@ pub(super) fn lower(
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
     dispatch(
         ctx, object, expr, PhpType::Mixed, false,
-        |ctx, receiver| lower_method_call_with_receiver(
+        |ctx, receiver| lower_method_call_with_receiver_direct(
             ctx, receiver, "__elephc_property_get", &[name.clone()], Op::MethodCall, expr,
         ),
         |ctx, receiver| lower_property_get_without_native_dispatch(ctx, receiver, property, op, expr),
@@ -31,7 +31,7 @@ pub(super) fn select(
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
     dispatch(
         ctx, object, expr, PhpType::Mixed, false,
-        |ctx, receiver| lower_method_call_with_receiver(
+        |ctx, receiver| lower_method_call_with_receiver_direct(
             ctx, receiver, "__elephc_property_write_fetch", &[name.clone()], Op::MethodCall, expr,
         ),
         |ctx, receiver| lower_property_get_without_native_dispatch(ctx, receiver, property, Op::PropGet, expr),
@@ -45,7 +45,7 @@ pub(super) fn isset(
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
     dispatch(
         ctx, object, expr, PhpType::Bool, false,
-        |ctx, receiver| lower_method_call_with_receiver(
+        |ctx, receiver| lower_method_call_with_receiver_direct(
             ctx, receiver, "__elephc_property_isset", &[name.clone()], Op::MethodCall, expr,
         ),
         |ctx, receiver| {
@@ -62,7 +62,7 @@ pub(super) fn probe(
     let name = Expr::new(ExprKind::StringLiteral(property.into()), expr.span);
     dispatch(
         ctx, object, expr, PhpType::Mixed, false,
-        |ctx, receiver| lower_method_call_with_receiver(
+        |ctx, receiver| lower_method_call_with_receiver_direct(
             ctx, receiver, "__elephc_property_probe", &[name.clone()], Op::MethodCall, expr,
         ),
         |ctx, receiver| lower_property_probe_without_native(ctx, receiver, property, PropertyFetchMode::Probe, expr),
@@ -166,7 +166,7 @@ pub(super) fn unset(
     dispatch_unset(
         ctx, object, expr,
         |ctx, receiver| {
-            let result = lower_method_call_with_receiver(
+            let result = lower_method_call_with_receiver_direct(
                 ctx, receiver, "__elephc_property_unset", &[name.clone()], Op::MethodCall, expr,
             );
             crate::ir_lower::ownership::release_if_owned(ctx, result, Some(expr.span));
@@ -297,6 +297,7 @@ fn ordinary_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, sp
 /// Lends the boxed receiver to either branch without consuming its common owner.
 fn borrow_receiver(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, span: Span) -> LoweredValue {
     let ty = ctx.builder.value_php_type(object.value);
+    if !Ownership::php_type_needs_lifetime_tracking(&ty) { return object; }
     let value = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
