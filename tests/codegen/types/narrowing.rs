@@ -724,3 +724,291 @@ echo S::get()->v;
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies an early exit inside an `if` narrows only the paths through it: after the enclosing
+/// `if`, which either returned or never ran the inner guard, `$value` is `mixed` again.
+#[test]
+fn test_early_exit_narrowing_stays_inside_its_enclosing_if() {
+    let out = compile_and_run(
+        r#"<?php
+final class H { public int $h = 7; }
+function f(int $kind, mixed $value): int {
+    if ($kind === 3) {
+        if (!is_array($value)) { throw new Exception("x"); }
+        return count($value);
+    }
+    return $value->h;
+}
+function g(int $kind, mixed $value): string {
+    if ($kind === 3) {
+        if (!is_array($value)) { return "scalar"; }
+        echo count($value), ":";
+    }
+    return is_object($value) ? "object" : "array";
+}
+echo f(1, new H()), "|", f(3, [1, 2]), "|", g(1, new H()), "|", g(3, [1]), "\n";
+"#,
+    );
+    assert_eq!(out, "7|2|object|1:array\n");
+}
+
+/// Verifies an `is_array()` guard narrows a `mixed` value, in the guarded branch and after an
+/// early exit, so it can be returned as `array` there.
+#[test]
+fn test_is_array_narrows_a_mixed_value() {
+    let out = compile_and_run(
+        r#"<?php
+function asList(mixed $v): array
+{
+    if (is_array($v)) {
+        return $v;
+    }
+    return [];
+}
+function orFail(mixed $v): array
+{
+    if (!is_array($v)) {
+        throw new Exception("not a list");
+    }
+    return $v;
+}
+$data = json_decode('[1,2,3]', true);
+echo count(asList($data)), "|", count(asList("x")), "|", count(orFail($data)), "\n";
+"#,
+    );
+    assert_eq!(out, "3|0|3\n");
+}
+
+/// Verifies narrowings kept inside a `switch` case or a `try` body stay inside it, while a
+/// `do`/`while` body that cannot leave early keeps its facts after the loop.
+#[test]
+fn test_kept_narrowing_scopes_follow_switch_try_and_do_while() {
+    let out = compile_and_run(
+        r#"<?php
+final class H { public int $h = 7; }
+function viaSwitch(int $kind, mixed $value): int {
+    switch ($kind) {
+        case 3:
+            if (!is_array($value)) {
+                throw new Exception("x");
+            }
+            return count($value);
+    }
+    return $value->h;
+}
+function viaTry(mixed $value): string {
+    try {
+        if (!is_array($value)) {
+            throw new Exception("x");
+        }
+    } catch (Exception $e) {
+    }
+    return is_object($value) ? "object" : "array";
+}
+function viaDoWhile(?array $value): array {
+    do {
+        if ($value === null) {
+            throw new Exception("x");
+        }
+    } while (false);
+    return $value;
+}
+echo viaSwitch(1, new H()), "|", viaSwitch(3, [1, 2]), "|", viaTry(new H()), "|", viaTry([1]), "|", count(viaDoWhile([1, 2, 3])), "\n";
+"#,
+    );
+    assert_eq!(out, "7|2|object|array|3\n");
+}
+
+/// Verifies facts an early exit kept survive the construct when every path reaching its end
+/// established them: a `try` whose catches cannot fall out (or that has only `finally`), and a
+/// `switch` with a `default` whose reaching cases all kept them; without a `default`, a breaking
+/// case's fact does not survive, since an unmatched value reaches the end without it.
+#[test]
+fn test_kept_narrowing_survives_try_and_switch_when_every_path_shares_it() {
+    let out = compile_and_run(
+        r#"<?php
+final class H { public int $h = 7; }
+function viaFinally(?array $value): array {
+    try {
+        if ($value === null) {
+            throw new Exception("x");
+        }
+    } finally {
+    }
+    return $value;
+}
+function viaRethrow(?array $value): array {
+    try {
+        if ($value === null) {
+            throw new Exception("x");
+        }
+    } catch (Exception $e) {
+        throw $e;
+    }
+    return $value;
+}
+function viaDefault(int $kind, ?array $value): array {
+    switch ($kind) {
+        case 0:
+            return [];
+        default:
+            if ($value === null) {
+                throw new Exception("x");
+            }
+    }
+    return $value;
+}
+function viaBreakWithoutDefault(int $kind, mixed $value): string {
+    switch ($kind) {
+        case 1:
+            if (!is_array($value)) {
+                throw new Exception("x");
+            }
+            break;
+    }
+    return is_object($value) ? "object" : "array";
+}
+echo count(viaFinally([1])), "|", count(viaRethrow([1, 2])), "|", count(viaDefault(1, [1, 2, 3])), "|", count(viaDefault(0, null)), "|", viaBreakWithoutDefault(2, new H()), "|", viaBreakWithoutDefault(1, [1]), "\n";
+"#,
+    );
+    assert_eq!(out, "1|2|3|0|object|array\n");
+}
+
+/// Verifies the paths an exception or a `continue` takes do not see facts only a completed body
+/// established: a catch and a `finally` are checked with the types from before the `try`, a
+/// local the `finally` reassigns keeps its new type after it, and a `switch` case that leaves
+/// through `continue 1` reaches the end of the `switch` without the `default`'s fact.
+#[test]
+fn test_exceptional_and_continue_paths_do_not_see_a_completed_body_s_facts() {
+    let out = compile_and_run(
+        r#"<?php
+final class H { public int $h = 7; }
+function viaCatch(mixed $value): int {
+    try {
+        if (!is_array($value)) {
+            throw new Exception("x");
+        }
+    } catch (Exception $e) {
+        return $value->h;
+    }
+    return count($value);
+}
+function seenByFinally(mixed $value): string {
+    $seen = "";
+    try {
+        try {
+            if (!is_array($value)) {
+                throw new Exception("x");
+            }
+        } finally {
+            $seen = is_object($value) ? "object" : "array";
+        }
+    } catch (Exception $e) {
+    }
+    return $seen;
+}
+function reassignedInFinally(?array $value): int {
+    try {
+        if ($value === null) {
+            throw new Exception("x");
+        }
+    } finally {
+        $value = null;
+    }
+    return $value === null ? 0 : 1;
+}
+function viaContinue(int $kind, mixed $value): int {
+    switch ($kind) {
+        case 0:
+            continue 1;
+        default:
+            if (!is_array($value)) {
+                throw new Exception("x");
+            }
+    }
+    return is_array($value) ? count($value) : $value->h;
+}
+echo viaCatch(new H()), "|", viaCatch([1, 2]), "|", seenByFinally(new H()), "|", seenByFinally([1]), "|", reassignedInFinally([1]), "|", viaContinue(0, new H()), "|", viaContinue(1, [1, 2, 3]), "\n";
+"#,
+    );
+    assert_eq!(out, "7|2|object|array|0|7|3\n");
+}
+
+/// Verifies a `switch` case that leaves the loop around it (`break 2`, `continue 2`) does not
+/// count as reaching the end of the `switch`, so the other cases' facts hold after it.
+#[test]
+fn test_switch_case_leaving_the_enclosing_loop_keeps_the_other_cases_facts() {
+    let out = compile_and_run(
+        r#"<?php
+function viaBreak(int $kind, ?array $v): array {
+    foreach ([$kind] as $k) {
+        switch ($k) {
+            case 0:
+                break 2;
+            default:
+                if ($v === null) { throw new Exception("x"); }
+        }
+        return $v;
+    }
+    return [];
+}
+function viaContinue(array $kinds, ?array $v): int {
+    $n = 0;
+    foreach ($kinds as $kind) {
+        switch ($kind) {
+            case 0:
+                continue 2;
+            default:
+                if ($v === null) { throw new Exception("x"); }
+        }
+        $n += count($v);
+    }
+    return $n;
+}
+echo count(viaBreak(0, null)), "|", count(viaBreak(1, [1, 2])), "|", viaContinue([0, 0], null), "|", viaContinue([0, 1], [1, 2, 3]), "\n";
+"#,
+    );
+    assert_eq!(out, "0|2|0|3\n");
+}
+
+/// Verifies a guard in a `try` body is not trusted after a `finally` that reassigns the local
+/// to a value of the same type: `$v` may be null again when it is returned.
+#[test]
+fn test_finally_reassignment_does_not_revive_a_try_body_guard() {
+    let err = compile_expect_type_error(
+        r#"<?php
+function f(?array $v, ?array $other): array {
+    try {
+        if ($v === null) { throw new Exception("x"); }
+    } finally {
+        $v = $other;
+    }
+    return $v;
+}
+var_dump(f([1], null));
+"#,
+    );
+    assert!(err.contains("return type expects array"), "{err}");
+}
+
+/// Verifies a chain of guards on one local inside a `switch` restores the type from before the
+/// whole chain when the enclosing `if` ends: the path that skipped the `if` keeps the array.
+#[test]
+fn test_chained_switch_guards_restore_the_type_from_before_the_chain() {
+    let err = compile_expect_type_error(
+        r#"<?php
+function g(int|string|array $v, bool $c, int $k): int|string {
+    if ($c) {
+        switch ($k) {
+            default:
+                if (is_array($v)) { return "a"; }
+                if (is_string($v)) { return "s"; }
+        }
+    }
+    return $v;
+}
+var_dump(g([1], false, 0));
+"#,
+    );
+    assert!(err.contains("return type expects int|string"), "{err}");
+}
