@@ -24,10 +24,12 @@ impl Fetch {
 
 /// Captures a native write-fetch or a null sentinel after every dimension operand runs.
 pub(super) fn fetch(
-    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, expression: &Expr, property: &str,
-    span: Span, mode: PropertyDimensionFetchMode,
+    ctx: &mut LoweringContext<'_, '_>, receiver: &property_write_receiver::PropertyWriteReceiver,
+    expression: &Expr, property: &str, span: Span,
 ) -> Option<Fetch> {
     if property.starts_with("__elephc_") || !ctx.classes.contains_key("SimpleXMLElement") { return None; }
+    let probe = receiver.temporary_may_destroy();
+    let receiver = receiver.value;
     let ty = ctx.builder.value_php_type(receiver.value);
     let known = crate::ir_lower::expr::singular_object_class(&ty).is_some_and(|(class, _)|
         crate::types::builtin_classes::native_property_method(class, property,
@@ -35,7 +37,12 @@ pub(super) fn fetch(
     let opaque = matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         || matches!(ty.codegen_repr(), PhpType::Object(class)
             if class.is_empty() || ctx.interfaces.contains_key(&class));
-    if !known && !opaque { return None; }
+    if !known && !opaque {
+        if !probe { return None; }
+        let child = ctx.with_independent_write_receiver(|ctx|
+            native_property_children::fetch(ctx, receiver, expression, property, span))?;
+        return Some(Fetch { value: child, conditional: true });
+    }
     if known {
         let child = call_fetch(ctx, receiver, property, span);
         return Some(Fetch { value: child, conditional: false });
@@ -57,8 +64,9 @@ pub(super) fn fetch(
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(ordinary);
     ctx.restore_initialized_slots(initial);
-    let child = native_property_children::fetch(ctx, receiver, expression, property, span, mode)
-        .unwrap_or_else(|| lower_expr(ctx, &Expr::new(ExprKind::Null, span)));
+    let child = if probe { ctx.with_independent_write_receiver(|ctx|
+        native_property_children::fetch(ctx, receiver, expression, property, span)) } else { None };
+    let child = child.unwrap_or_else(|| lower_expr(ctx, &Expr::new(ExprKind::Null, span)));
     crate::ir_lower::expr::store_value_into_temp(ctx, &temp, PhpType::Mixed, child, span);
     jump(ctx, merge);
     let ordinary_slots = ctx.initialized_slots_snapshot();
@@ -147,16 +155,22 @@ fn borrow_child(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, span: Sp
 /// Chooses native offsetSet or ordinary writeback while retiring the proper receiver in each arm.
 pub(super) fn write(
     ctx: &mut LoweringContext<'_, '_>, receiver: property_write_receiver::PropertyWriteReceiver,
-    fetch: Fetch, property: &str, index: Option<LoweredValue>, value: LoweredValue,
+    fetch: Fetch, property: &str, index: Option<LoweredValue>, late_key: Option<&Expr>, value: LoweredValue,
     compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool,
 ) {
     dispatch(ctx, receiver, fetch, span,
-        |ctx, child| native_write(ctx, child, index, value, compound, span, diagnosed),
+        |ctx, child| {
+            if let Some(index) = index {
+                with_late_property_key(ctx, late_key, index, span,
+                    |ctx, index| native_write(ctx, child, Some(index), value, compound, span, diagnosed));
+            } else { native_write(ctx, child, None, value, compound, span, diagnosed); }
+        },
         |ctx, receiver| {
             let mut roots = Vec::new();
             let object = runtime_receivers::box_opaque_receiver(ctx, receiver, span, &mut roots);
             if let Some(index) = index {
-                write_ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed);
+                with_late_property_key(ctx, late_key, index, span,
+                    |ctx, index| write_ordinary_compound(ctx, object, property, index, value, compound, span, diagnosed));
             } else {
                 lower_property_array_push_value(ctx, object, property, value, span);
             }
@@ -219,15 +233,15 @@ pub(super) fn ordinary_append(ctx: &mut LoweringContext<'_, '_>, object: Lowered
     let borrowed = ctx.emit_value(Op::Borrow, vec![array.value], None, PhpType::Mixed,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    if !super::super::native_dimension_append::lower(ctx, borrowed, value, span, |ctx, array, value| {
+    let writeback = |ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: LoweredValue| {
         ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
             Op::MixedArrayAppend.default_effects(), Some(span));
-    }) {
-        ctx.emit_void(Op::MixedArrayAppend, vec![borrowed.value, value.value], None,
-            Op::MixedArrayAppend.default_effects(), Some(span));
+        ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, array.value], None,
+            Op::DynamicPropSet.default_effects(), Some(span));
+    };
+    if !super::super::native_dimension_append::lower(ctx, borrowed, value, span, |ctx, array, value| writeback(ctx, array, value)) {
+        writeback(ctx, borrowed, value);
     }
-    ctx.emit_void(Op::DynamicPropSet, vec![object.value, name.value, borrowed.value], None,
-        Op::DynamicPropSet.default_effects(), Some(span));
     if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
     retire_property_write_roots(ctx, roots, span);
 }

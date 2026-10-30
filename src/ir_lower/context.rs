@@ -4223,6 +4223,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite
                     | crate::ir::RuntimeCallTarget::PropertyHashFetchForWrite
+                    | crate::ir::RuntimeCallTarget::PropertyHashRead
                     | crate::ir::RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
                     | crate::ir::RuntimeCallTarget::PendingAppendFetchForWrite
                     | crate::ir::RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,

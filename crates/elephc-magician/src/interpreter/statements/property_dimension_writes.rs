@@ -35,7 +35,9 @@ pub(super) fn eval_property_dimension_write(
             DimensionProperty::Dynamic(name) => PreparedPropertyName::Dynamic(
                 prepare_index(name, &mut operands, context, scope, values)?),
         };
-        let (key, assigned) = stage_operands(index, value, &mut operands, context, scope, values)?;
+        let late_index = index.filter(|index| matches!(index, EvalExpr::LoadVar(_)));
+        let staged_index = if late_index.is_some() { None } else { index };
+        let (key, assigned) = stage_operands(staged_index, value, &mut operands, context, scope, values)?;
         let early = if matches!(object, EvalExpr::LoadVar(_)) { None } else {
             let object = finish_dimension_receiver(receiver.take().ok_or(EvalStatus::RuntimeFatal)?,
                 &mut operands, &mut receiver_roots, context, scope, values)?;
@@ -50,7 +52,8 @@ pub(super) fn eval_property_dimension_write(
                 &mut operands, &mut receiver_roots, context, scope, values)?;
             object
         };
-        write_selected(object, &property, key, op, assigned, &mut operands, &receiver_roots, context, values)
+        write_selected(object, &property, key, late_index, op, assigned, &mut operands,
+            &receiver_roots, context, scope, values)
     })();
     for operand in operands.into_iter().rev() {
         let released = eval_release_value(context, values, operand);
@@ -94,9 +97,10 @@ pub(super) fn stage_operands(
 
 /// Selects a native writable child or ordinary property only after key and RHS evaluation.
 fn write_selected(
-    object: RuntimeCellHandle, property: &str, index: Option<RuntimeCellHandle>,
+    object: RuntimeCellHandle, property: &str, index: Option<RuntimeCellHandle>, late_index: Option<&EvalExpr>,
     op: Option<EvalBinOp>, assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
-    receiver_roots: &[usize], context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+    receiver_roots: &[usize], context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     validate_property_write_receiver(object, property, "modify", context, values)?;
     let native = super::super::runtime_ops::simplexml_properties::invoke(
@@ -106,11 +110,12 @@ fn write_selected(
         let current = if current.is_borrowed() { values.retain(current)? } else { current };
         operands.push(current);
         retire_native_parent(operands, receiver_roots, context, values)?;
+        let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
         return match write_value(current, index, op, assigned, operands, context, values)? {
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
     }
-    let selected = if index.is_none() && op.is_none() {
+    let selected = if index.is_none() && late_index.is_none() && op.is_none() {
         super::property_append_fetch::select(object, property, context, values)?
     } else { None };
     let dynamic = selected.is_some();
@@ -122,12 +127,17 @@ fn write_selected(
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     operands.push(current);
-    if super::super::runtime_ops::simplexml_properties::is_native(values, current, "")? {
+    let stored = if matches!(values.type_tag(current)?, EVAL_TAG_OBJECT | EVAL_TAG_NULL) {
+        property_dimension_guards::native_child_uses_storage(object, property, current, context, values)?
+    } else { false };
+    if stored && super::super::runtime_ops::simplexml_properties::is_native(values, current, "")? {
         retire_native_parent(operands, receiver_roots, context, values)?;
+        let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
         return match write_value(current, index, op, assigned, operands, context, values)? {
             None => Ok(()), Some(_) => Err(EvalStatus::RuntimeFatal),
         };
     }
+    let index = finish_dimension_index(index, late_index, operands, context, scope, values)?;
     if let Some(array) = write_value(current, index, op, assigned, operands, context, values)? {
         if dynamic {
             super::property_append_fetch::write(object, property, array, context, values)?;
@@ -136,6 +146,17 @@ fn write_selected(
         }
     }
     Ok(())
+}
+
+/// Reads a bare variable dimension after selection and native parent retirement.
+fn finish_dimension_index(
+    staged: Option<RuntimeCellHandle>, late: Option<&EvalExpr>, operands: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(late) = late else { return Ok(staged); };
+    let key = eval_owned_expr(late, context, scope, values)?;
+    operands.push(key);
+    Ok(Some(key))
 }
 
 /// Retires receiver captures after its selected native child is independently rooted.

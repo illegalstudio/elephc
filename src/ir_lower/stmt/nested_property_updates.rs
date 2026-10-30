@@ -60,4 +60,3 @@ pub(crate) fn lower_nested_property_compound_expression(
     super::nested_array_writes::lower_nested_array_assign(ctx, target, &captured, span);
     Some(lower_expr(ctx, result.unwrap_or(value)))
 }
-

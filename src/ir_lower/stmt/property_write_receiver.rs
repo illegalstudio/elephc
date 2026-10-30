@@ -19,6 +19,7 @@ pub(crate) struct PropertyWriteReceiver {
     nullable_mixed: bool,
     pins: Vec<crate::ir_lower::expr::PinnedInFlightOwner>,
     owners: Vec<LoweredValue>,
+    temporary_may_destroy: bool,
 }
 
 impl PropertyWriteReceiver {
@@ -37,6 +38,8 @@ impl PropertyWriteReceiver {
                 });
             let provisional_unbox = !immutable_this
                 && ctx.value_is_owned_unboxed_local_load(value.value);
+            let temporary_may_destroy = !immutable_this && !provisional_unbox
+                && ctx.value_is_owning_temporary(value);
             let value = if provisional_unbox {
                 // A final Mixed slot owns its cell while the typed load owns another payload
                 // reference. Move that provisional lease into an independently pinnable value.
@@ -48,9 +51,12 @@ impl PropertyWriteReceiver {
             } else { value };
             let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[value.value], span);
             let owners = if ctx.value_is_owning_temporary(value) { vec![value] } else { Vec::new() };
-            Self { value, nullable_class, nullable_mixed, pins, owners }
+            Self { value, nullable_class, nullable_mixed, pins, owners, temporary_may_destroy }
         })
     }
+
+    /// Identifies an original temporary whose retirement can run a PHP destructor.
+    pub(crate) fn temporary_may_destroy(&self) -> bool { self.temporary_may_destroy }
 
     /// Guards an array mutation after its keys and RHS have run, rooting their owners on Error.
     pub(crate) fn narrow_for_array(
@@ -141,7 +147,10 @@ impl PropertyWriteReceiver {
                 Op::Borrow.default_effects(), Some(span));
             ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
             let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
-            self.handoff(ctx, boxed, span)
+            let temporary_may_destroy = self.temporary_may_destroy;
+            let mut view = self.handoff(ctx, boxed, span);
+            view.temporary_may_destroy = temporary_may_destroy;
+            view
         })
     }
 

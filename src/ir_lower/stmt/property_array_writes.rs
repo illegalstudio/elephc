@@ -92,10 +92,10 @@ pub(super) fn lower_property_array_push(
         (receiver, value)
     };
     receiver.narrow_for_array(ctx, property, &[value.value], span);
-    if let Some(child) = native_xml::fetch(ctx, receiver.value, object, property, span, PropertyDimensionFetchMode::Write)
+    if let Some(child) = native_xml::fetch(ctx, &receiver, object, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
             PropertyDimensionFetchMode::Write).map(native_xml::Fetch::known)) {
-        native_xml::write(ctx, receiver, child, property, None, value, None, span, false);
+        native_xml::write(ctx, receiver, child, property, None, None, value, None, span, false);
         retire_property_write_roots(ctx, roots, span);
         return;
     }
@@ -293,6 +293,10 @@ pub(super) fn lower_property_array_assign_with_update(
         _ => None,
     };
     let placeholder = Expr::new(ExprKind::Null, span);
+    let late_index = (ctx.classes.contains_key("SimpleXMLElement")
+        && !known_buffer_property(ctx, object, property)
+        && matches!(index.kind, ExprKind::Variable(_))).then_some(index);
+    let staged_index = if late_index.is_some() { &placeholder } else { index };
     let source_value = if delayed_incdec.is_some() { &placeholder } else { compound.map_or(value, |(_, rhs)| rhs) };
     let mut roots = Vec::new();
     let (mut receiver, index, value) = if deferred_property_receiver(ctx, object) && !known_buffer_property(ctx, object, property) {
@@ -302,7 +306,7 @@ pub(super) fn lower_property_array_assign_with_update(
                 PropertyWriteValue::Expr(source_value)
             }
         };
-        let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
+        let (index, value) = lower_property_write_operands(ctx, staged_index, source, &mut roots, span);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain_with_operands(
             ctx, object, &[index.value, value.value], span);
         (receiver, index, value)
@@ -320,7 +324,7 @@ pub(super) fn lower_property_array_assign_with_update(
             }
             PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
         };
-        let (index, value) = lower_property_write_operands(ctx, index, source, &mut roots, span);
+        let (index, value) = lower_property_write_operands(ctx, staged_index, source, &mut roots, span);
         receiver.place_above_operand_roots(ctx, &roots, span);
         (receiver, index, value)
     };
@@ -328,27 +332,43 @@ pub(super) fn lower_property_array_assign_with_update(
     let fetch_mode = if delayed_incdec.is_some() || compound.is_some() {
         PropertyDimensionFetchMode::ReadWrite
     } else { PropertyDimensionFetchMode::Write };
-    if let Some(child) = native_xml::fetch(ctx, receiver.value, object, property, span, fetch_mode)
+    if let Some(child) = native_xml::fetch(ctx, &receiver, object, property, span)
         .or_else(|| lower_native_dimension_property(ctx, receiver.value, object, property, span,
             fetch_mode).map(native_xml::Fetch::known)) {
         if let Some(increment) = delayed_incdec {
             native_xml::dispatch(ctx, receiver, child, span,
-                |ctx, child| incdec::native(ctx, child, index, increment, span),
-                |ctx, object| incdec::ordinary(ctx, object, property, index, index_expression, increment, span));
+                |ctx, child| with_late_property_key(ctx, late_index, index, span,
+                    |ctx, index| incdec::native(ctx, child, index, increment, span)),
+                |ctx, object| with_late_property_key(ctx, late_index, index, span,
+                    |ctx, index| incdec::ordinary(ctx, object, property, index, index_expression, increment, span)));
         } else {
-            native_xml::write(ctx, receiver, child, property, Some(index), value,
+            native_xml::write(ctx, receiver, child, property, Some(index), late_index, value,
                 compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
         }
         retire_property_write_roots(ctx, roots, span);
         return;
     }
-    if let Some(increment) = delayed_incdec {
-        incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, span);
-    } else {
-        write_ordinary_compound(ctx, receiver.value, property, index, value,
-            compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
-    }
+    with_late_property_key(ctx, late_index, index, span, |ctx, index| {
+        if let Some(increment) = delayed_incdec {
+            incdec::ordinary(ctx, receiver.value, property, index, index_expression, increment, span);
+        } else {
+            write_ordinary_compound(ctx, receiver.value, property, index, value,
+                compound.map(|(op, _)| (op, index_expression)), span, key_already_diagnosed);
+        }
+    });
     receiver.finish(ctx, span);
+    retire_property_write_roots(ctx, roots, span);
+}
+
+/// Loads a bare variable key at mutation time, after a native parent destructor can change it.
+fn with_late_property_key(
+    ctx: &mut LoweringContext<'_, '_>, expression: Option<&Expr>, staged: LoweredValue, span: Span,
+    write: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue),
+) {
+    let Some(expression) = expression else { write(ctx, staged); return; };
+    let mut roots = Vec::new();
+    let key = lower_rooted_property_write_operand(ctx, expression, &mut roots);
+    write(ctx, key);
     retire_property_write_roots(ctx, roots, span);
 }
 
@@ -369,6 +389,8 @@ fn lower_native_dimension_property(
             crate::types::builtin_classes::has_native_dimensions(name, ctx.classes))
     } else { crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) };
     if !native { return None; }
+    let native_hook_owner = info.property_hooks.get(property).filter(|hooks| hooks.requires_get())
+        .map(|_| info.property_declaring_classes.get(property).cloned().unwrap_or_else(|| class.to_string()));
     let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
@@ -379,9 +401,25 @@ fn lower_native_dimension_property(
         return Some(crate::ir_lower::expr::lower_native_xml_property_write_fetch(ctx, borrowed, property, &expression));
     }
     guard_property_dimension_fetch(ctx, receiver, property, span, mode);
-    Some(crate::ir_lower::expr::lower_property_get_from_value(
+    let child = crate::ir_lower::expr::lower_property_get_from_value(
         ctx, borrowed, property, Op::PropGet, &expression,
-    ))
+    );
+    if let Some(owner) = native_hook_owner {
+        let null = ctx.emit_value(Op::IsNull, vec![child.value], None, PhpType::Bool,
+            Op::IsNull.default_effects(), Some(span));
+        let invalid = ctx.builder.create_named_block("xml.hook.null", vec![]);
+        let selected = ctx.builder.create_named_block("xml.hook.object", vec![]);
+        let initial = ctx.initialized_slots_snapshot();
+        ctx.builder.terminate(Terminator::CondBr { cond: null.value,
+            then_target: invalid, then_args: vec![], else_target: selected, else_args: vec![] });
+        ctx.builder.position_at_end(invalid);
+        crate::ir_lower::ownership::release_if_owned(ctx, child, Some(span));
+        lower_throw_access_exception(ctx, "Error",
+            &format!("Indirect modification of {}::${property} is not allowed", owner.trim_start_matches('\\')), span);
+        ctx.builder.position_at_end(selected);
+        ctx.restore_initialized_slots(initial);
+    }
+    Some(child)
 }
 
 /// The value a property-array write stores, resolved once the receiver is known.

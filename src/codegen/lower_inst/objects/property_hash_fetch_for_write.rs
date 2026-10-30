@@ -1,8 +1,8 @@
 //! Purpose:
-//! Fetches an attached writable cell from an ordinary dynamic-property hash.
+//! Reads ordinary dynamic-property hashes and selects their attached writable cells.
 //!
 //! Called from:
-//! - The typed PropertyHashFetchForWrite runtime operation after exact class selection.
+//! - Typed property hash read, presence and write-fetch operations after exact class selection.
 //!
 //! Key details:
 //! - Shared hashes and child payloads retain their ordinary COW boundaries.
@@ -81,6 +81,42 @@ pub(super) fn lower_property_hash_contains(
     ctx.emitter.label(&present);
     abi::emit_load_int_immediate(ctx.emitter, result, 1);
     ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Returns an independent PHP value without getter calls, creation diagnostics or hash mutation.
+pub(super) fn lower_property_hash_read(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let name = expect_operand(inst, 1)?;
+    let (_, offset) = property_hash_layout(ctx, object)?;
+    let target = ctx.emitter.target;
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    ctx.load_value_to_reg(object, scratch)?;
+    abi::emit_store_to_sp(ctx.emitter, scratch, 0);
+    ctx.load_string_value_to_regs(name, ptr, len)?;
+    abi::emit_store_to_sp(ctx.emitter, ptr, 8);
+    abi::emit_store_to_sp(ctx.emitter, len, 16);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, 0);
+    abi::emit_load_from_address(ctx.emitter, abi::int_arg_reg_name(target, 0), scratch, offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 1), 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(target, 2), 16);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    let found = ctx.next_label("property_hash_read_found");
+    let done = ctx.next_label("property_hash_read_done");
+    emit_branch_if_hash_entry_found(ctx, &found);
+    emit_boxed_null(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&found);
+    let payload = if target.arch == Arch::AArch64 { "x1" } else { "rdi" };
+    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 0), payload);
+    // The universal value copy resolves references and preserves shared resource identity.
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_if_result(ctx, inst)
 }
 

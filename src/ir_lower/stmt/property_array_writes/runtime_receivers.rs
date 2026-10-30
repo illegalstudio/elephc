@@ -50,7 +50,7 @@ pub(super) fn lower_append(
 }
 
 /// Recognizes undeclared names with ordinary hash storage and no PHP accessor protocol.
-fn dynamic_slot(info: &crate::types::ClassInfo, class: &str, property: &str) -> bool {
+pub(super) fn dynamic_slot(info: &crate::types::ClassInfo, class: &str, property: &str) -> bool {
     (crate::types::checker::builtin_stdclass::is_stdclass(class)
         || info.dynamic_property_hash_is_name_addressable())
         && info.visible_property(property).is_none()
