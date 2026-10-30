@@ -324,6 +324,12 @@ fn eval_var_dump_append_object_key(
     output: &mut Vec<u8>,
 ) {
     eval_var_dump_append_indent(depth, output);
+    if let Some(numeric_key) = property.numeric_key {
+        output.extend_from_slice(b"[");
+        output.extend_from_slice(numeric_key.to_string().as_bytes());
+        output.extend_from_slice(b"]=>\n");
+        return;
+    }
     output.extend_from_slice(b"[\"");
     output.extend_from_slice(property.name.as_bytes());
     output.extend_from_slice(b"\"");

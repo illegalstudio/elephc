@@ -8,6 +8,35 @@
 //! - Centralizes compile options, define handling, runtime harness injection, and diagnostic capture.
 
 use super::*;
+use std::cell::Cell;
+
+// One-shot override that forces the GMP prelude for a PHPT corpus compile.
+//
+// A corpus fixture may name GMP only inside a serialized payload, where the AST scanner
+// cannot see it; php-src loads ext/gmp for every file in the corpus. Each test thread owns
+// its own flag and the compile consumes it, so a failing case cannot leak into the next.
+thread_local! {
+    static FORCE_GMP_PRELUDE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Resets the one-shot GMP override even when the compile panics.
+struct ForceGmpGuard;
+
+impl Drop for ForceGmpGuard {
+    /// Clears the thread-local override on every exit path.
+    fn drop(&mut self) {
+        FORCE_GMP_PRELUDE.with(|flag| flag.set(false));
+    }
+}
+
+/// Compiles and runs one corpus fixture with ext/gmp guaranteed to be loaded.
+pub(crate) fn compile_and_run_capture_merged_with_gmp(source: &str) -> ProgramOutput {
+    FORCE_GMP_PRELUDE.with(|flag| flag.set(true));
+    let _guard = ForceGmpGuard;
+    // php-src's CLI runs the corpus with its default 128 MiB memory_limit; the decimal
+    // transport needs that headroom for `1000!` even though live values stay tiny.
+    compile_and_run_capture_merged_with_heap(source, 128 * 1024 * 1024)
+}
 
 /// Returns true when codegen fixtures are compiling through the EIR backend.
 pub(crate) fn codegen_fixture_uses_ir_backend() -> bool {
@@ -292,6 +321,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
     let synthetic_main = dir.join("test.php");
+    // `__FILE__` must name a readable file: some fixtures (the GMP division tests)
+    // open it with fopen() to obtain a real resource handle. The CLI pipeline always
+    // has the source on disk; the in-process fixture pipeline must mirror that.
+    fs::write(&synthetic_main, source).expect("write fixture source");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     // Mirrors `source::finalize_physical_program`: generic doc-comment annotations are applied
     // per physical file, between the magic constants and the conditional pass. Skipping it here
@@ -339,6 +372,8 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
+    let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
     let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::curl_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -464,6 +499,7 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
             "elephc_bcmath" => Some("bcmath"),
+            "elephc_gmp" => Some("gmp"),
             "elephc_random" => Some("random"),
             "elephc_mbstring" => Some("mbstring"),
             "elephc_phar" => Some("Phar"),
@@ -737,6 +773,45 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
 /// Provides the Compile and run capture helper used by the compiler module.
 pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
     compile_and_run_capture_with_optional_regex(source, false)
+}
+
+/// Compiles and runs a fixture with stderr merged onto stdout, preserving write order.
+///
+/// PHPT `--EXPECT--` records PHP's displayed diagnostics interleaved with program
+/// output; elephc writes them to stderr, so the corpus runner uses this variant.
+pub(crate) fn compile_and_run_capture_merged(source: &str) -> ProgramOutput {
+    compile_and_run_capture_merged_with_heap(source, 8_388_608)
+}
+
+/// Compiles and runs a fixture with an explicit fixed heap and merged diagnostics.
+///
+/// The GMP corpus mirrors PHP CLI's 128 MiB `memory_limit`: decimal transport and the
+/// prelude's temporary strings need more than the 8 MiB test default to reach `1000!`.
+pub(crate) fn compile_and_run_capture_merged_with_heap(
+    source: &str,
+    heap_size: usize,
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, heap_size, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_merged(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
 }
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.

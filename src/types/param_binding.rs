@@ -60,8 +60,92 @@ pub(crate) enum ParamBinding {
     /// PHP would coerce, but only a runtime check can tell whether the conversion succeeds,
     /// and elephc cannot raise PHP's runtime notice/`TypeError` at a parameter boundary.
     NeedsRuntimeCheck(String),
+    /// PHP binds the value unchanged and throws `TypeError` when it is not an instance of the
+    /// declared class. EIR lowering inserts the runtime instance guard.
+    ObjectGuard,
     /// No PHP parameter-binding rule applies; the caller keeps its existing diagnostic.
     Rejected,
+}
+
+/// Runtime acceptance classes carried by managed typed-property reference cells.
+///
+/// The codes are shared by EIR lowering, which selects one from the property's declared type,
+/// and the runtime guard, which enforces it before a callee write is coerced into the cell.
+pub(crate) const PROPERTY_REF_TYPE_INT: u8 = 1;
+pub(crate) const PROPERTY_REF_TYPE_STRING: u8 = 2;
+pub(crate) const PROPERTY_REF_TYPE_FLOAT: u8 = 3;
+pub(crate) const PROPERTY_REF_TYPE_BOOL: u8 = 4;
+pub(crate) const PROPERTY_REF_TYPE_FALSE: u8 = 5;
+pub(crate) const PROPERTY_REF_TYPE_ARRAY: u8 = 6;
+
+/// Returns the runtime acceptance class for a property that supports typed-reference writes.
+pub(crate) fn property_ref_type_code(ty: &PhpType) -> Option<u8> {
+    if matches!(ty, PhpType::False) {
+        return Some(PROPERTY_REF_TYPE_FALSE);
+    }
+    Some(match ty.codegen_repr() {
+        PhpType::Int | PhpType::Narrow(_) => PROPERTY_REF_TYPE_INT,
+        PhpType::Str => PROPERTY_REF_TYPE_STRING,
+        PhpType::Float => PROPERTY_REF_TYPE_FLOAT,
+        PhpType::Bool => PROPERTY_REF_TYPE_BOOL,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => PROPERTY_REF_TYPE_ARRAY,
+        _ => return None,
+    })
+}
+
+/// Returns whether a property type can be written back from a boxed by-reference result.
+///
+/// Shared by the checker that authorizes a property place and the EIR rewrite that narrows
+/// the reference cell back to the declared storage.
+pub(crate) fn by_ref_property_writeback_supported(ty: &PhpType) -> bool {
+    // Inspect the DECLARED type: a union or nullable property collapses to `Mixed` under
+    // `codegen_repr`, but its write-back needs a runtime type dispatch the rewrite does not
+    // implement. PHP's `array` contract is the one union the rewrite does support, because
+    // both of its storage shapes stay inside the boxed container payload.
+    if ty.is_php_array() {
+        return true;
+    }
+    matches!(
+        ty,
+        PhpType::Object(_)
+            | PhpType::Int
+            | PhpType::Float
+            | PhpType::Bool
+            | PhpType::False
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Union(_)
+            | PhpType::Mixed
+    )
+}
+
+/// Returns whether a declared by-reference parameter may receive a property of `property_ty`.
+pub(crate) fn by_ref_property_storage_compatible(
+    expected: &PhpType,
+    property_ty: &PhpType,
+) -> bool {
+    if !by_ref_property_writeback_supported(expected)
+        || !by_ref_property_writeback_supported(property_ty)
+    {
+        return false;
+    }
+    let expected = expected.codegen_repr();
+    let property = property_ty.codegen_repr();
+    match (expected, property) {
+        (PhpType::Mixed, _) => true,
+        (PhpType::Int, PhpType::Int)
+        | (PhpType::Float, PhpType::Float)
+        | (PhpType::Bool, PhpType::Bool)
+        | (PhpType::Str, PhpType::Str)
+        | (PhpType::Object(_), PhpType::Object(_)) => true,
+        (PhpType::Array(_), PhpType::Array(_))
+        | (PhpType::Array(_), PhpType::AssocArray { .. })
+        | (PhpType::AssocArray { .. }, PhpType::Array(_))
+        | (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
+        | (PhpType::TaggedScalar, PhpType::TaggedScalar) => true,
+        _ => false,
+    }
 }
 
 /// Classifies how `expected` binds `arg` (whose inferred type is `actual`) under PHP's
@@ -83,6 +167,22 @@ pub(crate) fn classify_param_binding(
     }
     if *expected == PhpType::Callable {
         return classify_callable_string_binding(actual, arg);
+    }
+    // A union that names the declared class plus exactly one of `false`/`null` is accepted by
+    // PHP at compile time; the call throws `TypeError` at runtime when the other alternative is
+    // the one supplied. EIR lowering inserts that instance guard.
+    if let PhpType::Object(expected_class) = expected {
+        if let PhpType::Union(members) = actual {
+            let expected_object = PhpType::Object(expected_class.clone());
+            let has_expected = members.iter().filter(|member| **member == expected_object).count() == 1;
+            let other = members
+                .iter()
+                .find(|member| **member != expected_object)
+                .map(|member| matches!(member, PhpType::False | PhpType::Void));
+            if has_expected && members.len() == 2 && other == Some(true) {
+                return ParamBinding::ObjectGuard;
+            }
+        }
     }
     match (expected.codegen_repr(), actual.codegen_repr()) {
         // `string $s` accepts every other scalar. `(string)` is total for int, float and
@@ -549,6 +649,45 @@ mod tests {
         assert!(detail.contains("declare(strict_types=1)"), "{}", detail);
         assert!(detail.contains("must be of type int, string given"), "{}", detail);
         assert!(detail.contains("`(int)` cast"), "{}", detail);
+    }
+
+    /// Verifies only an exact `Class|false` / `Class|null` union earns the runtime object guard.
+    #[test]
+    fn object_union_binding_requires_the_declared_class_plus_false_or_null() {
+        let arg = Expr::new(
+            ExprKind::Variable("value".to_string()),
+            crate::span::Span::dummy(),
+        );
+        let class = PhpType::Object("Marker".to_string());
+        assert_eq!(
+            classify_param_binding(
+                &class,
+                &PhpType::Union(vec![class.clone(), PhpType::False]),
+                &arg,
+            ),
+            ParamBinding::ObjectGuard
+        );
+        assert_eq!(
+            classify_param_binding(
+                &class,
+                &PhpType::Union(vec![PhpType::Void, class.clone()]),
+                &arg,
+            ),
+            ParamBinding::ObjectGuard
+        );
+        for rejected in [
+            PhpType::Union(vec![class.clone(), PhpType::Int]),
+            PhpType::Union(vec![PhpType::Object("Other".to_string()), PhpType::False]),
+            PhpType::Union(vec![class.clone(), PhpType::False, PhpType::Void]),
+        ] {
+            assert!(
+                matches!(
+                    classify_param_binding(&class, &rejected, &arg),
+                    ParamBinding::Rejected
+                ),
+                "{rejected:?}"
+            );
+        }
     }
 
     /// Verifies a scalar bound to `string` becomes an explicit `(string)` cast, which is the

@@ -54,6 +54,10 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_unser_at");                                    // parse while the cleanup boundary is active
     emitter.instruction("b __rt_unserialize_mixed_parsed");                     // share exception-boundary teardown with validation failures
     emitter.label("__rt_unserialize_mixed_invalid");
+    emitter.instruction("mov x0, x1");                                          // pass the validator's failure offset to the warning builder
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", source_len_offset));      // pass the complete source length
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x2", "_unser_call_line", 0);
+    emitter.instruction("bl __rt_unserialize_report_error");                    // report PHP's offset/length warning before returning false
     emitter.instruction("mov x0, #0");                                          // null result signals a bounded parse failure
     emitter.label("__rt_unserialize_mixed_parsed");
     emitter.instruction(&format!("ldr x10, [sp, #{legacy_offset}]"));           // recover the entry's sharing mode after hydration

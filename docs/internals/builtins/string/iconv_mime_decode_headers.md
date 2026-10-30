@@ -2,7 +2,7 @@
 title: "iconv_mime_decode_headers() - internals"
 description: "Compiler internals for iconv_mime_decode_headers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 838
+  order: 889
 ---
 
 ## `iconv_mime_decode_headers()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/iconv_mime_decode_headers.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/iconv_mime_decode_headers.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

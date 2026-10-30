@@ -23,22 +23,10 @@ const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
 /// Byte length of `_borrowed_reference_return_msg`, kept beside the data that defines it.
 const BORROWED_REFERENCE_RETURN_MSG_LEN: i64 = 75;
 
-/// Returns the descriptor tag for the actual stored property representation.
-pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
-    match php_type.codegen_repr() {
-        PhpType::Str => 1,
-        PhpType::Array(_) => 4,
-        PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) => 6,
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
-        PhpType::Callable => 10,
-        _ => 0,
-    }
-}
-
 /// Emits managed reference cells with the same ownership rules on every supported target.
 pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_new(emitter);
+    super::property_ref_cells::emit(emitter);
     emit_value_release(emitter);
     emit_release(emitter);
     emit_clone(emitter);
@@ -80,6 +68,19 @@ fn emit_new(emitter: &mut Emitter) {
     abi::emit_store_zero_to_address(emitter, result, 8);
     abi::emit_frame_restore(emitter, 32);
     abi::emit_return(emitter);
+}
+
+/// Returns the descriptor tag for the actual stored property representation.
+pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
+    match php_type.codegen_repr() {
+        PhpType::Str => 1,
+        PhpType::Array(_) => 4,
+        PhpType::AssocArray { .. } => 5,
+        PhpType::Object(_) => 6,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+        PhpType::Callable => 10,
+        _ => 0,
+    }
 }
 
 /// Releases the typed payload of a final-owner cell inside the existing cleanup boundary.

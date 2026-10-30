@@ -125,6 +125,38 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // save the right high payload word
     emitter.instruction("str xzr, [sp, #104]");                                 // initialize the unordered IEEE result flag
 
+    // -- internal class comparison adapters (GMP) run before scalar coercion --
+    emitter.instruction("cmp x0, #6");                                          // is the left operand an object?
+    emitter.instruction("b.eq __rt_pcmp_internal_object");                      // ask the program-specific typed comparator
+    emitter.instruction("cmp x3, #6");                                          // is the right operand an object?
+    emitter.instruction("b.ne __rt_pcmp_standard");                             // scalar pairs skip the adapter dispatch
+    emitter.label("__rt_pcmp_internal_object");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // borrow the saved left tag and payload word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // borrow the saved left high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the left operand for the typed comparator
+    emitter.instruction("str x0, [sp, #56]");                                   // park the left box across the right boxing
+    emitter.instruction("ldr x0, [sp, #24]");                                   // borrow the saved right tag
+    emitter.instruction("ldp x1, x2, [sp, #32]");                               // borrow the saved right payload words
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the right operand for the typed comparator
+    emitter.instruction("str x0, [sp, #64]");                                   // park the right box across the comparator call
+    emitter.instruction("ldr x0, [sp, #56]");                                   // pass the left boxed operand
+    emitter.instruction("ldr x1, [sp, #64]");                                   // pass the right boxed operand
+    abi::emit_call_label(emitter, &crate::names::function_symbol("__elephc_internal_object_compare")); // x0 = ordering, or 3 without an adapter
+    emitter.instruction("str x0, [sp, #72]");                                   // preserve the ordering across box release
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the left box for release
+    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary left box
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the right box for release
+    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary right box
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload the ordering result
+    emitter.instruction("cmp x0, #3");                                          // three means no internal class handled the pair
+    emitter.instruction("b.eq __rt_pcmp_standard");                             // ordinary objects keep PHP's existing rules
+    emitter.instruction("b __rt_pcmp_done");                                    // return the adapter's three-way ordering
+    emitter.label("__rt_pcmp_standard");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // restore the left tag and low payload word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // restore the left high payload word
+    emitter.instruction("ldp x3, x4, [sp, #24]");                               // restore the right tag and low payload word
+    emitter.instruction("ldr x5, [sp, #40]");                                   // restore the right high payload word
+
     // -- PHP rule 1: a bool operand converts BOTH sides to bool --
     emitter.instruction("cmp x0, #3");                                          // is the left operand a bool?
     emitter.instruction("b.eq __rt_pcmp_bools");                                // bool comparisons use truthiness on both sides
@@ -431,6 +463,42 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the right low payload word
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the right high payload word
     emitter.instruction("mov QWORD PTR [rbp - 112], 0");                        // initialize the unordered IEEE result flag
+
+    // -- internal class comparison adapters (GMP) run before scalar coercion --
+    emitter.instruction("cmp rdi, 6");                                          // is the left operand an object?
+    emitter.instruction("je __rt_pcmp_internal_object_x86");                    // ask the program-specific typed comparator
+    emitter.instruction("cmp rcx, 6");                                          // is the right operand an object?
+    emitter.instruction("jne __rt_pcmp_standard_x86");                          // scalar pairs skip the adapter dispatch
+    emitter.label("__rt_pcmp_internal_object_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // borrow the saved left tag
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // borrow the saved left payload word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // borrow the saved left high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the left operand for the typed comparator
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // park the left box across the right boxing
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // borrow the saved right tag
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // borrow the saved right payload word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // borrow the saved right high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the right operand for the typed comparator
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // park the right box across the comparator call
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // pass the left boxed operand
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // pass the right boxed operand
+    abi::emit_call_label(emitter, &crate::names::function_symbol("__elephc_internal_object_compare")); // rax = ordering, or 3 without an adapter
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // preserve the ordering across box release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the left box for release
+    emitter.instruction("call __rt_decref_mixed");                              // release the temporary left box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the right box for release
+    emitter.instruction("call __rt_decref_mixed");                              // release the temporary right box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the ordering result
+    emitter.instruction("cmp rax, 3");                                          // three means no internal class handled the pair
+    emitter.instruction("je __rt_pcmp_standard_x86");                           // ordinary objects keep PHP's existing rules
+    emitter.instruction("jmp __rt_pcmp_done");                                  // return the adapter's three-way ordering
+    emitter.label("__rt_pcmp_standard_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the left tag
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the left low payload word
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore the left high payload word
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // restore the right tag
+    emitter.instruction("mov r8, QWORD PTR [rbp - 40]");                        // restore the right low payload word
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // restore the right high payload word
 
     // -- PHP rule 1: a bool operand converts BOTH sides to bool --
     emitter.instruction("cmp rdi, 3");                                          // is the left operand a bool?

@@ -2503,6 +2503,13 @@ fn direct_closure_return_expr_type(
             return php_type.clone();
         }
     }
+    if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
+        let left_ty = direct_closure_return_expr_type(left, captures, params, ctx);
+        let right_ty = direct_closure_return_expr_type(right, captures, params, ctx);
+        if let Some(plan) = crate::types::object_operators::binary_plan(op, &left_ty, &right_ty) {
+            return plan.result_type(op);
+        }
+    }
     if let ExprKind::PropertyAccess { object, property } = &expr.kind {
         let receiver_name = match &object.kind {
             ExprKind::Variable(name) => Some(name.as_str()),

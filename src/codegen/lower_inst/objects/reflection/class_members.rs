@@ -18,12 +18,40 @@ pub(super) fn reflection_class_method_names(ctx: &FunctionContext<'_>, class_nam
         let Some((resolved_name, info)) = resolve_reflection_class(ctx, &current_name) else {
             break;
         };
-        push_unique_method_names(info.methods.keys(), &mut names, &mut seen);
-        push_unique_method_names(info.static_methods.keys(), &mut names, &mut seen);
+        push_unique_method_names(
+            info.methods.keys().filter(|method| {
+                elephc_builtin_contract::lookup_class(&resolved_name)
+                    .is_none_or(|class| class.method_is_php_visible(method))
+            }),
+            &mut names,
+            &mut seen,
+        );
+        push_unique_method_names(
+            info.static_methods.keys().filter(|method| {
+                elephc_builtin_contract::lookup_class(&resolved_name)
+                    .is_none_or(|class| class.method_is_php_visible(method))
+            }),
+            &mut names,
+            &mut seen,
+        );
         current = info.parent.clone();
         if current.as_deref() == Some(resolved_name) {
             break;
         }
+    }
+    // A reviewed internal surface reports php-src's declaration order. GMP's synthetic
+    // method tables are hash-ordered, so filter in the contract's list order instead.
+    if let Some(visible) = elephc_builtin_contract::lookup_class(class_name)
+        .and_then(|class| class.php_visible_methods)
+    {
+        let mut ordered = Vec::with_capacity(visible.len());
+        for method in visible {
+            let key = crate::names::php_symbol_key(method);
+            if let Some(position) = names.iter().position(|name| crate::names::php_symbol_key(name) == key) {
+                ordered.push(names.remove(position));
+            }
+        }
+        return ordered;
     }
     names
 }
@@ -40,11 +68,21 @@ pub(super) fn reflection_class_property_names(
         push_unique_property_name("name", &mut names, &mut seen);
     }
     for (name, _) in &info.properties {
+        if elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| class.property_is_hidden(name))
+        {
+            continue;
+        }
         if reflection_property_visible_from_class(info, class_name, name, false) {
             push_unique_property_name(name, &mut names, &mut seen);
         }
     }
     for (name, _) in &info.static_properties {
+        if elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| class.property_is_hidden(name))
+        {
+            continue;
+        }
         if reflection_property_visible_from_class(info, class_name, name, true) {
             push_unique_property_name(name, &mut names, &mut seen);
         }

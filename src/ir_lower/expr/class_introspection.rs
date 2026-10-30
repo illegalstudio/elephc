@@ -408,6 +408,10 @@ fn visible_class_method_names(
                 !declaring.is_property_hook_method(method)
             })
             .filter(|method| class_method_visible(ctx, class_name, info, method))
+            .filter(|method| {
+                elephc_builtin_contract::lookup_class(class_name)
+                    .is_none_or(|class| class.method_is_php_visible(method))
+            })
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()
     } else if let Some(info) = ctx.interfaces.get(class_name) {

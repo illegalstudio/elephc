@@ -378,6 +378,18 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     {
         native_requirements.push(NativeRequirement::package("libxml2"));
     }
+    // The gmp bridge is the same shape again: `elephc_gmp` is a Rust `staticlib`
+    // whose raw operations call libgmp through `extern "C"` declarations. The
+    // injected GMP prelude's `extern "elephc_gmp"` block is what puts the bridge in
+    // `planned_link_libraries`; mirroring it into the native requirement resolves
+    // `libgmp.a` from the project's managed `gmp` package. There is deliberately no
+    // system `-lgmp` fallback.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_gmp")
+    {
+        native_requirements.push(NativeRequirement::package("gmp"));
+    }
     if planned_link_libraries.iter().any(|lib| lib == "elephc_fileinfo") {
         native_requirements.push(NativeRequirement::package("libmagic"));
     }

@@ -223,6 +223,17 @@ pub enum Immediate {
         first: LocalSlotId,
         second: LocalSlotId,
     },
+    /// A hidden property-reference cell plus its typed-reference diagnostic metadata.
+    ///
+    /// `first` is the promoted temporary, `second` its managed-cell owner, `suffix` the
+    /// preformatted ` to reference held by property ... of type ...` message tail, and
+    /// `type_code` selects the runtime acceptance rule for the property's declared type.
+    PropertyRefCell {
+        first: LocalSlotId,
+        second: LocalSlotId,
+        suffix: DataId,
+        type_code: u8,
+    },
     GlobalName(DataId),
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
@@ -849,6 +860,9 @@ pub enum Op {
     LoadRefCell,
     StoreRefCell,
     PromoteLocalRefCell,
+    /// Promotes a typed property's copy-in/copy-out temporary into a managed cell that also
+    /// carries the reference-assignment diagnostic metadata used by `StoreRefCell`.
+    PromotePropertyRefCell,
     AliasLocalRefCell,
     /// Retains the nullable cell in one hidden owner slot into another hidden owner slot.
     /// Immediate: source/destination owner slots. Inline borrowed references remain null owners.
@@ -1357,6 +1371,9 @@ impl Op {
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
+            PromotePropertyRefCell => {
+                E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
+            }
             AliasLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL,
             RetainLocalRefCell => E::READS_LOCAL | E::WRITES_LOCAL | E::WRITES_HEAP | E::REFCOUNT_OP,
             // The last cell owner can run an arbitrary payload destructor.
@@ -1712,6 +1729,7 @@ impl Op {
             LoadRefCell => "load_ref_cell",
             StoreRefCell => "store_ref_cell",
             PromoteLocalRefCell => "promote_local_ref_cell",
+            PromotePropertyRefCell => "promote_property_ref_cell",
             AliasLocalRefCell => "alias_local_ref_cell",
             RetainLocalRefCell => "retain_local_ref_cell",
             ReleaseLocalRefCell => "release_local_ref_cell",

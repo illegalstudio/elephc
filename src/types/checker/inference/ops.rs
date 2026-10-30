@@ -164,7 +164,8 @@ impl Checker {
                 // made the ordinary character-range idiom (`$c >= '0' && $c <= '9'`) a
                 // compile error and pushed callers onto `ord()` (issue #507).
                 let strings_ok = orders_as_strings(&lt, &rt);
-                if !numeric_ok && !datetime_ok && !strings_ok {
+                let object_null = crate::types::object_operators::null_comparison_allowed(&lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !object_null {
                     return Err(CompileError::new(
                         expr.span,
                         "Comparison operators require numeric or string operands",
@@ -198,7 +199,8 @@ impl Checker {
                 // accepts the same two-string pair rather than leaving `"a" <=> "b"` a
                 // compile error while `"a" < "b"` works (issue #507).
                 let strings_ok = orders_as_strings(&lt, &rt);
-                if !numeric_ok && !datetime_ok && !strings_ok {
+                let object_null = crate::types::object_operators::null_comparison_allowed(&lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !object_null {
                     return Err(CompileError::new(
                         expr.span,
                         "Spaceship operator requires numeric or string operands",

@@ -2,7 +2,7 @@
 title: "sprintf()"
 description: "Returns a formatted string."
 sidebar:
-  order: 933
+  order: 984
 ---
 
 ## sprintf()

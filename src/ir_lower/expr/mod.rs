@@ -62,7 +62,7 @@ mod lazy_isset;
 mod native_isset;
 mod callable_probes;
 mod descriptor_invoke;
-mod call_operand_owners;
+pub(crate) mod call_operand_owners;
 mod pending_owners;
 mod descriptor_args;
 mod descriptor_unpack;

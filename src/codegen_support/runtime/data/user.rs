@@ -25,6 +25,13 @@ use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 use super::instanceof::{escaped_ascii, escaped_bytes};
 use super::NOT_SERIALIZABLE_BUILTIN_CLASSES;
 
+/// Returns whether a declared property is compiler storage hidden from PHP enumeration.
+fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
+    elephc_builtin_contract::lookup_class(class_name)
+        .is_some_and(|class| class.property_is_hidden(property))
+}
+
+
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_READONLY: u64 = 32;
@@ -482,11 +489,24 @@ pub(crate) fn emit_runtime_data_user(
             let flag = match (class_info_by_id.get(&class_id), class_name_by_id.get(&class_id)) {
                 (Some(class_info), Some(class_name)) => u8::from(
                     class_uses_dynamic_property_tail(class_name, class_info)
-                        && var_dump_debug_info_projection(class_info).is_none(),
+                        && (var_dump_debug_info_projection(class_info).is_none()
+                            || class_contract_dumps_dynamic_first(class_name)),
                 ),
                 _ => 0,
             };
             out.push_str(&format!("    .quad {}\n", flag));
+        }
+    }
+
+    // Per-class "render the dynamic-property tail before the projected rows" flags.
+    // PHP's GMP debug info duplicates the property table first and appends `num` after it.
+    out.push_str(".globl _class_dump_dyn_first\n_class_dump_dyn_first:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let flag = class_name_by_id
+                .get(&class_id)
+                .is_some_and(|class_name| class_contract_dumps_dynamic_first(class_name));
+            out.push_str(&format!("    .quad {}\n", u8::from(flag)));
         }
     }
 
@@ -694,15 +714,23 @@ pub(crate) fn emit_runtime_data_user(
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
-            let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
+                let legacy_gmp = class_name_by_id
+                    .get(&class_id)
+                    .is_some_and(|name| name.eq_ignore_ascii_case("GMP"));
                 if table.starts_with("_class_serializable_") {
                     let active = class_info_by_id.get(&class_id).is_some_and(|class| {
                         class.interfaces.iter().any(|name| name.eq_ignore_ascii_case("Serializable"))
                             && (method != "serialize" || !class.methods.contains_key("__serialize"))
-                    });
+                    }) || (legacy_gmp && method == "unserialize");
                     if !active { out.push_str("    .quad 0\n"); continue; }
                 }
+                let method = if legacy_gmp && method == "unserialize" {
+                    "__elephc_legacy_unserialize"
+                } else {
+                    method
+                };
+                let method_key = php_symbol_key(method);
                 // A class PHP refuses to serialize routes `__serialize` to the throwing helper,
                 // so the denial holds wherever the object is found: nested in an array, behind
                 // `mixed`, or reached through a subclass that declares its own `__serialize`.
@@ -730,8 +758,17 @@ pub(crate) fn emit_runtime_data_user(
         out.push_str(&format!(".globl _class_serializable_{method}_return_abi\n_class_serializable_{method}_return_abi:\n"));
         if let Some(max_class_id) = max_class_id {
             for class_id in 0..=max_class_id {
+                let method_key = if method == "unserialize"
+                    && class_name_by_id
+                        .get(&class_id)
+                        .is_some_and(|name| name.eq_ignore_ascii_case("GMP"))
+                {
+                    "__elephc_legacy_unserialize"
+                } else {
+                    method
+                };
                 let representation = class_info_by_id.get(&class_id)
-                    .and_then(|class| class.methods.get(method))
+                    .and_then(|class| class.methods.get(method_key))
                     .map_or(super::SerializableReturnAbi::Null, |signature| super::SerializableReturnAbi::of(&signature.return_type));
                 out.push_str(&format!("    .quad {}\n", representation as u8));
             }
@@ -740,11 +777,71 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str(".globl _class_serializable_unserialize_boxed\n_class_serializable_unserialize_boxed:\n");
     if let Some(max_class_id) = max_class_id {
         for class_id in 0..=max_class_id {
+            let method_key = if class_name_by_id
+                .get(&class_id)
+                .is_some_and(|name| name.eq_ignore_ascii_case("GMP"))
+            {
+                "__elephc_legacy_unserialize"
+            } else {
+                "unserialize"
+            };
             let boxed = class_info_by_id.get(&class_id)
-                .and_then(|class| class.methods.get("unserialize"))
+                .and_then(|class| class.methods.get(method_key))
                 .and_then(|signature| signature.params.first())
                 .is_some_and(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)));
             out.push_str(&format!("    .quad {}\n", u8::from(boxed)));
+        }
+    }
+
+    // Dense class-id-indexed internal-operator hooks for runtime helpers that only see a
+    // boxed Mixed value: PHP's mixed-array sort pre-scan and comparator, and array_sum's
+    // numeric cast. Contract classes opt in by declaring the adapter; `0` keeps the
+    // helper's previous answer (refuse the sort, warn and skip the sum) for every class
+    // without a reviewed handler.
+    out.push_str(".globl _class_compare_ptrs\n_class_compare_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let entry = match class_name_by_id
+                .get(&class_id)
+                .and_then(|name| elephc_builtin_contract::lookup_class(name))
+                .and_then(|contract| contract.operators)
+                .and_then(|operators| operators.compare)
+            {
+                Some(method) => {
+                    let method_key = php_symbol_key(method);
+                    class_info_by_id
+                        .get(&class_id)
+                        .and_then(|class_info| class_info.static_method_impl_classes.get(&method_key))
+                        .map(|impl_class| static_method_symbol(impl_class, &method_key))
+                        .unwrap_or_else(|| "0".to_string())
+                }
+                None => "0".to_string(),
+            };
+            out.push_str(&format!("    .quad {}\n", entry));
+        }
+    }
+
+    out.push_str(".globl _class_to_number_ptrs\n_class_to_number_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let entry = match class_name_by_id
+                .get(&class_id)
+                .and_then(|name| elephc_builtin_contract::lookup_class(name))
+                .and_then(|contract| contract.operators)
+                .and_then(|operators| operators.casts)
+                .and_then(|casts| casts.to_number)
+            {
+                Some(method) => {
+                    let method_key = php_symbol_key(method);
+                    class_info_by_id
+                        .get(&class_id)
+                        .map(|class_info| source_instance_method_entry(class_info, &method_key, classes))
+                        .transpose()?
+                        .unwrap_or_else(|| "0".to_string())
+                }
+                None => "0".to_string(),
+            };
+            out.push_str(&format!("    .quad {}\n", entry));
         }
     }
 
@@ -1201,10 +1298,11 @@ pub(crate) fn emit_runtime_data_user(
                     .is_some_and(|visible_index| visible_index == *prop_index)
             })
             .filter(|(_, (name, _))| {
-                class_info
-                    .property_visibilities
-                    .get(name)
-                    .map_or(true, |v| matches!(v, Visibility::Public))
+                !class_property_is_hidden(class_name, name)
+                    && class_info
+                        .property_visibilities
+                        .get(name)
+                        .map_or(true, |v| matches!(v, Visibility::Public))
             })
             .collect();
         if enums.contains_key(class_name.as_str()) {
@@ -1329,14 +1427,26 @@ pub(crate) fn emit_runtime_data_user(
             out.push('\n');
         }
 
-        // Serialize property-info table: one row per declared property in declaration order,
-        // including PHP-mangled private keys. The cast walker separately hides Reflection's
-        // compiler-owned private rows by checking each row's declaring class.
-        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
+        // Serialize property-info table: one row per PHP-visible declared property in
+        // declaration order, including PHP-mangled private keys. Compiler storage
+        // (GMP's `__elephc_num`) is excluded, matching `get_object_vars()`, object casts,
+        // JSON, and PHP's serialized property table. The cast walker separately hides
+        // Reflection's compiler-owned private rows by checking each row's declaring class.
+        // __rt_serialize_object / __rt_unserialize_object walk this by class id.
+        let serialized_props: Vec<(usize, &String, &PhpType)> = class_info
+            .properties
+            .iter()
+            .enumerate()
+            .filter_map(|(prop_index, (prop_name, prop_ty))| {
+                (!class_property_is_hidden(class_name, prop_name))
+                    .then_some((prop_index, prop_name, prop_ty))
+            })
+            .collect();
+        for (prop_index, prop_name, _) in &serialized_props {
             let (metadata, owner_name) = physical_property_slot_metadata(
-                classes, class_info, class_name, prop_index, prop_name,
+                classes, class_info, class_name, *prop_index, *prop_name,
             );
-            let mangled = mangled_property_name(metadata, owner_name, prop_name);
+            let mangled = mangled_property_name(metadata, owner_name, *prop_name);
             out.push_str(&format!(
                 ".globl _class_serpname_{}_{}\n_class_serpname_{}_{}:\n",
                 class_info.class_id, prop_index, class_info.class_id, prop_index,
@@ -1355,15 +1465,15 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_{}\n_class_serprop_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        out.push_str(&format!("    .quad {}\n", class_info.properties.len()));
-        for (prop_index, (prop_name, prop_ty)) in class_info.properties.iter().enumerate() {
+        out.push_str(&format!("    .quad {}\n", serialized_props.len()));
+        for (prop_index, prop_name, prop_ty) in &serialized_props {
             let (metadata, owner_name) = physical_property_slot_metadata(
-                classes, class_info, class_name, prop_index, prop_name,
+                classes, class_info, class_name, *prop_index, *prop_name,
             );
-            let mangled_len = mangled_property_name(metadata, owner_name, prop_name).len();
+            let mangled_len = mangled_property_name(metadata, owner_name, *prop_name).len();
             let offset = metadata
                 .property_offsets
-                .get(prop_name)
+                .get(*prop_name)
                 .copied()
                 .unwrap_or(8 + prop_index * 16);
             let tag = prop_value_tag(metadata, prop_name, prop_ty);
@@ -1380,13 +1490,13 @@ pub(crate) fn emit_runtime_data_user(
             ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
             class_info.class_id, class_info.class_id,
         ));
-        for (prop_index, (prop_name, _)) in class_info.properties.iter().enumerate() {
+        for (prop_index, prop_name, _) in &serialized_props {
             let (metadata, owner_name) = physical_property_slot_metadata(
-                classes, class_info, class_name, prop_index, prop_name,
+                classes, class_info, class_name, *prop_index, *prop_name,
             );
             let declaring_class = metadata
                 .property_declaring_classes
-                .get(prop_name)
+                .get(*prop_name)
                 .map(String::as_str)
                 .unwrap_or(owner_name);
             let declaring_class_id = all_class_id_by_name
@@ -1396,27 +1506,25 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str(&format!("    .quad {}\n", declaring_class_id));
         }
 
-        // Serialize-property diagnostic table: one row per declared property carrying the
-        // static message suffix `__rt_obj_store_prop` appends when a hydrated value does not
-        // match the declared property type (" to property C::$p of type T"), and the set of
-        // boxed value tags the slot accepts. The runtime store raises PHP's TypeError from
-        // this row instead of silently writing the value (#1629). Kept parallel to
-        // `_class_serprop_*` so its row index is the same property index.
-        let serprop_diag: Vec<(String, u64, u64)> = class_info
-            .properties
+        // Serialize-property diagnostic table: one row per PHP-visible declared property
+        // carrying the static message suffix `__rt_obj_store_prop` appends when a hydrated
+        // value does not match the declared property type (" to property C::$p of type T"),
+        // and the set of boxed value tags the slot accepts. The runtime store raises PHP's
+        // TypeError from this row instead of silently writing the value (#1629). Kept
+        // parallel to `_class_serprop_*` so its row index is the same property index.
+        let serprop_diag: Vec<(String, u64, u64)> = serialized_props
             .iter()
-            .enumerate()
-            .map(|(prop_index, (prop_name, prop_ty))| {
+            .map(|(prop_index, prop_name, prop_ty)| {
                 let (metadata, owner_name) = physical_property_slot_metadata(
-                    classes, class_info, class_name, prop_index, prop_name,
+                    classes, class_info, class_name, *prop_index, *prop_name,
                 );
                 // An undeclared (untyped) slot has no PHP declaration to enforce: elephc
                 // infers a storage type from the default, but PHP accepts any value there,
                 // so leave the pre-existing accept behavior untouched.
-                let declared = metadata.property_slot_is_declared(prop_index, prop_name);
+                let declared = metadata.property_slot_is_declared(*prop_index, prop_name);
                 let declaring_class = metadata
                     .property_declaring_classes
-                    .get(prop_name)
+                    .get(*prop_name)
                     .map(String::as_str)
                     .unwrap_or(owner_name);
                 let type_name = if declared {
@@ -2291,6 +2399,9 @@ fn emit_eval_reflection_property_lookup_data(
     let mut index = 0usize;
     for (class_name, class_info) in sorted_classes {
         for (slot, (property_name, _)) in class_info.properties.iter().enumerate() {
+            if class_property_is_hidden(class_name, property_name) {
+                continue;
+            }
             let flags = eval_reflection_instance_property_flags(class_info, slot, property_name);
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
@@ -2327,6 +2438,9 @@ fn emit_eval_reflection_property_lookup_data(
             index += 1;
         }
         for (slot, (property_name, _)) in class_info.static_properties.iter().enumerate() {
+            if class_property_is_hidden(class_name, property_name) {
+                continue;
+            }
             let flags = eval_reflection_static_property_flags(class_info, slot, property_name);
             let class_label = format!("_eval_reflection_property_class_{}", index);
             let property_label = format!("_eval_reflection_property_name_{}", index);
@@ -2947,6 +3061,13 @@ fn class_object_payload_size(class_name: &str, class_info: &ClassInfo) -> usize 
 /// Returns whether this class layout stores a dynamic-property hash tail.
 fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) -> bool {
     class_name == "stdClass" || class_info.has_property_hash_storage()
+}
+
+/// Returns whether this class's reviewed contract renders dynamic properties before
+/// a foldable `__debugInfo()` projection.
+fn class_contract_dumps_dynamic_first(class_name: &str) -> bool {
+    elephc_builtin_contract::lookup_class(class_name)
+        .is_some_and(|contract| contract.dump_dynamic_properties_first)
 }
 
 /// The number of fixed-slot stream-wrapper methods recorded per class in

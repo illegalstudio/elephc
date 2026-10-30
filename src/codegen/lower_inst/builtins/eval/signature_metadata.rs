@@ -10,8 +10,24 @@
 use super::*;
 
 /// Returns true when a module function should expose metadata to eval fragments.
+///
+/// `__elephc_gmp_*` is the one compiler-internal prefix eval must reach: the public `gmp_*`
+/// registry builtins have no prelude functions of their own, so their Magician homes forward
+/// to the hidden prelude helper of the same suffix. Only the 51 public helpers are registered;
+/// the rest of the GMP prelude remains invisible to eval.
 pub(super) fn function_has_eval_metadata(function: &Function) -> bool {
-    !function.flags.is_main && !function.name.starts_with('_')
+    if function.flags.is_main {
+        return false;
+    }
+    if function.name == "__elephc_gmp_unserialize" {
+        return true;
+    }
+    if let Some(helper) = function.name.strip_prefix("__elephc_gmp_") {
+        return elephc_builtin_contract::GMP_FUNCTIONS
+            .iter()
+            .any(|name| name.strip_prefix("gmp_") == Some(helper));
+    }
+    !function.name.starts_with('_')
 }
 
 /// Returns true when eval can dispatch a native function through the generated bridge.

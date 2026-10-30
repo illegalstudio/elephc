@@ -540,6 +540,13 @@ Object-owned property reference cells use heap kind `8`, with their payload type
 in header bits `8..14`. Their two payload words remain the value's low word and
 its high word or string length. Class GC descriptor tag `11` identifies these
 owned cells; constructor-promoted borrowed reference addresses stay non-owning.
+A call temporary created for a fixed scalar, string, or array property sets its
+header flag bit `19` and appends four metadata words after the payload: a static
+diagnostic-suffix pointer and length, a declared-type acceptance code, and a
+reserved word. The callee's `StoreRefCell` guard reads that metadata before
+coercion and raises PHP's reference-form `TypeError` when the source cannot bind
+to the property. Ordinary local and variadic cells leave the flag clear, so their
+layout and release path are unchanged.
 Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding

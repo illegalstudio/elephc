@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
+use super::recipes::{curl, gmp, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -50,6 +50,7 @@ enum BuiltInRecipe {
     Libssh2,
     Curl,
     Libxml2,
+    Gmp,
     Libmagic,
 }
 
@@ -65,6 +66,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("curl", 4) => Some(BuiltInRecipe::Curl),
         ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
         ("libxml2", 1) => Some(BuiltInRecipe::Libxml2),
+        ("gmp", 2) => Some(BuiltInRecipe::Gmp),
         _ => None,
     }
 }
@@ -82,6 +84,7 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Curl) => curl::build(request),
             Some(BuiltInRecipe::Libmagic) => libmagic::build(request),
             Some(BuiltInRecipe::Libxml2) => libxml2::build(request),
+            Some(BuiltInRecipe::Gmp) => gmp::build(request),
             None => Err(NativeError::new(
                 NativeErrorKind::Build,
                 format!(
@@ -157,6 +160,17 @@ mod tests {
             "missing built-in recipe for libxml2 revision 1"
         );
         assert!(built_in_recipe("libxml2", 2).is_none());
+    }
+
+    /// Verifies the dispatcher recognizes libgmp by its exact catalog recipe revision,
+    /// and that the previous revision is not silently reused.
+    #[test]
+    fn gmp_recipe_revision_has_dispatcher() {
+        assert!(
+            built_in_recipe("gmp", 2).is_some(),
+            "missing built-in recipe for gmp revision 2"
+        );
+        assert!(built_in_recipe("gmp", 1).is_none());
     }
 
     /// Verifies the HTTP/1.1-only curl build (revision 1, no nghttp2/libssh2 and a wall of

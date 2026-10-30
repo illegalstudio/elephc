@@ -427,7 +427,7 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 - **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
 - **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
 - **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
-- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules. The exception is an **object union** in the exact shape `Class|false` or `Class|null` passed to a `Class` parameter of a user-declared method or constructor: elephc accepts it and inserts a runtime `instanceof` guard that throws `TypeError` for the other alternative.
 
 ### Callable strings
 

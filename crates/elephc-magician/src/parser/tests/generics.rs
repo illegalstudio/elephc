@@ -71,11 +71,19 @@ fn generics_function_names_preserve_imports_and_source_spelling() {
 }
 
 /// Typed-local probing must not reinterpret reserved statement keywords as class types.
+///
+/// `echo` and `return` take full expressions, so an assignment remains an assignment instead
+/// of being probed as a generic typed local named after the keyword.
 #[test]
 fn generics_typed_local_keeps_statement_keyword_precedence() {
-    for source in ["echo $value = 1;", "return $value = 1;"] {
-        assert!(parse_fragment(source.as_bytes()).is_err(), "{source}");
-    }
+    let assignment = EvalExpr::Assign {
+        name: "value".to_string(),
+        value: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+    };
+    let echo = parse_fragment(b"echo $value = 1;").expect("echo takes an expression list");
+    assert_eq!(echo.statements(), &[EvalStmt::Echo(assignment.clone())]);
+    let ret = parse_fragment(b"return $value = 1;").expect("return takes an expression");
+    assert_eq!(ret.statements(), &[EvalStmt::Return(Some(assignment))]);
 }
 
 /// Native function/class/interface/trait declarations retain templates.

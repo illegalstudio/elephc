@@ -192,6 +192,21 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::LocalSlotPair { first, second } => {
             let _ = write!(out, " slots[{},{}]", first.as_raw(), second.as_raw());
         }
+        Immediate::PropertyRefCell {
+            first,
+            second,
+            suffix,
+            type_code,
+        } => {
+            let _ = write!(
+                out,
+                " property_ref[{},{}] data[{}] type_code={}",
+                first.as_raw(),
+                second.as_raw(),
+                suffix.as_raw(),
+                type_code
+            );
+        }
         Immediate::GlobalName(id) => {
             let value = data
                 .global_names

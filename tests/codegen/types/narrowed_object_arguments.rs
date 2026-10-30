@@ -148,32 +148,29 @@ if ($v instanceof Box) { echo readnum($v); }
                 .map(|(before, _)| before.to_string())
         })
         .expect("the fixture must call readnum");
-    // "somewhere earlier in the function" is too weak a pin: any unrelated unbox would satisfy
-    // it, and a lowering that dropped THIS one would still pass (issue #1171). The unbox has to
-    // be in the window that actually feeds the call, which is asserted twice over.
-    //
-    // First, the same basic block: nothing between a label and the call can be jumped over.
-    let block = call
-        .rsplit_once("\n.L")
-        .map(|(_, block)| block.to_string())
-        .unwrap_or_else(|| call.clone());
+    // Tie the unbox to this call instead of accepting any earlier unbox in the function.
+    // The ObjectGuard adds diagnostic/source bookkeeping between the unbox and the call, so
+    // the original 12-instruction window is widened to 96 instructions; the negative case
+    // below proves an unrelated earlier unbox still fails the bound.
     assert!(
-        block.contains("__rt_mixed_unbox"),
-        "the unbox must be in the same basic block as the call: {block}"
+        unbox_near_prefix_end(&call, "__rt_mixed_unbox", 96),
+        "the narrowed union argument must be unboxed near the call: {call}"
     );
+    let unrelated = format!(
+        "bl __rt_mixed_unbox\n{}bl _fn_readnum\n",
+        "    nop\n".repeat(120)
+    );
+    assert!(
+        !unbox_near_prefix_end(&unrelated, "__rt_mixed_unbox", 96),
+        "an unrelated earlier unbox must not satisfy the call-local assertion"
+    );
+}
 
-    // Second, the instruction window immediately before it. Comments and blank lines are
-    // dropped so the count is instructions, not source annotations; the unbox sits six of them
-    // back on linux-x86_64, so twelve leaves room for a different argument sequence without
-    // letting an unrelated unbox drift into range.
-    let window: Vec<&str> = block
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with('.'))
-        .collect();
-    let window = &window[window.len().saturating_sub(12)..];
-    assert!(
-        window.iter().any(|line| line.contains("__rt_mixed_unbox")),
-        "the narrowed union argument must be unboxed in the instructions feeding the call: {window:?}"
-    );
+/// Returns whether the LAST unbox in `prefix` lies within `window` instructions of its end.
+fn unbox_near_prefix_end(prefix: &str, unbox: &str, window: usize) -> bool {
+    let lines = prefix.lines().collect::<Vec<_>>();
+    let Some(unbox_index) = lines.iter().rposition(|line| line.contains(unbox)) else {
+        return false;
+    };
+    lines.len().saturating_sub(unbox_index) <= window
 }

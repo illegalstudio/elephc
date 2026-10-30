@@ -597,6 +597,9 @@ fn validate_instruction_immediate(
         PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell | AdoptRefCellPtr => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
+        PromotePropertyRefCell => require_immediate(inst_id, inst, "property reference cell metadata", |imm| {
+            matches!(imm, Imm::PropertyRefCell { .. })
+        }),
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
             matches!(imm, Imm::GlobalName(_))
         }),
@@ -828,7 +831,7 @@ fn validate_opcode_rules(
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
         ThrowError => check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
-        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
+        UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | PromotePropertyRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell
         | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
             check_count(inst_id, inst, 0, "0")

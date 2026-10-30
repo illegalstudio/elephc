@@ -331,14 +331,29 @@ fn summarize_with_callees<'a>(
     body: &[Stmt],
     callees: Option<&Callees>,
 ) -> ReturnArgAlias {
+    let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
     if by_ref_return {
+        // A by-reference callable whose whole body is `return $parameter;` transfers that
+        // parameter's storage. Anything more complex stays conservative: the legacy
+        // summary models value provenance, not lvalue cell identity.
+        if let [Stmt {
+            kind: StmtKind::Return(Some(Expr {
+                kind: ExprKind::Variable(name),
+                ..
+            })),
+            ..
+        }] = body
+        {
+            if let Some(index) = params.iter().position(|(param, _)| param == name) {
+                return ReturnArgAlias::parameter(index);
+            }
+        }
         return ReturnArgAlias::Unknown;
     }
     // A scalar or void result is never refcounted storage, whatever the body returns.
     if matches!(return_type, Some(TypeExpr::Int | TypeExpr::Float | TypeExpr::Bool | TypeExpr::Void)) {
         return ReturnArgAlias::None;
     }
-    let params: Vec<(&str, Option<&TypeExpr>)> = params.collect();
     // A variadic is deliberately absent: it collects its arguments into a fresh array, whose
     // slot is never a bare `Str`.
     let string_parameters: BTreeSet<String> = params

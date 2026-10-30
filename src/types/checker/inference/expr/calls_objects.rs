@@ -80,6 +80,12 @@ impl Checker {
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
+                if let Some(class) = crate::types::object_operators::operator_class(&ty) {
+                    return Ok(PhpType::Object(class.name.to_string()));
+                }
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                    return Ok(PhpType::Mixed);
+                }
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {
                     return Err(CompileError::new(
                         expr.span,

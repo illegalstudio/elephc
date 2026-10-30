@@ -245,6 +245,13 @@ fn apply_local_transfer(
             set_local_state(state, *first, CallableNameSet::Unknown);
             set_local_state(state, *second, CallableNameSet::Unknown);
         }
+        (
+            Op::PromotePropertyRefCell,
+            Some(Immediate::PropertyRefCell { first, second, .. }),
+        ) => {
+            set_local_state(state, *first, CallableNameSet::Unknown);
+            set_local_state(state, *second, CallableNameSet::Unknown);
+        }
         (Op::EvalLiteralCall | Op::EvalScopeSet | Op::ListUnpack, _) => {
             state.fill(CallableNameSet::Unknown);
         }

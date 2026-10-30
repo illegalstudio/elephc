@@ -151,6 +151,11 @@ fn eval_visible_runtime_method_names(
 ) -> Result<Vec<String>, EvalStatus> {
     let mut result = Vec::new();
     for name in names {
+        if elephc_builtin_contract::lookup_class(lookup_class_name)
+            .is_some_and(|class| !class.method_is_php_visible(&name))
+        {
+            continue;
+        }
         if values.reflection_method_flags(lookup_class_name, &name)?
             .is_some_and(|flags| flags & EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK != 0)
         {

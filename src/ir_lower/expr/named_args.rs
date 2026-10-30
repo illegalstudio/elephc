@@ -111,6 +111,21 @@ pub(super) fn lower_named_args_with_signature_options(
         }
         operands.push(lower_named_variadic_tail_array(ctx, sig, &plan.source_values, &source_values).value);
     }
+    // Named arguments are lowered in source order and reordered into parameter order here.
+    // Apply the same object-union ABI guard the positional path uses before the callee sees
+    // the operand, using the original source expression for the TypeError text.
+    for (param_index, arg) in plan.regular_args.iter().enumerate() {
+        let crate::types::call_args::PlannedRegularArg::Source { source_index, .. } = arg else {
+            continue;
+        };
+        let source = &plan.source_args[*source_index];
+        let value = lowered_value_from_id(ctx, operands[param_index]);
+        if let Some(guarded) =
+            super::call_arg_coercion::guard_object_param_argument(ctx, sig, param_index, value, source)
+        {
+            operands[param_index] = guarded.value;
+        }
+    }
     operands
 }
 

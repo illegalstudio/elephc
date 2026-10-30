@@ -220,6 +220,34 @@ pub(super) fn store_value_through_ref_cell_slot(
     Ok(())
 }
 
+/// Promotes a typed property's temporary into a managed cell carrying its write guard.
+pub(super) fn lower_promote_property_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let Some(Immediate::PropertyRefCell {
+        first,
+        second,
+        suffix,
+        type_code,
+    }) = inst.immediate
+    else {
+        return Err(CodegenIrError::invalid_module(
+            "promote_property_ref_cell requires its slot pair and diagnostic metadata",
+        ));
+    };
+    let (suffix_label, suffix_len) = ctx.intern_string_data(suffix)?;
+    promote_local_slot_for_property_ref(
+        ctx,
+        first,
+        second,
+        &inst.result_php_type,
+        &suffix_label,
+        suffix_len,
+        type_code,
+    )
+}
+
 /// Promotes an existing raw local slot into a heap ref-cell pointer.
 pub(super) fn lower_promote_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let (slot, owner_slot) = expect_local_slot_pair(inst)?;
@@ -724,6 +752,41 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)
 }
 
+/// Rejects a wider callee write before it is coerced into a typed-property reference cell.
+///
+/// The guard is a no-op for every unmanaged stack address and ordinary managed cell, so local
+/// and variadic references keep their existing fast path. It reloads the source afterwards
+/// because the coercion below still consumes the same boxed operand.
+fn guard_property_reference_store(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    value: ValueId,
+    source_ty: &PhpType,
+) -> Result<()> {
+    if !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(());
+    }
+    // The store target is always addressable here, including a raw stack slot, so loading the
+    // slot word gives either the frame address or the managed cell pointer without dereferencing.
+    let offset = ctx.local_offset(slot)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::load_at_offset(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), offset);
+            abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1));
+            abi::emit_call_label(ctx.emitter, "__rt_property_reference_store_guard");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            abi::load_at_offset(ctx.emitter, "r11", offset);
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the ref-cell address in the System V first argument
+            abi::emit_pop_reg(ctx.emitter, "rsi");                             // pass the boxed source in the second argument
+            abi::emit_call_label(ctx.emitter, "__rt_property_reference_store_guard");
+        }
+    }
+    ctx.load_value_to_result(value).map(|_| ())
+}
+
 /// Writes through a borrowed address or a managed cell whose payload uses the declared shape.
 fn store_value_to_raw_ref_cell_as(
     ctx: &mut FunctionContext<'_>,
@@ -734,6 +797,7 @@ fn store_value_to_raw_ref_cell_as(
 ) -> Result<()> {
     ctx.load_value_to_result(value)?;
     let source_ty = ctx.mixed_box_type(value)?;
+    guard_property_reference_store(ctx, slot, value, &source_ty)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
     if target_ty == PhpType::Mixed

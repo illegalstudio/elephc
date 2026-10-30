@@ -38,6 +38,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         libbz2-dev \
         libpcre2-dev \
         libssl-dev \
+        m4 \
         netbase \
         pkg-config \
         python3 \

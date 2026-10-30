@@ -2,7 +2,7 @@
 title: "memory_get_frees() - internals"
 description: "Compiler internals for memory_get_frees(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 653
+  order: 704
 ---
 
 ## `memory_get_frees()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/memory_get_frees.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/memory_get_frees.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

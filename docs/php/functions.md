@@ -400,6 +400,47 @@ $b = 2;
 echo $a; // 2
 ```
 
+An **object property** can also be passed directly to a by-reference parameter of a user
+method or constructor when the parameter and the property are both object-typed:
+
+```php
+<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public function __construct(public Value $value) {} }
+class Ops {
+    public function replace(Value &$value): void {
+        $value = new Value(9);
+    }
+}
+
+$box = new Box(new Value(1));
+(new Ops())->replace($box->value);
+echo $box->value->number; // 9
+```
+
+elephc lowers the call as `$temporary = $box->value; replace($temporary); $box->value = $temporary;`
+through a hidden reference cell, so the callee's replacement is visible on the property
+exactly as PHP's shared reference is. The same rewrite accepts scalar, string, array,
+`mixed`, union, and nullable properties, static properties, static methods, and free
+functions.
+
+A fixed scalar, string, or array property reference also carries the property's declared
+type into the callee's hidden cell. When the callee writes a wider runtime value that the
+property cannot accept — for example `function w(int &$x, mixed $v) { $x = $v; }` called with
+an arbitrary string — the write raises PHP's reference-form `TypeError` before coercion
+(`Cannot assign string to reference held by property C::$n of type int`). Valid weak
+property writes (numeric strings, bools, and in-range floats) still convert normally. The
+write-back itself remains copy-in/copy-out for object, `mixed`, union, and nullable
+properties.
+
+The same property places also bind to by-reference **variadics**, including array
+properties: the variadic collector transports the boxed container, and the write-back
+repacks the mutated payload into the declared property slot. Properties whose declared type
+needs a runtime type dispatch the rewrite does not implement (`iterable`, pointers, buffers)
+still report `must be passed a variable`. The write-back runs after the call
+returns; if the callee throws after mutating the reference, the property keeps its previous
+value (PHP would already have applied the mutation).
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

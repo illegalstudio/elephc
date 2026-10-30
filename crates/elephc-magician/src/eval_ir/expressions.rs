@@ -107,6 +107,15 @@ pub enum EvalExpr {
         target: EvalInstanceOfTarget,
     },
     LoadVar(String),
+    /// `$name = value` in expression position, yielding the assigned value.
+    ///
+    /// The parser builds this for a simple variable target. Mutating statements keep their
+    /// dedicated `EvalStmt` forms; this variant only exists so an assignment can appear inside
+    /// a call argument, condition, or return value.
+    Assign {
+        name: String,
+        value: Box<EvalExpr>,
+    },
     Match {
         subject: Box<EvalExpr>,
         arms: Vec<EvalMatchArm>,

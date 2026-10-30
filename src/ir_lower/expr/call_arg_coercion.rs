@@ -64,6 +64,23 @@ pub(super) fn lower_arg_with_signature(
     guard_boxed_object_reference_argument(ctx, sig, index, arg);
     promote_boxed_reference_local_argument(ctx, sig, index, arg);
     promote_reference_return_local_argument(ctx, sig, index, arg);
+    // A property by-reference rewrite stages `$temp = <place>` as the argument so the read
+    // happens at this argument's source position. Execute that assignment now, then pass the
+    // hidden local's storage exactly like an ordinary variable argument.
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        if let ExprKind::Assignment { target, .. } = &arg.kind {
+            if let ExprKind::Variable(name) = &target.kind {
+                if name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM) {
+                    let assigned = lower_expr(ctx, arg);
+                    if ctx.value_is_owning_temporary(assigned) {
+                        crate::ir_lower::ownership::release_if_owned(ctx, assigned, Some(arg.span));
+                    }
+                    let variable = Expr::new(ExprKind::Variable(name.clone()), arg.span);
+                    return lower_arg_with_signature(ctx, sig, index, &variable);
+                }
+            }
+        }
+    }
     if let Some(lowered) = lower_tracked_callable_array_param(ctx, sig, index, arg) {
         return lowered.value;
     }
@@ -404,6 +421,53 @@ fn root_prior_argument_preserving_reference_place(
     root_evaluated_call_argument(ctx, lowered, arg.span).value
 }
 
+/// Guards a boxed `Class|false` / `Class|null` argument for an object parameter.
+///
+/// Returns `None` when the argument already carries the declared object representation or
+/// when the guard cannot be safely re-read. Shared by the positional and named-argument paths
+/// so both reject the non-object alternative at the call boundary.
+pub(super) fn guard_object_param_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> Option<LoweredValue> {
+    let (_, param_ty) = sig.params.get(index)?;
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let PhpType::Object(class_name) = param_ty.codegen_repr() else {
+        return None;
+    };
+    let source_ty = ctx.builder.value_php_type(value.value);
+    let static_ty = argument_static_type(ctx, arg);
+    let guard_ty = static_ty.as_ref().unwrap_or(&source_ty);
+    if let Some(given) = union_object_guard_word(guard_ty, &class_name) {
+        return Some(guard_union_object_param(
+            ctx, sig, index, value, &class_name, Some(given), arg,
+        ));
+    }
+    let rerunnable = matches!(
+        arg.kind,
+        ExprKind::Variable(_)
+            | ExprKind::This
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+    );
+    let already_object = matches!(guard_ty.codegen_repr(), PhpType::Object(_));
+    let literal_null = matches!(arg.kind, ExprKind::Null);
+    if rerunnable && !already_object && !literal_null {
+        return Some(guard_union_object_param(
+            ctx, sig, index, value, &class_name, None, arg,
+        ));
+    }
+    None
+}
+
 /// Coerces a positional argument to storage owned explicitly by EIR when required.
 ///
 /// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
@@ -420,6 +484,9 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
+    if let Some(guarded) = guard_object_param_argument(ctx, sig, index, value, arg) {
+        return guarded;
+    }
     // A by-reference parameter must receive the caller's storage, not a converted temporary,
     // so declared-parameter scalar binding never applies to one. The checker keeps those on
     // the strict path for the same reason.
@@ -451,6 +518,23 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         }
     }
     value
+}
+
+/// Returns the checker-facing type of one argument expression when lowering still knows it.
+///
+/// Locals retain their flow-sensitive PHP type even when their storage widened to a boxed
+/// Mixed cell; property and element places retain the declared property/element type.
+fn argument_static_type(
+    ctx: &LoweringContext<'_, '_>,
+    arg: &Expr,
+) -> Option<PhpType> {
+    match &arg.kind {
+        ExprKind::Variable(name) => {
+            let ty = ctx.local_type(name);
+            (!matches!(ty.codegen_repr(), PhpType::Mixed)).then_some(ty)
+        }
+        _ => super::ref_place_args::static_place_type(ctx, arg),
+    }
 }
 
 /// Extracts a statically checked array whose source storage is a boxed Mixed cell.
@@ -529,6 +613,145 @@ fn unbox_iterable_param_storage(
     let result = ctx.emit_owned_value(
         Op::MixedUnbox, vec![value.value], None, PhpType::Iterable,
         Op::mixed_unbox_effects(&PhpType::Iterable), span,
+    );
+    release_coerced_source_if_owned(ctx, value, span);
+    result
+}
+
+/// Returns the rejected alternative's PHP spelling when a union is exactly
+/// `Object(class)|false` or `Object(class)|null`, or `None` for every other shape.
+fn union_object_guard_word(actual: &PhpType, class_name: &str) -> Option<&'static str> {
+    let PhpType::Union(members) = actual else {
+        return None;
+    };
+    let expected = PhpType::Object(class_name.to_string());
+    if members.len() != 2 || members.iter().filter(|member| **member == expected).count() != 1 {
+        return None;
+    }
+    if members.iter().any(|member| matches!(member, PhpType::False)) {
+        Some("false")
+    } else if members.iter().any(|member| matches!(member, PhpType::Void)) {
+        Some("null")
+    } else {
+        None
+    }
+}
+
+/// Guards a `Object(class)|false` / `Object(class)|null` argument and unboxes the object.
+///
+/// The rejected branch throws a catchable `TypeError` naming the supplied alternative; the
+/// accepted branch extracts the raw object payload the declared parameter ABI expects.
+fn guard_union_object_param(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    class_name: &str,
+    given: Option<&str>,
+    arg: &Expr,
+) -> LoweredValue {
+    let span = Some(arg.span);
+    // `InstanceOf` and the accepted branch's unbox both expect boxed storage. A
+    // statically-known object (a subclass or a literal optimized from a union) keeps its
+    // raw representation, so box it first instead of feeding Object where Mixed is required.
+    let value = if matches!(
+        value.ir_type,
+        IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union)
+    ) {
+        value
+    } else {
+        ctx.emit_owned_value(
+            Op::MixedBox,
+            vec![value.value],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            span,
+        )
+    };
+    let class_data = ctx.intern_class_name(class_name);
+    let condition = ctx.emit_value(
+        Op::InstanceOf,
+        vec![value.value],
+        Some(Immediate::Data(class_data)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        span,
+    );
+    let accepted = ctx.builder.create_named_block("object.arg.accepted", Vec::new());
+    let rejected = ctx.builder.create_named_block("object.arg.rejected", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: accepted,
+        then_args: Vec::new(),
+        else_target: rejected,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(rejected);
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    }
+    let param_name = sig
+        .params
+        .get(index)
+        .map(|(name, _)| name.as_str())
+        .unwrap_or("arg");
+    let callable = ctx
+        .call_description
+        .as_deref()
+        .unwrap_or("call");
+    let source = ctx.source_path().unwrap_or("unknown");
+    let prefix = format!(
+        "{}(): Argument #{} (${}) must be of type {}, ",
+        callable,
+        index + 1,
+        param_name,
+        class_name
+    );
+    let suffix = format!(" given, called in {} on line {}", source, arg.span.line);
+    let given = match given {
+        Some(text) => Expr::new(ExprKind::StringLiteral(text.to_string()), arg.span),
+        None => super::enum_argument_guards::runtime_debug_type(arg, arg.span),
+    };
+    let message = [
+        Expr::new(ExprKind::StringLiteral(prefix), arg.span),
+        given,
+        Expr::new(ExprKind::StringLiteral(suffix), arg.span),
+    ]
+    .into_iter()
+    .reduce(|left, right| {
+        Expr::new(
+            ExprKind::BinaryOp {
+                left: Box::new(left),
+                op: crate::parser::ast::BinOp::Concat,
+                right: Box::new(right),
+            },
+            arg.span,
+        )
+    })
+    .expect("the diagnostic always has a prefix and a suffix");
+    let exception = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![message],
+            },
+            arg.span,
+        ),
+    );
+    ctx.builder.terminate(Terminator::Throw {
+        value: exception.value,
+    });
+    ctx.builder.position_at_end(accepted);
+    let object_ty = PhpType::Object(class_name.to_string());
+    let result = ctx.emit_owned_value(
+        Op::MixedUnbox,
+        vec![value.value],
+        None,
+        object_ty.clone(),
+        Op::mixed_unbox_effects(&object_ty),
+        span,
     );
     release_coerced_source_if_owned(ctx, value, span);
     result

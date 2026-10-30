@@ -17,6 +17,81 @@ impl Parser {
         self.parse_keyword_or()
     }
 
+    /// Continues a statement-level keyword logical expression from an already parsed left side.
+    ///
+    /// `$x = true and false;` binds as `($x = true) and false;` because assignment binds
+    /// tighter than `and`. The statement parser consumes the assignment itself, so it resumes
+    /// here with the assignment expression as the left operand.
+    pub(in crate::parser) fn parse_keyword_logical_from(
+        &mut self,
+        expr: EvalExpr,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let expr = self.parse_keyword_and_from(expr)?;
+        let expr = self.parse_keyword_xor_from(expr)?;
+        self.parse_keyword_or_from(expr)
+    }
+
+    /// Parses the `and` tail after an already parsed left operand.
+    fn parse_keyword_and_from(&mut self, mut expr: EvalExpr) -> Result<EvalExpr, EvalParseError> {
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
+            self.advance();
+            let right = self.parse_assignment()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalAnd,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses the `xor` tail after an already parsed left operand.
+    fn parse_keyword_xor_from(&mut self, mut expr: EvalExpr) -> Result<EvalExpr, EvalParseError> {
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "xor")) {
+            self.advance();
+            let right = self.parse_keyword_and()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalXor,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses the `or` tail after an already parsed left operand.
+    fn parse_keyword_or_from(&mut self, mut expr: EvalExpr) -> Result<EvalExpr, EvalParseError> {
+        while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "or")) {
+            self.advance();
+            let right = self.parse_keyword_xor()?;
+            expr = EvalExpr::Binary {
+                op: EvalBinOp::LogicalOr,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        Ok(expr)
+    }
+
+    /// Parses a binary operator's right operand, allowing an assignment place there.
+    ///
+    /// PHP's grammar lets `$a == $b = 1` parse as `$a == ($b = 1)`: assignment binds tighter
+    /// than the surrounding binary operator when it appears on the right. Only a writable
+    /// variable followed by an assignment operator takes this path; every other right operand
+    /// keeps the ordinary tighter-precedence parser so left-associative chains are unchanged.
+    pub(in crate::parser) fn parse_rhs_with_assignment(
+        &mut self,
+        tighter: fn(&mut Self) -> Result<EvalExpr, EvalParseError>,
+    ) -> Result<EvalExpr, EvalParseError> {
+        if matches!(self.current(), TokenKind::DollarIdent(_))
+            && assignment_op(self.peek()).is_some()
+        {
+            self.parse_assignment()
+        } else {
+            tighter(self)
+        }
+    }
+
     /// Parses PHP keyword `or`, whose precedence is lower than `xor`, `and`, and ternary.
     pub(in crate::parser) fn parse_keyword_or(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_keyword_xor()?;
@@ -47,12 +122,12 @@ impl Parser {
         Ok(expr)
     }
 
-    /// Parses PHP keyword `and`, whose precedence is lower than ternary and `&&`.
+    /// Parses PHP keyword `and`, whose precedence is lower than assignment and `&&`.
     pub(in crate::parser) fn parse_keyword_and(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_ternary()?;
+        let mut expr = self.parse_assignment()?;
         while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
             self.advance();
-            let right = self.parse_ternary()?;
+            let right = self.parse_assignment()?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::LogicalAnd,
                 left: Box::new(expr),
@@ -60,6 +135,32 @@ impl Parser {
             };
         }
         Ok(expr)
+    }
+
+    /// Parses PHP's right-associative assignment expression.
+    ///
+    /// PHP places assignment below the ternary operators and above `and`/`xor`/`or`.
+    /// Only a simple variable target is accepted in expression position; mutating property,
+    /// array-element, and static-property forms remain statement-only, matching the parser
+    /// before this form existed.
+    pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let left = self.parse_ternary()?;
+        let Some(op) = assignment_op(self.current()) else {
+            return Ok(left);
+        };
+        // Statement parsing reuses `parse_expr` for the write target, then reads the operator
+        // itself. Leave a non-variable target untouched so `$this->x += 2` and property/array
+        // writes keep lowering to their dedicated statement forms.
+        let EvalExpr::LoadVar(name) = left else {
+            return Ok(left);
+        };
+        self.advance();
+        let value = self.parse_assignment()?;
+        let value = assignment_value(&name, op, value);
+        Ok(EvalExpr::Assign {
+            name,
+            value: Box::new(value),
+        })
     }
 
     /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.
@@ -100,7 +201,7 @@ impl Parser {
     pub(in crate::parser) fn parse_logical_or(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_logical_and()?;
         while self.consume(TokenKind::OrOr) {
-            let right = self.parse_logical_and()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_logical_and)?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::LogicalOr,
                 left: Box::new(expr),
@@ -114,7 +215,7 @@ impl Parser {
     pub(in crate::parser) fn parse_logical_and(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_bit_or()?;
         while self.consume(TokenKind::AndAnd) {
-            let right = self.parse_bit_or()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_bit_or)?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::LogicalAnd,
                 left: Box::new(expr),
@@ -128,7 +229,7 @@ impl Parser {
     pub(in crate::parser) fn parse_bit_or(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_bit_xor()?;
         while self.consume(TokenKind::Pipe) {
-            let right = self.parse_bit_xor()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_bit_xor)?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::BitOr,
                 left: Box::new(expr),
@@ -142,7 +243,7 @@ impl Parser {
     pub(in crate::parser) fn parse_bit_xor(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_bit_and()?;
         while self.consume(TokenKind::Caret) {
-            let right = self.parse_bit_and()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_bit_and)?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::BitXor,
                 left: Box::new(expr),
@@ -156,7 +257,7 @@ impl Parser {
     pub(in crate::parser) fn parse_bit_and(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_equality()?;
         while self.consume(TokenKind::Ampersand) {
-            let right = self.parse_equality()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_equality)?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::BitAnd,
                 left: Box::new(expr),
@@ -181,7 +282,7 @@ impl Parser {
             } else {
                 break;
             };
-            let right = self.parse_ordering()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_ordering)?;
             expr = EvalExpr::Binary {
                 op,
                 left: Box::new(expr),
@@ -208,7 +309,7 @@ impl Parser {
             } else {
                 break;
             };
-            let right = self.parse_shift()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_shift)?;
             expr = EvalExpr::Binary {
                 op,
                 left: Box::new(expr),
@@ -229,7 +330,7 @@ impl Parser {
             } else {
                 break;
             };
-            let right = self.parse_concat()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_concat)?;
             expr = EvalExpr::Binary {
                 op,
                 left: Box::new(expr),
@@ -243,7 +344,7 @@ impl Parser {
     pub(in crate::parser) fn parse_concat(&mut self) -> Result<EvalExpr, EvalParseError> {
         let mut expr = self.parse_add()?;
         while self.consume(TokenKind::Dot) {
-            let right = self.parse_add()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_add)?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::Concat,
                 left: Box::new(expr),
@@ -264,7 +365,7 @@ impl Parser {
             } else {
                 break;
             };
-            let right = self.parse_mul()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_mul)?;
             expr = EvalExpr::Binary {
                 op,
                 left: Box::new(expr),
@@ -287,7 +388,7 @@ impl Parser {
             } else {
                 break;
             };
-            let right = self.parse_unary()?;
+            let right = self.parse_rhs_with_assignment(Self::parse_unary)?;
             expr = EvalExpr::Binary {
                 op,
                 left: Box::new(expr),

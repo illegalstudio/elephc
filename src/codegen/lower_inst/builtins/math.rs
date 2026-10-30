@@ -62,6 +62,10 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             PhpType::Int
         }
+        PhpType::Object(class_name) => {
+            emit_object_math_type_error(ctx, "abs", &class_name);
+            return Ok(());
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "abs for PHP type {:?}",
@@ -963,6 +967,10 @@ fn load_numeric_as_float(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
             Ok(())
         }
+        PhpType::Object(class_name) => {
+            emit_object_math_type_error(ctx, name, &class_name);
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other
@@ -1003,6 +1011,20 @@ fn emit_float_select(ctx: &mut FunctionContext<'_>, want_max: bool) {
             ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the selected floating candidate into the result register
         }
     }
+}
+
+/// Raises php-src's scalar-only TypeError for a math builtin receiving an object.
+fn emit_object_math_type_error(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    class_name: &str,
+) {
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx,
+        &format!(
+            "{name}(): Argument #1 ($num) must be of type int|float, {class_name} given"
+        ),
+    );
 }
 
 /// Loads a numeric operand and normalizes integer-like values into the integer result register.

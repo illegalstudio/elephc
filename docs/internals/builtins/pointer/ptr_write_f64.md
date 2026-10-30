@@ -2,7 +2,7 @@
 title: "ptr_write_f64() - internals"
 description: "Compiler internals for ptr_write_f64(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 767
+  order: 818
 ---
 
 ## `ptr_write_f64()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write_f64.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write_f64.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

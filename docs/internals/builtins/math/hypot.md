@@ -2,7 +2,7 @@
 title: "hypot() - internals"
 description: "Compiler internals for hypot(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 590
+  order: 641
 ---
 
 ## `hypot()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/hypot.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/hypot.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

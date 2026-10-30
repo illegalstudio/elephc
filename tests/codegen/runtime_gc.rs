@@ -253,3 +253,5 @@ mod coroutine_debuginfo;
 mod coroutine_slot_set;
 #[path = "runtime_gc/counter_regions.rs"]
 mod counter_regions;
+#[path = "runtime_gc/gmp_exception_operands.rs"]
+mod gmp_exception_operands;

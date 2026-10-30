@@ -737,6 +737,8 @@ Each instruction has:
 | `StoreLocal(slot, value)` | value | `Void` | `writes_local`, maybe `refcount_op` |
 | `UnsetLocal(slot)` | none | `Void` | `writes_local` |
 | `ZeroLocalSlot(slot)` | none | `Void` | `writes_local` |
+| `PromoteLocalRefCell(slot, owner)` | none | `Void` | `reads_local`, `writes_local`, `writes_heap`, `alloc_heap`, `refcount_op` |
+| `PromotePropertyRefCell(slot, owner, suffix, type_code)` | none | `Void` | `reads_local`, `writes_local`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `LoadRefCell(slot)` | none | value or address | `reads_local`, maybe `reads_heap` |
 | `StoreRefCell(slot, value)` | value | `Void` | `writes_local`, maybe `writes_heap`, `refcount_op` |
 | `LoadGlobal(name)` | none | declared type | `reads_global` |

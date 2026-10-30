@@ -2,7 +2,7 @@
 title: "mb_strlen()"
 description: "Returns the character count of a string in the requested encoding."
 sidebar:
-  order: 902
+  order: 953
 ---
 
 ## mb_strlen()

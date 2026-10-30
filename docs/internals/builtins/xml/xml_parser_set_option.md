@@ -2,7 +2,7 @@
 title: "xml_parser_set_option() - internals"
 description: "Compiler internals for xml_parser_set_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1043
+  order: 1094
 ---
 
 ## `xml_parser_set_option()` - internals
