@@ -1,6 +1,6 @@
 #!/bin/sh
 # Print the `lib/` directory of the NEWEST managed native gmp artifact for one
-# elephc target, so a shell step can export it as ELEPHC_GMP_LIB_DIR for
+# elephc target, so a shell step can export it as ELEPHC_LIBGMP_DIR for
 # `cargo test -p elephc-gmp` (crates/elephc-gmp/build.rs reads that variable,
 # links libgmp.a from it, and compiles the libgmp-calling unit tests in behind
 # cfg(elephc_gmp_native)).

@@ -341,7 +341,7 @@ jobs:
 
       - name: Test the GMP bridge against managed libgmp
         if: inputs.scope == 'tests'
-        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # crates/elephc-gmp/build.rs reads ELEPHC_LIBGMP_DIR, links libgmp.a into
         # the crate's test binary and compiles the libgmp-calling unit tests in
         # behind cfg(elephc_gmp_native). Without the variable those tests take the
         # skip path exercised by the archived non-codegen run. Runs AFTER the
@@ -350,7 +350,7 @@ jobs:
         run: |
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
-          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+          ELEPHC_LIBGMP_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native openssl-crypto/zlib
         if: inputs.scope == 'tests'
         run: |
@@ -662,7 +662,7 @@ jobs:
 
       - name: Test the GMP bridge against managed libgmp
         if: inputs.scope == 'tests'
-        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # crates/elephc-gmp/build.rs reads ELEPHC_LIBGMP_DIR, links libgmp.a into
         # the crate's test binary and compiles the libgmp-calling unit tests in
         # behind cfg(elephc_gmp_native). Without the variable those tests take the
         # skip path exercised by the archived non-codegen run. Runs AFTER the
@@ -671,7 +671,7 @@ jobs:
         run: |
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
-          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+          ELEPHC_LIBGMP_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native openssl-crypto/zlib
         if: inputs.scope == 'tests'
         run: |
@@ -978,7 +978,7 @@ jobs:
 
       - name: Test the GMP bridge against managed libgmp
         if: inputs.scope == 'tests'
-        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # crates/elephc-gmp/build.rs reads ELEPHC_LIBGMP_DIR, links libgmp.a into
         # the crate's test binary and compiles the libgmp-calling unit tests in
         # behind cfg(elephc_gmp_native). Without the variable those tests take the
         # skip path exercised by the archived non-codegen run. Runs AFTER the
@@ -987,7 +987,7 @@ jobs:
         run: |
           set -e
           gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
-          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+          ELEPHC_LIBGMP_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
       - name: Materialize managed native openssl-crypto/zlib
         if: inputs.scope == 'tests'
         run: |

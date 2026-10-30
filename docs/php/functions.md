@@ -424,11 +424,20 @@ exactly as PHP's shared reference is. The same rewrite accepts scalar, string, a
 `mixed`, union, and nullable properties, static properties, static methods, and free
 functions.
 
-The same property places also bind to by-reference **variadics**, except array properties:
-the variadic collector needs the container payload repacked, so `collect($box->items)` is
-rejected and asks for a local variable instead. Properties whose declared type needs a runtime
-type dispatch the rewrite does not implement (`iterable`, pointers, buffers) still report
-`must be passed a variable`. The write-back runs after the call
+A fixed scalar, string, or array property reference also carries the property's declared
+type into the callee's hidden cell. When the callee writes a wider runtime value that the
+property cannot accept — for example `function w(int &$x, mixed $v) { $x = $v; }` called with
+an arbitrary string — the write raises PHP's reference-form `TypeError` before coercion
+(`Cannot assign string to reference held by property C::$n of type int`). Valid weak
+property writes (numeric strings, bools, and in-range floats) still convert normally. The
+write-back itself remains copy-in/copy-out for object, `mixed`, union, and nullable
+properties.
+
+The same property places also bind to by-reference **variadics**, including array
+properties: the variadic collector transports the boxed container, and the write-back
+repacks the mutated payload into the declared property slot. Properties whose declared type
+needs a runtime type dispatch the rewrite does not implement (`iterable`, pointers, buffers)
+still report `must be passed a variable`. The write-back runs after the call
 returns; if the callee throws after mutating the reference, the property keeps its previous
 value (PHP would already have applied the mutation).
 

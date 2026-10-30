@@ -740,6 +740,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             match (inst.op, inst.immediate.as_ref()) {
                 (
                     Op::PromoteLocalRefCell
+                    | Op::PromotePropertyRefCell
                     | Op::AliasLocalRefCell
                     | Op::RetainLocalRefCell
                     | Op::BindRefCellPtr
@@ -1031,6 +1032,7 @@ impl<'a> ConcatInertAnalysis<'a> {
             | Op::PushCallOperandOwner
             | Op::PopCallOperandOwner
             | Op::PromoteLocalRefCell
+            | Op::PromotePropertyRefCell
             | Op::AliasLocalRefCell
             | Op::RetainLocalRefCell
             | Op::BindRefCellPtr

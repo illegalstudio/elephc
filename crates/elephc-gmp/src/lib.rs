@@ -4,7 +4,7 @@
 //! Called from:
 //! - Compiled PHP programs through `extern "elephc_gmp"` declarations in the
 //!   injected GMP prelude.
-//! - `cargo test -p elephc-gmp` when `ELEPHC_GMP_LIB_DIR` points at a built libgmp.
+//! - `cargo test -p elephc-gmp` when `ELEPHC_LIBGMP_DIR` points at a built libgmp.
 //!
 //! Key details:
 //! - This crate owns only raw big-integer behaviour. PHP class semantics,

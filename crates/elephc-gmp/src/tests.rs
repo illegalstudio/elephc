@@ -2,7 +2,7 @@
 //! Pins the bridge's operation table to values produced by PHP 8.5.10 + libgmp 6.3.0.
 //!
 //! Called from:
-//! - `cargo test -p elephc-gmp` with `ELEPHC_GMP_LIB_DIR` set to a built libgmp.
+//! - `cargo test -p elephc-gmp` with `ELEPHC_LIBGMP_DIR` set to a built libgmp.
 //!
 //! Key details:
 //! - The whole module is compiled only with `cfg(elephc_gmp_native)`, because the
@@ -171,6 +171,22 @@ mod native {
             assert_eq!(ok_packet(call_string(elephc_gmp_random_range(c_str("0"), c_str("10000")))), "4098");
             assert_eq!(ok_packet(call_string(elephc_gmp_random_range(c_str("-10000"), c_str("10000")))), "866");
             assert_eq!(ok_packet(call_string(elephc_gmp_random_range(c_str("-10000"), c_str("0")))), "-4602");
+
+            // Re-seeding the same process generator replays the same stream.
+            assert_eq!(call_string(elephc_gmp_random_seed(c_str("42"))), "O");
+            let first = ok_packet(call_string(elephc_gmp_random_bits(256)));
+            assert_eq!(call_string(elephc_gmp_random_seed(c_str("42"))), "O");
+            assert_eq!(ok_packet(call_string(elephc_gmp_random_bits(256))), first);
+
+            // A seed applied on another thread must affect the caller's next draw.
+            assert_eq!(call_string(elephc_gmp_random_seed(c_str("987654321"))), "O");
+            let expected = ok_packet(call_string(elephc_gmp_random_bits(256)));
+            std::thread::spawn(|| unsafe {
+                assert_eq!(call_string(elephc_gmp_random_seed(c_str("987654321"))), "O");
+            })
+            .join()
+            .expect("seed worker");
+            assert_eq!(ok_packet(call_string(elephc_gmp_random_bits(256))), expected);
         }
     }
 
@@ -187,7 +203,7 @@ mod native_skip {
     #[test]
     fn native_suite_requires_managed_libgmp() {
         eprintln!(
-            "skipping elephc-gmp native operation tests: set ELEPHC_GMP_LIB_DIR to the managed \
+            "skipping elephc-gmp native operation tests: set ELEPHC_LIBGMP_DIR to the managed \
              gmp lib directory (scripts/ci/gmp_lib_dir.sh <target>)"
         );
     }

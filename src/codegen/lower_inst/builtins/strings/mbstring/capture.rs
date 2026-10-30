@@ -63,10 +63,14 @@ fn live_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut HashS
         && inst.immediate == Some(Immediate::LocalSlot(slot))) { return false; }
     let mut backed = false;
     for inst in &ctx.function.instructions {
-        let Some(Immediate::LocalSlotPair { first, second }) = inst.immediate else { continue; };
+        let (first, second) = match inst.immediate {
+            Some(Immediate::LocalSlotPair { first, second })
+            | Some(Immediate::PropertyRefCell { first, second, .. }) => (first, second),
+            _ => continue,
+        };
         if first != slot { continue; }
         match inst.op {
-            Op::PromoteLocalRefCell => {
+            Op::PromoteLocalRefCell | Op::PromotePropertyRefCell => {
                 if !ctx.function.locals.get(second.as_raw() as usize)
                     .is_some_and(|owner| owner.kind == crate::ir::LocalKind::RefCell) { return false; }
                 backed = true;
@@ -112,10 +116,14 @@ fn managed_local(ctx: &FunctionContext<'_>, slot: LocalSlotId, visiting: &mut Ha
         if inst.op == Op::BindRefCellPtr && inst.immediate == Some(Immediate::LocalSlot(slot)) {
             return false;
         }
-        let Some(Immediate::LocalSlotPair { first, second }) = inst.immediate else { continue; };
+        let (first, second) = match inst.immediate {
+            Some(Immediate::LocalSlotPair { first, second })
+            | Some(Immediate::PropertyRefCell { first, second, .. }) => (first, second),
+            _ => continue,
+        };
         if first != slot { continue; }
         match inst.op {
-            Op::PromoteLocalRefCell => {
+            Op::PromoteLocalRefCell | Op::PromotePropertyRefCell => {
                 if !ctx.function.locals.get(second.as_raw() as usize)
                     .is_some_and(|owner| owner.kind == crate::ir::LocalKind::RefCell && owner.php_type.codegen_repr() == PhpType::Mixed) {
                     return false;
