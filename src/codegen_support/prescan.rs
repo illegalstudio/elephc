@@ -120,9 +120,26 @@ fn collect_constant_decls(
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {
-                constants
-                    .entry(name.clone())
-                    .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
+                // A user constant whose initializer names an already-known constant keeps that
+                // constant's value: `const X = MT_RAND_PHP;` then reads as the literal `1`
+                // instead of re-evaluating the (deprecated) read at every use.
+                let resolved = match &value.kind {
+                    // `PHP_BINARY` is only a placeholder until the runtime materializer
+                    // resolves it per fetch; folding an alias to that placeholder would
+                    // replace the executable path with an empty string.
+                    ExprKind::ConstRef(reference)
+                        if reference.as_str().trim_start_matches('\\') != "PHP_BINARY" =>
+                    {
+                        constants
+                            .get(reference.as_str().trim_start_matches('\\'))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                (value.kind.clone(), constant_expr_type(&value.kind))
+                            })
+                    }
+                    _ => (value.kind.clone(), constant_expr_type(&value.kind)),
+                };
+                constants.entry(name.clone()).or_insert(resolved);
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {

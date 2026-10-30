@@ -25,7 +25,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         params: &[
             ParamSpec {
                 name: "array",
-                ty: TypeSpec::Array,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
             },
@@ -43,7 +43,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Mixed,
         by_ref_return: false,
-        summary: "Picks one or more random keys out of an array on the global Mt19937 state.",
+        summary: "Picks one or more random keys out of an array on the global Mt19937 state. The array parameter is mixed so every call form reaches the same runtime type check.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.array-rand.php"),
@@ -60,6 +60,17 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
         arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
         summary: "Raises an engine deprecation through the active PHP error handler.",
+        examples: &[], php_manual: None, deprecation: None,
+        extension: false, internal: true, requirements: &[],
+    },
+    BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_call_strict_types"),
+        name: "__elephc_call_strict_types", area: Area::System, module: PhpModule::Elephc,
+        since: None, kind: BuiltinKind::Function,
+        params: &[],
+        variadic: None, variadic_by_ref: false, min_args: None, max_args: None,
+        arity_error: None, returns: TypeSpec::Bool, by_ref_return: false,
+        summary: "Reads the constructing file's strict_types state for a prelude constructor.",
         examples: &[], php_manual: None, deprecation: None,
         extension: false, internal: true, requirements: &[],
     },

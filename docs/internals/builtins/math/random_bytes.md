@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:316](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L316) (`random_bytes`)
+- **Lowering**: [`src/random_prelude.rs`:543](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L543) (`random_bytes`)
 - **Function symbol**: `random_bytes()`
 
 

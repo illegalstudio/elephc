@@ -31,6 +31,9 @@ mod types;
 /// The prelude group id used by declaration reachability and `--with-random`.
 pub(crate) const PRELUDE_GROUP: &str = "random";
 
+/// Name of the prelude helper every AOT `array_rand()` call form lowers onto.
+pub(crate) const ARRAY_RAND_HELPER: &str = "__elephc_array_rand";
+
 /// Builds the complete random-extension declaration set.
 pub(crate) fn random_declarations() -> Program {
     internal_declarations(|| {
@@ -125,6 +128,11 @@ fn bridge_externs() -> Program {
         ("elephc_random_lcg_value", &[], CType::Float),
         ("elephc_random_bytes_hex", &[("length", CType::Int)], CType::Str),
         ("elephc_random_mt_uniform", &[("bound", CType::Int)], CType::Int),
+        (
+            "elephc_random_mt_legacy_scale",
+            &[("min", CType::Int), ("max", CType::Int), ("draw", CType::Int)],
+            CType::Int,
+        ),
         ("elephc_random_csprng_failed", &[], CType::Int),
         ("elephc_random_next_up", &[("value", CType::Float)], CType::Float),
         (
@@ -132,6 +140,7 @@ fn bridge_externs() -> Program {
             &[("value", CType::Float)],
             CType::Float,
         ),
+        ("elephc_random_float_repr", &[("value", CType::Float)], CType::Str),
     ];
 
     externs
@@ -157,11 +166,8 @@ fn procedural_functions() -> Program {
                 if_then(
                     bin(var("mode"), BinOp::StrictEq, e_int(1)),
                     vec![expr_stmt(call(
-                        "trigger_error",
-                        vec![
-                            e_str("The MT_RAND_PHP variant of Mt19937 is deprecated"),
-                            e_const("E_USER_DEPRECATED"),
-                        ],
+                        "__elephc_builtin_deprecated",
+                        vec![e_str("The MT_RAND_PHP variant of Mt19937 is deprecated")],
                     ))],
                 ),
                 expr_stmt(bridge(
@@ -195,25 +201,246 @@ fn procedural_functions() -> Program {
             .returns(TypeExpr::Int)
             .returning(e_int(2147483647))
             .build(),
+        // php-src parses `Mt19937`'s seed with `Z_PARAM_LONG_OR_NULL`: weak mode coerces
+        // int-convertible scalars (with PHP's lossy-conversion deprecations), strict mode
+        // rejects them, and `null` still requests a random seed. The constructing file's
+        // `strict_types` state is known at the construction site, so it is published into the
+        // runtime slot `__elephc_call_strict_types()` reads and passed in here for every call
+        // shape (direct, named, spread, dynamically constructed class).
+        function("__elephc_random_mt19937_seed")
+            .param("seed", t_mixed())
+            .param("strict", TypeExpr::Bool)
+            .returns(t_mixed())
+            .body(vec![
+                if_then(
+                    bin(var("seed"), BinOp::StrictEq, e_null()),
+                    vec![ret(e_null())],
+                ),
+                if_then(
+                    call("is_int", vec![var("seed")]),
+                    vec![ret(var("seed"))],
+                ),
+                assign("_type", call("gettype", vec![var("seed")])),
+                if_chain(
+                    bin(var("_type"), BinOp::StrictEq, e_str("double")),
+                    vec![assign("_type", e_str("float"))],
+                    vec![(
+                        bin(var("_type"), BinOp::StrictEq, e_str("boolean")),
+                        vec![assign(
+                            "_type",
+                            e_ternary(var("seed"), e_str("true"), e_str("false")),
+                        )],
+                    )],
+                    Some(vec![if_then(
+                        call("is_object", vec![var("seed")]),
+                        vec![assign("_type", call("get_class", vec![var("seed")]))],
+                    )]),
+                ),
+                if_then(
+                    var("strict"),
+                    vec![throw_(mt19937_seed_type_error())],
+                ),
+                if_then(
+                    call("is_bool", vec![var("seed")]),
+                    vec![ret(cast(CastType::Int, var("seed")))],
+                ),
+                if_then(
+                    call("is_float", vec![var("seed")]),
+                    vec![
+                        if_then(
+                            mt19937_seed_float_out_of_range(var("seed")),
+                            vec![throw_(mt19937_seed_type_error())],
+                        ),
+                        if_then(
+                            bin(
+                                cast(CastType::Float, cast(CastType::Int, var("seed"))),
+                                BinOp::StrictNotEq,
+                                var("seed"),
+                            ),
+                            vec![expr_stmt(mt19937_seed_deprecation(e_concat_all(vec![
+                                e_str("Implicit conversion from float "),
+                                bridge("elephc_random_float_repr", vec![var("seed")]),
+                                e_str(" to int loses precision"),
+                            ])))],
+                        ),
+                        ret(cast(CastType::Int, var("seed"))),
+                    ],
+                ),
+                if_then(
+                    call("is_string", vec![var("seed")]),
+                    vec![
+                        if_then(
+                            not(call("is_numeric", vec![var("seed")])),
+                            vec![throw_(mt19937_seed_type_error())],
+                        ),
+                        if_chain(
+                            mt19937_seed_float_string(var("seed")),
+                            vec![
+                                assign("_number", cast(CastType::Float, var("seed"))),
+                                if_then(
+                                    mt19937_seed_float_out_of_range(var("_number")),
+                                    vec![throw_(mt19937_seed_type_error())],
+                                ),
+                                if_then(
+                                    bin(
+                                        cast(CastType::Float, cast(CastType::Int, var("seed"))),
+                                        BinOp::StrictNotEq,
+                                        var("_number"),
+                                    ),
+                                    vec![expr_stmt(mt19937_seed_deprecation(
+                                        e_concat_all(vec![
+                                            e_str("Implicit conversion from float-string \""),
+                                            var("seed"),
+                                            e_str("\" to int loses precision"),
+                                        ]),
+                                    ))],
+                                ),
+                            ],
+                            vec![],
+                            Some(vec![
+                                // Integer strings bind through zend_strtol, so the range check
+                                // must not go through a double: `9223372036854775808` rounds to
+                                // PHP_INT_MAX when compared as floats and would be accepted.
+                                assign("_text", call("trim", vec![var("seed")])),
+                                assign(
+                                    "_negative",
+                                    bin(
+                                        call(
+                                            "substr",
+                                            vec![var("_text"), int(0), int(1)],
+                                        ),
+                                        BinOp::StrictEq,
+                                        e_str("-"),
+                                    ),
+                                ),
+                                assign(
+                                    "_digits",
+                                    call(
+                                        "ltrim",
+                                        vec![
+                                            call("ltrim", vec![var("_text"), e_str("+-")]),
+                                            e_str("0"),
+                                        ],
+                                    ),
+                                ),
+                                if_then(
+                                    bin(var("_digits"), BinOp::StrictEq, e_str("")),
+                                    vec![assign("_digits", e_str("0"))],
+                                ),
+                                assign(
+                                    "_limit",
+                                    e_ternary(
+                                        var("_negative"),
+                                        e_str("9223372036854775808"),
+                                        e_str("9223372036854775807"),
+                                    ),
+                                ),
+                                if_then(
+                                    bin(
+                                        bin(
+                                            call("strlen", vec![var("_digits")]),
+                                            BinOp::Gt,
+                                            int(19),
+                                        ),
+                                        BinOp::Or,
+                                        bin(
+                                            bin(
+                                                call("strlen", vec![var("_digits")]),
+                                                BinOp::StrictEq,
+                                                int(19),
+                                            ),
+                                            BinOp::And,
+                                            bin(
+                                                call(
+                                                    "strcmp",
+                                                    vec![var("_digits"), var("_limit")],
+                                                ),
+                                                BinOp::Gt,
+                                                int(0),
+                                            ),
+                                        ),
+                                    ),
+                                    vec![
+                                        // An integer string that overflows zend_long falls back to
+                                        // the double binding: `-9223372036854775809` rounds to
+                                        // PHP_INT_MIN and binds, while `9223372036854775808`
+                                        // rounds to 2^63 and is rejected.
+                                        assign("_number", cast(CastType::Float, var("seed"))),
+                                        if_then(
+                                            mt19937_seed_float_out_of_range(var("_number")),
+                                            vec![throw_(mt19937_seed_type_error())],
+                                        ),
+                                        ret(cast(CastType::Int, var("seed"))),
+                                    ],
+                                ),
+                            ]),
+                        ),
+                        ret(cast(CastType::Int, var("seed"))),
+                    ],
+                ),
+                throw_(mt19937_seed_type_error()),
+            ])
+            .build(),
         function("lcg_value")
             .returns(TypeExpr::Float)
             .body(vec![
                 expr_stmt(call(
-                    "trigger_error",
-                    vec![
-                        e_str("Function lcg_value() is deprecated since 8.4, use \\Random\\Randomizer::getFloat() instead"),
-                        e_const("E_USER_DEPRECATED"),
-                    ],
+                    "__elephc_builtin_deprecated",
+                    vec![e_str(
+                        "Function lcg_value() is deprecated since 8.4, use \\Random\\Randomizer::getFloat() instead",
+                    )],
                 )),
                 ret(bridge("elephc_random_lcg_value", vec![])),
             ])
             .build(),
 
         function("__elephc_array_rand")
-            .param("array", t_array())
+            .param("array", t_mixed())
             .param_default("num", TypeExpr::Int, e_int(1))
             .returns(t_mixed())
             .body(vec![
+                // A direct call, a string callable and the runtime descriptor wrapper all
+                // reach this one helper. The parameter is `mixed` so a dynamically selected
+                // name hands over whatever the caller passed; the array check is PHP's own
+                // parameter binding, raised here because the wrapper bypasses the checker.
+                if_then(
+                    not(call("is_array", vec![var("array")])),
+                    vec![
+                        // php-src's parameter error uses zend_zval_type_name: gettype's
+                        // spellings for scalars differ, objects report their class, and
+                        // resources stay "resource".
+                        assign("_given", call("gettype", vec![var("array")])),
+                        if_then(
+                            bin(var("_given"), BinOp::StrictEq, e_str("integer")),
+                            vec![assign("_given", e_str("int"))],
+                        ),
+                        if_then(
+                            bin(var("_given"), BinOp::StrictEq, e_str("double")),
+                            vec![assign("_given", e_str("float"))],
+                        ),
+                        if_then(
+                            bin(var("_given"), BinOp::StrictEq, e_str("boolean")),
+                            vec![assign("_given", e_str("bool"))],
+                        ),
+                        if_then(
+                            bin(var("_given"), BinOp::StrictEq, e_str("NULL")),
+                            vec![assign("_given", e_str("null"))],
+                        ),
+                        if_then(
+                            call("is_object", vec![var("array")]),
+                            vec![assign("_given", call("get_class", vec![var("array")]))],
+                        ),
+                        throw_(e_new_fq(
+                            "\\TypeError",
+                            vec![e_concat_all(vec![
+                                e_str("array_rand(): Argument #1 ($array) must be of type array, "),
+                                var("_given"),
+                                e_str(" given"),
+                            ])],
+                        )),
+                    ],
+                ),
+                assign("array", cast(CastType::Array, var("array"))),
                 assign("_available", count(var("array"))),
                 if_then(
                     bin(var("_available"), BinOp::StrictEq, int(0)),
@@ -457,9 +684,27 @@ pub fn inject_if_used(
         }
         let mut declarations = random_declarations();
         inventory.record_program(PRELUDE_GROUP, &declarations);
+        // `array_rand`'s string-callable forms reach the prelude helper from EIR lowering, with
+        // no AST reference that would keep it alive during reachability pruning.
+        if force || program_references_array_rand(&program) {
+            inventory.record_required_function(PRELUDE_GROUP, ARRAY_RAND_HELPER);
+        }
         declarations.extend(program);
         declarations
     })
+}
+
+/// Returns whether the program can call `array_rand` through any AOT-visible form.
+fn program_references_array_rand(program: &[Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    usage
+        .functions
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("array_rand"))
+        || usage
+            .literals
+            .iter()
+            .any(|literal| literal.eq_ignore_ascii_case("array_rand"))
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +767,53 @@ pub(super) fn unique_new(class_name: &str, args: Vec<Expr>) -> Expr {
 /// Reads one limb from a numeric pair as an integer.
 pub(super) fn limb(array: Expr, at: i64) -> Expr {
     e_cast(CastType::Int, e_index(array, e_int(at)))
+}
+
+/// Builds PHP's `TypeError` for a non-bindable `Mt19937` seed.
+fn mt19937_seed_type_error() -> Expr {
+    e_new_fq(
+        "\\TypeError",
+        vec![e_concat_all(vec![
+            e_str("Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, "),
+            var("_type"),
+            e_str(" given"),
+        ])],
+    )
+}
+
+/// Returns whether a numeric value is NaN, infinite, or outside the signed 64-bit range.
+fn mt19937_seed_float_out_of_range(value: Expr) -> Expr {
+    bin(
+        bin(
+            call("is_nan", vec![value.clone()]),
+            BinOp::Or,
+            call("is_infinite", vec![value.clone()]),
+        ),
+        BinOp::Or,
+        bin(
+            bin(value.clone(), BinOp::GtEq, float(9_223_372_036_854_775_808.0)),
+            BinOp::Or,
+            bin(value, BinOp::Lt, float(-9_223_372_036_854_775_808.0)),
+        ),
+    )
+}
+
+/// Returns whether a numeric string is PHP's "float-string" form.
+fn mt19937_seed_float_string(value: Expr) -> Expr {
+    bin(
+        call("str_contains", vec![value.clone(), e_str(".")]),
+        BinOp::Or,
+        bin(
+            call("stripos", vec![value, e_str("e")]),
+            BinOp::StrictNotEq,
+            e_bool(false),
+        ),
+    )
+}
+
+/// Builds the engine-level `E_DEPRECATED` notice PHP emits for a lossy seed coercion.
+fn mt19937_seed_deprecation(message: Expr) -> Expr {
+    call("__elephc_builtin_deprecated", vec![message])
 }
 
 /// Builds an integer literal.

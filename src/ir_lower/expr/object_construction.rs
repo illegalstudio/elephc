@@ -70,6 +70,12 @@ pub(super) fn lower_new_object(
     begin_call_argument_evaluation(ctx);
     let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+    // Publish AFTER argument evaluation: a nested construction executed by an argument
+    // (possibly from an included weak file) must not leave its own strictness behind for
+    // this constructor to read.
+    if is_mt19937_class(ctx, class_name.as_str()) {
+        publish_call_strictness(ctx, expr.span);
+    }
     let roots = root_user_call_operands(
         ctx,
         &mut operands,
@@ -100,6 +106,50 @@ pub(super) fn lower_new_object(
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
+}
+
+/// Returns whether a resolved class name is `Random\Engine\Mt19937` or inherits from it.
+///
+/// A subclass keeps the injected constructor, so constructing it must publish the call
+/// site's strictness exactly like a direct `Mt19937` construction.
+fn is_mt19937_class(ctx: &LoweringContext<'_, '_>, class_name: &str) -> bool {
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        if php_symbol_key(&name) == "random\\engine\\mt19937" {
+            return true;
+        }
+        current = ctx.classes.get(&name).and_then(|info| info.parent.clone());
+    }
+    false
+}
+
+/// Publishes the constructing file's `strict_types` state for the next constructor call.
+///
+/// A prelude constructor cannot read the call site's source profile from PHP, so every site
+/// that may construct `Random\Engine\Mt19937` stores it in the runtime slot the injected
+/// `__elephc_call_strict_types()` builtin reads. Fixed construction publishes for that class
+/// and its subclasses; dynamic construction publishes unconditionally because the class is
+/// only known at run time.
+pub(super) fn publish_call_strictness(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    publish_call_strictness_value(ctx, span, crate::source::current_strict_types());
+}
+
+/// Publishes an explicit `strict_types` value for the next constructor call.
+pub(super) fn publish_call_strictness_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    span: Span,
+    strict_types: bool,
+) {
+    let strict = ctx.builder.emit_const_bool(strict_types);
+    ctx.emit_void(
+        Op::CoreBuiltin,
+        vec![strict],
+        Some(Immediate::I64(
+            crate::ir::CoreBuiltinOp::PublishCallStrictness.as_i64(),
+        )),
+        crate::ir::CoreBuiltinOp::PublishCallStrictness.effects(),
+        Some(span),
+    );
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
@@ -443,6 +493,9 @@ pub(super) fn lower_new_dynamic_generic(
         operands.extend(lower_args(ctx, args));
         None
     };
+    // Arguments are fully evaluated above; a nested construction cannot overwrite the
+    // published strictness before this constructor runs.
+    publish_call_strictness(ctx, expr.span);
     let result = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
@@ -483,6 +536,7 @@ pub(super) fn lower_new_dynamic_object(
     }
     let mut operands = vec![class_name.value];
     operands.extend(lower_args(ctx, args));
+    publish_call_strictness(ctx, expr.span);
     let name = format!("{}|{}", fallback_class.as_str(), required_parent.as_str());
     let data = ctx.intern_class_name(&name);
     ctx.emit_value(

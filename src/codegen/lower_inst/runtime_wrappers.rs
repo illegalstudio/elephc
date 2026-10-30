@@ -165,6 +165,17 @@ pub(in crate::codegen) fn emit_runtime_builtin_wrapper_inline(
 /// Returns the registry/runtime-descriptor ABI used by builtin callable wrappers.
 pub(in crate::codegen) fn runtime_builtin_wrapper_sig(name: &str, sig: &FunctionSig) -> FunctionSig {
     let mut sig = sig.clone();
+    // `array_rand` forwards to a prelude helper whose first parameter is `mixed`: the helper
+    // validates the array and raises PHP's TypeError, so the wrapper must hand it a boxed
+    // value instead of assuming the descriptor already bound an array.
+    if crate::names::php_symbol_key(name.trim_start_matches('\\')) == "array_rand" {
+        if let Some((_, ty)) = sig.params.first_mut() {
+            *ty = PhpType::Mixed;
+        }
+        if let Some(ty) = sig.param_type_exprs.first_mut() {
+            *ty = None;
+        }
+    }
     if let Some(def) = crate::builtins::registry::lookup(name) {
         if let crate::builtins::semantics::BuiltinRuntimeFunctions::One(runtime_fn) =
             def.spec.semantics.runtime_functions
@@ -355,6 +366,7 @@ fn build_runtime_call_wrapper_function(
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
                 data: &mut module.data,
+                functions: &module.functions,
                 strict_php,
             };
             let result = crate::builtins::semantics::lower_registry_call(
@@ -464,6 +476,8 @@ fn wrapper_result_ownership(
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
     data: &'a mut crate::ir::DataPool,
+    /// Lowered functions, for the callee signature a generated wrapper call must match.
+    functions: &'a [crate::ir::Function],
     strict_php: bool,
 }
 
@@ -569,26 +583,96 @@ impl crate::builtins::semantics::BuiltinLoweringContext
         )
     }
 
-    /// A synthetic wrapper has no function-name pool to intern a callee into, and no
-    /// registry builtin that composes user calls admits a runtime-selected callable
-    /// (`BuiltinCallablePolicy::StaticOnly`), so this is never reached; it answers a
-    /// null constant rather than a call so a future policy change fails visibly in tests
-    /// instead of emitting an unresolved symbol.
+    /// Emits a direct call to a declared PHP function from the synthetic wrapper body.
+    ///
+    /// A builtin whose semantic lowering composes a prelude helper (`array_rand` forwards to
+    /// `__elephc_array_rand`) can then serve a runtime-selected callable, because the wrapper
+    /// interns the callee name in the module data pool exactly like AST lowering does. The
+    /// callee must be declared in the same module; the registry policy that admits dynamic
+    /// dispatch is what guarantees reachability retained it.
     fn emit_user_call(
         &mut self,
-        _name: &str,
-        _operands: Vec<ValueId>,
+        name: &str,
+        operands: Vec<ValueId>,
         php_type: PhpType,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
-        self.emit_value(
-            Op::ConstNull,
-            Vec::new(),
-            None,
+        // A call generated here bypasses the `func_args::desugar` AST rewrite; when the
+        // callee carries the hidden surplus-argument collector, supply an empty one.
+        let mut operands = operands;
+        let callee_sig = self
+            .functions
+            .iter()
+            .find(|function| {
+                crate::names::php_symbol_key(&function.name)
+                    == crate::names::php_symbol_key(name)
+            })
+            .and_then(|function| function.signature.as_ref());
+        let mut collector = None;
+        if callee_sig.is_some_and(crate::func_args::sig_collects_surplus_args) {
+            let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+            let empty = self.emit_value(
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                array_ty,
+                Op::ArrayNew.default_effects(),
+                span,
+            );
+            if callee_sig.is_some_and(crate::func_args::sig_collects_optional_arg_count) {
+                let count = self.emit_value(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(operands.len() as i64)),
+                    PhpType::Int,
+                    Op::ConstI64.default_effects(),
+                    span,
+                );
+                let boxed = self.emit_value(
+                    Op::MixedBox,
+                    vec![count.value],
+                    None,
+                    PhpType::Mixed,
+                    Op::MixedBox.default_effects(),
+                    span,
+                );
+                self.emit_void(
+                    Op::ArrayPush,
+                    vec![empty.value, boxed.value],
+                    None,
+                    Op::ArrayPush.default_effects(),
+                    span,
+                );
+                self.emit_void(
+                    Op::Release,
+                    vec![boxed.value],
+                    None,
+                    Op::Release.default_effects(),
+                    span,
+                );
+            }
+            collector = Some(empty.value);
+            operands.push(empty.value);
+        }
+        let data = self.data.intern_function_name(name);
+        let result = self.emit_value(
+            Op::Call,
+            operands,
+            Some(Immediate::Data(data)),
             php_type,
-            Op::ConstNull.default_effects(),
+            Op::Call.default_effects(),
             span,
-        )
+        );
+        if let Some(collector) = collector {
+            self.emit_void(
+                Op::Release,
+                vec![collector],
+                None,
+                Op::Release.default_effects(),
+                span,
+            );
+        }
+        result
     }
 
     /// A wrapper's operands are its own parameters, never a caller's locals, so there is

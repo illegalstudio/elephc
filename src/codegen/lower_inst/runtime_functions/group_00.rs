@@ -115,9 +115,6 @@ pub(super) fn lower(
         RuntimeFnId::ArrayPush => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_push(ctx, inst)
         }),
-        RuntimeFnId::ArrayRand => Some({
-            crate::codegen::lower_inst::builtins::arrays::lower_array_rand(ctx, inst)
-        }),
         RuntimeFnId::ArrayReduce => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_reduce(ctx, inst)
         }),

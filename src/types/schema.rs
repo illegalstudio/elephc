@@ -57,10 +57,52 @@ pub enum AttrArgValue {
 /// `key` is `None` for a positional argument / next sequential array element,
 /// `Some(AttrKey::Str)` for a named argument (`#[A(name: 1)]`) or string array
 /// key, and `Some(AttrKey::Int)` for an explicit integer array key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct AttrArgEntry {
     pub key: Option<AttrKey>,
     pub value: AttrArgValue,
+    /// Declaration span of the attribute this argument belongs to.
+    ///
+    /// Reflection reports a deprecated constant read at this span, at every
+    /// `newInstance()` call. The span is deliberately NOT part of the identity below:
+    /// two identical attributes must share one reflection factory, and only a deprecated
+    /// constant read needs per-declaration factories (see `attribute_factory_key`).
+    pub span: Span,
+}
+
+/// Compares only the PHP-visible key and value, ignoring the diagnostic span.
+impl PartialEq for AttrArgEntry {
+    /// Returns whether two entries carry the same argument, regardless of declaration site.
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.value == other.value
+    }
+}
+
+impl Eq for AttrArgEntry {}
+
+/// Hashes only the PHP-visible key and value, ignoring the diagnostic span.
+impl std::hash::Hash for AttrArgEntry {
+    /// Feeds the argument key and value into `state`.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key.hash(state);
+        self.value.hash(state);
+    }
+}
+
+/// Orders entries by their PHP-visible key and value, ignoring the diagnostic span.
+impl PartialOrd for AttrArgEntry {
+    /// Returns the argument order of the two entries.
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Orders entries by their PHP-visible key and value, ignoring the diagnostic span.
+impl Ord for AttrArgEntry {
+    /// Compares the argument key and value of the two entries.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (&self.key, &self.value).cmp(&(&other.key, &other.value))
+    }
 }
 
 /// A resolved array/named-argument key for an [`AttrArgEntry`].
@@ -105,8 +147,12 @@ pub(crate) fn collect_attribute_args(
                     }
                     _ => (None, arg_expr),
                 };
-                match fold_attr_value(value_expr) {
-                    Some(value) => entries.push(AttrArgEntry { key, value }),
+                match fold_attr_value(value_expr, attr.span) {
+                    Some(value) => entries.push(AttrArgEntry {
+                        key,
+                        value,
+                        span: attr.span,
+                    }),
                     None => {
                         supported = false;
                         break;
@@ -120,7 +166,11 @@ pub(crate) fn collect_attribute_args(
 }
 
 /// Folds one attribute argument expression to retained reflection metadata.
-fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
+///
+/// Every retained entry carries the ATTRIBUTE's span: php-src reports a deprecated constant
+/// read from an attribute argument at the attribute declaration, even when the argument
+/// itself sits on a later line of a multi-line attribute.
+fn fold_attr_value(expr: &Expr, span: Span) -> Option<AttrArgValue> {
     match &expr.kind {
         ExprKind::StringLiteral(value) => Some(AttrArgValue::Str(value.clone())),
         ExprKind::IntLiteral(value) => Some(AttrArgValue::Int(*value)),
@@ -144,7 +194,8 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
             for element in elements {
                 entries.push(AttrArgEntry {
                     key: None,
-                    value: fold_attr_value(element)?,
+                    value: fold_attr_value(element, span)?,
+                    span,
                 });
             }
             Some(AttrArgValue::Array(entries))
@@ -154,7 +205,8 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
             for (key_expr, value_expr) in pairs {
                 entries.push(AttrArgEntry {
                     key: Some(fold_attr_key(key_expr)?),
-                    value: fold_attr_value(value_expr)?,
+                    value: fold_attr_value(value_expr, span)?,
+                    span,
                 });
             }
             Some(AttrArgValue::Array(entries))
@@ -826,6 +878,12 @@ pub enum EnumCaseValue {
 pub struct EnumCaseInfo {
     pub name: String,
     pub value: Option<EnumCaseValue>,
+    /// Declaration span, when the case came from user source.
+    pub span: Option<Span>,
+    /// True when the backing value read `MT_RAND_PHP`, which php-src deprecates at first
+    /// access. Keeping the flag here lets lowering raise the notice without re-reading
+    /// the (folded) value expression.
+    pub deprecated_mt_rand_php: bool,
     pub attribute_names: Vec<String>,
     pub attribute_args: Vec<Option<Vec<AttrArgEntry>>>,
 }

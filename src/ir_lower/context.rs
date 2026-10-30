@@ -388,6 +388,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
+    /// Span a `MT_RAND_PHP` constant-expression deprecation reports instead of the stored
+    /// value's own span. A class-constant access reports the access site, like php-src; the
+    /// once-per-declaration key still comes from the stored value's span.
+    pub(crate) const_deprecation_report_span: Option<Span>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
@@ -615,6 +619,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             mixed_storage_store_sites,
             loop_storage_scope,
             constants: constants.clone(),
+            const_deprecation_report_span: None,
             top_level_env,
             current_class,
             loop_stack: Vec::new(),
@@ -5257,6 +5262,50 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         php_type: PhpType,
         span: Option<Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        // `func_args::desugar` appends a hidden variadic collector to every function when the
+        // program captures all frames (an eval fragment that uses backtraces). A call generated
+        // by a builtin lowering does not go through that AST rewrite, so it supplies the empty
+        // collector itself.
+        let mut operands = operands;
+        let callee_sig = self
+            .functions
+            .iter()
+            .find(|(callee, _)| {
+                crate::names::php_symbol_key(callee.trim_start_matches('\\'))
+                    == crate::names::php_symbol_key(name.trim_start_matches('\\'))
+            })
+            .map(|(_, sig)| sig.clone());
+        let mut collector = None;
+        if callee_sig
+            .as_ref()
+            .is_some_and(crate::func_args::sig_collects_surplus_args)
+        {
+            let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+            let empty = LoweringContext::emit_value(
+                self,
+                Op::ArrayNew,
+                Vec::new(),
+                Some(Immediate::Capacity(0)),
+                array_ty.clone(),
+                Op::ArrayNew.default_effects(),
+                span,
+            );
+            if callee_sig
+                .as_ref()
+                .is_some_and(crate::func_args::sig_collects_optional_arg_count)
+            {
+                crate::ir_lower::expr::push_func_args_count(
+                    self,
+                    empty.value,
+                    &array_ty,
+                    &Some(PhpType::Mixed),
+                    operands.len(),
+                    span.unwrap_or_else(Span::dummy),
+                );
+            }
+            collector = Some(empty.value);
+            operands.push(empty.value);
+        }
         let data = self.intern_function_name(name);
         let lowered = LoweringContext::emit_value(
             self,
@@ -5267,6 +5316,15 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
             crate::ir_lower::effects_lookup::user_call_effects(name),
             span,
         );
+        if let Some(collector) = collector {
+            self.emit_void(
+                Op::Release,
+                vec![collector],
+                None,
+                Op::Release.default_effects(),
+                span,
+            );
+        }
         crate::builtins::semantics::LoweredBuiltinValue {
             value: lowered.value,
         }

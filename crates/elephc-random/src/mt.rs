@@ -211,8 +211,19 @@ impl Mt19937 {
             return self.range(min, max);
         }
         let draw = self.generate31();
-        let offset = (max as f64 - min as f64 + 1.0) * (draw as f64 / 2_147_483_648.0);
-        (offset + min as f64) as i64
+        Self::legacy_scale(min, max, i64::from(draw))
+    }
+
+    /// Applies php-src's `RAND_RANGE_BADSCALING` to one 31-bit draw.
+    ///
+    /// php-src computes the fractional offset in `double`, converts it to `zend_ulong` first,
+    /// and only then adds the lower bound with wrapping integer semantics. Adding the bound in
+    /// floating point instead rounds it to the nearest representable double, which loses
+    /// precision above 2^53 and can leave the requested interval even when both bounds are
+    /// equal.
+    pub fn legacy_scale(min: i64, max: i64, draw: i64) -> i64 {
+        let offset = (((max as f64) - (min as f64) + 1.0) * (draw as f64 / 2_147_483_648.0)) as u64;
+        offset.wrapping_add(min as u64) as i64
     }
 
     /// Serializes the 624 state words in php-src's little-endian hex form.

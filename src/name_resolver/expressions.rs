@@ -66,16 +66,11 @@ fn mt_rand_php_read(span: Span) -> ExprKind {
     let at = |kind| Expr { kind, span };
     ExprKind::Ternary {
         condition: Box::new(at(ExprKind::FunctionCall {
-            name: resolved_name("trigger_error".to_string()),
-            args: vec![
-                at(ExprKind::StringLiteral(
-                    "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937"
-                        .to_string(),
-                )),
-                at(ExprKind::ConstRef(resolved_name(
-                    "E_USER_DEPRECATED".to_string(),
-                ))),
-            ],
+            name: resolved_name("__elephc_builtin_deprecated".to_string()),
+            args: vec![at(ExprKind::StringLiteral(
+                "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937"
+                    .to_string(),
+            ))],
         })),
         then_expr: Box::new(at(ExprKind::IntLiteral(1))),
         else_expr: Box::new(at(ExprKind::IntLiteral(1))),

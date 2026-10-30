@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:198](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L198) (`lcg_value`)
+- **Lowering**: [`src/random_prelude.rs`:384](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L384) (`lcg_value`)
 - **Function symbol**: `lcg_value()`
 
 

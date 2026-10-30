@@ -167,6 +167,15 @@ Two consequences worth knowing when adding one:
 
 These helpers implement PHP's `@` error-suppression operator and the runtime warning channel. The suppression depth lives in `_rt_diag_suppression`; while it is non-zero, suppressible warnings are silently dropped instead of written to stderr. They are emitted before any PHP-visible helper so the rest of the runtime can report warnings through a single path.
 
+Every instruction that can enter another PHP frame, or warn at its own call site, first
+publishes its source coordinates in `_php_diagnostic_line`, `_php_diagnostic_file`, and
+`_php_diagnostic_file_len`. The file is the physical file of the instruction's span, resolved
+through the module's span-to-file table, so a notice raised inside an injected prelude names
+the user's included file and line rather than the prelude or the program entry file.
+Compiler-generated prelude spans skip publication, which keeps the entering user call site
+in place; `diagnostic_caller_file` falls back to `_script_source_file` when no call site has
+published one yet.
+
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_diag_push_suppression` | Enter one nested `@` suppression scope (increment `_rt_diag_suppression`) | — | — |
@@ -986,8 +995,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_column_str` | Extract column from array of assoc arrays (string values) |
 | `__rt_array_column_mixed` | Extract column values as boxed Mixed cells for heterogeneous input payloads |
 | `__rt_range` | Generate integer range array |
-| `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
-| `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
+| `__rt_shuffle` | Randomize order |
+| `__rt_random_u32` / `__rt_random_uniform` / `__rt_random_u64` / `__rt_random_uniform64` | Target-aware random primitives used by `rand()`, `random_int()`, and `shuffle()` |
 | `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
 | `__rt_float_compare_slots` / `__rt_float_compare_slots_desc` | Tag raw payloads as floats and delegate to `__rt_php_compare`. Descending negates the result because `NAN` comparisons are not antisymmetric |
 | `__rt_sort_float` / `__rt_sort_mixed` | Sort homogeneous indexed float arrays and validated boxed scalar arrays with PHP's small-sort, insertion and median-partition comparison schedules, including `NAN` placement. One temporary ordinal sidecar keeps equal elements stable in both directions; payloads stay unboxed, and the sidecar is freed before returning |

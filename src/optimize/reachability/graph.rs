@@ -96,6 +96,12 @@ pub fn compute(
         check_result,
     );
     state.apply_usage(executable_usage, true);
+    // Backend-only prelude helpers have no AST reference; their owning prelude recorded them so
+    // the EIR lowering that calls them still finds a declaration.
+    for name in options.inventory.required_functions() {
+        state.reach.functions.insert(name.clone());
+        state.behavioral.functions.insert(name);
+    }
     // An extern class is C struct layout metadata with no emitted code. Besides `ptr_cast<T>`
     // (recorded by the usage scan) it is named through types the scan does not walk: `ptr<T>`
     // in extern function signatures and in fields of other extern classes. Keeping every

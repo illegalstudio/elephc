@@ -2,12 +2,12 @@
 //! Publishes the elephc-random global Mt19937 range entry into a late-bound runtime slot.
 //!
 //! Called from:
-//! - The `array_rand`/`shuffle` EIR lowerers, immediately before the shared runtime helper.
+//! - The `shuffle` EIR lowerer, immediately before the shared runtime helper.
 //!
 //! Key details:
-//! - Call-site publication keeps programs without `array_rand`/`shuffle` free of bridge symbol
-//!   references, so a program that never touches the global Mt19937 state links no
-//!   `libelephc_random.a`.
+//! - Call-site publication keeps programs without `shuffle` free of bridge symbol references,
+//!   so a program that never touches the global Mt19937 state links no `libelephc_random.a`.
+//!   `array_rand()` reaches the same state through the injected prelude helper instead.
 //! - Both supported architectures publish the same single entry.
 
 use crate::codegen_support::abi;

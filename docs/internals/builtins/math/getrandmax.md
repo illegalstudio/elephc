@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:194](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L194) (`getrandmax`)
+- **Lowering**: [`src/random_prelude.rs`:200](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L200) (`getrandmax`)
 - **Function symbol**: `getrandmax()`
 
 

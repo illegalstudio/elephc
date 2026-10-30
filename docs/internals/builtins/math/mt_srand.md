@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:152](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L152) (`mt_srand`)
+- **Lowering**: [`src/random_prelude.rs`:161](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L161) (`mt_srand`)
 - **Function symbol**: `mt_srand()`
 
 

@@ -328,9 +328,10 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_type_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
+    let synthetic_main = dir.join("test.php");
+    elephc::span::Span::register_source_path(0, synthetic_main.display().to_string());
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
@@ -423,6 +424,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let php_path = dir.join(main_file);
     let source = fs::read_to_string(&php_path).unwrap();
     let base_dir = php_path.parent().unwrap();
+    elephc::span::Span::register_source_path(0, php_path.display().to_string());
 
     let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -432,6 +434,11 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
+    // Mirrors `pipeline::compile`: declaration preludes are injected after include
+    // resolution and before name resolution, so a multi-file fixture can construct
+    // `Random\Engine\*` exactly like a normally compiled program.
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
     // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
@@ -518,6 +525,7 @@ fn compile_and_run_files_with_defines_per_argv(
     let php_path = dir.join(main_file);
     let source = fs::read_to_string(&php_path).unwrap();
     let base_dir = php_path.parent().unwrap();
+    elephc::span::Span::register_source_path(0, php_path.display().to_string());
 
     let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -533,12 +541,16 @@ fn compile_and_run_files_with_defines_per_argv(
     )
     .expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
+    // Mirrors `pipeline::compile`: declaration preludes are injected after include
+    // resolution and before name resolution, so a multi-file fixture can construct
+    // `Random\Engine\*` exactly like a normally compiled program.
+    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
     // Mirrors `pipeline::compile`: the object-cast prelude is injected AFTER autoloading, so a
     // `(object)` cast that only appears in an autoloaded class file is still detected.
-    let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let resolved = elephc::dom_html_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
     let resolved = elephc::testing_prelude::inject_after_autoload(resolved, &mut prelude_inventory)
@@ -632,6 +644,7 @@ pub(crate) fn compile_files_error_message(
     let php_path = dir.join(main_file);
     let source = fs::read_to_string(&php_path).unwrap();
     let base_dir = php_path.parent().unwrap();
+    elephc::span::Span::register_source_path(0, php_path.display().to_string());
 
     let result = (|| -> Result<(), String> {
         let tokens = elephc::lexer::tokenize(&source).map_err(|e| e.message.clone())?;
@@ -678,6 +691,7 @@ pub(crate) fn check_files_diagnostics(
     let php_path = dir.join(main_file);
     let source = fs::read_to_string(&php_path).unwrap();
     let base_dir = php_path.parent().unwrap();
+    elephc::span::Span::register_source_path(0, php_path.display().to_string());
 
     let result = (|| -> Result<Vec<String>, String> {
         let tokens = elephc::lexer::tokenize(&source).map_err(|e| e.message.clone())?;
@@ -734,6 +748,7 @@ pub(crate) fn compile_files_fails_with_defines(
     let php_path = dir.join(main_file);
     let source = fs::read_to_string(&php_path).unwrap();
     let base_dir = php_path.parent().unwrap();
+    elephc::span::Span::register_source_path(0, php_path.display().to_string());
 
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let tokens = elephc::lexer::tokenize(&source)?;
@@ -766,9 +781,10 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
     fs::create_dir_all(&dir).unwrap();
 
+    let synthetic_main = dir.join("test.php");
+    elephc::span::Span::register_source_path(0, synthetic_main.display().to_string());
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, &dir).expect("resolve failed");

@@ -2,7 +2,7 @@
 title: "__elephc_class_has_constructor() - internals"
 description: "Compiler internals for __elephc_class_has_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1114
+  order: 1115
 ---
 
 ## `__elephc_class_has_constructor()` - internals

@@ -49,6 +49,31 @@ var_dump($ok);
     assert_eq!(out, "bool(true)\n");
 }
 
+/// The legacy `getInt()` scaling keeps integer precision on large bounds.
+#[test]
+fn test_random_randomizer_get_int_legacy_integer_bounds() {
+    let out = compile_and_run(
+        r#"<?php
+$r = new Random\Randomizer(new Random\Engine\Mt19937(0, 1));
+var_dump($r->getInt(9007199254740993, 9007199254740993));
+var_dump($r->getInt(-9007199254740993, -9007199254740993));
+var_dump($r->getInt(PHP_INT_MAX, PHP_INT_MAX));
+var_dump($r->getInt(PHP_INT_MIN, PHP_INT_MIN));
+var_dump($r->getInt(PHP_INT_MIN, PHP_INT_MIN + 10));
+var_dump($r->getInt(0, 100));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9007199254740993)\n\
+int(-9007199254740993)\n\
+int(9223372036854775807)\n\
+int(-9223372036854775808)\n\
+int(-9223372036854775808)\n\
+int(86)\n"
+    );
+}
+
 /// A one-byte user engine is accumulated little-endian for 32-bit ranges.
 #[test]
 fn test_random_randomizer_get_int_one_byte_engine_32() {

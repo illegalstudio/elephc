@@ -2,7 +2,7 @@
 title: "__elephc_ptr_get() - internals"
 description: "Compiler internals for __elephc_ptr_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1204
+  order: 1205
 ---
 
 ## `__elephc_ptr_get()` - internals

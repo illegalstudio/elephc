@@ -94,6 +94,7 @@ pub(super) fn lower_static_method_call(
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
+    emit_deprecated_enum_case_notice(ctx, receiver, dispatch_method);
     let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
     let data = ctx.intern_string(&name);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
@@ -170,6 +171,34 @@ pub(super) fn static_late_binding_receiver_type_for_ir(
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {
             ctx.current_class.clone()
         }
+    }
+}
+
+/// Raises the case-table deprecation when `cases()`, `from()` or `tryFrom()` first
+/// materializes an enum whose backing value read `MT_RAND_PHP`.
+///
+/// php-src evaluates the whole case table for these calls, so the notice fires there just
+/// like a direct case fetch and shares the same once-per-declaration guard.
+fn emit_deprecated_enum_case_notice(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    method: &str,
+) {
+    if !matches!(php_symbol_key(method).as_str(), "cases" | "from" | "tryfrom") {
+        return;
+    }
+    let StaticReceiver::Named(name) = receiver else {
+        return;
+    };
+    let enum_name = name.trim_start_matches('\\');
+    let declaration_span = ctx.enums.get(enum_name).and_then(|info| {
+        info.cases
+            .iter()
+            .find(|case| case.deprecated_mt_rand_php)
+            .and_then(|case| case.span)
+    });
+    if let Some(span) = declaration_span {
+        super::constants::emit_mt_rand_php_deprecation(ctx, span, span);
     }
 }
 

@@ -47,6 +47,13 @@ pub(super) fn lower_reflection_class_new_instance(
     );
     let mut operands = vec![class_name.value];
     operands.extend(arg_values.iter().copied());
+    // Reflection invokes the constructor as an internal caller: php-src keeps coercive
+    // binding there even when the file calling `newInstance*` declared strict_types.
+    crate::ir_lower::expr::object_construction::publish_call_strictness_value(
+        ctx,
+        expr.span,
+        false,
+    );
     let object = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,

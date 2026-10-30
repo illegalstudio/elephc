@@ -83,6 +83,7 @@ use dynamic_constructors::*;
 mod named_args;
 mod named_spreads;
 mod variadic_args;
+pub(crate) use variadic_args::push_func_args_count;
 mod call_return_types;
 mod indexed_array_literals;
 mod array_cast_source;

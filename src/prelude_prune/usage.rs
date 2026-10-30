@@ -46,8 +46,8 @@ use std::collections::HashSet;
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    CallableTarget, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget,
-    Stmt, StmtKind,
+    BinOp, CallableTarget, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind,
+    InstanceOfTarget, Stmt, StmtKind,
 };
 
 /// Symbol-reference summary for one AST subtree.
@@ -310,6 +310,22 @@ fn scan_literal_eval_fragment(source: Option<&Expr>, usage: &mut Usage) -> bool 
     usage.dynamic_function_call |= dynamic_call_before;
     usage.constructs_dynamic_class |= dynamic_class_before;
     true
+}
+
+/// Folds a concatenation tree whose leaves are all string literals.
+///
+/// Returns `None` as soon as one leaf is not a literal, so a partly dynamic expression is
+/// never mistaken for a statically known callable name.
+fn folded_concat_literal(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::StringLiteral(text) => Some(text.clone()),
+        ExprKind::BinaryOp { left, right, op: BinOp::Concat } => Some(format!(
+            "{}{}",
+            folded_concat_literal(left)?,
+            folded_concat_literal(right)?
+        )),
+        _ => None,
+    }
 }
 
 /// Records one normalized PHP function name.
@@ -813,9 +829,17 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(arg, usage);
             }
         }
-        ExprKind::BinaryOp { left, right, .. } => {
+        ExprKind::BinaryOp { left, right, op } => {
             scan_expr(left, usage);
             scan_expr(right, usage);
+            // A callable or prelude-visible name assembled from string literals is a constant
+            // expression: the optimizer folds it before lowering, so detection has to see the
+            // folded spelling too (`call_user_func("array" . "_rand", ...)`).
+            if *op == BinOp::Concat {
+                if let Some(folded) = folded_concat_literal(expr) {
+                    usage.literals.insert(php_symbol_key(folded.trim_start_matches('\\')));
+                }
+            }
         }
         ExprKind::InstanceOf { value, target } => {
             scan_expr(value, usage);

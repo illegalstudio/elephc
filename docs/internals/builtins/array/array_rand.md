@@ -16,25 +16,23 @@ sidebar:
 
 ### Lowering notes
 
-- Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.array_rand` through `BuiltinLoweringContext`.
-- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `runtime_call`
+- **Target strategy**: `eir_graph`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
+- **Result ownership**: `fresh`
+- **Effects**: `shared`
 - **Requirements**: `static (1 requirements)`
-- **Callable policy**: `static_only`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.array_rand`
-- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

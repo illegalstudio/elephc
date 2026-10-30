@@ -104,7 +104,6 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
     arrays::emit_mt_uniform(emitter);
-    arrays::emit_array_rand(emitter);
     arrays::emit_array_fill(emitter);
     arrays::emit_array_fill_assoc(emitter);
     arrays::emit_array_fill_refcounted(emitter);

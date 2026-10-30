@@ -40,12 +40,16 @@ pub(crate) fn inject_builtin_enums(
             EnumCaseInfo {
                 name: "Ascending".to_string(),
                 value: None,
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
             EnumCaseInfo {
                 name: "Descending".to_string(),
                 value: None,
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
@@ -69,12 +73,16 @@ pub(crate) fn inject_builtin_enums(
             EnumCaseInfo {
                 name: "Get".to_string(),
                 value: Some(EnumCaseValue::Str("get".to_string())),
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
             EnumCaseInfo {
                 name: "Set".to_string(),
                 value: Some(EnumCaseValue::Str("set".to_string())),
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             },
@@ -106,6 +114,8 @@ pub(crate) fn inject_builtin_enums(
             .map(|name| EnumCaseInfo {
                 name: name.to_string(),
                 value: None,
+                span: None,
+                deprecated_mt_rand_php: false,
                 attribute_names: Vec::new(),
                 attribute_args: Vec::new(),
             })

@@ -97,6 +97,12 @@ pub struct ClosureScopeVariant {
 pub struct Module {
     pub target: Target,
     pub source_path: Option<String>,
+    /// Physical file of each source identity used by this module's instructions.
+    ///
+    /// Lowering copies `Span::registered_source_paths()` here because the source table is
+    /// thread-local while codegen may run on another thread. Kept per module so parallel
+    /// compilations never share identities.
+    pub source_paths: std::collections::HashMap<u32, String>,
     /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
     /// These belong to user assembly, never the reusable runtime object.
     pub mbstring_startup: Option<Vec<Vec<u8>>>,
@@ -171,6 +177,7 @@ impl Module {
         Self {
             target,
             source_path: None,
+            source_paths: HashMap::new(),
             mbstring_startup: None,
             included_files: Vec::new(),
             probe_key: None,

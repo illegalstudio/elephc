@@ -164,7 +164,7 @@ mod tests {
         // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
         // the extension-hosting prelude calls.
         // +2: PHP 8.5 array value-edge functions.
-        assert_eq!(contracts().len(), 1196 + curl_surface);
+        assert_eq!(contracts().len(), 1197 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

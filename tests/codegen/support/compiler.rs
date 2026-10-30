@@ -289,9 +289,13 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
 ) {
     elephc::codegen::set_null_repr(null_repr);
     elephc::codegen::set_compile_profile(php_version, false);
+    let synthetic_main = dir.join("test.php");
+    // Mirrors `pipeline::compile`: the entry file uses source ID 0. Registering it makes the
+    // harness cover published diagnostic files (and their canonicalization) for main-file call
+    // sites, which otherwise fall back to `_script_source_file`.
+    elephc::span::Span::register_source_path(0, synthetic_main.display().to_string());
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let synthetic_main = dir.join("test.php");
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     // Mirrors `source::finalize_physical_program`: generic doc-comment annotations are applied
     // per physical file, between the magic constants and the conditional pass. Skipping it here

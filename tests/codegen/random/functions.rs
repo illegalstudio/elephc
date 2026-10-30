@@ -86,6 +86,33 @@ var_dump(mt_rand(0, 999));
     assert_eq!(out, "int(448865905)\nint(592)\n");
 }
 
+/// The legacy bad-scaling formula converts the offset first, then adds the lower bound.
+#[test]
+fn test_random_mt_rand_php_integer_bounds() {
+    let out = compile_and_run(
+        r#"<?php
+mt_srand(0, 1);
+var_dump(mt_rand(9007199254740993, 9007199254740993));
+var_dump(mt_rand(-9007199254740993, -9007199254740993));
+var_dump(mt_rand(PHP_INT_MAX, PHP_INT_MAX));
+var_dump(mt_rand(PHP_INT_MIN, PHP_INT_MIN));
+var_dump(mt_rand(PHP_INT_MIN, PHP_INT_MIN + 10));
+var_dump(rand(9007199254740993, 9007199254740993));
+var_dump(rand(-9007199254740993, -9007199254740993));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9007199254740993)\n\
+int(-9007199254740993)\n\
+int(9223372036854775807)\n\
+int(-9223372036854775808)\n\
+int(-9223372036854775808)\n\
+int(9007199254740993)\n\
+int(-9007199254740993)\n"
+    );
+}
+
 /// An unknown seed mode is silently clamped to `MT_RAND_MT19937`, like php-src.
 #[test]
 fn test_random_mt_srand_unknown_mode_clamps() {
@@ -351,6 +378,141 @@ array_rand(): Argument #2 ($num) must be between 1 and the number of elements in
     );
 }
 
+/// String callables reach the same multi-key implementation as direct calls.
+#[test]
+fn test_random_array_rand_string_callables() {
+    let out = compile_and_run(
+        r#"<?php
+mt_srand(0);
+var_dump(call_user_func("array_rand", [42]));
+var_dump(call_user_func("array_rand", [10, 20, 30], 2));
+$f = "array_rand";
+var_dump($f(["x" => 1, "y" => 2]));
+var_dump(call_user_func_array("array_rand", [[42]]));
+var_dump(call_user_func_array("array_rand", [["a" => 1, "b" => 2, "c" => 3], 2]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(0)\n\
+array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n\
+string(1) \"y\"\n\
+int(0)\n\
+array(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"c\"\n}\n"
+    );
+}
+
+/// String callables keep the helper's element layout for float-valued arrays.
+#[test]
+fn test_random_array_rand_string_callables_float_values() {
+    let out = compile_and_run(
+        r#"<?php
+mt_srand(7);
+var_dump(call_user_func("array_rand", [1.5, 2.5, 3.5]));
+var_dump(call_user_func_array("array_rand", [["a" => 1.5, "b" => 2.5, "c" => 3.5], 2]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(0)\narray(2) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(1) \"c\"\n}\n"
+    );
+}
+
+/// A callable name folded from string literals reaches the same implementation.
+#[test]
+fn test_random_array_rand_folded_callable_name() {
+    let out = compile_and_run(
+        r#"<?php
+mt_srand(0);
+var_dump(call_user_func("array" . "_rand", [10, 20, 30], 2));
+var_dump(call_user_func_array("array" . "_rand", [["a" => 1, "b" => 2, "c" => 3], 2]));
+var_dump(call_user_func("arr" . "ay" . "_rand", [42]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n}\n\
+array(2) {\n  [0]=>\n  string(1) \"b\"\n  [1]=>\n  string(1) \"c\"\n}\n\
+int(0)\n"
+    );
+}
+
+/// A runtime-selected `array_rand` name reaches the injected helper through the wrapper.
+#[test]
+fn test_random_array_rand_runtime_selected_callable() {
+    let out = compile_and_run(
+        r#"<?php
+mt_srand(0);
+$f = $argc > 1 ? $argv[1] : "array_rand";
+var_dump($f([10, 20, 30], 2));
+var_dump(call_user_func($f, ["a" => 1, "b" => 2, "c" => 3], 2));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(1)\n}\n\
+array(2) {\n  [0]=>\n  string(1) \"b\"\n  [1]=>\n  string(1) \"c\"\n}\n"
+    );
+}
+
+/// A runtime-selected `array_rand` name still reports PHP's argument errors.
+#[test]
+fn test_random_array_rand_runtime_selected_invalid_argument() {
+    let out = compile_and_run(
+        r#"<?php
+mt_srand(0);
+$f = $argc > 1 ? $argv[1] : "array_rand";
+try {
+    $f("nope");
+} catch (TypeError $e) {
+    echo $e->getMessage(), "
+";
+}
+try {
+    $f([1, 2, 3], 4);
+} catch (ValueError $e) {
+    echo $e->getMessage(), "
+";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "array_rand(): Argument #1 ($array) must be of type array, string given\n\
+array_rand(): Argument #2 ($num) must be between 1 and the number of elements in argument #1 ($array)\n"
+    );
+}
+
+/// Generated `array_rand` calls clean up their hidden collector in capture mode.
+#[test]
+fn test_random_array_rand_generated_calls_release_collector() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function capture(): array { return debug_backtrace(); }
+capture();
+mt_srand(0);
+$f = "array_rand";
+for ($i = 0; $i < 100; $i++) {
+    $f([10, 20, 30]);
+}
+for ($i = 0; $i < 100; $i++) {
+    call_user_func("array_rand", [10, 20, 30]);
+}
+$dynamic = $argc > 1 ? $argv[1] : "array_rand";
+for ($i = 0; $i < 100; $i++) {
+    $dynamic([10, 20, 30]);
+}
+echo "done\n";
+"#,
+    );
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// `array_rand()` and `Randomizer::pickArrayKeys()` consume the same Mt19937 stream.
 #[test]
 fn test_random_array_rand_matches_pick_array_keys() {
@@ -472,6 +634,121 @@ echo MT_RAND_PHP, "\n";
         !out.stderr.contains("on line 1000"),
         "the deprecation leaked a synthetic span: {}",
         out.stderr
+    );
+}
+
+/// `MT_RAND_PHP` in constant expressions deprecates at runtime, where PHP evaluates it.
+#[test]
+fn test_random_mt_rand_php_constant_expressions_deprecate_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, " ", basename($file), ":", $line, " ", $message, "\n";
+    return true;
+});
+const X = MT_RAND_PHP;
+class C { const Y = MT_RAND_PHP; }
+enum E: int {
+    case A = MT_RAND_PHP;
+}
+#[Attribute] class A { public function __construct(public int $v) {} }
+#[A(
+    MT_RAND_PHP
+)] class Marked {}
+function f(
+    int $v = MT_RAND_PHP
+): int { return $v; }
+echo "start ", X, "\n";
+echo C::Y, " ", C::Y, "\n";
+echo f(), " ", f(), "\n";
+echo E::A->value, " ", E::A->value, "\n";
+$a = (new ReflectionClass(Marked::class))->getAttributes()[0];
+var_dump($a->getArguments());
+var_dump($a->newInstance()->v);
+var_dump($a->newInstance()->v);
+mt_srand(0, MT_RAND_PHP);
+echo mt_rand(0, 10), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "8192 test.php:6 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "start 1\n",
+            "8192 test.php:19 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "1 1\n",
+            "8192 test.php:16 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "1 1\n",
+            "8192 test.php:9 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "1 1\n",
+            "8192 test.php:23 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "array(1) {\n  [0]=>\n  int(1)\n}\n",
+            "8192 test.php:12 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "int(1)\n",
+            "8192 test.php:12 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "int(1)\n",
+            "8192 test.php:26 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n",
+            "8192 test.php:26 The MT_RAND_PHP variant of Mt19937 is deprecated\n",
+            "4\n"
+        )
+    );
+}
+
+/// `from()`/`tryFrom()`/`cases()` materialize the case table and raise its deprecation once.
+#[test]
+fn test_random_mt_rand_php_enum_table_materialization_deprecates() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $level, string $message, string $file, int $line): bool {
+    echo $level, " ", $line, "\n";
+    return true;
+});
+enum E: int {
+    case A = MT_RAND_PHP;
+}
+echo "before\n";
+var_dump(E::from(1)->value);
+var_dump(E::cases()[0]->value);
+"#,
+    );
+    assert_eq!(out, "before\n8192 7\nint(1)\nint(1)\n");
+}
+
+/// Main-file notices name the same canonical file as `__FILE__`, symlink included.
+#[test]
+fn test_random_diagnostics_name_the_canonical_entry_file() {
+    let out = compile_and_run_files(
+        &[(
+            "main.php",
+            "<?php\nset_error_handler(function (int $level, string $message, string $file, int $line): bool {\n    echo ($file === __FILE__ ? \"same\" : \"diff\"), \" \", $line, \"\\n\";\n    return true;\n});\nclass C { const Y = MT_RAND_PHP; }\nlcg_value();\necho C::Y, \"\\n\";\n",
+        )],
+        "main.php",
+    );
+    assert_eq!(out, "same 7\nsame 8\n1\n");
+}
+
+/// Prelude-raised notices name the included file that called the prelude function.
+#[test]
+fn test_random_prelude_notices_report_the_included_file() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php\nset_error_handler(function (int $level, string $message, string $file, int $line): bool {\n    echo $level, \" \", basename($file), \":\", $line, \" \", $message, \"\\n\";\n    return true;\n});\nrequire __DIR__ . '/lib/random_calls.php';\nrandom_calls();\n",
+            ),
+            (
+                "lib/random_calls.php",
+                "<?php\nclass Holder {\n    const MODE = MT_RAND_PHP;\n}\nfunction random_calls(): void {\n    lcg_value();\n    mt_srand(0, 1);\n    echo Holder::MODE, \"\\n\";\n}\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(
+        out,
+        "8192 random_calls.php:6 Function lcg_value() is deprecated since 8.4, use \\Random\\Randomizer::getFloat() instead\n\
+8192 random_calls.php:7 The MT_RAND_PHP variant of Mt19937 is deprecated\n\
+8192 random_calls.php:8 Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937\n\
+1\n"
     );
 }
 

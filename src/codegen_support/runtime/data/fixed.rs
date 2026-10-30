@@ -1222,7 +1222,7 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&comm_directive(slot, 8, target));
     }
     // _elephc_random_mt_uniform_fn: indirect pointer to elephc_random_mt_uniform, published
-    // only at array_rand()/shuffle() call sites so the shared __rt_mt_uniform trampoline can
+    // only at shuffle() call sites so the shared __rt_mt_uniform trampoline can
     // consume the global Mt19937 state without a program that never shuffles linking the
     // random bridge.
     out.push_str(&comm_directive("_elephc_random_mt_uniform_fn", 8, target));

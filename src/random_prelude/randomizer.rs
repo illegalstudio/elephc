@@ -326,31 +326,13 @@ fn get_int_method() -> MethodBuilder {
             int(1),
         ),
     ));
-    bad_scaling.push(assign(
-        "_offset",
-        bin(
-            bin(
-                bin(
-                    bin(
-                        cast(CastType::Float, var("max")),
-                        BinOp::Sub,
-                        cast(CastType::Float, var("min")),
-                    ),
-                    BinOp::Add,
-                    float(1.0),
-                ),
-                BinOp::Mul,
-                bin(
-                    cast(CastType::Float, var("_draw")),
-                    BinOp::Div,
-                    float(2147483648.0),
-                ),
-            ),
-            BinOp::Add,
-            cast(CastType::Float, var("min")),
-        ),
-    ));
-    bad_scaling.push(ret(cast(CastType::Int, var("_offset"))));
+    // php-src converts the fractional offset to an unsigned integer first, then adds the
+    // lower bound with wrapping 64-bit semantics. The bridge performs exactly that order of
+    // operations, so large bounds keep their precision instead of rounding through a double.
+    bad_scaling.push(ret(bridge(
+        "elephc_random_mt_legacy_scale",
+        vec![var("min"), var("max"), var("_draw")],
+    )));
 
     method("getInt")
         .param("min", TypeExpr::Int)

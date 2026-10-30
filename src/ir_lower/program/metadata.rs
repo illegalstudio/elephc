@@ -22,15 +22,6 @@ pub(super) fn reserve_eval_subclass_property_storage(module: &mut Module) {
     }
 }
 
-/// Converts a PHP source path into the canonical display string stored in EIR metadata.
-pub(super) fn canonical_source_path(source_path: &Path) -> String {
-    source_path
-        .canonicalize()
-        .unwrap_or_else(|_| source_path.to_path_buf())
-        .display()
-        .to_string()
-}
-
 /// Copies declaration metadata into the EIR module placeholder tables.
 pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_result: &CheckResult) {
     module.class_table.names = sorted_keys(&check_result.classes);

@@ -80,7 +80,6 @@ mod array_set_mixed;
 mod array_set_mixed_key;
 mod array_set_refcounted;
 mod array_set_str;
-mod array_rand;
 mod mt_uniform;
 mod random_u32;
 mod random_uniform;
@@ -363,11 +362,9 @@ pub use array_set_mixed_key::emit_array_set_mixed_key;
 pub use array_get_mixed_key::emit_array_get_mixed_key;
 /// Emit refcounted indexed-array set helper.
 pub use array_set_refcounted::emit_array_set_refcounted;
-/// Emit refcounted indexed-array set helper.
-pub use array_set_str::emit_array_set_str;
 /// Emit string indexed-array set helper.
-pub use array_rand::emit_array_rand;
-/// Emit random array element helper.
+pub use array_set_str::emit_array_set_str;
+/// Emit random u32 draw helper.
 pub use random_u32::emit_random_u32;
 /// Emit 32-bit random unsigned integer helper.
 pub use random_uniform::emit_random_uniform;

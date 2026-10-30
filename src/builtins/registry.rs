@@ -152,6 +152,18 @@ fn registry() -> &'static HashMap<String, BuiltinDef> {
 /// Looks up a PHP builtin by name, using case-insensitive matching.
 ///
 /// Returns `None` if the name is not registered in the inventory.
+/// Returns the prelude functions a builtin's runtime callable wrapper calls directly.
+///
+/// A wrapper may only be emitted when those callees are declared in the lowered module:
+/// retaining the prelude is what makes the helper exist, and a program that only builds the
+/// callable name at run time never injects it.
+pub fn dynamic_wrapper_prelude_callees(name: &str) -> &'static [&'static str] {
+    match crate::names::php_symbol_key(name.trim_start_matches('\\')).as_str() {
+        "array_rand" => &[crate::random_prelude::ARRAY_RAND_HELPER],
+        _ => &[],
+    }
+}
+
 pub fn lookup(name: &str) -> Option<&'static BuiltinDef> {
     let lower = name.to_ascii_lowercase();
     registry().get(&lower)

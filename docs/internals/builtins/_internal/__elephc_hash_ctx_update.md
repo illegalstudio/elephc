@@ -2,7 +2,7 @@
 title: "__elephc_hash_ctx_update() - internals"
 description: "Compiler internals for __elephc_hash_ctx_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1164
+  order: 1165
 ---
 
 ## `__elephc_hash_ctx_update()` - internals

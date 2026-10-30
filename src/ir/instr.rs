@@ -695,6 +695,21 @@ pub enum CoreBuiltinOp {
     BuiltinDeprecated = 18,
     /// Reads the nearest source call site through compiler-generated diagnostic frames.
     DiagnosticCallerLine = 19,
+    /// Stores the constructing file's `strict_types` state for the next constructor call.
+    PublishCallStrictness = 20,
+    /// Reads the `strict_types` state published by the nearest constructor call site.
+    CallStrictTypes = 21,
+    /// Reads the file published by the nearest real PHP call site.
+    ///
+    /// Prelude code has synthetic spans, so it cannot bake the user call site's file; this
+    /// reads the value `prepare_call_site` published before entering the prelude frame.
+    DiagnosticCallerFile = 22,
+    /// Reports whether a once-per-site runtime notice has not fired yet, marking it as fired.
+    ///
+    /// The flag is module-private storage keyed by the instruction's span, not a PHP global:
+    /// a synthetic `MT_RAND_PHP` constant-expression read uses it to match php-src's
+    /// first-evaluation-only deprecation.
+    DeprecatedOnceBegin = 23,
 }
 
 impl CoreBuiltinOp {
@@ -719,7 +734,11 @@ impl CoreBuiltinOp {
             | Self::RestoreErrorHandler
             | Self::RestoreExceptionHandler
             | Self::TriggerError | Self::BuiltinWarning | Self::BuiltinDeprecated
-            | Self::DiagnosticCallerLine => BuiltinResultOwnership::NonHeap,
+            | Self::DiagnosticCallerLine
+            | Self::PublishCallStrictness
+            | Self::CallStrictTypes
+            | Self::DiagnosticCallerFile
+            | Self::DeprecatedOnceBegin => BuiltinResultOwnership::NonHeap,
         }
     }
 
@@ -751,6 +770,10 @@ impl CoreBuiltinOp {
             17 => Some(Self::BuiltinWarning),
             18 => Some(Self::BuiltinDeprecated),
             19 => Some(Self::DiagnosticCallerLine),
+            20 => Some(Self::PublishCallStrictness),
+            21 => Some(Self::CallStrictTypes),
+            22 => Some(Self::DiagnosticCallerFile),
+            23 => Some(Self::DeprecatedOnceBegin),
             _ => None,
         }
     }
@@ -773,7 +796,11 @@ impl CoreBuiltinOp {
             | Self::GetIncludedFiles
             | Self::GetErrorHandler
             | Self::GetExceptionHandler
-            | Self::DiagnosticCallerLine => 0,
+            | Self::DiagnosticCallerLine
+            | Self::CallStrictTypes
+            | Self::DiagnosticCallerFile
+            | Self::DeprecatedOnceBegin => 0,
+            Self::PublishCallStrictness => 1,
             Self::GetDefinedFunctions => 1,
         }
     }
@@ -785,6 +812,11 @@ impl CoreBuiltinOp {
             Self::DiagnosticCallerLine => Effects::from_bits_retain(
                 E::READS_GLOBAL.bits() | E::READS_HEAP.bits(),
             ),
+            Self::PublishCallStrictness => E::WRITES_GLOBAL,
+            Self::CallStrictTypes | Self::DiagnosticCallerFile => E::READS_GLOBAL,
+            Self::DeprecatedOnceBegin => {
+                Effects::from_bits_retain(E::READS_GLOBAL.bits() | E::WRITES_GLOBAL.bits())
+            }
             Self::GetDefinedConstants
             | Self::GetDefinedFunctions
             | Self::GetDefinedVars

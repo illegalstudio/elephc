@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:212](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L212) (`__elephc_array_rand`)
+- **Lowering**: [`src/random_prelude.rs`:397](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L397) (`__elephc_array_rand`)
 - **Function symbol**: `__elephc_array_rand()`
 
 
@@ -29,7 +29,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function __elephc_array_rand(array $array, int $num = 1): mixed
+function __elephc_array_rand(mixed $array, int $num = 1): mixed
 ```
 
 ## What the type checker enforces
