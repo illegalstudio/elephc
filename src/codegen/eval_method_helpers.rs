@@ -706,10 +706,10 @@ fn emit_method_call_aarch64(
     emitter.instruction("str x4, [sp, #32]");                                   // save the active eval class-scope pointer
     emitter.instruction("str x5, [sp, #40]");                                   // save the active eval class-scope length
     emitter.instruction("str x6, [sp, #64]");                                   // save the active eval context for callable descriptors
-    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // null Mixed receiver cannot dispatch a method
+    abi::emit_branch_if_zero_wide(emitter, "x0", fail_label);                    // null Mixed receiver cannot dispatch a method
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose receiver tag and object payload
     emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means the Mixed receiver is an object
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // non-object receivers cannot dispatch instance methods
+    abi::emit_branch_if_not_equal_wide(emitter, fail_label);                       // non-object receivers cannot dispatch instance methods
     emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer for method calls
     emit_aarch64_builtin_throwable_method_dispatch(
         module,
@@ -1080,7 +1080,7 @@ fn emit_aarch64_builtin_throwable_method_name_branch(
     abi::emit_symbol_address(emitter, "x3", &label);
     abi::emit_load_int_immediate(emitter, "x4", len as i64);
     emitter.instruction("bl __rt_strcasecmp");                                  // compare Throwable method names with PHP case-insensitive rules
-    emitter.instruction(&format!("cbz x0, {}", target_label));                  // dispatch to the compact Throwable method when names match
+    abi::emit_branch_if_zero_wide(emitter, "x0", target_label);                  // dispatch to the compact Throwable method when names match
 }
 
 /// Emits one x86_64 method-name comparison for a compact Throwable method.
@@ -1117,7 +1117,7 @@ fn emit_aarch64_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     let target_label = method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the method body when the names match
+        abi::emit_branch_if_zero_wide(emitter, "x0", target_label);              // dispatch to the method body when the names match
         return;
     }
     let miss_label = method_access_miss_label(module, slot);
@@ -1192,7 +1192,7 @@ fn emit_aarch64_static_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare static method names with PHP case-insensitive rules
     let target_label = static_method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        emitter.instruction(&format!("cbz x0, {}", target_label));              // dispatch to the static method body when the names match
+        abi::emit_branch_if_zero_wide(emitter, "x0", target_label);              // dispatch to the static method body when the names match
         return;
     }
     let miss_label = static_method_access_miss_label(module, slot);
@@ -1239,7 +1239,7 @@ fn emit_aarch64_method_scope_check(
     let (scope_ptr_offset, scope_len_offset) = aarch64_method_scope_offsets(is_static);
     emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));       // reload the active eval class-scope pointer
     emitter.instruction(&format!("ldr x2, [sp, #{}]", scope_len_offset));       // reload the active eval class-scope length
-    emitter.instruction(&format!("cbz x1, {}", fail_label));                    // reject scoped method access outside a class scope
+    abi::emit_branch_if_zero_wide(emitter, "x1", fail_label);                    // reject scoped method access outside a class scope
     for scope_name in allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
         emitter.instruction(&format!("ldr x1, [sp, #{}]", scope_ptr_offset));   // reload the active eval class-scope pointer
@@ -1247,7 +1247,7 @@ fn emit_aarch64_method_scope_check(
         abi::emit_symbol_address(emitter, "x3", &label);
         abi::emit_load_int_immediate(emitter, "x4", len as i64);
         emitter.instruction("bl __rt_strcasecmp");                              // compare current eval scope with an allowed class
-        emitter.instruction(&format!("cbz x0, {}", success_label));             // dispatch when scoped visibility is satisfied
+        abi::emit_branch_if_zero_wide(emitter, "x0", success_label);             // dispatch when scoped visibility is satisfied
     }
     emitter.instruction(&format!("b {}", fail_label));                          // reject scoped method access from unrelated classes
 }
@@ -1428,7 +1428,7 @@ fn emit_aarch64_validate_builtin_throwable_method_arg_count(
     let array_len_symbol = module.target.extern_symbol("__elephc_eval_value_array_len");
     abi::emit_call_label(emitter, &array_len_symbol);
     emitter.instruction("cmp x0, #0");                                          // compact Throwable methods accept no eval arguments
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject unsupported Throwable method arguments from eval
+    abi::emit_branch_if_not_equal_wide(emitter, fail_label);                       // reject unsupported Throwable method arguments from eval
 }
 
 /// Emits x86_64 zero-argument validation for compact Throwable eval methods.
@@ -1750,7 +1750,7 @@ fn emit_aarch64_validate_method_arg_count(
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the method signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject method dispatch when arity differs
+    abi::emit_branch_if_not_equal_wide(emitter, fail_label);                       // reject method dispatch when arity differs
 }
 
 /// Emits x86_64 arity validation for one method body.
@@ -1780,7 +1780,7 @@ fn emit_aarch64_validate_static_method_arg_count(
     abi::emit_call_label(emitter, &array_len_symbol);
     abi::emit_load_int_immediate(emitter, "x9", slot.params.len() as i64);
     emitter.instruction("cmp x0, x9");                                          // compare supplied eval argument count with the static method signature
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject static method dispatch when arity differs
+    abi::emit_branch_if_not_equal_wide(emitter, fail_label);                       // reject static method dispatch when arity differs
 }
 
 /// Emits x86_64 arity validation for one static method body.
@@ -2247,7 +2247,7 @@ fn emit_aarch64_cast_eval_object_arg(
         emitter.instruction("ldr x0, [x29, #-16]");                             // a generic object hint needs only the runtime object tag
         emitter.instruction("bl __rt_mixed_unbox");                             // expose the borrowed object payload
         emitter.instruction("cmp x0, #6");                                      // scalars and null do not satisfy object
-        emitter.instruction(&format!("b.ne {}", fail_label));                   // reject a non-object argument
+        abi::emit_branch_if_not_equal_wide(emitter, fail_label);                   // reject a non-object argument
         emitter.instruction("mov x0, x1");                                      // pass the native object pointer
         return;
     }
@@ -2258,11 +2258,11 @@ fn emit_aarch64_cast_eval_object_arg(
     abi::emit_load_int_immediate(emitter, "x2", len as i64);
     emitter.instruction("mov x3, xzr");                                         // allow exact class matches for object type hints
     abi::emit_call_label(emitter, &is_a_symbol);
-    emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject values that fail the object type hint
+    abi::emit_branch_if_zero_wide(emitter, "x0", fail_label);                    // reject values that fail the object type hint
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for object unboxing
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the object payload for the native method call
     emitter.instruction("cmp x0, #6");                                          // object type hints require an object payload, not a class string
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject malformed non-object payloads
+    abi::emit_branch_if_not_equal_wide(emitter, fail_label);                       // reject malformed non-object payloads
     emitter.instruction("mov x0, x1");                                          // place the unboxed object pointer in the result register
 }
 
@@ -2273,7 +2273,7 @@ fn emit_aarch64_cast_eval_array_arg(emitter: &mut Emitter, param_ty: &PhpType, e
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the array payload for the native method call
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
-    emitter.instruction(&format!("b.ne {}", fail_label));                       // reject array payloads with an incompatible ABI shape
+    abi::emit_branch_if_not_equal_wide(emitter, fail_label);                       // reject array payloads with an incompatible ABI shape
     emitter.instruction("mov x0, x1");                                          // place the unboxed array pointer in the result register
 }
 
@@ -3148,3 +3148,6 @@ mod source_entry_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod range_tests;

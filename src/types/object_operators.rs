@@ -79,6 +79,14 @@ fn possible_operator_class(ty: &PhpType) -> Option<&'static ClassContract> {
     })
 }
 
+/// Rejects static selection when a union can offer a different native operator first.
+fn contains_other_operator_class(ty: &PhpType, class: &ClassContract) -> bool {
+    match ty {
+        PhpType::Union(members) => members.iter().any(|member| contains_other_operator_class(member, class)),
+        _ => operator_class(ty).is_some_and(|other| !other.name.eq_ignore_ascii_case(class.name)),
+    }
+}
+
 /// Finds the first internal class whose contract declares the requested scalar cast.
 pub(crate) fn cast_class(ty: &PhpType) -> Option<&'static ClassContract> {
     match ty {
@@ -167,7 +175,10 @@ fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpTy
     let accepted = |ty: &PhpType| match ty {
         PhpType::Union(members) if comparison
             || operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number => members.iter().all(accepts),
-        PhpType::Union(_) => false,
+        PhpType::Union(_) => operators.accepts_any_operands
+            && [left, right].iter().any(|operand| operator_class(operand)
+                .is_some_and(|known| known.name.eq_ignore_ascii_case(class.name)))
+            && !contains_other_operator_class(ty, class),
         _ => accepts(ty),
     };
     if !accepted(left) || !accepted(right) { return None; }
@@ -330,6 +341,27 @@ mod tests {
         }
         let gmp = lookup_class("GMP").unwrap().operators.unwrap();
         assert!(gmp.cast_method(elephc_builtin_contract::ObjectCast::Int).is_none());
+    }
+
+    /// A definite GMP operand keeps its result class beside scalar or GMP-only unions.
+    #[test]
+    fn definite_gmp_accepts_union_operands_without_promising_scalar_branches() {
+        let gmp = PhpType::Object("GMP".into());
+        for other in [
+            PhpType::Union(vec![gmp.clone(), PhpType::False]),
+            PhpType::Union(vec![PhpType::Int, PhpType::Void]),
+            PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+        ] {
+            for (left, right) in [(&gmp, &other), (&other, &gmp)] {
+                for op in [BinOp::Add, BinOp::Mul] {
+                    assert_eq!(binary_plan(&op, left, right).unwrap().result_type(&op), gmp);
+                }
+            }
+        }
+        let scalar_branch = PhpType::Union(vec![gmp.clone(), PhpType::Int]);
+        assert!(binary_plan(&BinOp::Mul, &scalar_branch, &PhpType::Int).is_none());
+        let foreign = PhpType::Union(vec![PhpType::Object("SimpleXMLElement".into()), PhpType::Int]);
+        assert!(binary_plan(&BinOp::Mul, &gmp, &foreign).is_none());
     }
 }
 

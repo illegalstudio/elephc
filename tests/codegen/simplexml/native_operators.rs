@@ -39,11 +39,15 @@ echo nativeAdd($xml), ':', gmp_strval(nativeAdd($integer)), "\n";
 echo nativeNegate($xml), ':', gmp_strval(nativeNegate($integer)), "\n";
 echo nativeAnd($xml), ':', gmp_strval(nativeAnd($integer)), "\n";
 echo nativeShift($xml), ':', gmp_strval(nativeShift($integer)), "\n";
+$inverted = gmp_invert(3, 11);
+echo gmp_strval($integer * $inverted), "\n";
+$maybe = $argc > 0 ? 2 : null;
+echo gmp_strval($integer + $maybe), "\n";
 "#;
     let expected = concat!(
         "int(7)\nfloat(7.5)\nint(42)\nfloat(42)\nint(3)\nfloat(3.5)\n",
         "int(9)\nfloat(9.5)\nint(9)\nfloat(9.5)\n",
-        "9.5:44\n-7.5:-42\n3:2\n14:84\n",
+        "9.5:44\n-7.5:-42\n3:2\n14:84\n168\n44\n",
     );
     for (name, source) in [
         ("aot", format!("{setup}{body}")),

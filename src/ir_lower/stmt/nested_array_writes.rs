@@ -345,36 +345,57 @@ fn lower_static_update_parent(
     lower_static_update_key_and_guard(ctx, pinned, read_key,
         "Cannot use string offset as an array", span);
     let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
-    let object = ctx.emit_value(Op::TypePredicate, vec![pinned.value],
-        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
-        Op::TypePredicate.default_effects(), Some(span));
+    let receiver_type = ctx.builder.value_php_type(pinned.value).codegen_repr();
+    let known_object = matches!(receiver_type, PhpType::Object(_));
+    let known_array = matches!(receiver_type, PhpType::Array(_) | PhpType::AssocArray { .. });
     let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let slot = ctx.local_slots[&selected];
     ctx.clear_owned_hidden_temp(&selected, Some(span));
     let initialized = ctx.initialized_slots_snapshot();
-    let object_block = ctx.builder.create_named_block("static.update.object.parent", Vec::new());
-    let array_block = ctx.builder.create_named_block("static.update.array.parent", Vec::new());
+    let object_block = (!known_array).then(|| ctx.builder.create_named_block("static.update.object.parent", Vec::new()));
+    let array_block = (!known_object).then(|| ctx.builder.create_named_block("static.update.array.parent", Vec::new()));
     let merge = ctx.builder.create_named_block("static.update.parent.merge", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: object.value, then_target: object_block, then_args: Vec::new(),
-        else_target: array_block, else_args: Vec::new(),
-    });
-    ctx.builder.position_at_end(object_block);
-    let parent = retain_static_update_parent(ctx, probe, span);
-    let ty = ctx.builder.value_php_type(parent.value);
-    ctx.store_call_argument_local(&selected, parent, ty, Some(span));
-    branch_to(ctx, merge);
-    ctx.builder.position_at_end(array_block);
-    ctx.restore_initialized_slots(initialized);
-    if ctx.value_is_owning_temporary(probe) {
-        crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+    match (object_block, array_block) {
+        (Some(object), None) | (None, Some(object)) => branch_to(ctx, object),
+        (Some(object_block), Some(array_block)) => {
+            let object = ctx.emit_value(Op::TypePredicate, vec![pinned.value],
+                Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+                Op::TypePredicate.default_effects(), Some(span));
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: object.value, then_target: object_block, then_args: Vec::new(),
+                else_target: array_block, else_args: Vec::new(),
+            });
+        }
+        (None, None) => unreachable!("a property update has at least one storage arm"),
     }
-    let parent = lower_static_update_array_parent(ctx, pinned, read_array, write_key, read, span);
-    let parent = retain_static_update_parent(ctx, parent, span);
-    let ty = ctx.builder.value_php_type(parent.value);
-    ctx.store_call_argument_local(&selected, parent, ty, Some(span));
-    branch_to(ctx, merge);
+    let mut branch_slots: Option<HashSet<LocalSlotId>> = None;
+    if let Some(object_block) = object_block {
+        ctx.builder.position_at_end(object_block);
+        let parent = retain_static_update_parent(ctx, probe, span);
+        let ty = ctx.builder.value_php_type(parent.value);
+        ctx.store_call_argument_local(&selected, parent, ty, Some(span));
+        branch_to(ctx, merge);
+        branch_slots = Some(ctx.initialized_slots_snapshot());
+    }
+    if let Some(array_block) = array_block {
+        ctx.builder.position_at_end(array_block);
+        ctx.restore_initialized_slots(initialized.clone());
+        if ctx.value_is_owning_temporary(probe) {
+            crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+        }
+        let parent = lower_static_update_array_parent(ctx, pinned, read_array, write_key, read, span);
+        let parent = retain_static_update_parent(ctx, parent, span);
+        let ty = ctx.builder.value_php_type(parent.value);
+        ctx.store_call_argument_local(&selected, parent, ty, Some(span));
+        branch_to(ctx, merge);
+        let array_slots = ctx.initialized_slots_snapshot();
+        branch_slots = Some(match branch_slots {
+            Some(object_slots) => object_slots.intersection(&array_slots).copied().collect(),
+            None => array_slots,
+        });
+    }
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(branch_slots.unwrap_or(initialized));
     // Replace the original parent's topmost record before publishing the child:
     // operand scopes are LIFO, even though the EIR pop names its protected slot.
     if let Some(owner) = owner {

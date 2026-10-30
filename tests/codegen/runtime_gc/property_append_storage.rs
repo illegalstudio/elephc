@@ -21,7 +21,7 @@ fn test_erased_property_xml_append_storage_bundle() {
     verify(true);
 }
 
-/// Covers declared arrays, ordinary dynamic hashes, object clones and managed reference entries.
+/// Covers declared arrays, ordinary dynamic hashes, clones and declared managed references.
 fn verify(xml: bool) {
     let source = r#"<?php
 interface AppendStorageMarker {}
@@ -51,8 +51,10 @@ $node = new stdClass(); $node->items = ['a'];
 $snapshot = $node->items; $clone = clone $node; $alias = $node;
 appendStorageMixed($node, 1);
 echo implode(',', $snapshot), ':', implode(',', $clone->items), ':', implode(',', $alias->items), '|';
-$reference =& $node->items;
-appendStorageObject($node, 1);
+class AppendStorageReference { public array $items = []; }
+$managed = new AppendStorageReference(); $managed->items = $node->items;
+$reference =& $managed->items;
+appendStorageObject($managed, 1);
 echo implode(',', $reference), ':', implode(',', $clone->items), '|';
 $missing = new stdClass(); appendStorageMixed($missing, 2);
 echo implode(',', $missing->items), '|';

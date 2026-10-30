@@ -102,6 +102,10 @@ fn slot_guard(
         || !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, class, info, property)
     { return None; }
     let storage = object_type_property_type(ctx, &PhpType::Object(class.into()), property)?;
+    // Elephc native storage keeps its dedicated write and initialization semantics.
+    if matches!(storage, PhpType::Buffer(_) | PhpType::Pointer(_) | PhpType::Packed(_)) {
+        return None;
+    }
     let (_, (_, declared)) = info.visible_property(property)?;
     let declaring = info.property_declaring_classes.get(property).map(String::as_str).unwrap_or(class);
     let inaccessible = info.property_set_visibilities.get(property).is_some_and(|visibility|

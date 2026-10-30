@@ -76,7 +76,11 @@ class AppendMagicPrivateGetter {
 function AppendMagicMixed(mixed $box): void { $box->items[] = 2; }
 function AppendMagicObject(object $box): void { $box->items[] = 2; }
 function AppendMagicInterface(AppendMagicMarker $box): void { $box->items[] = 2; }
-function AppendMagicSeed(mixed $box): void { @($box->items = ['handler']); }
+function AppendMagicSeed(mixed $box): void {
+    $previous = error_reporting(0);
+    try { $box->items = ['handler']; }
+    finally { error_reporting($previous); }
+}
 function AppendMagicValueCase(mixed $backing): void {
     $box = new AppendMagicValue($backing);
     try { AppendMagicMixed($box); }

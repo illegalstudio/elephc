@@ -157,8 +157,12 @@ pub(super) fn lower_object_binary_values(
 ) -> Option<LoweredValue> {
     let lt = ctx.builder.value_php_type(lhs.value);
     let rt = ctx.builder.value_php_type(rhs.value);
-    if matches!(lt, PhpType::Union(_)) || matches!(rt, PhpType::Union(_)) { return None; }
     let plan = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, ctx.classes)?;
+    if (matches!(lt, PhpType::Union(_)) || matches!(rt, PhpType::Union(_)))
+        && !(plan.class.operators.is_some_and(|operators| operators.accepts_any_operands)
+            && [&lt, &rt].iter().any(|operand| crate::types::object_operators::operator_class(operand)
+                .is_some_and(|class| class.name.eq_ignore_ascii_case(plan.class.name))))
+    { return None; }
     Some(emit_object_binary_plan(ctx, plan, lhs, op, rhs, expr, true))
 }
 

@@ -72,6 +72,7 @@ pub use symbols::{
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
 pub use values::{
     emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
+    emit_branch_if_not_equal_wide, emit_branch_if_zero_wide,
     emit_decref_if_refcounted,
     emit_decref_preserving_exception, emit_extend_int_result,
     emit_float_result_double_to_single, emit_float_result_single_to_double,

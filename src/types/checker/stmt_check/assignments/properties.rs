@@ -92,9 +92,7 @@ pub(super) fn check_property_array_push(
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
-            if matches!(&prop_ty, PhpType::Object(name)
-                if name.eq_ignore_ascii_case("WeakMap")
-                    || crate::types::builtin_classes::has_native_dimensions(name, &checker.classes)) {
+            if property_supports_object_dimensions(checker, &prop_ty) {
                 return Ok(());
             }
             let updated_prop_ty = updated_array_property_push_type(
@@ -250,10 +248,8 @@ pub(super) fn check_property_array_assign(
                     super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
                 ));
             }
-            if let PhpType::Object(prop_class_name) = &prop_ty {
-                if checker.object_type_supports_dimensions(prop_class_name) {
-                    return Ok(());
-                }
+            if property_supports_object_dimensions(checker, &prop_ty) {
+                return Ok(());
             }
             if let PhpType::Buffer(elem_ty) = &prop_ty {
                 super::arrays::validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
@@ -976,7 +972,12 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() {
+    if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
+        updated_array_property_push_type(checker, &nonnull, property_has_declared_type,
+            class_name, property, val_ty, span)?;
+        return Ok(prop_ty.clone());
+    }
+    if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
     match prop_ty {
@@ -1012,6 +1013,29 @@ fn updated_array_property_push_type(
     }
 }
 
+/// Recognizes native or ArrayAccess object storage without discarding its nullable branches.
+fn property_supports_object_dimensions(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => checker.object_type_supports_dimensions(name),
+        PhpType::Union(members) => members.iter().any(|member| *member != PhpType::Void)
+            && members.iter().all(|member| *member == PhpType::Void
+                || property_supports_object_dimensions(checker, member)),
+        _ => false,
+    }
+}
+
+/// Removes only a union's null alternative for container validation, preserving the stored type.
+fn nullable_dimension_property_type(ty: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    if !members.contains(&PhpType::Void) { return None; }
+    let mut nonnull: Vec<_> = members.iter().filter(|member| **member != PhpType::Void).cloned().collect();
+    match nonnull.len() {
+        0 => None,
+        1 => nonnull.pop(),
+        _ => Some(PhpType::Union(nonnull)),
+    }
+}
+
 /// Computes the updated type of an array property after an indexed write (`$prop[$index] = value`).
 ///
 /// Handles `PhpType::Array` and `PhpType::AssocArray` storage:
@@ -1032,7 +1056,12 @@ fn updated_array_property_assign_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() || prop_ty == &PhpType::Mixed {
+    if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
+        updated_array_property_assign_type(checker, &nonnull, property_has_declared_type,
+            class_name, property, index, normalized_idx_ty, val_ty, span)?;
+        return Ok(prop_ty.clone());
+    }
+    if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
     match prop_ty {
