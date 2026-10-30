@@ -256,7 +256,25 @@ pub(super) fn lower_object_bitnot(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr,
 ) -> Option<LoweredValue> {
     let ty = ctx.builder.value_php_type(value.value);
-    crate::types::object_operators::operator_class(&ty)?;
+    if let Some(class) = crate::types::object_operators::operator_class(&ty)
+        .or_else(|| crate::types::object_operators::cast_class_with_classes(&ty, ctx.classes)) {
+        let operators = class.operators?;
+        if let Some(method) = operators.bit_not {
+            return Some(emit_guarded_adapter(ctx, value, class.name, method, PhpType::Mixed, Some(expr.span)));
+        }
+        if operators.operand_dispatch == elephc_builtin_contract::ObjectOperandDispatch::NumericConversion {
+            return None;
+        }
+    } else {
+        if !can_contain_object(&ty) { return None; }
+        let mut handlers = ctx.classes.keys().filter_map(|name| {
+            let class = elephc_builtin_contract::lookup_class(name)?;
+            Some((class.name, class.operators?.bit_not?))
+        }).collect::<Vec<_>>();
+        handlers.sort_unstable(); handlers.dedup();
+        if handlers.is_empty() { return None; }
+        return Some(lower_dynamic_numeric_cast(ctx, value, PhpType::Mixed, Some(expr.span), &handlers, true));
+    }
     let zero = lower_int_literal(ctx, 0, expr);
     let negative = lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr)?;
     let one = lower_int_literal(ctx, 1, expr);
@@ -467,15 +485,19 @@ pub(super) fn lower_object_numeric_cast(
     }).collect::<Vec<_>>();
     handlers.sort_unstable(); handlers.dedup();
     if handlers.is_empty() { return None; }
-    Some(lower_dynamic_numeric_cast(ctx, input, result_type, span, &handlers))
+    Some(lower_dynamic_numeric_cast(ctx, input, result_type, span, &handlers, false))
 }
 
-/// Selects the applicable native cast while preserving ordinary scalar/object fallback casts.
+/// Selects a native unary adapter while preserving the operation's existing scalar fallback.
 fn lower_dynamic_numeric_cast(
     ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, result_type: PhpType,
-    span: Option<Span>, handlers: &[(&str, &str)],
+    span: Option<Span>, handlers: &[(&str, &str)], bit_not: bool,
 ) -> LoweredValue {
     let Some((class, method)) = handlers.first() else {
+        if bit_not {
+            return ctx.emit_value(Op::RuntimeCall, vec![input.value], None, PhpType::Mixed,
+                Effects::all(), span);
+        }
         let at = span.unwrap_or_else(Span::dummy);
         let operand = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {
             box_operand(ctx, input, at)
@@ -504,7 +526,7 @@ fn lower_dynamic_numeric_cast(
     let object_initialized = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(fallback);
     ctx.restore_initialized_slots(initialized.clone());
-    let value = lower_dynamic_numeric_cast(ctx, input, result_type.clone(), span, &handlers[1..]);
+    let value = lower_dynamic_numeric_cast(ctx, input, result_type.clone(), span, &handlers[1..], bit_not);
     store_value_into_temp(ctx, &temp, result_type, value, at);
     branch_to(ctx, merge);
     let fallback_initialized = ctx.initialized_slots_snapshot();

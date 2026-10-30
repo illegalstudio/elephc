@@ -110,7 +110,8 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
                 assert!(!function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::PhpLocal
                     && local.php_type == crate::types::PhpType::Mixed
                     && local.name.as_deref().is_some_and(crate::names::is_generated_local_name)),
-                    "{target}, xml={xml}, {name}: scalar property updates must not gain Mixed PHP locals");
+                    "{target}, xml={xml}, {name}: scalar property updates must not gain Mixed PHP locals\n{}",
+                    crate::ir::print_function(function));
             }
             let opaque = method(&module, "InlinePropertyCounter::mixedpost");
             assert!(opaque.locals.iter().any(|local| local.name.as_deref()

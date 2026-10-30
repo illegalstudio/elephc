@@ -233,16 +233,24 @@ fn ordinary(
 fn capture_receiver(
     ctx: &mut LoweringContext<'_, '_>, object: &Expr, operands: &[ValueId], owners: &mut Vec<Capture>, span: Span,
 ) -> Result<String, LoweredValue> {
-    let name = reserve(ctx, PhpType::Mixed, owners, span);
+    let checked = array_cast_source::array_cast_source_type_for_ir(ctx, object);
+    let capture_type = match &checked {
+        PhpType::Object(class) if !class.is_empty() && !ctx.interfaces.contains_key(class)
+            && !crate::types::builtin_classes::has_native_dimensions(class, ctx.classes) => checked,
+        _ => PhpType::Mixed,
+    };
+    let name = reserve(ctx, capture_type.clone(), owners, span);
     let receiver = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
     if ctx.builder.insertion_block_is_terminated() { return Err(receiver.value); }
     let ty = ctx.builder.value_php_type(receiver.value.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
-    let snapshot = crate::ir_lower::ownership::copy_assignment_value(ctx, boxed, Some(span));
-    store_value_into_temp(ctx, &name, PhpType::Mixed, snapshot, span);
+    let captured = if capture_type == PhpType::Mixed {
+        ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span))
+    } else { borrowed };
+    let snapshot = crate::ir_lower::ownership::copy_assignment_value(ctx, captured, Some(span));
+    store_value_into_temp(ctx, &name, capture_type, snapshot, span);
     receiver.finish(ctx, span);
     Ok(name)
 }

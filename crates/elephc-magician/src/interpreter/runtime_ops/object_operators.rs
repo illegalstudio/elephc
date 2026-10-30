@@ -155,6 +155,14 @@ pub(super) fn bit_not(
     values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(class) = operator_class(values, value)? else { return Ok(None) };
+    if let Some(operators) = class.operators {
+        if let Some(method) = operators.bit_not {
+            return values.operator_method_call(value, method, vec![]).map(Some);
+        }
+        if operators.operand_dispatch == ObjectOperandDispatch::NumericConversion {
+            return Ok(None);
+        }
+    }
     let Some(method) = class
         .operators
         .and_then(|ops| ops.arithmetic_method(ObjectArithmetic::Sub))

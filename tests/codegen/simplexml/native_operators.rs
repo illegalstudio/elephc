@@ -10,6 +10,49 @@
 
 use crate::support::*;
 
+/// Bitwise NOT refuses native XML and subclasses through typed AOT and runtime eval dispatch.
+#[test]
+fn test_simplexml_bitnot_refusal_bundle() {
+    if skip_without_xml_native("test_simplexml_bitnot_refusal_bundle") { return; }
+    let setup = r#"<?php
+class BitnotNativeXml extends SimpleXMLElement {}
+$xml = new SimpleXMLElement('<n>5</n>');
+$iterator = new SimpleXMLIterator('<n>5</n>');
+$child = new BitnotNativeXml('<n>5</n>');
+"#;
+    let body = r#"
+function rejectNativeBitnot(mixed $value): void {
+    try { ~$value; echo 'unexpected|'; }
+    catch (TypeError $error) { echo $error->getMessage(), '|'; }
+}
+try { ~$xml; echo 'unexpected|'; }
+catch (TypeError $error) { echo $error->getMessage(), '|'; }
+try { $unused = ~$iterator; echo 'unexpected|'; }
+catch (TypeError $error) { echo $error->getMessage(), '|'; }
+try { $unused = ~$child; echo 'unexpected|'; }
+catch (TypeError $error) { echo $error->getMessage(), '|'; }
+rejectNativeBitnot($xml); rejectNativeBitnot($iterator); rejectNativeBitnot($child);
+"#;
+    let expected = concat!(
+        "Cannot perform bitwise not on SimpleXMLElement|Cannot perform bitwise not on SimpleXMLIterator|Cannot perform bitwise not on BitnotNativeXml|",
+        "Cannot perform bitwise not on SimpleXMLElement|Cannot perform bitwise not on SimpleXMLIterator|Cannot perform bitwise not on BitnotNativeXml|",
+    );
+    let aot = format!("{setup}{body}");
+    let eval_setup = setup.replace("BitnotNativeXml", "EvalBitnotNativeXml");
+    let eval_body = body.replace("rejectNativeBitnot", "rejectEvalNativeBitnot");
+    let eval_expected = expected.replace("BitnotNativeXml", "EvalBitnotNativeXml");
+    let eval = format!("{eval_setup}\n$code = $argc > 0 ? <<<'BITNOT_NATIVE'\n{eval_body}\nBITNOT_NATIVE\n : ''; eval($code);");
+    assert_bundle_with(&[
+        BundleCase { name: "bitnot_xml_aot", source: &aot, expected },
+        BundleCase { name: "bitnot_xml_eval", source: &eval, expected: &eval_expected },
+    ], |source| {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    });
+}
+
 /// Both native families retain their casts and operator result domains in AOT and opaque eval.
 #[test]
 fn test_simplexml_gmp_mixed_operator_dispatch_bundle() {
@@ -90,7 +133,8 @@ nativeForeignNumberAdd($xml, $number); nativeForeignNumberAdd($number, $xml);
 "#;
     let expected = "Unsupported operand types: SimpleXMLElement + BcMath\\Number|Unsupported operand types: BcMath\\Number + SimpleXMLElement|";
     let aot = format!("{setup}{body}");
-    let eval = format!("{setup}\n$code = $argc > 0 ? <<<'FOREIGN_NUMBER'\n{body}\nFOREIGN_NUMBER\n : ''; eval($code);");
+    let eval_body = body.replace("nativeForeignNumberAdd", "evalForeignNumberAdd");
+    let eval = format!("{setup}\n$code = $argc > 0 ? <<<'FOREIGN_NUMBER'\n{eval_body}\nFOREIGN_NUMBER\n : ''; eval($code);");
     assert_bundle_with(&[
         BundleCase { name: "foreign_number_aot", source: &aot, expected },
         BundleCase { name: "foreign_number_eval", source: &eval, expected },

@@ -59,14 +59,48 @@ fn boxed_native_write_receivers_guard_null_on_every_target() {
 function nativeBoxedWrite(mixed $node): void { $node->leaf = 'value'; }
 function nativeBoxedNestedWrite(mixed $node): void { $node->child->leaf = 'value'; }
 function nativeBoxedCompound(mixed $node): void { $node->leaf .= 'value'; }
+function nativeBoxedDimensionWrite(mixed $node): void { $node[0]->leaf = 'value'; }
+function nativeBoxedBitnot(mixed $node): mixed { return ~$node; }
+function nativeTypedBitnot(SimpleXMLElement $node): mixed { return ~$node; }
 $xml = new SimpleXMLElement('<r/>');
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        for name in ["nativeBoxedWrite", "nativeBoxedNestedWrite", "nativeBoxedCompound"] {
+        for name in ["nativeBoxedWrite", "nativeBoxedNestedWrite", "nativeBoxedCompound", "nativeBoxedDimensionWrite"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
+        }
+        let function = module.functions.iter().find(|f| f.name == "nativeBoxedDimensionWrite").unwrap();
+        let mut transferred_guards = 0;
+        for (guard_position, guard) in function.instructions.iter().enumerate() {
+            use crate::ir::{Immediate, LocalKind, Op, ValueDef};
+            if guard.op != Op::IsNull { continue; }
+            let value = guard.operands[0];
+            let Some(ValueDef::Instruction { inst, .. }) = function.value(value).map(|value| value.def) else { continue; };
+            let producer = function.instruction(inst).unwrap();
+            let Some(Immediate::LocalSlot(source)) = producer.immediate else { continue; };
+            if producer.op != Op::LoadLocal || function.locals[source.as_raw() as usize].kind != LocalKind::OwnedTemp { continue; }
+            transferred_guards += 1;
+            let protected = function.instructions[..guard_position].iter().enumerate().any(|(store_position, store)| {
+                let Some(Immediate::LocalSlot(owner)) = store.immediate else { return false; };
+                store.op == Op::StoreLocal && store.operands == [value]
+                    && function.instructions[store_position + 1..guard_position].iter().any(|push|
+                        push.op == Op::PushCallOperandOwner && push.immediate == Some(Immediate::LocalSlot(owner)))
+                    && !function.instructions[store_position + 1..guard_position].iter().any(|clear|
+                        matches!(clear.op, Op::UnsetLocal | Op::ReleaseLocalSlot)
+                            && clear.immediate == Some(Immediate::LocalSlot(owner)))
+            });
+            assert!(protected, "{target}: a transferred null-write receiver needs a live unwind owner\n{}",
+                crate::ir::print_function(function));
+        }
+        assert!(transferred_guards > 0, "{target}: fixture must exercise a transferred merge result");
+        for name in ["nativeBoxedBitnot", "nativeTypedBitnot"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
+                && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == "__elephc_bitnot")),
+                "{target}: {name} must retain the native refusal adapter");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }

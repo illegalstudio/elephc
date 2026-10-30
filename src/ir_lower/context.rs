@@ -211,6 +211,7 @@ pub(crate) struct LoweringSnapshot {
     reference_call_context: Option<ReferenceCallContext>,
     refusals: usize,
     scoped_write_scopes: Vec<super::scoped_writes::ScopedWriteScope>,
+    taken_owned_temp_values: HashSet<ValueId>,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
     /// Provisional offset receiver reads belonging to this speculative function state.
@@ -309,6 +310,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Live owners for captures introduced by the scoped statement write planners.
     pub(super) scoped_write_scopes: Vec<super::scoped_writes::ScopedWriteScope>,
+    /// Values that own a reference transferred out of an already-cleared merge temporary.
+    taken_owned_temp_values: HashSet<ValueId>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
@@ -665,6 +668,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             expression_depth: 0,
             reference_call_context: None,
             scoped_write_scopes: Vec::new(),
+            taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
             string_offset_receivers: Vec::new(),
@@ -738,6 +742,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // always lowered again for real, and that pass records its refusals again.
             refusals: crate::ir_lower::diagnostics::mark(),
             scoped_write_scopes: self.scoped_write_scopes.clone(),
+            taken_owned_temp_values: self.taken_owned_temp_values.clone(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
@@ -848,6 +853,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         crate::ir_lower::diagnostics::rollback_to(snapshot.refusals);
         self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
         self.scoped_write_scopes = snapshot.scoped_write_scopes;
+        self.taken_owned_temp_values = snapshot.taken_owned_temp_values;
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
         self.string_offset_receivers = snapshot.string_offset_receivers;
@@ -3389,6 +3395,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Op::UnsetLocal.default_effects(),
             span,
         );
+    }
+
+    /// Marks only a one-shot owned load whose backing slot has just been cleared.
+    pub(crate) fn mark_taken_owned_temp(&mut self, value: ValueId) {
+        if self.value_is_owned_temp_load(value) {
+            self.taken_owned_temp_values.insert(value);
+        }
+    }
+
+    /// Distinguishes a transferred merge result from ordinary and still-live local loads.
+    pub(crate) fn value_is_taken_owned_temp(&self, value: ValueId) -> bool {
+        self.taken_owned_temp_values.contains(&value)
+            && self.builder.value_ownership(value) != Ownership::Borrowed
     }
 
     /// Emits an idempotent promotion of an initialized local into an owned fallback ref-cell.

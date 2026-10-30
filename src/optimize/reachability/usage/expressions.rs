@@ -1233,6 +1233,9 @@ impl Scanner<'_> {
             if let Some(method) = operators.boolean {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
+            if let Some(method) = operators.bit_not {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
             if let Some(casts) = operators.casts {
                 for method in [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
                     .into_iter()

@@ -187,6 +187,9 @@ class SimpleXMLElement implements Stringable, Countable, RecursiveIterator {
     }
     final public function __elephc_int(): int { $handle = $this->__elephc_handle; return (int)elephc_xml_sx_string($handle, 0); }
     final public function __elephc_float(): float { $handle = $this->__elephc_handle; return (float)elephc_xml_sx_string($handle, 0); }
+    final public function __elephc_bitnot(): mixed {
+        throw new TypeError('Cannot perform bitwise not on ' . get_class($this));
+    }
     final public function __elephc_number(): int|float {
         $handle = $this->__elephc_handle; $text = elephc_xml_sx_string($handle, 0);
         return __elephc_simplexml_parse_number($text);

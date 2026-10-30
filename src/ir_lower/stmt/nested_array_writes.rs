@@ -47,15 +47,19 @@ pub(super) fn lower_nested_array_assign(
     }
     let static_update = matches!(&update,
         Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }));
+    let runtime_property = super::nested_write_sources::scoped_runtime_property_root(target);
     if static_update
         && (nested_target_has_static_array_root(ctx, target)
             || nested_target_has_local_array_root(ctx, target)
-            || attached_property_root(ctx, target))
+            || attached_property_root(ctx, target) || runtime_property)
     {
         let mut sources = Vec::new();
-        let target = super::nested_write_sources::capture_update_target(ctx, target, &mut sources);
         let mut value = value.clone();
-        capture_compound_rhs(ctx, &mut value, &mut sources);
+        // The parser already captured the receiver and raw name. PHP converts that name
+        // only after the compound RHS, then both update halves share the converted string.
+        if runtime_property { capture_compound_rhs(ctx, &mut value, &mut sources); }
+        let target = super::nested_write_sources::capture_update_target(ctx, target, &mut sources);
+        if !runtime_property { capture_compound_rhs(ctx, &mut value, &mut sources); }
         let mut snapshots = Vec::new();
         let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots, true);
         if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {

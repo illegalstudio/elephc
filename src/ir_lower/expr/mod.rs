@@ -272,6 +272,7 @@ pub(crate) use prepared_binary::lower_prepared_binary;
 pub(crate) use array_access::lower_array_access_from_values;
 pub(crate) use property_access::{
     borrow_native_xml_property_receiver,
+    coerce_runtime_property_name,
     lower_property_get_from_value,
     lower_native_xml_property_write_fetch,
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,

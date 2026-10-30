@@ -9,6 +9,50 @@
 
 use crate::support::*;
 
+/// Runtime property names are converted once and stay live for both indexed update halves.
+#[test]
+fn test_computed_indexed_name_owners_bundle() {
+    let source = r#"<?php
+class ScopedIndexedBox {
+    public array $items = [0];
+    public function receiver(): self { echo 'r|'; return $this; }
+}
+class ScopedIndexedName {
+    public function __toString(): string { echo 's|'; return 'items'; }
+    public function __destruct() { echo 'd|'; }
+}
+function makeScopedIndexedName(int $kind): mixed { echo 'n|'; return $kind === 0 ? 'items' : new ScopedIndexedName(); }
+function scopedIndexedKey(): int { echo 'k|'; return 0; }
+function scopedIndexedValue(): int { echo 'v|'; return 2; }
+$box = new ScopedIndexedBox();
+for ($kind = 0; $kind < 2; $kind++) {
+    $box->receiver()->{makeScopedIndexedName($kind)}[scopedIndexedKey()] += scopedIndexedValue();
+    echo json_encode($box->items), '|';
+    $box->receiver()->{makeScopedIndexedName($kind)}[scopedIndexedKey()]++;
+    echo json_encode($box->items), '|';
+    --$box->receiver()->{makeScopedIndexedName($kind)}[scopedIndexedKey()];
+    echo json_encode($box->items), '|';
+}
+unset($box);
+"#;
+    let renamed = source.replace("ScopedIndexed", "EvalScopedIndexed").replace("scopedIndexed", "evalScopedIndexed");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = concat!(
+        "r|n|k|v|[2]|r|n|k|[3]|r|n|k|[2]|",
+        "r|n|k|v|s|d|[4]|r|n|k|s|d|[5]|r|n|k|s|d|[4]|",
+    );
+    assert_bundle_with(&[
+        BundleCase { name: "computed_names_aot", source, expected },
+        BundleCase { name: "computed_names_eval", source: &eval, expected },
+    ], |source| {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    });
+}
+
 /// Erased object containers use offsetSet through readable readonly and private(set) properties.
 #[test]
 fn test_erased_declared_arrayaccess_property_writeback() {

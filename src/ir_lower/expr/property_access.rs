@@ -1003,7 +1003,7 @@ pub(super) fn class_extends_class(
 /// codegen boxed and was refused outright. Casting here keeps one string-name contract for the
 /// get, set and unset ladders, and leaves an already-`Str` name untouched so its producer stays
 /// visible to the owned-temporary cleanup.
-pub(super) fn coerce_runtime_property_name(
+pub(crate) fn coerce_runtime_property_name(
     ctx: &mut LoweringContext<'_, '_>,
     property: LoweredValue,
     span: Span,

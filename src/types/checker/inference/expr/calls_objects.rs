@@ -80,7 +80,15 @@ impl Checker {
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if let Some(class) = crate::types::object_operators::operator_class(&ty) {
+                if let Some(class) = crate::types::object_operators::operator_class(&ty)
+                    .or_else(|| crate::types::object_operators::cast_class_with_classes(&ty, &self.classes)) {
+                    if class.operators.is_some_and(|ops| ops.bit_not.is_some()) {
+                        return Ok(PhpType::Mixed);
+                    }
+                    if class.operators.is_some_and(|ops| ops.operand_dispatch
+                        == elephc_builtin_contract::ObjectOperandDispatch::NumericConversion) {
+                        return Err(CompileError::new(expr.span, "Bitwise NOT requires integer operand"));
+                    }
                     return Ok(PhpType::Object(class.name.to_string()));
                 }
                 if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {

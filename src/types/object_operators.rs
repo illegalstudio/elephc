@@ -255,6 +255,7 @@ mod tests {
         arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")], compare: Some("synthetic_order"), boolean: None,
         arithmetic_result: elephc_builtin_contract::ObjectArithmeticResult::Object,
         operand_dispatch: elephc_builtin_contract::ObjectOperandDispatch::Handler,
+        bit_not: None,
         bitwise: &[(ObjectBitwise::And, "synthetic_and")],
         shift: &[(ObjectShift::Left, "synthetic_shl")],
         casts: Some(&CASTS),

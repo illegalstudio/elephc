@@ -963,8 +963,8 @@ pub(crate) fn pin_in_flight_owners(
         if !explicit_lifetime_pin && !ctx.value_is_owning_temporary(value) {
             continue;
         }
-        // A load out of a variable is never such a temporary, whatever the provisional
-        // ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
+        // A transferred merge result owns its reference after take_owned_temp cleared the
+        // backing slot. Other local loads stay excluded, whatever provisional ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
         // owned so a release can be emitted and pruned later, and the variable keeps owning the
         // payload either way: publishing it would run the element destructors of a LIVE `$values`
         // during the unwind, before the catch body that PHP runs first
@@ -972,7 +972,7 @@ pub(crate) fn pin_in_flight_owners(
         if matches!(
             ctx.builder.value_defining_op(value.value),
             Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadGlobal),
-        ) {
+        ) && !ctx.value_is_taken_owned_temp(value.value) {
             continue;
         }
         let ty = ctx.builder.value_php_type(value.value);

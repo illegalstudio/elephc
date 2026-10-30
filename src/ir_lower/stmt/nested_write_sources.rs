@@ -31,6 +31,16 @@ pub(super) fn capture_update_target(
     capture_target_inner(ctx, target, sources, true)
 }
 
+/// Recognizes a parser-scoped runtime property name shared by an indexed read and write.
+pub(super) fn scoped_runtime_property_root(target: &Expr) -> bool {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    matches!(&root.kind, ExprKind::DynamicPropertyAccess { property, .. }
+        if matches!(&property.kind, ExprKind::Variable(name)
+            if name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX)
+                && crate::names::is_generated_local_name(name)))
+}
+
 /// Shares dimension capture while preserving the caller's receiver-selection timing.
 fn capture_target_inner(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, sources: &mut Vec<WriteSource>,
@@ -52,6 +62,18 @@ fn capture_target_inner(
                 object.as_ref().clone()
             } else { capture(ctx, object, sources) }), property: property.clone(),
         },
+        ExprKind::DynamicPropertyAccess { object, property } if late_receiver => {
+            let object = if super::property_array_writes::deferred_property_receiver(ctx, object) {
+                object.as_ref().clone()
+            } else { capture(ctx, object, sources) };
+            let name = crate::ir_lower::scoped_writes::property_name(ctx, property, target.span)
+                .unwrap_or_else(|| {
+                    let value = lower_expr(ctx, property);
+                    crate::ir_lower::expr::coerce_runtime_property_name(ctx, value, target.span)
+                });
+            let name = capture_lowered(ctx, name, target.span, sources);
+            ExprKind::DynamicPropertyAccess { object: Box::new(object), property: Box::new(name) }
+        }
         _ => return target.clone(),
     };
     Expr::new(kind, target.span)

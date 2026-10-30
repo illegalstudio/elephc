@@ -507,6 +507,7 @@ impl GraphState {
                                 || operators.shift.iter().any(|(_, adapter)| *adapter == method)
                                 || operators.compare == Some(method.as_str())
                         } else { operators.boolean == Some(method.as_str()) || operators.json == Some(method.as_str())
+                            || operators.bit_not == Some(method.as_str())
                             || operators.native_clone == Some(method.as_str())
                             || operators.properties.iter().any(|(_, adapter)| *adapter == method)
                             || operators.dimensions.iter().any(|(_, adapter)| *adapter == method)

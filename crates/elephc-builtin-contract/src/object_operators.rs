@@ -104,6 +104,8 @@ pub struct ClassOperators {
     pub arithmetic_result: ObjectArithmeticResult,
     /// Whether binary adapters implement a native handler or numeric conversion fallback.
     pub operand_dispatch: ObjectOperandDispatch,
+    /// Instance adapter for bitwise NOT, including a class-specific PHP refusal.
+    pub bit_not: Option<&'static str>,
     /// Public compiler adapters for `&`, `|`, and `^`.
     pub bitwise: &'static [(ObjectBitwise, &'static str)],
     /// Public compiler adapters for `<<` and `>>`.
@@ -171,6 +173,7 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     ],
     arithmetic_result: ObjectArithmeticResult::Object,
     operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
     bitwise: &[],
     shift: &[],
     compare: Some("__elephc_compare"),
@@ -196,6 +199,7 @@ pub const GMP_OPERATORS: ClassOperators = ClassOperators {
     native_casts: &[],
     arithmetic_result: ObjectArithmeticResult::Object,
     operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
     arithmetic: &[
         (ObjectArithmetic::Add, "__elephc_add"),
         (ObjectArithmetic::Sub, "__elephc_sub"),
@@ -246,6 +250,7 @@ pub static SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
         (ObjectArithmetic::Pow, "__elephc_pow")],
     arithmetic_result: ObjectArithmeticResult::Number,
     operand_dispatch: ObjectOperandDispatch::NumericConversion,
+    bit_not: Some("__elephc_bitnot"),
     bitwise: &[],
     shift: &[],
     casts: None,
@@ -269,6 +274,7 @@ mod tests {
             arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],
             arithmetic_result: ObjectArithmeticResult::Object,
             operand_dispatch: ObjectOperandDispatch::Handler,
+            bit_not: None,
             bitwise: &[(ObjectBitwise::And, "synthetic_and")],
             shift: &[(ObjectShift::Left, "synthetic_shl")],
             compare: None,
