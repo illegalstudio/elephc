@@ -82,6 +82,52 @@ fn erased_property_dimension_uses_declared_storage_on_every_target() {
     }
 }
 
+/// Native XML candidates are excluded while ArrayAccess and buffer slots keep their typed writes.
+#[test]
+fn erased_property_dimension_eligibility_matches_typed_writers_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class XmlDeclaredArrayWriteStorage extends SimpleXMLElement { public array $items = []; }
+class PlainDeclaredArrayWriteStorage { public array $items = []; }
+class ObjectDeclaredWriteStorage {
+    public ArrayObject $items;
+    public function __construct() { $this->items = new ArrayObject([]); }
+}
+class BufferDeclaredWriteStorage { public function __construct(public buffer<int> $values) {} }
+function writeErasedDeclaredItems(mixed $box): void { $box->items[0] = 'x'; }
+function writeErasedDeclaredBuffer(mixed $box): void { $box->values[0] = 7; }
+writeErasedDeclaredItems(new XmlDeclaredArrayWriteStorage('<r/>'));
+writeErasedDeclaredItems(new PlainDeclaredArrayWriteStorage());
+writeErasedDeclaredItems(new ObjectDeclaredWriteStorage());
+buffer<int> $values = buffer_new<int>(1);
+writeErasedDeclaredBuffer(new BufferDeclaredWriteStorage($values)); buffer_free($values);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let items = module.functions.iter().find(|function| function.name == "writeErasedDeclaredItems").unwrap();
+        assert!(!items.instructions.iter().any(|inst| inst.op == Op::MixedUnbox
+            && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
+                matches!(&value.php_type, crate::types::PhpType::Object(class)
+                    if class == "XmlDeclaredArrayWriteStorage"))),
+            "{target}: native XML properties must not enter the ordinary writer");
+        let object_arm = items.blocks.iter().find(|block| block.instructions.iter().any(|id|
+            items.instruction(*id).is_some_and(|inst| inst.op == Op::PropGet
+                && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
+                    matches!(&value.php_type, crate::types::PhpType::Object(class) if class == "ArrayObject")))))
+            .expect("declared ArrayObject write arm");
+        assert!(!object_arm.instructions.iter().any(|id| items.instruction(*id).is_some_and(|inst|
+            inst.op == Op::RuntimeCall && matches!(inst.immediate, Some(Immediate::Data(_))))),
+            "{target}: ArrayAccess writes must not use the stdClass-only property fallback");
+        let buffer = module.functions.iter().find(|function| function.name == "writeErasedDeclaredBuffer").unwrap();
+        assert!(buffer.instructions.iter().any(|inst| inst.op == Op::BufferSet), "{target}: typed buffer write");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Object arithmetic borrows an incdec working slot until overwrite and final cleanup.
 #[test]
 fn native_dimension_incdec_working_slot_has_one_owner_on_every_target() {

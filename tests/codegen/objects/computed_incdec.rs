@@ -9,6 +9,37 @@
 
 use crate::support::*;
 
+/// Erased object containers use offsetSet through readable readonly and private(set) properties.
+#[test]
+fn test_erased_declared_arrayaccess_property_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+interface ErasedObjectContainerPeer {}
+class ErasedObjectContainers implements ErasedObjectContainerPeer {
+    public ArrayObject $items;
+    public readonly ArrayObject $readonlyItems;
+    public private(set) ArrayObject $privateItems;
+    public function __construct() {
+        $this->items = new ArrayObject([1]);
+        $this->readonlyItems = new ArrayObject([2]);
+        $this->privateItems = new ArrayObject([3]);
+    }
+}
+function writeMixedObjectContainer(mixed $box): void { $box->items[0] = 7; }
+function writeRawObjectContainer(object $box): void { $box->items[0] += 1; }
+function writeInterfaceObjectContainer(ErasedObjectContainerPeer $box): void { $box->items[0] += 1; }
+function writeReadonlyObjectContainer(mixed $box): void { $box->readonlyItems[0] = 8; }
+function writePrivateSetObjectContainer(mixed $box): void { $box->privateItems[0] = 9; }
+$box = new ErasedObjectContainers();
+writeMixedObjectContainer($box); writeRawObjectContainer($box); writeInterfaceObjectContainer($box);
+writeReadonlyObjectContainer($box); writePrivateSetObjectContainer($box);
+echo $box->items[0], ':', $box->readonlyItems[0], ':', $box->privateItems[0];
+unset($box);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "9:8:9");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Erased declared-array receivers keep COW and update their actual property for every write form.
 #[test]
 fn test_erased_declared_property_dimension_writeback() {

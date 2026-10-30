@@ -1282,3 +1282,23 @@ echo ptr_sizeof("Slot"), "|", ptr_sizeof("Holder");
     );
     assert_eq!(out, "null|3|16|8");
 }
+
+/// Erased receivers dispatch buffer writes to their actual declared buffer storage.
+#[test]
+fn test_erased_declared_buffer_property_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedBufferPropertyStore {
+    public function __construct(public buffer<int> $values) {}
+}
+function writeErasedBufferProperty(mixed $store): void { $store->values[0] = 41; }
+buffer<int> $values = buffer_new<int>(1);
+$store = new ErasedBufferPropertyStore($values);
+writeErasedBufferProperty($store);
+echo $values[0], ':', $store->values[0];
+buffer_free($values);
+unset($store);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "41:41");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

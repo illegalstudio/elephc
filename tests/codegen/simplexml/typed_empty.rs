@@ -9,6 +9,33 @@
 
 use crate::support::*;
 
+/// An unreachable ordinary-write arm must not treat an XML subclass's declared field as storage.
+#[test]
+fn test_simplexml_erased_array_write_ignores_shadowing_declared_storage() {
+    if skip_without_xml_native("test_simplexml_erased_array_write_ignores_shadowing_declared_storage") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedArrayStorageXml extends SimpleXMLElement { public array $items = []; }
+class ErasedMixedStorageXml extends SimpleXMLElement { public mixed $items = []; }
+class ErasedUntypedStorageXml extends SimpleXMLElement { public $items = []; }
+class ErasedOrdinaryStorageXmlControl { public array $items = []; }
+function writeErasedStorageXml(mixed $box): void { $box->items[0] = 'x'; }
+foreach ([new ErasedArrayStorageXml('<r/>'), new ErasedMixedStorageXml('<r/>'), new ErasedUntypedStorageXml('<r/>')] as $xml) {
+    writeErasedStorageXml($xml);
+    echo $xml->asXML(), '|';
+}
+$ordinary = new ErasedOrdinaryStorageXmlControl(); writeErasedStorageXml($ordinary);
+echo json_encode($ordinary->items);
+unset($xml, $ordinary);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, concat!(
+        "<?xml version=\"1.0\"?>\n<r><items>x</items></r>\n|",
+        "<?xml version=\"1.0\"?>\n<r><items>x</items></r>\n|",
+        "<?xml version=\"1.0\"?>\n<r><items>x</items></r>\n|[\"x\"]",
+    ));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Linking SimpleXML preserves the ordinary magic presence protocol for opaque receivers.
 #[test]
 fn test_simplexml_named_isset_preserves_ordinary_magic_hooks() {

@@ -22,19 +22,26 @@ pub(super) fn lower(
             if class.is_empty() || ctx.interfaces.contains_key(&class)) { return false; }
     let mut classes: Vec<_> = ctx.classes.iter().filter_map(|(name, info)| {
         if info.methods.contains_key("__get") || info.methods.contains_key("__set")
-            || info.readonly_properties.contains(property)
             || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
             || !crate::ir_lower::expr::property_is_accessible_for_ir(ctx, name, info, property)
         { return None; }
-        if let Some(visibility) = info.property_set_visibilities.get(property) {
+        // Use the writer's own classifier, which excludes inherited native XML properties.
+        let property_ty = object_type_property_type(ctx, &PhpType::Object(name.clone()), property)?;
+        let (_, (_, declared)) = info.visible_property(property)?;
+        let object_container = type_satisfies_array_access_for_ir(ctx, declared);
+        let supported = property_ty.is_php_array() || property_ty == PhpType::Mixed
+            || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
+                | PhpType::Buffer(_)) || object_container;
+        if !supported || (!object_container && info.readonly_properties.contains(property)) {
+            return None;
+        }
+        // Mutating an ArrayAccess object's contents only reads the owning property.
+        if let Some(visibility) = info.property_set_visibilities.get(property).filter(|_| !object_container) {
             let declaring = info.property_declaring_classes.get(property).map(String::as_str)
                 .unwrap_or(name);
             if !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility) { return None; }
         }
-        let (_, (_, property_ty)) = info.visible_property(property)?;
-        (property_ty.is_php_array() || matches!(property_ty.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed))
-            .then(|| name.clone())
+        Some(name.clone())
     }).collect();
     classes.sort();
     if classes.is_empty() { return false; }
@@ -106,7 +113,18 @@ pub(super) fn fallback(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     index: LoweredValue, value: LoweredValue, span: Span,
 ) {
+    let ty = ctx.builder.value_php_type(object.value);
+    let mut roots = Vec::new();
+    let object = if matches!(&ty, PhpType::Object(class)
+        if class.is_empty() || ctx.interfaces.contains_key(class)) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
+        root_property_write_value(ctx, boxed, span, &mut roots)
+    } else { object };
     let data = ctx.intern_string(property);
     ctx.emit_void(Op::RuntimeCall, vec![object.value, index.value, value.value],
         Some(Immediate::Data(data)), effects_lookup::runtime_effects(), Some(span));
+    retire_property_write_roots(ctx, roots, span);
 }
