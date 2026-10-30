@@ -112,7 +112,7 @@ pub(super) fn lower_property_hash_read(
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&found);
     let payload = if target.arch == Arch::AArch64 { "x1" } else { "rdi" };
-    abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(target, 0), payload);
+    abi::emit_reg_move(ctx.emitter, abi::int_result_reg(ctx.emitter), payload);
     // The universal value copy resolves references and preserves shared resource identity.
     abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     ctx.emitter.label(&done);

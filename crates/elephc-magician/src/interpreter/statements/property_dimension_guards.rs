@@ -120,6 +120,9 @@ fn native_storage(
                 NativeStorage::Plain
             } else { NativeStorage::Deferred });
         }
+        // A rejected declared slot is not a raw dynamic entry, even when eval's
+        // stdClass backing stores it under an ordinary property name.
+        return Ok(NativeStorage::Deferred);
     }
     let native = if dynamic.is_some() {
         eval_dynamic_class_native_property_metadata(&class, property, context, values)?
@@ -141,6 +144,7 @@ fn native_storage(
                 NativeStorage::Plain
             } else { NativeStorage::Deferred });
         }
+        return Ok(NativeStorage::Deferred);
     }
     Ok(NativeStorage::Dynamic)
 }

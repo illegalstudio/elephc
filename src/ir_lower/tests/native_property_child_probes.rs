@@ -68,7 +68,22 @@ $box = new TargetGenericProbe(); targetGenericProbeBorrowed($box); $box->targetG
                     | Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::GetClass))))),
                 "{target}: {} must not acquire a temporary-child class probe", function.name);
         }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+        if target == "linux-x86_64" {
+            let mut reads = 0;
+            for arm in assembly.split("property_hash_read_found").skip(1) {
+                // Only label definitions start a found arm; branch operands end at a newline.
+                let Some((suffix, body)) = arm.split_once(':') else { continue; };
+                if suffix.contains('\n') { continue; }
+                let body = body.split("property_hash_read_done").next().unwrap();
+                let lines = body.lines().collect::<Vec<_>>();
+                assert!(lines.windows(2).any(|pair| pair[0].contains("mov rax, rdi")
+                    && pair[1].contains("call __rt_mixed_clone")),
+                    "{target}: raw hash reads must use the custom Mixed input register\n{body}");
+                reads += 1;
+            }
+            assert!(reads > 0, "{target}: the dynamic child fixture must emit a hash read");
+        }
     }
 }
