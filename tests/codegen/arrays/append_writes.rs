@@ -8,7 +8,7 @@
 //! - Append uses the runtime next-index operation rather than a guessed numeric key.
 //! - Expression results and receiver evaluation must preserve PHP source order.
 
-use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
+use crate::support::{compile_and_run, compile_and_run_with_heap_debug, without_ir_opt};
 
 /// An out-of-range negative string offset warns before rejecting an empty RHS.
 #[test]
@@ -1120,4 +1120,78 @@ restore_error_handler(); var_dump($items);
             assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         }
     }
+}
+
+/// Appending to an `ArrayAccess` object dispatches `offsetSet(null, $value)`, never an
+/// `append()` method (#1478).
+#[test]
+fn test_arrayaccess_append_calls_offset_set() {
+    let out = compile_and_run(
+        r#"<?php
+class A implements ArrayAccess {
+    public static array $log = [];
+    public function offsetSet(mixed $o, mixed $v): void { A::$log[] = ($o === null ? "null" : "key") . "=" . $v; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetUnset(mixed $o): void {}
+}
+function f(A $x): string { $x[] = 5; return implode(",", A::$log); }
+echo f(new A()), "\n";
+"#,
+    );
+    assert_eq!(out, "null=5\n");
+}
+
+/// The same dispatch for a union of `ArrayAccess` classes, which `codegen_repr` boxes into
+/// `Mixed` (#1497).
+#[test]
+fn test_union_arrayaccess_append_calls_offset_set() {
+    let out = compile_and_run(
+        r#"<?php
+class A implements ArrayAccess {
+    public static array $log = [];
+    public function offsetSet(mixed $o, mixed $v): void { A::$log[] = ($o === null ? "null" : "key") . "=" . $v; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetUnset(mixed $o): void {}
+}
+class B implements ArrayAccess {
+    public static array $log = [];
+    public function offsetSet(mixed $o, mixed $v): void { B::$log[] = ($o === null ? "null" : "key") . "=" . $v; }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetUnset(mixed $o): void {}
+}
+function f(A|B $x): string { $x[] = 5; return implode(",", A::$log) . "/" . implode(",", B::$log); }
+echo f(new A()), " ", f(new B()), "\n";
+"#,
+    );
+    assert_eq!(out, "null=5/ null=5/null=5\n");
+}
+
+/// A throwing `offsetSet` must not leak the value the append could not store (#1478 review).
+#[test]
+fn test_arrayaccess_append_throwing_offset_set_does_not_leak() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class A implements ArrayAccess {
+    public function offsetSet(mixed $o, mixed $v): void { throw new RuntimeException("boom"); }
+    public function offsetGet(mixed $o): mixed { return null; }
+    public function offsetExists(mixed $o): bool { return false; }
+    public function offsetUnset(mixed $o): void {}
+}
+function mk(): string { return str_repeat("ab", 200); }
+function f(A $a): string {
+    for ($i = 0; $i < 20; $i++) { try { $a[] = mk(); } catch (RuntimeException $e) {} }
+    return "done";
+}
+echo f(new A()), "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
 }
