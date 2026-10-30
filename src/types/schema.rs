@@ -352,6 +352,11 @@ pub struct ClassInfo {
     /// Trait method aliases declared directly by this class, as `(alias, Trait::method)`.
     pub trait_aliases: Vec<(String, String)>,
     pub properties: Vec<(String, PhpType)>,
+    /// This class's OWN property declarations in source order, instance and static
+    /// interleaved, exactly as PHP's reflection reports them (#1654). `properties` is the
+    /// flattened storage order (ancestors first); this is the declaration order the class
+    /// itself contributed.
+    pub own_property_order: Vec<(String, bool)>,
     pub property_offsets: HashMap<String, usize>,
     pub property_declaring_classes: HashMap<String, String>,
     pub defaults: Vec<Option<Expr>>,

@@ -560,3 +560,30 @@ echo ($plain->hasHooks() ? "bad" : "plain") . ":" . count($plain->getHooks());
         "2:get:Set:T:H:2:$doubled::get:$doubled::set:ReflectPropertyHookMetadataTarget:0:1:value:G:S:$doubled::get:$doubled::set:R:1:$readonlyHook::get:RG:RS:N:plain:0"
     );
 }
+
+/// `getProperties()` lists a class's own properties first, in declaration order (statics
+/// interleaved), then each ancestor's remaining properties; `get_class_vars()` lists instance
+/// properties first and statics afterwards, own-first within each group (#1654).
+#[test]
+fn test_reflection_property_order_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    public static $a = 1;
+    public static $b = 2;
+    public $x = 10;
+    public $y = 20;
+}
+class C extends P {
+    public static $z = 3;
+    public static $a = 4;
+    public $w = 30;
+    public $x = 11;
+}
+$r = new ReflectionClass(C::class);
+foreach ($r->getProperties() as $p) { echo $p->getName(), ","; } echo "\n";
+echo implode(",", array_keys(get_class_vars(C::class))), "\n";
+"#,
+    );
+    assert_eq!(out, "z,a,w,x,b,y,\nw,x,y,z,a,b\n");
+}

@@ -586,6 +586,7 @@ pub(crate) fn insert_enum_metadata(
         ClassInfo {
             class_id: *next_class_id,
             declaration_span,
+            own_property_order: Vec::new(),
             is_internal,
             parent: None,
             is_abstract: false,

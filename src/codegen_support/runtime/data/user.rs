@@ -4565,6 +4565,7 @@ mod tests {
         ClassInfo {
             class_id,
             declaration_span: crate::span::Span::dummy(),
+            own_property_order: Vec::new(),
             is_internal: false,
             parent: None,
             is_abstract: false,

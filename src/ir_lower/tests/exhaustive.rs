@@ -185,6 +185,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
     ClassInfo {
         class_id: 1,
         declaration_span: crate::span::Span::dummy(),
+        own_property_order: Vec::new(),
         is_internal: false,
         parent: None,
         is_abstract: false,

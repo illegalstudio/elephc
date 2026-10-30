@@ -103,15 +103,32 @@ pub(super) fn reflection_class_property_names_for_filter(
     class_name: &str,
     filter: Option<i64>,
 ) -> Option<Vec<String>> {
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
+    let lookup = class_name.trim_start_matches('\\');
+    let class_info = ctx.classes.get(lookup)?;
+    // PHP lists the class's own properties first, in declaration order with statics
+    // interleaved, then each ancestor's remaining ones (#1654).
+    let mut ordered: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor = Some(lookup.to_string());
+    while let Some(name) = cursor {
+        let Some(link) = ctx.classes.get(&name) else { break; };
+        for (property, _) in &link.own_property_order {
+            if seen.insert(property.clone()) {
+                ordered.push(property.clone());
+            }
+        }
+        cursor = link.parent.clone();
+    }
+    // Storage-only entries (compiler-injected or dynamic) keep their physical order at the end.
+    for (name, _) in class_info.properties.iter().chain(class_info.static_properties.iter()) {
+        if seen.insert(name.clone()) {
+            ordered.push(name.clone());
+        }
+    }
     Some(
-        class_info
-            .properties
-            .iter()
-            .chain(class_info.static_properties.iter())
-            .map(|(name, _)| name)
+        ordered
+            .into_iter()
             .filter(|name| reflection_property_matches_filter(class_info, name, filter))
-            .cloned()
             .collect(),
     )
 }

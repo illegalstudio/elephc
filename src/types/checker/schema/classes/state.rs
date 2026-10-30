@@ -136,6 +136,11 @@ impl ClassBuildState {
         Ok(ClassInfo {
             class_id,
             declaration_span: class.span,
+            own_property_order: class
+                .properties
+                .iter()
+                .map(|property| (property.name.clone(), property.is_static))
+                .collect(),
             is_internal,
             parent: class.extends.clone(),
             is_abstract: class.is_abstract,

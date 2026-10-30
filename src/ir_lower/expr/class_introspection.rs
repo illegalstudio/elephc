@@ -599,34 +599,62 @@ fn visible_class_default_entries(
             })
             .collect();
     };
+    // PHP's order: the class's own declarations first, then each ancestor's remaining ones,
+    // instance properties before static ones within each group (#1654).
+    let mut chain: Vec<&crate::types::ClassInfo> = Vec::new();
+    let mut cursor = Some(class_name.to_string());
+    while let Some(name) = cursor {
+        let Some(link) = ctx.classes.get(&name) else { break; };
+        chain.push(link);
+        cursor = link.parent.clone();
+    }
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
-    for (index, (property, _)) in info.properties.iter().enumerate() {
-        if info.visible_property_index(property) != Some(index)
-            || info.property_is_virtual(property)
-            || !seen.insert(property.clone())
-            || !instance_property_visible(ctx, class_name, info, property)
-        {
-            continue;
+    for want_static in [false, true] {
+        for link in &chain {
+            for (property, is_static) in &link.own_property_order {
+                if *is_static != want_static || !seen.insert(property.clone()) {
+                    continue;
+                }
+                if want_static {
+                    let Some(index) = info
+                        .static_properties
+                        .iter()
+                        .position(|(name, _)| name == property)
+                    else { continue; };
+                    if !static_property_visible(ctx, class_name, info, property) {
+                        continue;
+                    }
+                    entries.push(ClassDefaultEntry {
+                        name: property.clone(),
+                        declaring_class: info
+                            .static_property_declaring_classes
+                            .get(property)
+                            .cloned()
+                            .unwrap_or_else(|| class_name.to_string()),
+                        default: info.static_defaults.get(index).cloned().flatten(),
+                    });
+                } else {
+                    // The visible slot, not the first same-named one: an ancestor's shadowed
+                    // private slot must not hide the redeclaration (#1654 review).
+                    let Some(index) = info.visible_property_index(property) else { continue; };
+                    if info.property_is_virtual(property)
+                        || !instance_property_visible(ctx, class_name, info, property)
+                    {
+                        continue;
+                    }
+                    entries.push(ClassDefaultEntry {
+                        name: property.clone(),
+                        declaring_class: info
+                            .property_declaring_classes
+                            .get(property)
+                            .cloned()
+                            .unwrap_or_else(|| class_name.to_string()),
+                        default: info.defaults.get(index).cloned().flatten(),
+                    });
+                }
+            }
         }
-        entries.push(ClassDefaultEntry {
-            name: property.clone(),
-            declaring_class: info.property_declaring_classes.get(property)
-                .cloned().unwrap_or_else(|| class_name.to_string()),
-            default: info.defaults.get(index).cloned().flatten(),
-        });
-    }
-    for (index, (property, _)) in info.static_properties.iter().enumerate() {
-        if !seen.insert(property.clone()) || !static_property_visible(ctx, class_name, info, property)
-        {
-            continue;
-        }
-        entries.push(ClassDefaultEntry {
-            name: property.clone(),
-            declaring_class: info.static_property_declaring_classes.get(property)
-                .cloned().unwrap_or_else(|| class_name.to_string()),
-            default: info.static_defaults.get(index).cloned().flatten(),
-        });
     }
     entries
 }
