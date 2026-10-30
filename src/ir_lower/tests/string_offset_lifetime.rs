@@ -421,6 +421,126 @@ function warning_key(string $s, int $i): void { $items = ["seed" => 0]; $items[$
     }
 }
 
+/// A warning-capable array read persists an earlier mixed string cast before reentry.
+#[test]
+fn concat_transient_string_is_persisted_before_warning_rhs() {
+    use crate::ir::{Effects, Op, ValueDef};
+    let module = super::lower_source(
+        r#"<?php
+function concat_warning(array $items): string {
+    return $items["n"] . $items["missing"];
+}
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "concat_warning")
+        .expect("expected concat_warning EIR function");
+    let (block, persist) = function
+        .blocks
+        .iter()
+        .find_map(|block| {
+            block.instructions.iter().enumerate().find_map(|(position, id)| {
+                let inst = function.instruction(*id)?;
+                let source = inst.operands.first().and_then(|value| {
+                    function.value(*value).and_then(|value| match value.def {
+                        ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                        _ => None,
+                    })
+                });
+                (inst.op == Op::StrPersist && source.is_some_and(|source| source.op == Op::Cast))
+                    .then_some((block, position))
+            })
+        })
+        .expect("expected the mixed string cast to be persisted");
+    let cast = function.instruction(block.instructions[persist]).unwrap().operands[0];
+    assert!(block.instructions[persist + 1..].iter().any(|id| {
+        let inst = function.instruction(*id).unwrap();
+        inst.op == Op::Release && inst.operands.first() == Some(&cast)
+    }), "the original mixed cast must retire after its stable copy is made");
+    assert!(
+        block.instructions[persist + 1..].iter().any(|id| {
+            function
+                .instruction(*id)
+                .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
+        }),
+        "the persisted mixed cast must precede the warning-capable RHS"
+    );
+}
+
+/// A warning-capable comparison RHS persists an earlier scratch-backed string cast.
+#[test]
+fn comparison_transient_string_is_persisted_before_warning_rhs() {
+    use crate::ir::{Effects, Op, ValueDef};
+    let module = super::lower_source(
+        r#"<?php
+function compare_warning(array $items, int $prefix, string $fill): bool {
+    return (string)(strlen($fill . $fill) + $prefix) === (string)$items["missing"] . "536625";
+}
+"#,
+    );
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "compare_warning")
+        .expect("expected compare_warning EIR function");
+    let (block, persist) = function
+        .blocks
+        .iter()
+        .find_map(|block| {
+            block.instructions.iter().enumerate().find_map(|(position, id)| {
+                let inst = function.instruction(*id)?;
+                let source = inst.operands.first().and_then(|value| {
+                    function.value(*value).and_then(|value| match value.def {
+                        ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                        _ => None,
+                    })
+                });
+                (inst.op == Op::StrPersist && source.is_some_and(|source| source.op == Op::Cast))
+                    .then_some((block, position))
+            })
+        })
+        .expect("expected the comparison's string cast to be persisted");
+    assert!(
+        block.instructions[persist + 1..].iter().any(|id| {
+            function
+                .instruction(*id)
+                .is_some_and(|inst| inst.effects.contains(Effects::MAY_WARN))
+        }),
+        "the persisted comparison operand must precede the warning-capable RHS"
+    );
+}
+
+/// A throwing comparison RHS publishes one owner for an already captured byte view.
+#[test]
+fn comparison_byte_view_has_one_unwind_owner_on_all_targets() {
+    use crate::ir::Op;
+    let source = r#"<?php
+function comparison_throwing_rhs(): string { throw new Exception('rhs'); }
+function comparison_byte_view(string $bytes): bool {
+    return $bytes[0] === comparison_throwing_rhs();
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "comparison_byte_view")
+            .expect("expected comparison_byte_view EIR function");
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == Op::PushCallOperandOwner
+        }).count(), 2, "{target}: the captured byte and call result each need one unwind owner");
+        assert_eq!(function.instructions.iter().filter(|inst| {
+            inst.op == Op::PopCallOperandOwner
+        }).count(), 2, "{target}: both distinct unwind owners must retire once");
+    }
+}
+
 /// A nested index call sees the persisted byte receiver published until the outer read completes.
 #[test]
 fn string_offset_nested_index_owner_on_all_targets() {

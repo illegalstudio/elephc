@@ -10,15 +10,24 @@
 //! - Recipe and source identity come from the catalog, not a separately pinned revision.
 //! - System PCRE2 archives are admitted only inside this test provider; production resolution
 //!   remains fail-closed and never falls back to system libraries.
-//! - Process-wide provider and shim caches reject attempts to mix supported targets.
+//! - Provider and shim results, including a miss, are cached per target. Each target has
+//!   its own `OnceLock`, so one thread builds or searches that target while another target
+//!   proceeds independently.
+//! - `managed_pcre2_execution_skip_reason` skips only where a missing provider is expected.
+//!   Linux, macOS, and any process with `CI` set panic through `test_pcre2_provider` instead.
+//!   That check runs when a regex fixture is prepared. The host self-test lives with the
+//!   regex capacity tests, not in every binary that includes this module.
+//!   A later compile or link failure must still fail the caller.
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 
 use elephc::codegen::platform::{Arch, Platform, Target};
 use serde_json::json;
@@ -52,16 +61,10 @@ struct TestNativeToolchain {
 }
 
 /// Header/library pair selected for one supported test target.
-struct TestPcre2Provider {
+pub(crate) struct TestPcre2Provider {
     target: String,
     include_dir: PathBuf,
     library_dir: PathBuf,
-}
-
-/// Cached shim archive together with the target it was compiled for.
-struct TestPcre2Shim {
-    target: String,
-    archive: PathBuf,
 }
 
 /// Configures a CLI child process with an isolated host-target managed-PCRE2 project.
@@ -70,74 +73,99 @@ pub(crate) fn configure_host_managed_pcre2(command: &mut Command, dir: &Path) {
     command.env("ELEPHC_NATIVE_CACHE", cache);
 }
 
-/// Compiles and archives the embedded shim against the selected target's PCRE2 headers.
+/// Counts completed attempts to compile the embedded shim in this process.
+static SHIM_BUILD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns how many times this process has started compiling the embedded shim.
+///
+/// Callers use this to show that concurrent requests for one target share one build.
+pub(crate) fn test_pcre2_shim_build_count() -> usize {
+    SHIM_BUILD_COUNT.load(Ordering::SeqCst)
+}
+
+/// Returns the cached shim archive for `target`, compiling it on the first request.
+///
+/// Each target has its own `OnceLock`. The map mutex only publishes that slot; the
+/// slot then lets one thread run `gcc` and `ar` while every other caller for the
+/// same target waits and receives the same archive path.
 pub(crate) fn test_pcre2_shim_archive(target: Target) -> &'static Path {
-    static SHIM: OnceLock<TestPcre2Shim> = OnceLock::new();
+    static SHIMS: LazyLock<Mutex<HashMap<&'static str, Arc<OnceLock<&'static Path>>>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    let shim = SHIM.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!(
-            "elephc_test_pcre2_shim_{}_{}",
-            std::process::id(),
-            target.as_str()
-        ));
-        fs::create_dir_all(&dir).expect("failed to create PCRE2 shim test directory");
-        let source = dir.join("elephc_pcre2_shim.c");
-        let object = dir.join("elephc_pcre2_shim.o");
-        let archive = dir.join("libelephc_pcre2_shim.a");
-        fs::write(
-            &source,
-            include_str!("../../src/native_deps/recipes/pcre2_shim.c"),
-        )
-        .expect("failed to write embedded PCRE2 shim source");
+    let slot = {
+        let mut cache = lock_test_cache(&SHIMS);
+        cache
+            .entry(target.as_str())
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone()
+    };
+    *slot.get_or_init(|| Box::leak(Box::new(compile_test_pcre2_shim(target))))
+}
 
-        let compiler = test_c_compiler(target);
-        let mut compile = Command::new(compiler);
-        compile.args(["-c", "-fPIC", "-DPCRE2_STATIC"]);
-        if target.platform == Platform::MacOS {
-            compile.args(["-arch", target.darwin_arch_name()]);
-        }
-        compile.arg(format!(
-            "-I{}",
-            test_pcre2_provider(target).include_dir.display()
-        ));
-        let output = compile
-            .arg(&source)
-            .arg("-o")
-            .arg(&object)
-            .output()
-            .expect("failed to run C compiler for PCRE2 shim test provider");
-        assert!(
-            output.status.success(),
-            "PCRE2 shim test-provider compilation failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+/// Compiles and archives the embedded shim against the selected target's PCRE2 headers.
+///
+/// `test_pcre2_shim_archive` calls this from one `OnceLock` per target, so concurrent
+/// callers do not share the object file or the `ar rcs` destination.
+fn compile_test_pcre2_shim(target: Target) -> PathBuf {
+    SHIM_BUILD_COUNT.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_pcre2_shim_{}_{}",
+        std::process::id(),
+        target.as_str()
+    ));
+    fs::create_dir_all(&dir).expect("failed to create PCRE2 shim test directory");
+    let source = dir.join("elephc_pcre2_shim.c");
+    let object = dir.join("elephc_pcre2_shim.o");
+    let archive = dir.join("libelephc_pcre2_shim.a");
+    fs::write(
+        &source,
+        include_str!("../../src/native_deps/recipes/pcre2_shim.c"),
+    )
+    .expect("failed to write embedded PCRE2 shim source");
 
-        let archiver = compiler
-            .strip_suffix("gcc")
-            .map(|prefix| format!("{prefix}ar"))
-            .unwrap_or_else(|| "ar".to_string());
-        let output = Command::new(archiver)
-            .arg("rcs")
-            .arg(&archive)
-            .arg(&object)
-            .output()
-            .expect("failed to archive PCRE2 shim test provider");
-        assert!(
-            output.status.success(),
-            "PCRE2 shim test-provider archive failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        TestPcre2Shim {
-            target: target.as_str().to_string(),
-            archive,
-        }
-    });
-    assert_eq!(
-        shim.target,
-        target.as_str(),
-        "managed-PCRE2 shim cache cannot mix targets in one test process"
+    let compiler = test_c_compiler(target);
+    let mut compile = Command::new(compiler);
+    compile.args(["-c", "-fPIC", "-DPCRE2_STATIC"]);
+    if target.platform == Platform::MacOS {
+        compile.args(["-arch", target.darwin_arch_name()]);
+    }
+    compile.arg(format!(
+        "-I{}",
+        test_pcre2_provider(target).include_dir.display()
+    ));
+    let output = compile
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .expect("failed to run C compiler for PCRE2 shim test provider");
+    assert!(
+        output.status.success(),
+        "PCRE2 shim test-provider compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
-    &shim.archive
+
+    let archiver = compiler
+        .strip_suffix("gcc")
+        .map(|prefix| format!("{prefix}ar"))
+        .unwrap_or_else(|| "ar".to_string());
+    let output = Command::new(archiver)
+        .arg("rcs")
+        .arg(&archive)
+        .arg(&object)
+        .output()
+        .expect("failed to archive PCRE2 shim test provider");
+    assert!(
+        output.status.success(),
+        "PCRE2 shim test-provider archive failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    archive
+}
+
+/// Locks a process-wide test cache, recovering the map if an earlier caller panicked.
+fn lock_test_cache<T>(cache: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Returns the target-aware C compiler used by the system-aligned shim test provider.
@@ -149,69 +177,139 @@ fn test_c_compiler(target: Target) -> &'static str {
     }
 }
 
-/// Discovers one target-aligned system PCRE2 header/library prefix for integration tests.
-fn test_pcre2_provider(target: Target) -> &'static TestPcre2Provider {
-    static PROVIDER: OnceLock<TestPcre2Provider> = OnceLock::new();
+/// Returns the cached static PCRE2 provider for `target`, searching each target once.
+///
+/// A miss is cached as `None` for that target only. The map mutex only publishes the
+/// target's `OnceLock`; that slot runs the directory search once, including when
+/// several threads ask for the same target together.
+pub(crate) fn find_test_pcre2_provider(target: Target) -> Option<&'static TestPcre2Provider> {
+    static CACHED: LazyLock<
+        Mutex<HashMap<&'static str, Arc<OnceLock<Option<&'static TestPcre2Provider>>>>>,
+    > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-    let provider = PROVIDER.get_or_init(|| {
-        let candidates: Vec<(PathBuf, PathBuf)> = match target.platform {
-            Platform::MacOS => {
-                let mut candidates = Vec::new();
-                if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX") {
-                    let pcre2 = PathBuf::from(prefix).join("opt/pcre2");
-                    candidates.push((pcre2.join("include"), pcre2.join("lib")));
-                }
-                candidates.extend([
-                    (
-                        "/opt/homebrew/opt/pcre2/include".into(),
-                        "/opt/homebrew/opt/pcre2/lib".into(),
-                    ),
-                    (
-                        "/usr/local/opt/pcre2/include".into(),
-                        "/usr/local/opt/pcre2/lib".into(),
-                    ),
-                ]);
-                candidates
+    let slot = {
+        let mut cache = lock_test_cache(&CACHED);
+        cache
+            .entry(target.as_str())
+            .or_insert_with(|| Arc::new(OnceLock::new()))
+            .clone()
+    };
+    *slot.get_or_init(|| {
+        locate_test_pcre2_provider(target).map(|provider| &*Box::leak(Box::new(provider)))
+    })
+}
+
+/// Searches the target's static PCRE2 prefixes and returns the first complete one.
+fn locate_test_pcre2_provider(target: Target) -> Option<TestPcre2Provider> {
+    let candidates: Vec<(PathBuf, PathBuf)> = match target.platform {
+        Platform::MacOS => {
+            let mut candidates = Vec::new();
+            if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX") {
+                let pcre2 = PathBuf::from(prefix).join("opt/pcre2");
+                candidates.push((pcre2.join("include"), pcre2.join("lib")));
             }
-            Platform::Linux => {
-                let tuple = match target.arch {
-                    Arch::AArch64 => "aarch64-linux-gnu",
-                    Arch::X86_64 => "x86_64-linux-gnu",
-                };
-                vec![
-                    ("/usr/include".into(), "/usr/lib".into()),
-                    ("/usr/local/include".into(), "/usr/local/lib".into()),
-                    ("/usr/include".into(), format!("/usr/lib/{tuple}").into()),
-                    ("/usr/include".into(), format!("/lib/{tuple}").into()),
-                ]
-            }
-            Platform::Windows => panic!("managed native fixtures do not support Windows"),
-        };
-        for (include_dir, library_dir) in candidates {
-            let has_headers = include_dir.join("pcre2.h").is_file()
-                && include_dir.join("pcre2posix.h").is_file();
-            let has_posix = library_dir.join("libpcre2-posix.a").is_file();
-            let has_core = library_dir.join("libpcre2-8.a").is_file();
-            if has_headers && has_posix && has_core {
-                return TestPcre2Provider {
-                    target: target.as_str().to_string(),
-                    include_dir,
-                    library_dir,
-                };
-            }
+            candidates.extend([
+                (
+                    "/opt/homebrew/opt/pcre2/include".into(),
+                    "/opt/homebrew/opt/pcre2/lib".into(),
+                ),
+                (
+                    "/usr/local/opt/pcre2/include".into(),
+                    "/usr/local/opt/pcre2/lib".into(),
+                ),
+            ]);
+            candidates
         }
+        Platform::Linux => {
+            let tuple = match target.arch {
+                Arch::AArch64 => "aarch64-linux-gnu",
+                Arch::X86_64 => "x86_64-linux-gnu",
+            };
+            vec![
+                ("/usr/include".into(), "/usr/lib".into()),
+                ("/usr/local/include".into(), "/usr/local/lib".into()),
+                ("/usr/include".into(), format!("/usr/lib/{tuple}").into()),
+                ("/usr/include".into(), format!("/lib/{tuple}").into()),
+            ]
+        }
+        Platform::Windows => return None,
+    };
+    for (include_dir, library_dir) in candidates {
+        let has_headers = include_dir.join("pcre2.h").is_file()
+            && include_dir.join("pcre2posix.h").is_file();
+        let has_posix = library_dir.join("libpcre2-posix.a").is_file();
+        let has_core = library_dir.join("libpcre2-8.a").is_file();
+        if has_headers && has_posix && has_core {
+            return Some(TestPcre2Provider {
+                target: target.as_str().to_string(),
+                include_dir,
+                library_dir,
+            });
+        }
+    }
+    None
+}
+
+/// Reports whether `target` must have the static PCRE2 provider.
+///
+/// Linux and macOS are the hosts that execute these fixtures, and CI images install
+/// the aligned archives. iOS device and Simulator targets do not execute the host
+/// binary, so a missing provider is expected there unless `CI` is set.
+fn provider_is_required(target: Target) -> bool {
+    if std::env::var_os("CI").is_some() {
+        return true;
+    }
+    matches!(target.platform, Platform::Linux | Platform::MacOS) && !target.is_ios()
+}
+
+/// Reports why `target` cannot execute a managed-PCRE2 CLI fixture.
+///
+/// `None` means the caller must compile and run. On Linux, macOS, or when `CI` is
+/// set, a missing provider panics with the same message as `test_pcre2_provider`
+/// instead of producing a skip. `Some` is an explicit supported skip for a host
+/// that is not expected to have the archives: Windows, iOS (device or Simulator),
+/// or another non-CI host whose prefixes are absent. Callers must not use this to
+/// absorb a compile or link failure after the fixture has been prepared.
+pub(crate) fn managed_pcre2_execution_skip_reason(target: Target) -> Option<String> {
+    if provider_is_required(target) {
+        let _provider = test_pcre2_provider(target);
+        return None;
+    }
+    if target.platform == Platform::Windows || target.is_ios() {
+        return Some(format!(
+            "supported skip: managed PCRE2 capacity regressions execute on the host and do not run for {}",
+            target.as_str()
+        ));
+    }
+    if find_test_pcre2_provider(target).is_none() {
+        return Some(format!(
+            "supported skip: managed PCRE2 fixture is unavailable for {}: aligned pcre2.h, pcre2posix.h, libpcre2-posix.a, and libpcre2-8.a were not found",
+            target.as_str()
+        ));
+    }
+    None
+}
+
+/// Reports why the host under test cannot execute a managed-PCRE2 CLI fixture.
+pub(crate) fn host_managed_pcre2_execution_skip_reason() -> Option<String> {
+    managed_pcre2_execution_skip_reason(Target::detect_host())
+}
+
+/// Discovers one target-aligned system PCRE2 header/library prefix for integration tests.
+///
+/// Panics when the archives are missing. That is the same failure the regex capacity
+/// regressions use on Linux, macOS, and CI; those hosts do not skip a missing provider.
+fn test_pcre2_provider(target: Target) -> &'static TestPcre2Provider {
+    if target.platform == Platform::Windows {
+        panic!("managed native fixtures do not support Windows");
+    }
+    find_test_pcre2_provider(target).unwrap_or_else(|| {
         panic!(
             "integration regex tests require aligned pcre2.h, pcre2posix.h, \
              libpcre2-posix.a and libpcre2-8.a for {}",
             target.as_str()
-        );
-    });
-    assert_eq!(
-        provider.target,
-        target.as_str(),
-        "managed-PCRE2 provider cache cannot mix targets in one test process"
-    );
-    provider
+        )
+    })
 }
 
 /// Returns one header from the target-aligned PCRE2 test provider.

@@ -448,9 +448,10 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 // pointer than the container itself, so comparing them would read "not aliased"
                 // for a value the result does own, and release it twice. Same restriction the
                 // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
-                // A string argument the caller owns outright (claimed with `EnsureOwned`, or an
-                // acquired copy) is decided the same way when a USER function produced the
-                // result. A `Str` result compares by payload pointer, the string's whole
+                // A string argument the caller owns outright (claimed with `EnsureOwned`, an
+                // acquired copy, or a `StrPersist` of a normalized string cast) is decided the
+                // same way when a USER function produced the result. A `Str` result compares
+                // by payload pointer, the string's whole
                 // identity: a PHP function persists every builtin result it returns, so an equal
                 // pointer means the callee handed the block back and a different one means the
                 // caller still owns it. Any other result that can alias it is a boxed `Mixed`
@@ -465,7 +466,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     let owned_string_arg = arg_repr == PhpType::Str
                         && matches!(
                             ctx.builder.value_defining_op(lowered.value),
-                            Some(Op::EnsureOwned | Op::Acquire)
+                            Some(Op::EnsureOwned | Op::Acquire | Op::StrPersist)
                         );
                     let user_call_result = matches!(
                         ctx.builder.value_defining_op(result),
@@ -512,6 +513,11 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                             Some(span),
                         );
                     }
+                    // `trim((string)$s)` is not itself the owned copy. The copy is the
+                    // cast underneath it. A user call that may return its argument skips
+                    // releasing `trim`'s result, so the copy has to be released here
+                    // unless that call handed the same block back.
+                    release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
                 }
                 continue;
             }
@@ -520,6 +526,48 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     }
     if let Some(value) = guarded_result {
         ctx.unguard_call_argument(value, span);
+    }
+}
+
+/// Releases a normalized string-cast copy nested under a call argument.
+///
+/// `id(trim((string)$s))` skips releasing `trim`'s result because the callee may
+/// return that argument. The owned copy is the cast underneath `trim`. Free that
+/// copy when the callee returned a different block, and leave it alone when the
+/// callee handed the same block back.
+fn release_marked_cast_copies_unless_returned(
+    ctx: &mut LoweringContext<'_, '_>,
+    argument: LoweredValue,
+    result: ValueId,
+    span: Span,
+) {
+    let Some(inst) = ctx.builder.value_defining_instruction(argument.value) else {
+        return;
+    };
+    if inst.op != Op::RuntimeCall {
+        return;
+    }
+    let copies = inst
+        .operands
+        .iter()
+        .copied()
+        .filter(|operand| {
+            ctx.builder
+                .value_defining_instruction(*operand)
+                .is_some_and(|producer| {
+                    producer.op == Op::StrPersist
+                        && producer.immediate == Some(Immediate::Bool(true))
+                })
+        })
+        .collect::<Vec<_>>();
+    for copy in copies {
+        ctx.emit_void(
+            Op::ReleaseUnlessAliases,
+            vec![copy, result],
+            None,
+            Op::ReleaseUnlessAliases.default_effects(),
+            Some(span),
+        );
     }
 }
 

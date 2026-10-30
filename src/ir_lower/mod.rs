@@ -14,6 +14,7 @@ mod array_pointer_scan;
 mod boxed_array_appends;
 mod builtin_datetime;
 mod clone_overrides;
+mod closure_scopes;
 mod context;
 mod diagnostics;
 mod effect_refinement;

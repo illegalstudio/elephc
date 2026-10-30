@@ -8,6 +8,9 @@
 //!
 //! Key details:
 //! - Output must match PHP-compatible text for the supported concrete types.
+//! - A string payload whose pointer is the missing-entry sentinel dumps as `NULL`.
+//!   A real empty string, including one produced by `(string)` of that sentinel,
+//!   still dumps as `string(0) ""`.
 //! - Mixed dispatch follows the runtime tag/payload contract from `__rt_mixed_unbox`.
 //! - `var_dump` emits only the top-level `array(N) {` / `}` frame here; the body
 //!   (and every nested container) comes from `codegen_support::runtime::io::
@@ -551,6 +554,9 @@ fn emit_var_dump_float(ctx: &mut FunctionContext<'_>) -> Result<()> {
 }
 
 /// Emits `var_dump` output for a string payload in the string result register pair.
+///
+/// The missing-entry sentinel is a string-shaped null. It dumps as `NULL`. Any
+/// other pointer, including the canonical empty string, dumps as a string.
 fn emit_var_dump_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let scratch = abi::secondary_scratch_reg(ctx.emitter);

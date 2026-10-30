@@ -189,6 +189,10 @@ pub fn emit_stack_overflow(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stack_overflow (controlled call-depth fatal) ---");
     emitter.label_global("__rt_stack_overflow");
+    if emitter.phpext_output {
+        // A PHP host receives the recoverable error after native cleanup, without a raw fatal line.
+        abi::emit_cdylib_exit_escape(emitter);
+    }
     match emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(emitter, "x1", "_stack_err_msg");

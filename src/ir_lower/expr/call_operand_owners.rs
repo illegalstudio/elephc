@@ -626,6 +626,8 @@ pub(super) struct PrepublishedCallResult {
 /// The slot is an `OwnedTemp`, which the frame prologue zero-initializes and whose store MOVES
 /// its source instead of retaining it, so publishing it before anything is stored releases
 /// nothing and staging the result never doubles its reference.
+/// The caller must emit the eventual store: cleanup discovery omits permanently unassigned slots,
+/// so an optional argument that never exists must not publish an empty result owner.
 pub(super) fn prepublish_call_result(
     ctx: &mut LoweringContext<'_, '_>,
     result_type: &PhpType,
@@ -644,6 +646,24 @@ pub(super) fn prepublish_call_result(
         slot,
         php_type: result_type.clone(),
     })
+}
+
+/// Borrows a prepublished argument snapshot without transferring its cleanup owner.
+pub(super) fn borrow_prepublished_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    staging: &PrepublishedCallResult,
+    span: Span,
+) -> LoweredValue {
+    load_published_container(ctx, staging.slot, staging.php_type.clone(), span)
+}
+
+/// Retires a prepublished argument snapshot in its PHP-observable cleanup order.
+pub(super) fn retire_prepublished_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    staging: PrepublishedCallResult,
+    span: Span,
+) {
+    retire_owned_call_operand(ctx, staging.slot, span);
 }
 
 /// Publishes result staging for a direct user call whose result owns storage independently.

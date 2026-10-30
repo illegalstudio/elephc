@@ -182,6 +182,7 @@ which tiers a run executes and writes its reason to the run summary.
 | macOS test matrix (non-codegen, CLI, web, codegen, eval, PDO, curl) and the iOS compile and link jobs | with `ci:macos`, or when the PR changes CI scheduling | yes | only if the queue did not test that commit |
 | Core live database suites (`pdo-live.yml`: PostgreSQL 16 and MySQL 8.4) | yes | yes | only if the queue did not test that commit |
 | Optional-driver live database suites (`pdo-live.yml`: `sqlsrv-oci`, `cubrid-dblib`, `firebird-odbc`, `informix-ibm`) | when the PR changes PDO or mysqli code or `Cargo.lock`, or with `ci:pdo-live` | yes | only if the queue did not test that commit |
+| Real PHP 8.5 extension SDK matrix (NTS/ZTS on all three hosts, Valgrind and Apple leaks) | when producer, compiler or SDK inputs change | yes, required by `Build & Test` | only if the queue did not test that commit |
 | Benchmark suite | no | no | yes |
 
 The live database suites also run every night. "CI scheduling" means
@@ -239,31 +240,11 @@ The `actions/*` references stay on version tags. They are GitHub-owned — same
 origin as the runner and the workflow token — and their tags are immutable by
 convention, so the threat model is much weaker.
 
-### Read-only mirrors
+### External application projects
 
-Some directories are also published as their own repositories in the
-[getelephc](https://github.com/getelephc) organization:
-
-| Directory | Mirror | History |
-|---|---|---|
-| `showcases/doom` | [getelephc/doom](https://github.com/getelephc/doom) | `preserve` |
-
-Develop them here. After a push to `main` that touches one of them,
-`.github/workflows/mirrors.yml` publishes the directory with the shared
-`illegalstudio/.github/actions/subtree-mirror` action, authenticated as the
-`elephc-bot` GitHub App. A mirror takes no direct commits: the publish stops
-instead of overwriting one, and the mirror closes pull requests with a pointer
-here.
-
-A mirrored directory must work as a repository root, so its README, license and
-CI belong inside it. Its `.github/workflows` are inert here and run in the mirror.
-
-To add a mirror, create the empty repository in getelephc, then add the directory
-to the workflow's `paths`, its dry run to the `test` job and an entry to the
-`publish` matrix. Choose its history once: `preserve` publishes the directory's
-own history with its authors, `flatten` publishes one commit by the bot per sync.
-A `preserve` mirror can later switch to `flatten`; the reverse would rewrite the
-mirror's history, so the publisher refuses it.
+Applications such as [DOOM](https://github.com/getelephc/doom) are maintained in
+their own repositories. Open gameplay, assets, game tests and application CI
+changes there. Compiler and runtime fixes belong in Elephc.
 
 ## Coding Style
 

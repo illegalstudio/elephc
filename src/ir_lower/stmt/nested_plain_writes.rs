@@ -24,6 +24,7 @@ pub(super) fn lower_store(
         .map_or(target, |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, array, span);
+    if ctx.builder.insertion_block_is_terminated() { return; }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let key = lower_expr(ctx, index);
@@ -50,6 +51,7 @@ pub(super) fn lower_append(
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
         .map_or(target, |(_, write)| write);
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
+    if ctx.builder.insertion_block_is_terminated() { return; }
     let parent = resolve_parent_for_write(ctx, parent, span);
     let (parent, parent_owner) = super::nested_array_writes::root_static_update_receiver(ctx, parent, span);
     let pending = super::nested_false_errors::capture(ctx, parent, span);

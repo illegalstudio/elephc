@@ -343,6 +343,7 @@ pub(crate) fn parse_type_expr(
     pos: &mut usize,
     span: Span,
 ) -> Result<TypeExpr, CompileError> {
+    let starts_with_null = matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Null));
     let mut closes = AngleCloses::default();
     let ty = parse_type_expr_nested(tokens, pos, span, &mut closes)?;
     // A credit left over means a `>>` closed one more list than was open — the type ended with
@@ -350,6 +351,9 @@ pub(crate) fn parse_type_expr(
     // token later fails to parse as.
     if closes.pending > 0 {
         return Err(CompileError::new(span, "Unbalanced '>' in type arguments"));
+    }
+    if starts_with_null && matches!(ty, TypeExpr::Void) {
+        return Ok(TypeExpr::Named(crate::names::Name::unqualified("null")));
     }
     Ok(ty)
 }

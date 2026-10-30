@@ -8080,6 +8080,130 @@ return preg_replace_callback("/[m]/", $static, "mm");');
     assert_eq!(out, "OAOB:S1S2:SCSC:OxOy:SmSm");
 }
 
+/// Verifies eval `preg_replace_callback()` returns real PHP null for a bad pattern and `/e`.
+///
+/// A valid replacement and an empty subject stay strings.
+#[test]
+fn test_eval_preg_replace_callback_invalid_pattern_returns_real_null() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_bad_repl($matches) {
+    return "x";
+}
+$invalid = preg_replace_callback("/[/", "eval_bad_repl", "a");
+$evalmod = preg_replace_callback("/a/e", "eval_bad_repl", "a");
+$empty = preg_replace_callback("/x/", "eval_bad_repl", "");
+$ok = preg_replace_callback("/a/", "eval_bad_repl", "a");
+return ($invalid === null ? "1" : "0")
+    . (is_string($invalid) ? "1" : "0")
+    . (is_null($invalid) ? "1" : "0")
+    . gettype($invalid) . ":"
+    . ($evalmod === null ? "1" : "0")
+    . (is_string($evalmod) ? "1" : "0")
+    . gettype($evalmod) . ":"
+    . ($empty === "" ? "empty" : "other")
+    . (is_string($empty) ? "s" : "n") . ":"
+    . $ok;
+');
+"#,
+    );
+    assert_eq!(out, "101NULL:10NULL:emptys:x");
+}
+
+/// Verifies eval returns null for unknown modifiers and a missing delimiter.
+///
+/// `/x` is extended mode, so `"a b"` is unchanged and `"ab"` is replaced. A
+/// missing callback is a TypeError even when the pattern is also invalid,
+/// because the callback is checked first.
+#[test]
+fn test_eval_preg_replace_callback_invalid_patterns_and_callback_order() {
+    let invalid = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_order_repl($matches) { return "X"; }
+$unknown = preg_replace_callback("/a/z", "eval_order_repl", "a");
+$missing = preg_replace_callback("/abc", "eval_order_repl", "abc");
+$evalmod = preg_replace_callback("/a/e", "eval_order_repl", "a");
+return (is_null($unknown) ? "1" : "0")
+    . (is_string($unknown) ? "1" : "0")
+    . (is_null($missing) ? "1" : "0")
+    . (is_null($evalmod) ? "1" : "0");
+');
+"#,
+    );
+    assert_eq!(invalid, "1011");
+
+    let callback = compile_and_run_capture_with_regex(
+        r#"<?php
+echo eval('try {
+    preg_replace_callback("/[/", "missing_cb", "a");
+    return "bad";
+} catch (TypeError $e) {
+    return get_class($e) . ":" . $e->getMessage();
+}');
+"#,
+    );
+    assert!(
+        callback.success,
+        "program failed: stdout={:?} stderr={}",
+        callback.stdout, callback.stderr
+    );
+    assert_eq!(
+        callback.stdout,
+        "TypeError:preg_replace_callback(): Argument #2 ($callback) must be a valid callback, function \"missing_cb\" not found or invalid function name"
+    );
+
+    let extended = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_extended_repl($matches) { return "X"; }
+$spaced = preg_replace_callback("/a b/x", "eval_extended_repl", "a b");
+$compact = preg_replace_callback("/a b/x", "eval_extended_repl", "ab");
+$class = preg_replace_callback("/[a b]/x", "eval_extended_repl", " ");
+return $spaced . ":" . $compact . ":" . $class;
+');
+"#,
+    );
+    assert_eq!(extended, "a b:X:X");
+}
+
+/// Verifies eval ignores space, LF, and CR in the modifier suffix.
+///
+/// A tab stays an invalid modifier and returns null. The same bytes are covered
+/// by the compiled regression.
+#[test]
+fn test_eval_preg_replace_callback_modifier_whitespace_is_ignored() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_ws_repl($matches) { return "X"; }
+$nl = preg_replace_callback("/a/\n", "eval_ws_repl", "a");
+$sp = preg_replace_callback("/a/ i", "eval_ws_repl", "A");
+$cr = preg_replace_callback("/a/\r", "eval_ws_repl", "a");
+$tab = preg_replace_callback("/a/\t", "eval_ws_repl", "a");
+return $nl . ":" . $sp . ":" . $cr . ":" . (is_null($tab) ? "n" : "s");
+');
+"#,
+    );
+    assert_eq!(out, "X:X:X:n");
+}
+
+/// Verifies eval `/x` keeps leading PCRE2 verbs at the start of the pattern.
+///
+/// Eval compiles through the same shim as compiled code. `(*UTF)` and
+/// `(*ANYCRLF)` stay valid, and the replacements match PHP.
+#[test]
+fn test_eval_preg_extended_leading_verbs_stay_at_pattern_start() {
+    let out = compile_and_run_with_regex(
+        r#"<?php
+echo eval('function eval_verb_repl($matches) { return "X"; }
+$match = preg_match("/(*UTF)a/x", "a");
+$replaced = preg_replace("/(*ANYCRLF)a/x", "Y", "ab");
+$callback = preg_replace_callback("/(*UTF)a/x", "eval_verb_repl", "ab");
+return $match . ":" . $replaced . ":" . $callback;
+');
+"#,
+    );
+    assert_eq!(out, "1:Yb:Xb");
+}
+
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {

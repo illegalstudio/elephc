@@ -579,7 +579,8 @@ impl ExceptionFlowAnalysis {
             // materialized; a `return` hands its value to the caller instead.
             StmtKind::Echo(expr) => operand(expr)
                 .combined(self.string_conversion_throws(expr, class_context))
-                .combined(self.temporary_destruction_throws(expr, class_context)),
+                .combined(self.temporary_destruction_throws(expr, class_context))
+                .combined(host_output_throws()),
             StmtKind::ExprStmt(expr) => operand(expr)
                 .combined(self.temporary_destruction_throws(expr, class_context)),
             // A static-variable initializer and a list unpack both rebind storage that may have
@@ -807,7 +808,8 @@ impl ExceptionFlowAnalysis {
                 }
             }
             ExprKind::Print(inner) => operand(inner)
-                .combined(self.string_conversion_throws(inner, class_context)),
+                .combined(self.string_conversion_throws(inner, class_context))
+                .combined(host_output_throws()),
             ExprKind::Cast { target, expr: inner } => {
                 let mut thrown = operand(inner);
                 if matches!(target, CastType::String) {
@@ -1409,4 +1411,10 @@ fn exact_receiver_class(
         ExprKind::This => None,
         _ => None,
     }
+}
+
+/// Adds external host callback throws to the existing native approximation.
+/// Chunked native ob_start callbacks still need callback-aware exception analysis.
+fn host_output_throws() -> ThrownTypes {
+    if output::output_may_throw() { ThrownTypes::unknown() } else { ThrownTypes::default() }
 }

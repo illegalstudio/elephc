@@ -189,10 +189,15 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_decref_mixed(emitter);
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_eval_object_children(emitter);
+    arrays::emit_gc_callable_children(emitter);
+    arrays::emit_gc_object_children(emitter);
+    arrays::emit_gc_frame_children(emitter);
+    arrays::emit_gc_frame_slots(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_control(emitter);
     arrays::emit_memory(emitter);
     arrays::emit_gc_destructors(emitter);
+    arrays::gc_candidates::emit(emitter);
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
@@ -261,6 +266,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
     objects::emit_throw_object_not_array(emitter);
+    objects::emit_mixed_object_offset_unset(emitter);
     objects::emit_throw_serialization_denied(emitter);
     objects::emit_throw_unserialization_denied(emitter);
     objects::emit_mixed_array_set(emitter);

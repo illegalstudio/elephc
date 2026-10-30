@@ -192,3 +192,30 @@ unset($value);
 unset($source);
 "#, "1|[[1],[[2]]]");
 }
+
+/// Boxed encoder results release their string conversions across every call plan and errors.
+#[test]
+fn test_json_decode_owners_boxed_encode_sources() {
+    check_json_owners(r#"<?php
+for ($i = 0; $i < 4; $i++) {
+    $source = json_encode([['value' => str_repeat('x', 2048)]], JSON_THROW_ON_ERROR);
+    $value = json_decode($source, true);
+    echo strlen($value[0]['value']), ':';
+    unset($value);
+    $value = json_decode(associative: true, json: $source);
+    unset($value);
+    $value = json_decode(...[$source, true]);
+    unset($value);
+    echo json_validate($source) ? 'v' : 'bad';
+    echo json_validate(json: $source) ? 'v' : 'bad';
+    echo json_validate(...[$source]) ? 'v' : 'bad';
+    try {
+        json_decode($source, true, 1, JSON_THROW_ON_ERROR);
+        echo 'miss';
+    } catch (JsonException $error) {
+        echo $error->getCode(), '|';
+    }
+    unset($source);
+}
+"#, "2048:vvv1|2048:vvv1|2048:vvv1|2048:vvv1|");
+}

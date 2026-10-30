@@ -127,7 +127,49 @@ echo $s[-1];   // o
 echo "[" . $s[99] . "]";  // []
 ```
 
-Read-only. Negative indices count from end. Out-of-bounds returns empty string.
+Negative indices count from end. An out-of-bounds read warns `Uninitialized string offset N`
+and returns an empty string.
+
+### Writing to a string offset
+
+Assigning to an offset replaces one byte, exactly as in PHP:
+
+```php
+<?php
+$s = "abc";
+$s[1] = "Z";      // aZc
+$s[-1] = "q";     // aZq   (negative offsets count from the end)
+$s[5] = "x";      // aZq  x (writing past the end pads with spaces)
+$s[0] = "hello";  // hZq  x + Warning: Only the first byte will be assigned to the string offset
+$s[0] = 7;        // 7Zq  x (the value converts to a string first)
+
+$copy = $s;
+$copy[0] = "!";   // $s is unchanged: strings are copied on write
+```
+
+- Only the first byte of the value is written; a longer value warns
+  `Only the first byte will be assigned to the string offset`.
+- An empty value (including `null` and `false`) throws `Error: Cannot assign an empty string
+  to a string offset`.
+- An offset still before the start after counting from the end warns
+  `Illegal string offset -N` and writes nothing, even for an empty value. The RHS is not
+  converted to a string on this path, so a Stringable object's `__toString()` is skipped.
+- The offset follows the string read's rules: an integer, a float (truncated, with
+  `String offset cast occurred`), or a numeric string literal such as `"1"`. Other offset
+  expressions are compile errors.
+- The expression `($s[$i] = $v)` evaluates to the one-byte string that was written, or to
+  `null` when an offset before the start wrote nothing. On a `mixed` variable it evaluates to
+  that byte while the variable holds a string, and to `$v` while it holds an array.
+- Compound assignment (`$s[0] .= "x"`), `++`/`--` (`$s[0]++`) and `$s[] = $v` on a
+  concrete string local are compile errors carrying PHP's own `Error` text.
+- The write works on string locals, `mixed` parameters, `global` variables and strings stored
+  in array elements (`$a["k"][0] = "x"`). A string offset used as an array (`$s[0][0] = $v`)
+  raises a catchable `Error`, preserving the existing nested-write behavior.
+- Boxed and nested string writes accept runtime keys through the same offset conversion:
+  numeric strings select an offset, leading-integer strings such as `"1x"` warn, and invalid
+  string or container keys throw `TypeError`. Boolean, null and float keys warn on conversion.
+- Direct writes through a property (`$o->s[0] = "x"`, `C::$s[0] = "x"`) remain unsupported;
+  copy the string into a local, write the offset, and store it back.
 
 ## Incrementing a string
 

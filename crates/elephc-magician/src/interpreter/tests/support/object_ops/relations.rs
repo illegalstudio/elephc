@@ -21,6 +21,7 @@ pub(super) fn fake_runtime_exception_like_class(class_name: &str) -> bool {
         "FiberError",
         "ValueError",
         "TypeError",
+        "ArgumentCountError",
     ]
     .iter()
     .any(|known| class_name.eq_ignore_ascii_case(known))
@@ -73,6 +74,7 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
             "FiberError",
             "ValueError",
             "TypeError",
+            "ArgumentCountError",
         ]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
@@ -81,6 +83,9 @@ pub(super) fn fake_runtime_object_is_a(class_name: &str, target_class: &str, exc
         return ["ArithmeticError", "DivisionByZeroError"]
             .iter()
             .any(|known| class_name.eq_ignore_ascii_case(known));
+    }
+    if target_class.eq_ignore_ascii_case("TypeError") {
+        return class_name.eq_ignore_ascii_case("ArgumentCountError");
     }
     false
 }

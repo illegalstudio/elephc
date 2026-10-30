@@ -120,7 +120,8 @@ Source (.php or .lfc)
 ┌──────────────┐
 │   Exports    │  src/exports.rs
 │    Scan      │  Collects #[Export]-marked functions and validates their
-│              │  C-ABI signatures and post-lowering safety graph (warns and
+│              │  native-library or PHP-extension signatures and post-lowering
+│              │  safety graph (warns and
 │              │  ignores them only in normal executable emission).
 └─────┬────────┘
       │
@@ -302,7 +303,8 @@ src/
 ├── pipeline.rs                Frontend/backend compilation pipeline
 │   └── artifact_io.rs         Generated-artifact write policy: preflight destination
 │                              validation and O_EXCL-staged atomic replacement
-├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
+├── exports.rs                 #[Export] collection and boundary validation for library outputs
+├── phpext/                    PHP 8.5 SDK discovery, Zend adapter, registration, transport, and linking
 ├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
 ├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
 ├── linker/                    Link-plan rendering, bridge discovery, SDK lookup, and archive handling
@@ -503,6 +505,7 @@ src/
 │   ├── cdylib.rs              Owned-string boundary orchestration + lifecycle/status/error/memory symbols
 │   ├── cdylib/boundary.rs     Recoverable scalar wrappers + nested boundary/concat state
 │   ├── cdylib/owned_string.rs Caller-owned binary-string ABI helpers
+│   ├── cdylib/phpext.rs       PHP-visible handler trampolines and request-boundary state exchange
 │   ├── visibility.rs          ELF hidden / Mach-O private visibility for internal cdylib globals
 │   ├── sentinels.rs           Null representation selection (sentinel vs tagged) and constants
 │   ├── data_section.rs        String/float literal .data section

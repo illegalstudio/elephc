@@ -28,6 +28,7 @@ const PENDING: usize = 88;
 const NEXT: usize = 96;
 const BORROWED: usize = 104;
 const ORIGINAL_TAG: usize = 112;
+const ESCAPED: usize = 120;
 
 /// Static diagnostic fragments shared with runtime data emission.
 pub const ARRAY_AGGREGATE_MESSAGES: &[(&str, &str)] = &[
@@ -68,7 +69,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     branch(emitter, "hi", "a", &format!("{prefix}_invalid"));
     sentinels::emit_branch_if_null_container(emitter, low, abi::secondary_scratch_reg(emitter), &format!("{prefix}_invalid"));
     abi::store_at_offset(emitter, low, PAYLOAD);
-    for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT] { clear_slot(emitter, slot); }
+    for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT, ESCAPED] { clear_slot(emitter, slot); }
     install_boundary(emitter, prefix);
     abi::load_at_offset(emitter, result, BORROWED);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -215,12 +216,23 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
     emitter.label(&format!("{prefix}_release_source"));
     release_slot(emitter, SOURCE);
     abi::load_at_offset(emitter, result, PENDING);
-    abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_return"));
+    abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_maybe_escape"));
     abi::load_at_offset(emitter, low_reg(emitter), PREVIOUS);
     clear_slot(emitter, PREVIOUS);
     abi::emit_call_label(emitter, "__rt_exception_chain");
     abi::load_at_offset(emitter, result, PENDING);
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    restore_boundary(emitter);
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label(&format!("{prefix}_maybe_escape"));
+    abi::load_at_offset(emitter, result, ESCAPED);
+    abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_return"));
+    release_slot(emitter, CARRY);
+    abi::load_at_offset(emitter, low_reg(emitter), PREVIOUS);
+    clear_slot(emitter, PREVIOUS);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_call_label(emitter, "__rt_exception_chain");
     restore_boundary(emitter);
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_jump(emitter, "__rt_throw_current");
@@ -234,6 +246,12 @@ fn emit_cleanup(emitter: &mut Emitter, prefix: &str) {
     emitter.label(&format!("{prefix}_caught"));
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    let caught_object = format!("{prefix}_caught_object");
+    abi::emit_branch_if_int_result_nonzero(emitter, &caught_object);
+    abi::emit_load_int_immediate(emitter, result, 1);
+    abi::store_at_offset(emitter, result, ESCAPED);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    emitter.label(&caught_object);
     abi::load_at_offset(emitter, low_reg(emitter), PENDING);
     abi::store_at_offset(emitter, result, PENDING);
     abi::emit_call_label(emitter, "__rt_exception_chain");
@@ -325,6 +343,7 @@ mod tests {
                 let mut emitter = Emitter::new(target);
                 emit_aggregate(&mut emitter, product);
                 let asm = emitter.output();
+                let prefix = if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" };
                 let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();
                 let acquire = asm.find("__rt_mixed_from_value").unwrap();
                 let warning = asm.find("__rt_diag_warning").unwrap();
@@ -333,6 +352,8 @@ mod tests {
                 assert!(asm.contains("__rt_str_numeric_value"), "{name}");
                 assert!(asm.contains("__rt_exception_chain"), "{name}");
                 assert!(asm.contains("__rt_throw_current"), "{name}");
+                assert!(asm.contains(&format!("{prefix}_maybe_escape")), "{name}");
+                assert!(asm.contains(&format!("{prefix}_caught_object")), "{name}");
                 let operation = if product { "__rt_mixed_numeric_mul" } else { "__rt_mixed_numeric_add" };
                 assert!(asm.contains(operation), "{name}");
                 assert!(!asm.contains("__rt_mixed_clone"), "{name}: stack cells stay borrowed");

@@ -124,6 +124,7 @@ mod oop;
 mod static_class_features;
 mod types;
 mod optimizer;
+mod preg_replace_callback_throw;
 mod iterators;
 mod dom_html;
 mod spl;

@@ -11,7 +11,9 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, Op, ValueDef, ValueId};
+use crate::ir::{
+    Immediate, Instruction, Op, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
+};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -256,16 +258,25 @@ pub(super) fn release_value_if_owned(ctx: &mut FunctionContext<'_>, value: Value
         return Ok(());
     }
     if value_is_transient_string(ctx, value)? {
+        release_normalized_string_cast_copies(ctx, value)?;
         return release_transient_string(ctx, value);
     }
     if value_is_scratch_string(ctx, value)? {
-        return Ok(());
+        // `trim` and `md5` may answer with a view or a fresh string and then
+        // skip releasing that answer. A normalized `(string)` cast still owns
+        // the copy it passed in, so that copy is released with the answer,
+        // after the caller has read it.
+        return release_normalized_string_cast_copies(ctx, value);
     }
 
     let ty = ctx.load_value_to_result(value)?;
     match ty {
         PhpType::Str => {
+            // Free this string before nested cast copies. The nested release
+            // reloads its own pointer, so doing it first would free that copy
+            // twice and leak this one.
             release_loaded_string(ctx);
+            release_normalized_string_cast_copies(ctx, value)?;
         }
         PhpType::Callable => {
             abi::emit_decref_if_refcounted(ctx.emitter, &ty);
@@ -351,6 +362,88 @@ pub(super) fn lower_forward(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let value = expect_operand(inst, 0)?;
     ctx.load_value_to_result(value)?;
     store_if_result(ctx, inst)
+}
+
+/// Releases owned `(string)` copies passed into a runtime call whose own result is not freed.
+///
+/// The copy exists only so a mixed local or a `??` temporary can be released
+/// before the call. `trim` may return a view of that copy, so the copy stays
+/// alive until the call's result is released, which is after the caller reads it.
+/// Only calls that do not keep the argument are included. `ini_set` stores the
+/// pointer and must not have it freed here.
+fn release_normalized_string_cast_copies(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let persists = {
+        let Some(inst) = ctx.function.value(value).and_then(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        let subject = if inst.op == Op::StrPersist {
+            let Some(operand) = inst.operands.first().copied() else {
+                return Ok(());
+            };
+            let Some(subject) = ctx.function.value(operand).and_then(|value| match value.def {
+                ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+                _ => None,
+            }) else {
+                return Ok(());
+            };
+            subject
+        } else {
+            inst
+        };
+        if subject.op != Op::RuntimeCall || !runtime_call_discards_string_argument(subject) {
+            return Ok(());
+        }
+        subject
+            .operands
+            .iter()
+            .copied()
+            .filter(|operand| {
+                ctx.function.value(*operand).and_then(|value| match value.def {
+                    ValueDef::Instruction { inst, .. } => ctx.function.instruction(inst),
+                    _ => None,
+                }).is_some_and(|producer| {
+                    producer.op == Op::StrPersist && producer.immediate == Some(Immediate::Bool(true))
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    for operand in persists {
+        let ty = ctx.load_value_to_result(operand)?;
+        if ty == PhpType::Str {
+            release_loaded_string(ctx);
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether this runtime call reads its string arguments without storing them.
+fn runtime_call_discards_string_argument(inst: &Instruction) -> bool {
+    let Some(Immediate::RuntimeCall(target)) = &inst.immediate else {
+        return false;
+    };
+    let id = match target {
+        RuntimeCallTarget::Function(id)
+        | RuntimeCallTarget::ProfiledFunction { target: id, .. } => *id,
+        _ => return false,
+    };
+    matches!(
+        id,
+        RuntimeFnId::Trim
+            | RuntimeFnId::Ltrim
+            | RuntimeFnId::Rtrim
+            | RuntimeFnId::Chop
+            | RuntimeFnId::Md5
+            | RuntimeFnId::Sha1
+            | RuntimeFnId::Sprintf
+            | RuntimeFnId::Vsprintf
+            | RuntimeFnId::Printf
+    )
 }
 
 /// Releases a loaded string result through the validating heap-free helper.

@@ -61,7 +61,7 @@ pub fn emit_decref_mixed(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store the decremented mixed cell refcount
     emitter.instruction("b.eq __rt_decref_mixed_free");                         // zero refcount means the boxed payload can be released now
 
-    emitter.instruction("b __rt_decref_mixed_skip");                            // non-zero refcount stays alive until an explicit GC safe point
+    emitter.instruction("b __rt_gc_note_candidate");                            // non-zero refcount stays alive until an explicit GC safe point
 
     emitter.label("__rt_decref_mixed_free");
     emitter.instruction("b __rt_mixed_free_deep");                              // tail-call to deep free the mixed cell and its boxed child
@@ -109,7 +109,7 @@ fn emit_decref_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the mixed-box refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented mixed-box refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_mixed_free");                           // zero refcount means the boxed payload can be released now
-    emitter.instruction("jmp __rt_decref_mixed_skip");                          // non-zero refcount stays alive until an explicit GC safe point
+    emitter.instruction("jmp __rt_gc_note_candidate");                          // non-zero refcount stays alive until an explicit GC safe point
     emitter.label("__rt_decref_mixed_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers
 

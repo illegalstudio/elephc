@@ -554,6 +554,9 @@ pub(crate) fn emit_runtime_data_user(
         let destruct_key = php_symbol_key("__destruct");
         for class_id in 0..=max_class_id {
             let entry = match class_info_by_id.get(&class_id) {
+                Some(_) if all_class_id_by_name.get("Fiber") == Some(&class_id)
+                    || all_class_id_by_name.get("Generator") == Some(&class_id) =>
+                    "__rt_coroutine_force_close".to_string(),
                 Some(class_info) => source_instance_method_entry(
                     class_info,
                     &destruct_key,
@@ -625,7 +628,8 @@ pub(crate) fn emit_runtime_data_user(
 
     // Dense class-id-indexed interface-method tables for the runtime helpers that meet an object
     // only as a boxed `Mixed` and so cannot know its class during EIR lowering: `count($m)` reaches
-    // `__rt_mixed_count` and `$m[$k]` reaches `__rt_mixed_array_get`. Both answered for a short
+    // `__rt_mixed_count` and `$m[$k]` reaches `__rt_mixed_array_get` (`unset()` of such an offset
+    // reaches `__rt_mixed_object_offset_unset`). Both answered for a short
     // hard-coded ladder of RUNTIME-NATIVE SPL classes and returned 0 / null for everything else, so
     // a `Countable`/`ArrayAccess` written in PHP — the synthetic builtins like `ArrayObject`
     // included — was skipped in silence.
@@ -648,6 +652,7 @@ pub(crate) fn emit_runtime_data_user(
         ("_class_count_ptrs", "Countable", "count", PhpType::Int),
         ("_class_offsetget_ptrs", "ArrayAccess", "offsetGet", PhpType::Mixed),
         ("_class_offsetset_ptrs", "ArrayAccess", "offsetSet", PhpType::Void),
+        ("_class_offsetunset_ptrs", "ArrayAccess", "offsetUnset", PhpType::Void),
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {

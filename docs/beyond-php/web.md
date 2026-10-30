@@ -31,6 +31,12 @@ The generated process entry calls a different bridge symbol for each model, so
 the default worker request path does not pay an isolation branch or IPC cost.
 `--web-isolation` without `--web` (or its `--with-web` alias) is an error.
 
+The independent `--web-lifecycle=request|application` option controls PHP state
+lifetime. `request` is the default. Opt into `application` with worker isolation
+to bootstrap one typed application after fork and reuse it across requests.
+See [Persistent Web Applications](web-application.md) for registration,
+ownership, failure, shutdown, and recycling semantics.
+
 The produced binary has no PHP runtime dependency. Run it with `--listen`:
 
 ```bash
@@ -62,7 +68,7 @@ them; they are never silently ignored.
 
 ## HTTP request lifecycle
 
-The request model follows PHP-FPM / `php -S`: each incoming HTTP request
+The default request lifecycle follows PHP-FPM / `php -S`: each incoming HTTP request
 re-runs the program's top-level code from a completely fresh state. Whatever
 the script writes via `echo` or `print` becomes the HTTP response body. The
 default response is `200 OK` with no `Content-Type` set; the program controls
@@ -172,6 +178,9 @@ pieces fit together in a real-ish application.
 
 ## Per-request fresh state
 
+This section describes the default `--web-lifecycle=request`. Application
+lifecycle preserves application owners and prepares request state separately.
+
 Between requests, the generated PHP runtime resets its request-visible state so
 request N+1 sees the same PHP environment request N did:
 
@@ -207,7 +216,7 @@ workers. The compile-time isolation model decides where PHP executes:
 
 ### Choosing a model
 
-If in doubt, start with `worker`. All three models reset PHP globals, function
+If in doubt, start with `worker`. With the default request lifecycle, all three models reset PHP globals, function
 statics, and static properties between requests; selecting `request` is necessary
 only when state outside that PHP heap must also disappear after every response.
 
@@ -255,7 +264,8 @@ worker so the master reconstructs a clean worker/broker pair.
 
 - **Graceful shutdown** — the master shuts down cleanly on `SIGINT` (Ctrl-C) and
   `SIGTERM`: it forwards termination to the workers, reaps them, and exits `0`. An
-  in-flight request may be dropped when shutdown arrives.
+  in-flight request may be dropped with the default request lifecycle. The
+  [application lifecycle](web-application.md) drains active requests before its shutdown hook.
 - **Process supervision** — the master replaces failed web workers. In isolated
   modes, the broker separately tracks, reaps, and replaces handler children.
 - **Planned recycling** — `--max-requests` stops new accepts at the quota, asks
@@ -322,8 +332,9 @@ available. The following are not yet available:
 - **Default worker mode has no intra-worker concurrency** — `handler()` runs
   synchronously. Use more workers or compile with `pool`/`request` and set
   `--handler-concurrency`.
-- **In-flight requests may drop on shutdown** — `SIGINT`/`SIGTERM` terminate
-  workers promptly; there is no graceful connection drain yet.
+- **In-flight requests may drop on shutdown with the default request lifecycle**:
+  `SIGINT`/`SIGTERM` terminate workers promptly. The application lifecycle drains
+  active requests before shutdown.
 - **Worker mode does not stream responses** — `pool` and `request` do.
 - **Execution is intentionally unbounded when `--max-execution-time 0`** — a
   handler that never returns keeps its process slot while its client remains

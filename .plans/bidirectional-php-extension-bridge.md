@@ -9,13 +9,11 @@
 
 ## Current status
 
-As checked on 2026-10-19,
-[PR #1862](https://github.com/illegalstudio/elephc/pull/1862) is open and ready,
-head `8580a517bc84cf8b01005f53b3b77d283bcfa3d2`, targeting
-`stack/pr-1743-php-ext-hosting`.
-[PR #1743](https://github.com/illegalstudio/elephc/pull/1743) is also open.
-Neither producer stack is present in this release candidate's main code.
-Do not retarget, merge or mutate either ready PR as part of this plan cleanup.
+As checked on 2026-10-28,
+[PR #1743](https://github.com/illegalstudio/elephc/pull/1743) has merged.
+[PR #1862](https://github.com/illegalstudio/elephc/pull/1862) has been rebased
+onto `main`. Integration validation and fresh review are tracked under the
+[producer plan](emit-phpext.md).
 
 The active producer design and review record are Code Journal plan `3c86308a`
 ("Emit PHP extensions through a host-owned Zend adapter") and doc `38078d2a`.

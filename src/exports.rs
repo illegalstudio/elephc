@@ -27,7 +27,7 @@ mod header;
 mod safety;
 
 pub use header::{render_c_header, ELEPHC_ABI_VERSION};
-pub use safety::validate_cdylib_call_graph;
+pub use safety::{validate_cdylib_call_graph, validate_phpext_call_graph};
 
 /// A user PHP function flagged with `#[Export]` that the library emitter must
 /// expose through a C-ABI trampoline. Captured after type checking so the
@@ -41,6 +41,8 @@ pub struct ExportedFunction {
     /// Physical compiler signature used when the trampoline invokes the PHP body.
     pub internal_sig: FunctionSig,
     pub span: Span,
+    /// Source void declaration, distinct from the runtime null representation.
+    pub php_void_return: bool,
 }
 
 /// Walks the post-typecheck program AST and returns every user function
@@ -55,17 +57,47 @@ pub fn collect(
     program: &Program,
     functions: &HashMap<String, FunctionSig>,
 ) -> Result<HashMap<String, ExportedFunction>, CompileError> {
+    collect_mode(program, functions, false)
+}
+
+/// Collects real PHP exports without imposing the unrelated public C scalar ABI.
+pub fn collect_for_php(
+    program: &Program,
+    functions: &HashMap<String, FunctionSig>,
+) -> Result<HashMap<String, ExportedFunction>, CompileError> {
+    collect_mode(program, functions, true)
+}
+
+/// Shares export discovery while keeping the two host signatures independent.
+fn collect_mode(
+    program: &Program,
+    functions: &HashMap<String, FunctionSig>,
+    php: bool,
+) -> Result<HashMap<String, ExportedFunction>, CompileError> {
     let mut exports = HashMap::new();
+    let include_variants = program.iter().filter_map(|stmt| {
+        let StmtKind::FunctionVariantGroup { name, variants } = &stmt.kind else {
+            return None;
+        };
+        Some(variants.iter().map(move |variant| (crate::names::php_symbol_key(variant), name)))
+    }).flatten().collect::<HashMap<_, _>>();
     let mut public_symbols = lifecycle_symbols()
         .into_iter()
         .map(|symbol| (symbol.to_string(), "cdylib lifecycle ABI".to_string()))
         .collect::<HashMap<_, _>>();
     for stmt in program {
-        let StmtKind::FunctionDecl { name, .. } = &stmt.kind else {
+        let StmtKind::FunctionDecl { name, return_type, .. } = &stmt.kind else {
             continue;
         };
         if !has_export_attribute(stmt) {
             continue;
+        }
+        if php {
+            if let Some(public_name) = include_variants.get(&crate::names::php_symbol_key(name)) {
+                return Err(CompileError::new(stmt.span, &format!(
+                    "PHP export '{public_name}' is an include-selected function variant; --emit phpext does not execute top-level include activation"
+                )));
+            }
         }
         let sig = functions.get(name).ok_or_else(|| {
             CompileError::new(
@@ -77,8 +109,12 @@ pub fn collect(
             )
         })?;
         let source_sig = source_signature(name, sig, stmt.span)?;
-        validate_signature(name, &source_sig, stmt.span)?;
-        let c_name = public_c_name(name);
+        if php {
+            crate::phpext::signature::validate(name, &source_sig, stmt.span)?;
+        } else {
+            validate_signature(name, &source_sig, stmt.span)?;
+        }
+        let c_name = if php { format!("elephc_php_invoke_{}", exports.len()) } else { public_c_name(name) };
         if let Some(existing) = public_symbols.insert(c_name.clone(), name.clone()) {
             return Err(CompileError::new(
                 stmt.span,
@@ -96,6 +132,7 @@ pub fn collect(
                 source_sig,
                 internal_sig: sig.clone(),
                 span: stmt.span,
+                php_void_return: matches!(return_type, Some(crate::parser::ast::TypeExpr::Void)),
             },
         );
     }

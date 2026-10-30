@@ -1242,6 +1242,11 @@ pub(super) fn lower_array_set_mixed_key(
     let key = expect_operand(inst, 1)?;
     let value = expect_operand(inst, 2)?;
     require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
+    if let Some(slot) = source_load_local_slot(ctx, array)? {
+        // Late Mixed storage leaves the load owning a child lease. Retire its previous box
+        // before the consuming mutation so publication cannot abandon that outer owner.
+        ctx.prepare_mutated_source_local_owner(slot, array)?;
+    }
     let key_ty = ctx.value_php_type(key)?.codegen_repr();
     if !matches!(key_ty, PhpType::Mixed | PhpType::Union(_)) {
         return Err(CodegenIrError::unsupported(format!(
@@ -2465,11 +2470,11 @@ fn emit_mixed_array_get_deref_invoker_ref_cell(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", mixed_reg, done_label)); // null gap cells read as PHP null and carry no tag word to inspect
+                .instruction(&format!("cbz {}, {}", mixed_reg, done_label));    // null gap cells read as PHP null and carry no tag word to inspect
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", mixed_reg, mixed_reg)); // null gap cells read as PHP null and carry no tag word to inspect
+                .instruction(&format!("test {}, {}", mixed_reg, mixed_reg));    // null gap cells read as PHP null and carry no tag word to inspect
             ctx.emitter.instruction(&format!("jz {}", done_label));             // skip marker detection for null gap cells
         }
     }
@@ -3155,7 +3160,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx.emitter.instruction("ldr x11, [x10, x1, lsl #3]");                      // load the existing boxed Mixed slot
     ctx.emitter.instruction(&format!("cbz x11, {}", runtime_label));            // null gap slots are ordinary array writes
     ctx.emitter.instruction("ldr x12, [x11]");                                  // load the existing Mixed tag for marker detection
-    ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG));// check whether the slot aliases caller storage
+    ctx.emitter.instruction(&format!("cmp x12, #{}", INVOKER_ARG_REF_CELL_TAG)); // check whether the slot aliases caller storage
     ctx.emitter.instruction(&format!("b.ne {}", runtime_label));                // ordinary boxed Mixed slots are replaced by the runtime setter
     if retained_value {
         ctx.emitter.instruction("stp x0, x11, [sp, #-16]!");                    // preserve the array result and the marker across the detach

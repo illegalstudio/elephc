@@ -29,10 +29,10 @@ mod tail_scan_tests;
 /// only when their merged endpoint reaches the bump frontier.
 ///
 /// Otherwise, blocks up to `HEAP_BIN_MAX` payload bytes go to the exact size-class bin for their
-/// payload (one push, no coalescing until `__rt_heap_consolidate`). Under `--heap-debug` or the
-/// `--web` heap guard, the header's byte in `_heap_bin_marks` catches a double free in O(1); the
+/// payload (one push, no coalescing until `__rt_heap_consolidate`). Under `--heap-debug`, the header's byte in `_heap_bin_marks` catches a double free in O(1); the
 /// bin is scanned only when the mark is already set, which a stale mark can also explain.
-/// Larger blocks join the ordered coalescing free list.
+/// Web mode instead rejects retired identities through the exact live-base bitmap
+/// before allocator mutation. Larger blocks join the ordered coalescing free list.
 ///
 /// Input: `x0` = user pointer (as returned by `heap_alloc`)
 ///
@@ -69,6 +69,8 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("add x12, x0, x11");                                    // compute the candidate payload end address
     emitter.instruction("cmp x12, x17");                                        // would the candidate payload overrun the live heap?
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
+
+    super::heap_live_bases::emit_free_guard(emitter);
 
     // -- return this block's PHP object handle to the pool before the storage goes --
     // Probe the authoritative side table inline. Most blocks are strings, arrays,
@@ -154,10 +156,7 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     emitter.instruction("sub x10, x10, #8");                                    // x10 = address of this size class's bin head
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_guarded");        // heap-debug mode active, check the bin mark for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
-    emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
-    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
+    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // normal web frees already passed the exact live-base guard
     emitter.label("__rt_heap_free_cache_small_guarded");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_heap_buf");
     emitter.instruction("sub x13, x9, x12");                                    // x13 = header offset from the heap base
@@ -366,6 +365,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
 
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
+    super::heap_live_bases::emit_free_guard(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
@@ -476,11 +476,7 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
     emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
-    emitter.instruction("jnz __rt_heap_free_cache_small_guarded");              // heap-debug mode active, check the bin mark for a double free
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
-    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
-    emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // normal web frees already passed the exact live-base guard
     emitter.label("__rt_heap_free_cache_small_guarded");
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
     emitter.instruction("mov rdx, r9");                                         // rdx = header address

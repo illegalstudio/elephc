@@ -26,6 +26,11 @@ pub(crate) use user::{is_user_filter_contract_method, is_user_wrapper_contract_m
 pub(crate) use user::USER_WRAPPER_VTABLE_BOXED_MASK_OFFSET;
 pub(crate) use user::USER_WRAPPER_VTABLE_CAST_RESULT_OFFSET;
 
+/// Optional native stream closer installed only by an application worker after its startup reset.
+pub(crate) const WEB_STREAM_CLOSE_SLOT: &str = "_web_application_stream_close";
+/// Program-specific close body shared with explicit fclose lowering.
+pub(crate) const WEB_STREAM_CLOSE_ENTRY: &str = "__rt_web_application_close_stream";
+
 /// Fatal error message when `php_uname()` receives a `$mode` argument whose length is not exactly 1.
 pub(crate) const PHP_UNAME_MODE_LEN_MSG: &str =
     "Fatal error: php_uname(): Argument #1 ($mode) must be a single character\n";

@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - The requested EIR optimization setting is applied before printing.
-//! - Exported code receives the same cdylib call-graph safety validation as final emission.
+//! - Exported code receives the output kind's call-graph safety validation, as in final emission.
 
 use std::collections::HashMap;
 
@@ -17,6 +17,7 @@ pub(super) fn emit(
     ast: &parser::ast::Program,
     check_result: &types::CheckResult,
     target: Target,
+    emit_kind: Emit,
     filename: &str,
     web: bool,
     ir_opt: bool,
@@ -54,7 +55,12 @@ pub(super) fn emit(
     timings.record_since("ir-lower", phase_started);
 
     if !exported_functions.is_empty() {
-        if let Err(error) = exports::validate_cdylib_call_graph(&module, exported_functions) {
+        let validate = if emit_kind == Emit::Phpext {
+            exports::validate_phpext_call_graph
+        } else {
+            exports::validate_cdylib_call_graph
+        };
+        if let Err(error) = validate(&module, exported_functions) {
             crate::progress::clear();
             errors::report(&error.with_file(filename.to_string()));
             process::exit(1);

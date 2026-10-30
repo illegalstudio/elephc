@@ -7,7 +7,9 @@
 //!
 //! Key details:
 //! - Regex helpers preserve PHP PCRE-flavored pattern bytes and pass PCRE2 POSIX-wrapper flags downstream.
-//! - The removed `/e` modifier sets bit 30. Callers must reject that bit; PCRE2 accepts it.
+//! - The removed `/e` modifier sets bit 30. That bit is not a PCRE2 flag, and
+//!   PCRE2 would accept it. Every regex helper tests the bit after stripping
+//!   and rejects the pattern before compilation, so it never reaches `pcre2_regcomp`.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -86,8 +88,13 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
     emitter.label("__rt_preg_strip_flag_U");
     emitter.instruction("cmp w9, #85");                                         // check for 'U' ungreedy modifier
-    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("b.ne __rt_preg_strip_flag_x");                         // try the extended-mode modifier
     emitter.instruction("orr x3, x3, #512");                                    // add REG_UNGREEDY for inverted quantifier greediness
+    emitter.instruction("b __rt_preg_strip_save_flag");                         // save the updated flag word
+    emitter.label("__rt_preg_strip_flag_x");
+    emitter.instruction("cmp w9, #120");                                        // check for 'x' extended modifier
+    emitter.instruction("b.ne __rt_preg_strip_skip_flag");                      // ignore unsupported trailing modifiers for now
+    emitter.instruction("orr x3, x3, #0x2000");                                 // record the private PCRE2_EXTENDED flag for the shim
     emitter.label("__rt_preg_strip_save_flag");
     emitter.instruction("str x3, [sp, #16]");                                   // save accumulated PCRE2 POSIX flags
     emitter.label("__rt_preg_strip_skip_flag");
@@ -160,8 +167,13 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
     emitter.label("__rt_preg_strip_flag_U_linux_x86_64");
     emitter.instruction("cmp r8d, 85");                                         // detect the trailing 'U' ungreedy modifier
-    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("jne __rt_preg_strip_flag_x_linux_x86_64");             // try the extended-mode modifier
     emitter.instruction("or rcx, 512");                                         // record REG_UNGREEDY for inverted quantifier greediness
+    emitter.instruction("jmp __rt_preg_strip_skip_flag_linux_x86_64");          // continue scanning toward the opening delimiter
+    emitter.label("__rt_preg_strip_flag_x_linux_x86_64");
+    emitter.instruction("cmp r8d, 120");                                        // detect the trailing 'x' extended modifier
+    emitter.instruction("jne __rt_preg_strip_skip_flag_linux_x86_64");          // ignore unsupported trailing modifiers for now
+    emitter.instruction("or rcx, 0x2000");                                      // record the private PCRE2_EXTENDED flag for the shim
 
     emitter.label("__rt_preg_strip_skip_flag_linux_x86_64");
     emitter.instruction("sub r9, 1");                                           // move the reverse scan cursor one byte closer to the opening delimiter

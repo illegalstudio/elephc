@@ -9,6 +9,8 @@
 //! - Parameters, captures, globals, reference cells and eval-visible slots cannot be consumed.
 //! - Publication moves the runtime result directly, without another acquire or old-owner release.
 //! - Final slot widening retries the body with ordinary argument and assignment ownership.
+//! - A `(string)` cast that borrowed a local is retried the same way when that slot
+//!   ends up freeing the load. The retry copies only those locals.
 
 use super::*;
 
@@ -38,15 +40,40 @@ impl LoweringContext<'_, '_> {
                 &self.builder.local_php_type(slot), &self.builder.value_php_type(*value),
             ).then_some(*span)
         }).collect();
-        if invalidated_append || invalidated_read || !owned_offsets.is_empty() {
+        let widened_casts = self.widened_borrowed_string_cast_locals();
+        if invalidated_append || invalidated_read || !owned_offsets.is_empty() || !widened_casts.is_empty() {
             // Replay the existing ownership path instead of repairing a consuming
             // store piecemeal: widened loads, acquires and old-owner releases must agree.
+            // The cast replay copies only locals whose finished slot frees the load.
             self.restore(checkpoint);
             self.owned_string_offset_sites.extend(owned_offsets);
+            self.owned_string_cast_locals = widened_casts;
             if invalidated_append { self.consuming_string_append_enabled = false; }
             if invalidated_read { self.borrowed_string_calls_enabled = false; }
             lower(self);
         }
+    }
+
+    /// Returns locals a `(string)` cast borrowed whose finished slot frees that load.
+    ///
+    /// The cast is lowered before a later store can widen the slot, so the first
+    /// pass borrows. Codegen then detaches an owned string from the widened slot
+    /// and the borrowed cast would leak it. The replay copies those locals only.
+    fn widened_borrowed_string_cast_locals(&self) -> HashSet<String> {
+        self.provisional_borrowed_string_casts.iter().filter(|name| {
+            let locals = self.builder.function().locals.iter().filter(|local| {
+                local.name.as_deref().is_some_and(|stored| {
+                    stored.strip_suffix("#cow").unwrap_or(stored) == name.as_str()
+                })
+            });
+            let mut found = false;
+            let mut owns = false;
+            for local in locals {
+                found = true;
+                owns |= crate::ir::local_load_coercion_owns_result(&local.php_type, &PhpType::Str);
+            }
+            !found || owns
+        }).cloned().collect()
     }
 
     /// Proves an initialized local can hand its string owner to a consuming append.

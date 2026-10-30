@@ -47,6 +47,9 @@ macro_rules! class {
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
+    class!("Elephc\\Web\\Request", "elephc\\web\\request", Class, Elephc, Prelude),
+    class!("Elephc\\Web\\WorkerApplication", "elephc\\web\\workerapplication", Interface, Elephc, Prelude),
+    class!("Elephc\\Web\\Worker", "elephc\\web\\worker", Class, Elephc, Prelude),
     class!("__ElephcFinfoHandle", "__elephcfinfohandle", Class, Elephc, Prelude, internal: true),
     class!("__ElephcCallableSessionHandler", "__elephccallablesessionhandler", Class, Elephc, Prelude, internal: true),
     class!("__ElephcDOMNodeListIterator", "__elephcdomnodelistiterator", Class, Elephc, Prelude, internal: true),

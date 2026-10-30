@@ -9,6 +9,14 @@ elephc manages memory without calling `malloc`/`free` for PHP values directly. S
 
 This page explains where every value lives in memory at runtime.
 
+For `--emit phpext`, each PHP request owns a snapshot of these native writable
+regions. The adapter restores snapshots at stable addresses under a module-local
+mutex, preserving internal pointers while isolating request heaps and statics.
+Native strings and arrays are copied through private transport storage, then
+converted using real Zend APIs. Zend allocations and native allocations never
+share ownership. Snapshot buffers and partial transport allocations are freed
+at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
+
 ## Runtime memory regions
 
 ```
@@ -451,7 +459,7 @@ Every allocation has a **16-byte header**: two 32-bit fields for block size and 
        header (16 bytes total)          ← pointer returned to caller
 ```
 
-The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, while raw helper buffers remain `0`. Compact runtime-thrown Throwable payloads (exception/error objects allocated by throw paths) are stamped kind `6=throwable`; the uniform release dispatchers (`__rt_decref_any`, `__rt_object_free_deep`) accept kind `6` and release it through the object path. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout.
+The size is stored at header offset `+0`, the reference count at `+4`, and the heap kind tag at `+8`. New allocations start with refcount `1`; typed constructors then stamp the kind as `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, `7=concat temporary`, `8=reference cell`, and `9=callable descriptor`, while raw helper buffers remain `0`. Compact runtime-thrown Throwable payloads (exception/error objects allocated by throw paths) are stamped kind `6=throwable`; the uniform release dispatchers (`__rt_decref_any`, `__rt_object_free_deep`) accept kind `6` and release it through the object path. Generator frames are stamped as kind `4` object blocks because `Generator` is a built-in class with a custom payload layout.
 
 On x86_64 the 8-byte kind word also carries an ownership marker: the ASCII bytes `"ELPH"` in its high 32 bits. Every x86_64 heap stamp goes through the shared `codegen_support::sentinels` helpers — `x86_64_heap_kind_word(low_bits)` builds the full word (magic + packed kind/COW/value_type low bits) and checkers compare against `X86_64_HEAP_MAGIC_HI32` — instead of hand-typed immediates. Refcount and free helpers ignore pointers whose header does not carry the marker, so foreign or static pointers silently opt out of refcounting. For array/hash containers, the low 16 bits of the kind word are persistent metadata: the low byte is still the heap kind, indexed arrays still pack their runtime `value_type` in the next byte, and bit 15 is reserved as the persistent copy-on-write container flag. Higher bits remain transient collector metadata.
 
@@ -528,7 +536,7 @@ reentrant unwinding from consuming a retired scope or local owner twice.
 Promoted local reference cells follow the same rule: detach the owner before
 releasing the payload, contain any payload exception, and free the cell before
 propagating. This applies both to explicit retirement and function epilogues.
-Object-owned property reference cells use heap kind `7`, with their payload type
+Object-owned property reference cells use heap kind `8`, with their payload type
 in header bits `8..14`. Their two payload words remain the value's low word and
 its high word or string length. Class GC descriptor tag `11` identifies these
 owned cells; constructor-promoted borrowed reference addresses stay non-owning.
@@ -646,7 +654,7 @@ expression is lowered, so the record nests outside every argument root the call
 publishes and is detached only once the alias owns the cell. A same-frame `catch`,
 which runs no whole-frame cleanup, still releases the payload exactly once. The
 record's cleanup discipline follows the slot: a ref-cell owner always uses the
-generic `__rt_decref_any` entry, which dispatches heap kind 7 to
+generic `__rt_decref_any` entry, which dispatches heap kind 8 to
 `__rt_reference_cell_release`, never the callable-descriptor entry its payload type
 would otherwise select.
 
@@ -761,6 +769,28 @@ property aliases retain directly without this scan.
 Plain local overwrites and `unset()` also retire the previous slot owner before
 calling its release helper. The EIR retirement operation records that local
 mutation and the observable effects of a potentially throwing destructor.
+
+Property element removal fetches separated storage with `PropGetForWrite` and
+removes the key in place. It never stores a container back after releasing the
+removed value, because that value's destructor may replace the property or throw.
+Owned receiver expressions and keys stay in unwind-visible EIR operand slots.
+If key conversion can invoke a warning handler, native lowering retains a snapshot
+owner of the selected hash in a temporary cleanup scope. After conversion, another
+live owner allows this snapshot to be retired before deletion, preserving ordinary
+destructor interleaving. A detached hash keeps its snapshot through deletion or
+exception unwinding. The old property value is never stored back.
+
+When a boxed property holds an `ArrayAccess` object, the native
+`__rt_mixed_object_offset_unset` helper retains the selected object across dispatch.
+A callback may clear the supplying property while still using its receiver. The
+helper guards this receiver before entering PHP or an SPL offset conversion that
+can invoke an error handler. PHP methods borrow the original boxed key, so a
+second guard protects that key during the method call. Normal cleanup retires the
+key before the receiver; an escaping throw releases both through the shared
+activation chain. SPL helpers consume the original key themselves and apply
+their own offset conversion rules. `OffsetUnset` carries conservative callback
+effects because these methods and warning handlers can observe or mutate PHP state.
+
 Ordinary executable PHP frames and library frames both publish exception-cleanup
 activations. Each PHP catch saves the current activation as the unwind stop, so
 the catching function and its callers keep their live local owners. The unwinder
@@ -822,6 +852,9 @@ The runtime routine `__rt_heap_free`:
 1. Read the block size (32-bit) from the 16-byte header at `user_pointer - 16`
 2. If the block is exactly at the bump tail, shrink `_heap_off` immediately
 3. Otherwise, payloads up to 2048 bytes are pushed onto the exact bin for their size, so a later allocation of the same size reuses them without scanning anything
+   Web-mode frees first validate exact membership in the allocator live-base bitmap;
+   duplicate detection does not scan the cached chain. Heap-debug bin marks and full
+   chain validation remain available for diagnostics.
 4. Larger non-tail blocks are inserted into the general free list in address order and merged with adjacent free neighbors. Only a merged block ending at the bump frontier starts a tail search, which repeatedly trims the now-free tail chain back into `_heap_off`; other insertions skip that scan
 5. Free blocks reuse the same 16-byte header, clear the kind back to `0`, and then store the next pointer immediately after it: `[size:4][refcnt:4][kind:8][next_ptr:8][...unused...]`
 
@@ -1378,6 +1411,16 @@ read the same uniform heap header, including on the iOS targets.
 
 ## Memory management strategy
 
+The opt-in web application lifecycle keeps this heap valid for the worker.
+Its registered application, ordinary globals, and statics remain owning roots.
+Request functions release local owners, the boundary detaches and releases
+superglobals, then explicit cycle collection and resource inventory pruning
+retire remaining request graphs. Newly stored application values follow normal
+string persistence, reference counting, and COW; no boot-allocation immortality
+or request-arena pointer escape is involved. The default web request lifecycle
+continues to reclaim its entire arena. See
+[Persistent Web Applications](../beyond-php/web-application.md).
+
 elephc uses a **free-list allocator with reference counting plus a targeted cycle collector** — not pure bump-allocation, and not a whole-heap tracing runtime either. Memory is reclaimed in specific situations:
 
 1. **Reference counting** — every heap allocation carries a 32-bit refcount (initialized to 1). When a reference is shared, `__rt_incref` increments it. When a reference is dropped, `__rt_decref_array`, `__rt_decref_hash`, or `__rt_decref_object` decrements it and frees the block when it reaches zero
@@ -1460,13 +1503,149 @@ The runtime now includes a targeted collector for heap-backed `array`, associati
 `__rt_gc_collect_cycles` is intentionally narrower than a full tracing GC: it ignores strings and raw helper buffers as candidates, clears transient marks, counts heap-only incoming edges, and marks externally reachable container/object blocks. An object-destructor phase pins graph candidates before running PHP, then repeats root analysis before freeing the unmarked remainder. Heap-kind bit 18 identifies an artificial pin, distinct from snapshot membership bit 17, destructor completion bit 14, and reachability bit 16. `_gc_collecting` suppresses recursive collection throughout these phases; `_gc_freeing_unreachable` suppresses decrements of doomed graph children only during the final sweep. Destructor-side writes therefore update real ownership normally. `_gc_pin_head` links C-allocated snapshot chunks outside the PHP heap. This remains a non-moving collector for structural cycles, not Zend collector-buffer parity.
 
 On x86_64, one outgoing-edge traversal caches incoming counts in transient
-kind-word bits 19 through 31. The high 32-bit ELPH marker and actual refcounts
-remain intact. Counts saturate at 8191; a saturated candidate uses the original
-full-precision heap rescan before any root decision. Already reachable nodes
+kind-word bits 19 through 30. The high 32-bit ELPH marker and actual refcounts
+remain intact. Counts saturate at 4095; a saturated candidate uses the original
+full-precision rescan of the selected graph before any root decision. Already reachable nodes
 need no additional root classification. Each root scan clears cached fields
 before destructor callbacks, and destructor mutations trigger fresh counting.
 The ARM64 collector continues using its existing 32-bit incoming-count field.
 Both ABIs enumerate retained eval-object children through the same callback.
+
+Native callable descriptors are managed kind-9 graph nodes. Every dynamic producer
+initializes capture storage and stamps that kind; static descriptors remain outside
+the live heap. Callable slots (value tag 10) in arrays, hashes, object properties,
+Mixed boxes and reference cells contribute real ownership edges. The shared capture
+visitor mirrors final release metadata, including nested descriptors and by-reference
+capture cells normalized through `__rt_reference_cell_owner`. This helper validates
+the exact live allocation through the allocator bitmap before checking its kind,
+with constant work independent of heap size. Nonfinal descriptor
+releases queue candidates. Final sweep invokes protected descriptor teardown and
+suppresses only doomed snapshot child owners; strings and excluded children still
+release normally. Weak observers, throwing destructors and resurrection keep the
+same lifetime rules as other graph nodes.
+
+`__rt_gc_object_children` combines retained eval edges with native Fiber, Generator
+and SPL owners, plus incomplete-object property hashes. The Fiber walk follows its callable, transfer value, pending
+throwable, and any owned legacy trailing capture slots. Its visible start arguments,
+caller pointers and saved frame pointers are borrowed and never contribute incoming
+owner counts. Generator start arguments are independently owned boxed values;
+its visitor also follows transfer, pending throwable, last key, last value and return
+value slots. SplDoublyLinkedList, SplStack, SplQueue and SplFixedArray own their
+internal storage array. Incomplete objects use class sentinel `-2` and own one
+property hash at offset 24; their persisted name is a string, excluded from graph
+edges. The visitor requires at least 32 payload bytes for that layout. Class identities and allocation bounds guard native layout
+accesses. Structural work estimates inspect the same slots, and teardown routes
+these owners through the common dispatcher to suppress doomed selected children.
+Suspended coroutine activations publish pure typed owner visitors. Ordinary PHP
+activation records retain their cleanup/frame/backtrace prefix and add a visitor
+at offset 40 (48 bytes total). Compact 32-byte transferred-owner guards keep their
+self-data prefix; native call-operand records already have 48 bytes. Frame walks
+recognize these layouts before reading extended metadata. Saved registers and
+caller pointers remain borrowed; the owned locals represented by activations are
+real coroutine children.
+Warning dispatch publishes the same complete 48-byte layout and visits its owned
+argument and result boxes. Suspended error-handler registrations use a specialized
+compact-record visitor for their saved PHP value, callable and initialized result
+slot. Borrowed callback arguments and opaque eval-context handles are excluded.
+Native cleanup clears each released slot before executing callbacks.
+
+The generated visitor uses the same slot inventory, moved/borrowed exclusions,
+reference-state predicates and initialized zero slots as exceptional frame cleanup.
+Managed reference cells remain nodes; raw fallback cells expose their owned payload.
+A private native hash set deduplicates physical owner-slot addresses across local
+and call-operand relay records, while distinct slots still count as distinct owners.
+Nested coroutine walks have separate contexts. Pure-cost mode allocates no set and
+counts both activation records and inspected slots without following PHP values.
+
+Native Fiber/Generator destructor entries force-close a suspended body before stack
+release. A private class-sentinel unwind marker cannot match PHP catches; ordinary
+finally lowering and exceptional cleanup retire the body locals. The entry boundary
+absorbs only this marker. Real finally exceptions use protected destructor cleanup,
+and the marker is never attached as a PHP-visible previous exception. Yield during
+forced Generator close raises Error; Fiber suspension during forced Fiber close raises FiberError. Other Fiber
+operations and nested engine-driven close retain PHP semantics. Doomed coroutine nodes run this stage with the collector's destructor pins
+before a fresh reachability recount, so finally mutations and resurrection precede
+sweep. Never-started or completed coroutines require no forced body execution.
+The AST destruction-effect model accounts for these implicit callback throws even
+when the class declares no PHP __destruct.
+Eval catch clauses use the ordinary dynamic/native class and interface matcher,
+including for `Throwable`, so they cannot consume the private unwind object.
+Eval `finally` blocks still run and retain PHP control-override semantics.
+
+`GeneratorYieldFrom` publishes an owning temporary through the ordinary EIR
+call-operand ledger. Exceptional unwinding releases that owner before entering a
+same-frame `finally`; borrowed local and external aliases keep their existing
+lifetime. Its result is staged before argument cleanup so throwing teardown does
+not strand the returned cell. `Fiber::start()` also boxes wire arguments explicitly
+in EIR, under source-evaluation and call-operand owners. The native start buffer
+continues to borrow those cells; callback parameter owners survive suspension,
+while caller cleanup retires fresh wire boxes on return and throw.
+
+Native callable proofs store logical capture indexes and validate current capacity,
+environment binding counts, value tags and child identities. Reference bindings prove
+the normalized owning cell; its changing payload is validated by the next typed edge.
+Opaque eval callbacks and native object slots remain outside the proof cache and use
+ordinary immediate collection when no separate rooted proof exists.
+
+Application lifecycle enables a candidate queue instead of the physical heap scan.
+Nonfinal graph decrements, including COW owner retirement, queue borrowed identities
+with kind bit 31 for deduplication. The exact allocator live-base bitmap rejects
+retired or interior addresses before a header is read. Reused storage participates
+only if independently queued again. Discovery visits the forward closure iteratively
+through the same typed child layouts used by ordinary marking.
+
+A per-program visitor reads initialized owning globals and statics before expansion.
+It anchors those roots, normalized Mixed/reference payloads, and direct object children,
+without traversing array/hash contents. A non-owning spanning forest additionally records
+paths through typed object, array, hash, Mixed and reference slots. Each lookup validates
+exact live bases, current layout tags, bounds and child identities until it reaches a
+fresh root anchor. Hash records store logical indexes and reacquire current entry storage
+after rehashing. No mutation barrier is required: stale proofs fail validation and the
+ordinary collector handles the affected graph. Opaque callback edges remain outside this
+native-slot cache. Bootstrap builds and sorts the forest. Before path validation,
+candidate discovery checks current snapshot membership to avoid duplicate work.
+A parallel memo word records either a successful or an unproved path for the
+current preparation epoch. An iterative second parent walk stamps every checked
+prefix, including failures, so shared ancestors are not repeatedly revalidated.
+No PHP callbacks run during preparation. Every prepare, including destructor
+recounts, advances the epoch; wrapping clears all stamps before reuse. A negative
+memo means only that this cached path does not prove liveness, never that the
+node is unreachable. The ordinary collector still determines its ownership.
+
+Every surviving unproved snapshot member adds its structural scan cost to the
+saturating `_gc_proofs_debt` counter. `__rt_gc_node_scan_cost` charges one node plus
+the child slots actually inspected: graph-array length, full hash capacity
+(including holes and scalar/string entries), fixed and dynamic object properties,
+and native retained-child slots. The native enumeration mode counts without
+marking or acquiring owners. A request boundary rebuilds only after debt reaches
+`max(256, _gc_proofs_cost)` of the preceding forest. Rebuilding resets the debt.
+This amortizes reconstruction against candidate scan work and prevents each
+small retained write from triggering a global walk and sort. Unproved values
+still participate in the ordinary collector immediately; only proof-cache
+maintenance waits for its budget. Newly retained large services can earn reusable
+proofs through repeated closure work. A refresh can still cause an individual
+request latency spike, and opaque ownership paths retain their conservative fallback.
+
+Records use three machine words plus one parallel epoch word in reusable libc
+storage, with geometric capacity. Within a preparation pass, lookup work depends
+on the number of distinct validated prefixes and queries, each using logarithmic
+record searches, instead of repeatedly walking shared paths. Rebuilding visits
+and sorts the rooted graph. Diagnostic visited counts include structural slots,
+validation, memo propagation and cache reconstruction. Native cache capacity
+follows its largest recorded graph.
+
+Anchor bit 20 is temporary and is removed before incoming-edge counting reuses that
+field. References from excluded roots remain external to the candidate subset.
+Destructor recounts retain previously pinned nodes even when resurrection gives them
+a new global owner, so pin removal remains balanced. Only snapshot members suppress
+child decrements during the final sweep; scalar/string array leaves always retire
+through ordinary ownership.
+
+Pending roots, anchors, and snapshot vectors use reusable libc buffers that own no PHP
+references. Their counts are reset after use; capacities follow their largest observed
+working sets. Surviving snapshot membership is cleared before a pending exception is
+re-thrown. Candidate collection runs at the same safe points and request boundaries,
+with the same destructor timing. Default request lifecycle retains physical heap scans.
 
 ### Performance characteristics
 

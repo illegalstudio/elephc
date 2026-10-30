@@ -37,6 +37,12 @@ pub(crate) const FLOAT_WINDOW_BYTES: usize = 64;
 /// with a mask.
 pub(crate) const FLOAT_SPILL_SLOTS: usize = 4;
 
+/// Keeps runtime helper bounds and the capacity read by nested host boundaries identical.
+pub(crate) fn scratch_capacity(heap_size: usize) -> usize {
+    // x86_64 helper comparisons need a signed 32-bit immediate; larger results use the heap.
+    heap_size.clamp(65_536, 1 << 30)
+}
+
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
 /// `__rt_alloc_overflow`.
 ///
@@ -163,7 +169,7 @@ fn emit_float_window_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the current concat scratch write offset
     emitter.instruction(&format!("add x11, x10, #{}", FLOAT_WINDOW_BYTES));     // offset after reserving the formatter window
     abi::emit_load_int_immediate(emitter, "x9", emitter.concat_capacity as i64); // load the scratch arena capacity
-    emitter.instruction("cmp x11, x9");                                        // would the window cross the end of _concat_buf?
+    emitter.instruction("cmp x11, x9");                                         // would the window cross the end of _concat_buf?
     emitter.instruction("b.hi __rt_float_window_spill");                        // a full scratch formats into the spill ring instead
     abi::emit_symbol_address(emitter, "x9", "_concat_buf");
     emitter.instruction("add x0, x9, x10");                                     // the window starts at the scratch write offset
@@ -190,7 +196,7 @@ fn emit_float_window_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_float_window");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);
     emitter.instruction(&format!("lea r11, [r10 + {}]", FLOAT_WINDOW_BYTES));   // offset after reserving the formatter window
-    emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));          // would the window cross the end of _concat_buf?
+    emitter.instruction(&format!("cmp r11, {}", emitter.concat_capacity));      // would the window cross the end of _concat_buf?
     emitter.instruction("ja __rt_float_window_spill_x86");                      // a full scratch formats into the spill ring instead
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("add r10, r9");                                         // the window starts at the scratch write offset
@@ -676,6 +682,41 @@ mod tests {
         assert!(x86_asm.contains(&format!(
             "mov r10, 0x{:x}",
             crate::codegen_support::sentinels::x86_64_heap_kind_word(CONCAT_TEMP_HEAP_KIND)
+        )));
+    }
+
+    /// Growth must publish the new base into the caller's slot. The throw path frees
+    /// that slot, so a stale pre-growth pointer would either leak the grown block or
+    /// free a block `__rt_concat_grow` already released.
+    #[test]
+    fn preg_cb_ensure_publishes_the_grown_base_before_returning() {
+        let mut arm = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_concat_scratch(&mut arm);
+        let arm_asm = arm.output();
+        let ensure = arm_asm
+            .find("__rt_preg_cb_ensure:")
+            .expect("ensure helper");
+        let arm_ensure = &arm_asm[ensure..];
+        let grow = arm_ensure.find("bl __rt_concat_grow").expect("grow call");
+        let publish = arm_ensure.find("str x9, [x10]").expect("published base");
+        let retag = arm_ensure.find("mov x9, #1").expect("owned-string kind");
+        assert!(retag < publish && publish > grow, "{arm_ensure}");
+
+        let mut x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_concat_scratch(&mut x86);
+        let x86_asm = x86.output();
+        let ensure = x86_asm
+            .find("__rt_preg_cb_ensure:")
+            .expect("ensure helper");
+        let x86_ensure = &x86_asm[ensure..];
+        let grow = x86_ensure.find("call __rt_concat_grow").expect("grow call");
+        let publish = x86_ensure
+            .find("mov QWORD PTR [r9], r8")
+            .expect("published base");
+        assert!(publish > grow, "{x86_ensure}");
+        assert!(x86_ensure.contains(&format!(
+            "mov r10, 0x{:x}",
+            crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
         )));
     }
 }

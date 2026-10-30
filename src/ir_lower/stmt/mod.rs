@@ -30,7 +30,7 @@ use crate::ir_lower::expr::{
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
-    string_op_uses_scratch_storage, type_satisfies_array_access_for_ir,
+    persist_pending_string, string_value_needs_persistence, type_satisfies_array_access_for_ir,
 };
 use crate::names::{php_symbol_key, property_hook_set_method};
 use crate::parser::ast::{
@@ -70,6 +70,7 @@ mod nested_false_errors;
 mod return_coercions;
 mod repr_fixpoint;
 mod static_property_helpers;
+mod string_offset_writes;
 
 use statement_basics::*;
 use local_assignments::*;
@@ -107,11 +108,20 @@ pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
 pub(super) use instance_property_writes::contextualize_property_array_value;
 pub(super) use property_array_writes::release_property_assignment_source_after_retaining_store;
+// Shared with `crate::ir_lower::expr::unset`, which removes property and static-property array
+// elements through the same storage paths the element writes use.
+pub(crate) use property_array_writes::lower_property_array_unset;
+pub(crate) use static_property_helpers::static_property_type;
+pub(crate) use static_property_writes::lower_static_property_array_unset;
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
 pub(crate) use array_write_core::{
     desugared_element_update, lower_array_assign_with_diagnosed_key, ElementUpdate,
+};
+pub(in crate::ir_lower) use string_offset_writes::{
+    local_is_string_offset_target, local_may_hold_boxed_string, lower_boxed_string_offset_write,
+    lower_string_offset_write, StringOffsetWriteResult,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
 pub(crate) use buffer_element_updates::{lower_buffer_expression_update, BufferExpressionUpdate};

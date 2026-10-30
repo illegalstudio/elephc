@@ -766,6 +766,13 @@ fn validate_opcode_rules(
         }
         EvalScopeSet => check_count(inst_id, inst, 2, "2"),
         ClosureNew => Ok(()),
+        ClosureBind => {
+            match inst.immediate {
+                None | Some(Immediate::ClosureBindScope(_)) => check_count(inst_id, inst, 2, "2"),
+                Some(Immediate::ClosureBindObjectScope(_)) => check_count(inst_id, inst, 3, "3"),
+                _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
+            }
+        }
         FirstClassCallableNew => check_count_at_most(inst_id, inst, 1, "0 or 1"),
         ObjectNew => Ok(()),
         EvalStaticMethodCall => Ok(()),

@@ -63,6 +63,10 @@ fn emit_retire(emitter: &mut Emitter) {
 
 /// Emits inventory registration, close tracking, filtering, and enumeration helpers.
 pub(crate) fn emit_resource_inventory(emitter: &mut Emitter, features: RuntimeFeatures) {
+    emitter.label_global("__rt_web_close_stream");
+    let target = if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 { "x9" } else { "r11" };
+    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, target, crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_SLOT, 0);
+    emitter.instruction(if emitter.target.arch == crate::codegen_support::platform::Arch::AArch64 { "br x9" } else { "jmp r11" }); // tail-call the installed native stream closer with its C descriptor argument
     emit_retire(emitter);
     match emitter.target.arch {
         Arch::AArch64 => emit_resource_inventory_aarch64(emitter, features),

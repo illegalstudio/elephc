@@ -142,6 +142,9 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         "web-session",
         "web-session-trans-sid",
         "web-session-upload",
+        // The application contract is injected only by --web-lifecycle=application;
+        // web_application_example_reuses_its_counter covers its real compilation profile.
+        "web-application",
         // OPcache introspection functions are provided by the pay-for-use OPcache
         // prelude, which the plain CLI-mode corpus lowering does not inject. The
         // opcache_* integration suites compile both examples' surfaces for real.

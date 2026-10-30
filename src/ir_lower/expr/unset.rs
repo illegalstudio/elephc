@@ -9,12 +9,20 @@
 
 use super::*;
 
+mod property_elements;
+use property_elements::*;
+
 /// Lowers supported `unset(...)` targets without evaluating them as ordinary call args.
 pub(super) fn lower_unset_locals(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    for arg in args {
+        if let Some(message) = unset_property_element_refusal(ctx, arg) {
+            crate::ir_lower::diagnostics::refuse(arg.span, &message);
+        }
+    }
     if !args.iter().all(|arg| unset_target_supported(ctx, arg)) {
         return None;
     }
@@ -48,6 +56,9 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_array_access_property_array_type(ctx, array).is_some()
+                || unset_array_access_has_array_access_property_receiver(ctx, array)
+                || unset_array_access_static_php_array_receiver(ctx, array).is_some()
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -127,12 +138,35 @@ pub(super) fn unset_array_access_has_object_receiver(
 /// representation change and therefore stays limited to a local this function owns. An
 /// `ArrayAccess` object dispatches to its `offsetUnset($key)` method like before, and a raw
 /// by-reference INDEXED local falls through to that path.
+///
+/// An element of a declared-array, associative or boxed `Mixed` object property, and of a
+/// declared-array static property, is removed through the same storage the element writes mutate
+/// (issue #750). A property holding an ArrayAccess object dispatches to its `offsetUnset` after
+/// the key, and a readonly array property raises PHP's indirect-modification `Error`.
 pub(super) fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     index: &Expr,
     expr: &Expr,
 ) {
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if let Some(property_ty) = unset_array_access_property_array_type(ctx, array) {
+            if let Some(message) = readonly_property_element_unset_message(ctx, object, property) {
+                lower_unset_readonly_property_element(ctx, object, property, &message, index, expr);
+                return;
+            }
+            lower_unset_property_array_element(ctx, object, property, &property_ty, index, expr);
+            return;
+        }
+        if unset_array_access_has_array_access_property_receiver(ctx, array) {
+            lower_unset_array_access_property_offset(ctx, array, object, property, index, expr);
+            return;
+        }
+    }
+    if let Some((receiver, property)) = unset_array_access_static_php_array_receiver(ctx, array) {
+        lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
+        return;
+    }
     if let ExprKind::Variable(name) = &array.kind {
         if ctx.local_type(name).is_php_array()
             || (ctx.is_ref_bound_local(name)
@@ -209,6 +243,7 @@ pub(super) fn lower_unset_hash_element(
 ) {
     let array_value = ctx.load_local(name, Some(array_span));
     let index_value = lower_expr(ctx, index);
+    let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
     ctx.emit_void(
         Op::HashUnset,
         vec![array_value.value, index_value.value],
@@ -216,6 +251,9 @@ pub(super) fn lower_unset_hash_element(
         Op::HashUnset.default_effects(),
         Some(expr.span),
     );
+    if let Some(slot) = key_owner {
+        retire_owned_call_operand(ctx, slot, index.span);
+    }
 }
 
 /// Lowers `unset($arr[$key])` for a packed indexed-array local.

@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
+//! - The loop records body stores of a missing-string sentinel before the body is lowered.
 
 use super::*;
 
@@ -402,6 +403,10 @@ pub(super) fn lower_foreach(
         value: source,
         span: array.span,
     });
+    let missing_strings = crate::ir_lower::expr::loop_region_missing_string_names(
+        ctx, body, None, None,
+    );
+    ctx.push_loop_carried_missing_strings(missing_strings);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
         continue_block: header,
@@ -442,6 +447,7 @@ pub(super) fn lower_foreach(
     }
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.pop_loop_carried_missing_strings();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();

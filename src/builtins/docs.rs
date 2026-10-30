@@ -193,7 +193,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",
-        BuiltinArgumentLowering::JsonDecode => "json_decode",
+        BuiltinArgumentLowering::JsonSource => "json_source",
         BuiltinArgumentLowering::Getenv => "getenv",
         BuiltinArgumentLowering::PcntlPreserveOmitted => "pcntl_preserve_omitted",
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",

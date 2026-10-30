@@ -51,6 +51,7 @@ mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod string_offset_assign;
 mod assignment_rhs_capture;
 mod weak_map_places;
 mod static_property_updates;
@@ -94,6 +95,8 @@ mod array_access;
 mod string_offset_owners;
 mod array_access_types;
 mod ternary_cast;
+mod missing_string;
+pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
 mod closure_calls;
 mod descriptor_calls;
@@ -106,6 +109,7 @@ use reference_returns::{
 };
 mod property_fetch_for_write;
 mod method_calls;
+mod closure_binding;
 mod member_receivers;
 mod enum_interface_calls;
 mod enum_argument_guards;
@@ -143,6 +147,7 @@ use unary_logic::*;
 use lazy_branches::*;
 use pipe::*;
 use assignments::*;
+use string_offset_assign::*;
 use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
@@ -186,6 +191,7 @@ use object_construction::*;
 use property_access::*;
 use property_probes::*;
 use method_calls::*;
+use closure_binding::*;
 use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
 pub(crate) use member_receivers::lower_member_receiver_at_span;
 use reflection_class_calls::*;
@@ -245,9 +251,10 @@ pub(crate) use weak_map_places::lower_weak_map_append;
 pub(crate) use weak_map_places::lower_weak_map_denied_append;
 use weak_map_places::lower_weak_map_incdec_expression;
 pub(crate) use instanceof_coercions::{
-    coerce_array_key_to_int_at_span, coerce_to_int_at_span,
+    coerce_array_key_to_int_at_span, coerce_to_int_at_span, coerce_to_string_at_span,
 };
 pub(crate) use merge_temps::emit_bool_literal;
+pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
 pub(crate) use property_access::{
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
@@ -259,7 +266,8 @@ pub(crate) use property_fetch_for_write::{
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
     lower_nested_assignment_property_source,
 };
-pub(crate) use string_concat::string_op_uses_scratch_storage;
+pub(crate) use string_concat::string_value_needs_persistence;
+pub(crate) use string_concat::persist_pending_string;
 pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
     property_access_expr_type_for_ir,

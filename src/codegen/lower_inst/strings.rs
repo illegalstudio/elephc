@@ -8,6 +8,8 @@
 //! Key details:
 //! - PHP string coercion treats `false` and `null` as empty strings, while
 //!   integer true and ordinary ints use the existing `__rt_itoa` helper.
+//! - Those empty results publish the canonical empty string, not a leftover
+//!   pointer, so they stay distinct from the missing typed-array sentinel.
 //! - Raw pointers stringify through `__rt_ptoa`, the same "0x..." formatter `echo` uses.
 //! - Constant string values register lazy interned origins before native copies can create aliases.
 
@@ -331,11 +333,44 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers string persistence by copying the string into runtime-owned storage.
+///
+/// A normalized `(string)` cast is marked `Bool(true)`. Its empty result is the
+/// canonical empty literal. Copying that literal allocated a block which
+/// `id(trim(...))`, concatenation, array keys, `yield`, and `try` never released.
 pub(super) fn lower_str_persist(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(value)?, inst)?;
-    super::ownership::persist_loaded_string(ctx, value)?;
+    if inst.immediate == Some(Immediate::Bool(true)) {
+        copy_normalized_cast_unless_empty(ctx, value)?;
+    } else {
+        super::ownership::persist_loaded_string(ctx, value)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Copies a normalized string cast, and reuses the canonical empty string when it is empty.
+fn copy_normalized_cast_unless_empty(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    let (_, length_reg) = abi::string_result_regs(ctx.emitter);
+    let empty = ctx.next_label("str_cast_empty");
+    let done = ctx.next_label("str_cast_persist_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {length_reg}, {empty}"));     // an empty cast reuses the canonical empty literal
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {length_reg}, {length_reg}")); // an empty cast reuses the canonical empty literal
+            ctx.emitter.instruction(&format!("jz {empty}"));                    // skip the heap copy when the cast length is zero
+        }
+    }
+    super::ownership::persist_loaded_string(ctx, value)?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&empty);
+    emit_canonical_empty_string(ctx);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers a float-to-string conversion through the existing runtime formatter.
@@ -418,8 +453,7 @@ pub(super) fn lower_int_like_to_string(
             store_if_result(ctx, inst)
         }
         PhpType::Void | PhpType::Never => {
-            let len_reg = abi::string_result_regs(ctx.emitter).1;
-            abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+            emit_canonical_empty_string(ctx);
             store_if_result(ctx, inst)
         }
         other => Err(CodegenIrError::unsupported(format!(
@@ -438,10 +472,21 @@ fn lower_loaded_tagged_scalar_to_string(ctx: &mut FunctionContext<'_>) -> Result
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&null_label);
-    let len_reg = abi::string_result_regs(ctx.emitter).1;
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    emit_canonical_empty_string(ctx);
     ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Publishes PHP's canonical empty string in the string result registers.
+///
+/// Length alone is not enough. On x86_64 a null-to-string coercion leaves the
+/// tagged null payload, the shared null sentinel, in the string pointer
+/// register. `var_dump` and `is_null` would then treat that empty string as null.
+pub(super) fn emit_canonical_empty_string(ctx: &mut FunctionContext<'_>) {
+    let (label, len) = ctx.data.add_string(b"");
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.
@@ -454,7 +499,7 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the empty-string fallback after true conversion
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x2, #0");                              // false has zero string length
+            emit_canonical_empty_string(ctx);
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
@@ -465,7 +510,7 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
             abi::emit_call_label(ctx.emitter, "__rt_itoa");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the empty-string fallback after true conversion
             ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov rdx, 0");                              // false has zero string length
+            emit_canonical_empty_string(ctx);
             ctx.emitter.label(&done_label);
         }
     }

@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
+//! - Each loop records locals it assigns a missing-string sentinel, so a cast earlier in the
+//!   body still sees the store the back-edge runs first.
 
 use super::*;
 use crate::ir_lower::loop_closures::{begin_loop_closure_facts, retain_loop_body_facts};
@@ -17,6 +19,7 @@ pub(super) fn lower_while(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    remember_loop_missing_strings(ctx, body, Some(condition), None);
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
     let closure_facts = begin_loop_closure_facts(ctx, Some(condition), None, body, true);
     let header = ctx.builder.create_named_block("while.cond", Vec::new());
@@ -43,6 +46,7 @@ pub(super) fn lower_while(
     ctx.builder.position_at_end(body_block);
     lower_block(ctx, body);
     ctx.loop_stack.pop();
+    ctx.pop_loop_carried_missing_strings();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -55,6 +59,7 @@ pub(super) fn lower_do_while(
     condition: &Expr,
     loop_span: Span,
 ) {
+    remember_loop_missing_strings(ctx, body, Some(condition), None);
     apply_loop_storage_contracts(ctx, loop_span, Some(condition.span));
     let _ = begin_loop_closure_facts(ctx, Some(condition), None, body, false);
     let body_block = ctx.builder.create_named_block("do.body", Vec::new());
@@ -79,6 +84,7 @@ pub(super) fn lower_do_while(
     ctx.builder.position_at_end(cond_block);
     lower_condition(ctx, condition, body_block, exit);
     ctx.loop_stack.pop();
+    ctx.pop_loop_carried_missing_strings();
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
@@ -125,6 +131,7 @@ fn lower_for_once(
     update: Option<&Stmt>,
     body: &[Stmt],
 ) {
+    remember_loop_missing_strings(ctx, body, condition, update);
     let closure_facts = begin_loop_closure_facts(ctx, condition, update, body, true);
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
@@ -166,7 +173,24 @@ fn lower_for_once(
         lower_stmt(ctx, update);
     }
     ctx.loop_stack.pop();
+    ctx.pop_loop_carried_missing_strings();
     branch_to(ctx, header);
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
+}
+
+/// Records locals this loop assigns a missing-string sentinel before its body is lowered.
+///
+/// The cast inside the body is lowered before a store that follows it, but the next
+/// iteration runs that store first. The record is popped with the loop frame.
+fn remember_loop_missing_strings(
+    ctx: &mut LoweringContext<'_, '_>,
+    body: &[Stmt],
+    condition: Option<&Expr>,
+    update: Option<&Stmt>,
+) {
+    let names = crate::ir_lower::expr::loop_region_missing_string_names(
+        ctx, body, condition, update,
+    );
+    ctx.push_loop_carried_missing_strings(names);
 }

@@ -47,7 +47,7 @@ pub(super) fn store_expr_into_temp(
 }
 
 /// Stores an already lowered value into a hidden merge temporary.
-pub(super) fn store_value_into_temp(
+pub(in crate::ir_lower) fn store_value_into_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     temp_type: PhpType,
@@ -64,7 +64,7 @@ pub(super) fn store_value_into_temp(
 }
 
 /// Loads an owned hidden temp into SSA and clears the backing slot without releasing it.
-pub(super) fn take_owned_temp(
+pub(in crate::ir_lower) fn take_owned_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     span: crate::span::Span,

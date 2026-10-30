@@ -26,6 +26,7 @@ mod bcmath;
 mod eval_bridge;
 mod eval_scope;
 mod exceptions;
+pub(crate) use exceptions::deep_cleanup::Scope as CleanupScope;
 mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
@@ -49,7 +50,10 @@ pub(crate) mod spl;
 #[cfg(test)]
 mod sysv_call_alignment;
 mod strings;
+pub(crate) use strings::concat_scratch::scratch_capacity as concat_scratch_capacity;
 mod system;
+#[cfg(test)]
+mod hosted_fatals;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;
 
@@ -104,3 +108,5 @@ pub(crate) use fibers::{
     FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
     FIBER_USER_ARG_MAX_OFFSET,
 };
+
+pub(crate) use exceptions::guards as exception_guards;

@@ -45076,7 +45076,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 241,
+      "codegen_line": 220,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -79922,7 +79922,7 @@
     "module": "json",
     "name": "json_decode",
     "semantics": {
-      "argument_lowering": "json_decode",
+      "argument_lowering": "json_source",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -80501,7 +80501,7 @@
     "module": "json",
     "name": "json_validate",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "json_source",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -113862,7 +113862,7 @@
           "type": "string"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -129102,6 +129102,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -129109,6 +129110,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -129677,6 +129679,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -129684,6 +129687,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -129861,6 +129865,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -129868,6 +129873,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -130037,6 +130043,7 @@
           "reads_heap",
           "writes_heap",
           "reads_global",
+          "writes_global",
           "reads_fs",
           "writes_fs",
           "reads_process",
@@ -130044,6 +130051,7 @@
           "output",
           "alloc_heap",
           "alloc_concat",
+          "refcount_op",
           "may_throw",
           "may_fatal",
           "may_warn",
@@ -142279,7 +142287,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 141,
+      "codegen_line": 146,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations.",
         "Reaching this lowering means `crate::ir_lower::expr` could not turn the target",
@@ -142294,7 +142302,11 @@
         "renumbering, so a packed list has to become a hash \u2014 and a callee cannot retype the",
         "caller's slot, which still reads `array<T>`. The associative form has no such problem",
         "and lowers directly (issue #677), so the message names the difference rather than",
-        "leaving \"array/hash elements\" looking like a blanket promise."
+        "leaving \"array/hash elements\" looking like a blanket promise.",
+        "Property array elements lower directly for a declared `array` property, an associative",
+        "property and a declared `array` static property (issue #750). The two property shapes that",
+        "are refused on purpose, a packed-list property and an untyped static array, are reported by",
+        "EIR lowering with a source span before this fallback is reached."
       ],
       "runtime_helpers": [],
       "sig_arm": null,

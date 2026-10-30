@@ -90,6 +90,10 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     // -- plain write(1, ptr, len) syscall path --
     emitter.label("__rt_stdout_write_syscall");
+    if emitter.phpext_output {
+        emitter.bl_c("elephc_php_write");                                        // park native state while PHP handles output and possible reentry
+        crate::codegen_support::cdylib::emit_host_callback_check(emitter, "__rt_stdout_write_done");
+    }
     emitter.instruction("mov x2, x1");                                          // syscall len = incoming length (move before x1 is overwritten)
     emitter.instruction("mov x1, x0");                                          // syscall buf = incoming byte pointer
     emitter.instruction("mov x0, #1");                                          // syscall fd = stdout
@@ -157,6 +161,10 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool, mbstring: bool) {
 
     // -- plain write(1, ptr, len) syscall path --
     emitter.label("__rt_stdout_write_syscall");
+    if emitter.phpext_output {
+        emitter.bl_c("elephc_php_write");                                        // park native state while PHP handles output and possible reentry
+        crate::codegen_support::cdylib::emit_host_callback_check(emitter, "__rt_stdout_write_done");
+    }
     emitter.instruction("mov rdx, rsi");                                        // syscall len = incoming length (move before rsi is overwritten)
     emitter.instruction("mov rsi, rdi");                                        // syscall buf = incoming byte pointer
     emitter.instruction("mov edi, 1");                                          // syscall fd = stdout

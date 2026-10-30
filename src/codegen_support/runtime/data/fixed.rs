@@ -71,6 +71,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
+    // User boundary code reads this value from its linked runtime, including cached objects.
+    out.push_str(&format!(".globl _concat_capacity\n_concat_capacity:\n    .quad {}\n",
+        super::super::concat_scratch_capacity(heap_size)));
     out.push_str(&comm_directive(
         "_itoa_spill_ring",
         32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
@@ -618,6 +622,18 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_resource_inventory_head", 8, target));
     out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
     out.push_str(".globl _gc_enabled\n_gc_enabled:\n    .quad 1\n");
+    for symbol in [
+        "_gc_candidates_enabled", "_gc_candidates_gathering", "_gc_candidates_visited",
+        "_gc_candidates_roots", "_gc_candidates_roots_count", "_gc_candidates_roots_capacity",
+        "_gc_candidates_nodes", "_gc_candidates_nodes_count", "_gc_candidates_nodes_capacity",
+        "_gc_candidates_anchors", "_gc_candidates_anchors_count", "_gc_candidates_anchors_capacity",
+        "_gc_candidate_root_scan_fn",
+        "_gc_proofs", "_gc_proofs_count", "_gc_proofs_capacity", "_gc_proofs_initialized",
+        "_gc_proof_parent", "_gc_proof_slot", "_gc_proofs_debt", "_gc_proofs_visited",
+        "_gc_proof_epoch", "_gc_proof_memos", "_gc_proof_memos_capacity", "_gc_proofs_cost",
+    ] {
+        out.push_str(&comm_directive(symbol, 8, target));
+    }
     out.push_str(&comm_directive("_gc_collecting", 8, target));
     out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
     out.push_str(&comm_directive("_gc_pin_head", 8, target));
@@ -914,6 +930,24 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_string_offset_prefix\n_diag_string_offset_prefix:\n    .ascii \"Warning: Uninitialized string offset \"\n");
     out.push_str(".globl _diag_string_offset_nl\n_diag_string_offset_nl:\n    .ascii \"\\n\"\n");
+    // -- string offset WRITE diagnostics, used by `__rt_str_offset_set` --
+    for (label, message) in [
+        ("_diag_illegal_string_offset_prefix", "Warning: Illegal string offset "),
+        (
+            "_diag_string_offset_first_byte_msg",
+            "Warning: Only the first byte will be assigned to the string offset\n",
+        ),
+        (
+            "_string_offset_empty_assign_msg",
+            "Cannot assign an empty string to a string offset",
+        ),
+        (
+            "_string_offset_type_error_msg",
+            "Cannot access offset of type string on string",
+        ),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     for (label, message) in [
         ("_diag_float_key_precision_prefix", "Deprecated: Implicit conversion from float "),
         ("_diag_float_key_precision_suffix", " to int loses precision\n"),
@@ -973,6 +1007,8 @@ pub(crate) fn emit_runtime_data_fixed(
     {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    out.push_str(".globl _generator_msg_force_close\n_generator_msg_force_close:\n    .ascii \"Cannot yield from finally in a force-closed generator\"\n");
+    out.push_str(".globl _fiber_msg_force_close\n_fiber_msg_force_close:\n    .ascii \"Cannot suspend in a force-closed fiber\"\n");
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");

@@ -165,7 +165,9 @@ impl Instruction {
                             | crate::builtins::semantics::BuiltinResultOwnership::Independent
                     ) || matches!(target, RuntimeFnId::GetClass | RuntimeFnId::GetParentClass)
                 }
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(_))) => true,
+                Some(Immediate::RuntimeCall(
+                    RuntimeCallTarget::UnaryString(_) | RuntimeCallTarget::StringOffsetSet,
+                )) => true,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::ExecutablePath)) => true,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Pcntl(target))) => matches!(
                     target.result_ownership(),
@@ -228,6 +230,10 @@ pub enum Immediate {
     RuntimeCall(RuntimeCallTarget),
     ExternRef(u32),
     ClassRef(u32),
+    /// Explicit visibility scope for closure binding; `None` removes class scope.
+    ClosureBindScope(Option<u32>),
+    /// The third operand supplies an object scope, with an optional declared base class.
+    ClosureBindObjectScope(Option<u32>),
     EnumCaseRef {
         enum_id: u32,
         case_id: u32,
@@ -1034,7 +1040,7 @@ pub enum Op {
     ArrayGetMixedKeySilent,
     ArrayKeyExists,
     OffsetExists,
-    /// Removes an offset from a detached boxed PHP array cell, preserving sparse keys and aliases.
+    /// Removes an offset from a boxed PHP value, preserving array keys or calling ArrayAccess.
     OffsetUnset,
     ListUnpack,
     IterStart,
@@ -1489,10 +1495,12 @@ impl Op {
             }
             // Replacing a pending return can retire a payload with an arbitrary destructor.
             AcquireRefCell => E::all(),
+            // Offset removal can invoke arbitrary PHP methods, destructors or warning handlers.
+            HashUnset | OffsetUnset => E::all(),
             // `DynamicPropUnset` carries exactly `PropUnset`'s contract: the same storage is
             // removed, the same destructors can run, the same access `Error` can be raised, and
             // the hash removal can reallocate the table.
-            HashUnset | PropUnset | DynamicPropUnset | OffsetUnset => E::READS_HEAP
+            PropUnset | DynamicPropUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
             ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
@@ -1583,8 +1591,11 @@ impl Op {
             ExternCall | ExternGlobalLoad | ExternGlobalStore => {
                 E::READS_HEAP | E::WRITES_HEAP | E::READS_PROCESS | E::WRITES_PROCESS | E::MAY_THROW
             }
-            EchoValue | WriteStrStdout | WriteStdout | Warn => E::OUTPUT,
-            PrintValue => E::OUTPUT,
+            // A hosted PHP output or error handler can throw. These opcodes stay conservative
+            // for every target so EIR passes never move them across a protected region.
+            EchoValue | PrintValue | WriteStrStdout | WriteStdout | Warn => {
+                E::OUTPUT | E::MAY_THROW
+            }
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
             // Reads the key out of its boxed cell, allocates the composed message and the

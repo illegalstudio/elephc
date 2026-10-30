@@ -485,7 +485,7 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -913,7 +913,7 @@ fn lower_direct_system_call(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the null-terminated shell command to libc system()
     }
-    ctx.emitter.bl_c("system");
+    ctx.emitter.bl_c(if ctx.module.web_application { "elephc_web_application_system" } else { "system" });
     if returns_empty_string {
         emit_empty_string_result(ctx);
     }

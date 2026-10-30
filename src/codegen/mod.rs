@@ -173,13 +173,15 @@ pub enum Emit {
     Executable,
     Cdylib,
     Staticlib,
+    /// A real PHP module with host-owned Zend registration and request snapshots.
+    Phpext,
 }
 
 impl Emit {
     /// Returns whether this artifact is a library exposing `#[Export]`
     /// trampolines and lifecycle symbols rather than a process entry point.
     pub fn is_library(self) -> bool {
-        matches!(self, Emit::Cdylib | Emit::Staticlib)
+        matches!(self, Emit::Cdylib | Emit::Staticlib | Emit::Phpext)
     }
 }
 
@@ -346,13 +348,16 @@ pub fn generate_user_asm_from_ir_with_options_and_features(
     web_isolation: WebIsolation,
 ) -> Result<GeneratedUserAsm> {
     let mut emitter = match emit {
-        Emit::Cdylib => Emitter::new_cdylib(module.target),
+        Emit::Cdylib | Emit::Phpext => Emitter::new_cdylib(module.target),
         // A staticlib joins the executable path: it is linked once into the host
         // binary, so it needs no GOT indirection, but it still exposes the same
         // recoverable host boundary as a cdylib.
         Emit::Staticlib => Emitter::new_staticlib(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
+    // User bodies can contain host-boundary notifications in addition to the separately
+    // generated runtime object, so they need the output profile before EIR lowering begins.
+    emitter.phpext_output = emit == Emit::Phpext;
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }
@@ -504,7 +509,10 @@ fn finalize_user_asm(
     if emit.is_library() {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
         sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
-        crate::codegen::cdylib::emit_cdylib_exports(
+        let emit_exports = if emit == Emit::Phpext {
+            crate::codegen::cdylib::emit_phpext_exports
+        } else { crate::codegen::cdylib::emit_cdylib_exports };
+        emit_exports(
             &mut emitter,
             &mut data,
             module.target,
@@ -556,7 +564,7 @@ fn finalize_user_asm(
         .map(|export| module.target.extern_symbol(&export.c_name))
         .collect();
     match emit {
-        Emit::Cdylib | Emit::Staticlib => {
+        Emit::Cdylib | Emit::Staticlib | Emit::Phpext => {
             for lifecycle in [
                 "elephc_abi_version",
                 "elephc_init",

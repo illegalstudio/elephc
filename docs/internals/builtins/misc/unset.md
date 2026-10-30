@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:141](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L141) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:146](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L146) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 
@@ -30,6 +30,10 @@ sidebar:
 - caller's slot, which still reads `array<T>`. The associative form has no such problem
 - and lowers directly (issue #677), so the message names the difference rather than
 - leaving "array/hash elements" looking like a blanket promise.
+- Property array elements lower directly for a declared `array` property, an associative
+- property and a declared `array` static property (issue #750). The two property shapes that
+- are refused on purpose, a packed-list property and an untyped static array, are reported by
+- EIR lowering with a source span before this fallback is reached.
 
 ## Semantic descriptor
 

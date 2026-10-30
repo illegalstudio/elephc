@@ -30,6 +30,7 @@ mod fold;
 /// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
 mod generator_bodies;
 mod namespace_fallbacks;
+mod output;
 mod propagate;
 mod target_guards;
 pub mod reachability;
@@ -48,6 +49,7 @@ use propagate::*;
 pub use reachability::prune_unreachable_declarations;
 pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
 pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
+pub use output::with_hosted_output;
 
 #[cfg(test)]
 mod tests;

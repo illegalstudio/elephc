@@ -605,8 +605,10 @@ pub struct HostedExtensions {
 
 /// Finds the extensions a program's project hosts, already built. Returns
 /// `None` when the project declares none. Never builds: a missing artifact is
-/// an error that names the command which builds it.
-pub fn resolve_hosted(source_file: &Path, target: Target) -> Result<Option<HostedExtensions>, NativeError> {
+/// an error that names the command which builds it. Persistent web applications
+/// reject hosted extensions before resolution: Zend request storage cannot own
+/// values retained by the compiled application across requests.
+pub fn resolve_hosted(source_file: &Path, target: Target, web_application: bool) -> Result<Option<HostedExtensions>, NativeError> {
     let Some(project) = discover_for_source(source_file)? else { return Ok(None) };
     if !project.manifest.is_file() {
         return Ok(None);
@@ -614,6 +616,14 @@ pub fn resolve_hosted(source_file: &Path, target: Target) -> Result<Option<Hoste
     let manifest = PhpExtManifest::load(&project.manifest)?;
     if manifest.extensions().is_empty() {
         return Ok(None);
+    }
+    if web_application {
+        return Err(NativeError::new(
+            NativeErrorKind::Usage,
+            "hosted PHP extensions are not supported with --web-lifecycle=application",
+        )
+        .with_project(project.root)
+        .with_recovery("use --web-lifecycle=request for projects declaring [extension.dependencies]"));
     }
     let cwd = std::env::current_dir().map_err(|error| NativeError::io("read current directory", Path::new("."), error))?;
     let cache = CacheLayout::from_environment(&cwd)?;
@@ -637,6 +647,10 @@ pub fn resolve_hosted(source_file: &Path, target: Target) -> Result<Option<Hoste
         ini: manifest.ini().iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
     }))
 }
+
+#[cfg(test)]
+#[path = "install/lifecycle_tests.rs"]
+mod lifecycle_tests;
 
 #[cfg(test)]
 mod tests {

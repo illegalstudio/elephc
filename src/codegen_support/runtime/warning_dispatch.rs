@@ -8,7 +8,7 @@
 //! - Fragments are joined before dispatch, and detached before a reentrant warning.
 //! - Producers explicitly finish a diagnostic; newlines inside data never delimit it.
 //! - Volatile registers are preserved because legacy producers used a leaf writer.
-//! - An unwind activation releases owned message and argument storage on throws.
+//! - Every completed diagnostic publishes cleanup before native or host callbacks can throw.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
@@ -131,6 +131,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
         abi::emit_load_int_immediate(e, result, 0);
         save(e, offset);
     }
+    emit_activation(e);
     abi::emit_load_int_immediate(e, result, 2);
     save(e, LEVEL);
     // Match complete prefixes before stripping them from the handler's message.
@@ -162,7 +163,6 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_default");
     emit_arguments(e);
-    emit_activation(e);
     abi::emit_load_symbol_to_reg(e, a0, "_php_error_handler_callable", 0);
     arg(e, 1, ARGS);
     abi::emit_call_label(e, "__rt_error_handler_invoke");
@@ -172,14 +172,13 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "cmp x10, #3", "cmp r10, 3");
     ins(e, "b.ne __rt_warning_handled", "jne __rt_warning_handled");
     ins(e, "ldr x10, [x0, #8]", "mov r10, QWORD PTR [rax + 8]");
-    ins(e, "cbz x10, __rt_warning_unpublish", "test r10, r10");
-    if !arm { e.instruction("jz __rt_warning_unpublish"); } // boolean false falls through to default output
+    ins(e, "cbz x10, __rt_warning_default", "test r10, r10");
+    if !arm {
+        e.instruction("jz __rt_warning_default");                              // boolean false selects default output with its cleanup still published
+    }
     e.label("__rt_warning_handled");
     abi::emit_load_int_immediate(e, result, 1);
     save(e, HANDLED);
-    e.label("__rt_warning_unpublish");
-    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     e.label("__rt_warning_default");
     abi::emit_load_temporary_stack_slot(e, result, HANDLED);
     abi::emit_branch_if_int_result_nonzero(e, "__rt_warning_release");
@@ -196,6 +195,8 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     }
     abi::emit_call_label(e, "__rt_diag_write");
     e.label("__rt_warning_release");
+    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
+    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     abi::emit_temporary_stack_address(e, a0, 0);
     abi::emit_call_label(e, "__rt_warning_cleanup");
     e.label("__rt_warning_done");
@@ -213,6 +214,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     e.label("__rt_warning_allocation_failed");
     abi::emit_jump(e, "__rt_heap_allocation_failed");
     emit_cleanup(e);
+    super::arrays::emit_native_frame_owners(e, "__rt_gc_warning_frame_owners", &[ARGS, RESULT]);
     emit_reset(e);
 }
 
@@ -284,6 +286,9 @@ fn emit_activation(e: &mut Emitter) {
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 16);
     abi::emit_load_int_immediate(e, scratch, 0);
     abi::emit_store_to_sp(e, scratch, ACTIVATION + 24);
+    abi::emit_store_to_sp(e, scratch, ACTIVATION + 32);
+    abi::emit_symbol_address(e, scratch, "__rt_gc_warning_frame_owners");
+    abi::emit_store_to_sp(e, scratch, ACTIVATION + 40);
     abi::emit_temporary_stack_address(e, scratch, ACTIVATION);
     abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
 }
@@ -297,7 +302,11 @@ fn emit_cleanup(e: &mut Emitter) {
     abi::emit_store_to_sp(e, a0, 0);
     for (offset, helper) in [(ARGS, "__rt_decref_mixed"), (RESULT, "__rt_decref_mixed")] {
         abi::emit_load_temporary_stack_slot(e, result, 0);
-        abi::emit_load_from_address(e, result, result, offset);
+        let record = if e.target.arch == Arch::AArch64 { "x10" } else { "r10" };
+        abi::emit_reg_move(e, record, result);
+        abi::emit_load_from_address(e, result, record, offset);
+        abi::emit_load_int_immediate(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, 0);
+        abi::emit_store_to_address(e, if e.target.arch == Arch::AArch64 { "x11" } else { "r11" }, record, offset);
         abi::emit_call_label(e, helper);
     }
     abi::emit_load_temporary_stack_slot(e, a0, 0);

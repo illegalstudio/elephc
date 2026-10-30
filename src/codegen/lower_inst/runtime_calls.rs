@@ -49,6 +49,11 @@ pub(super) fn lower(
         }
         RuntimeCallTarget::ThrowableInitialize => lower_throwable_initialize(ctx, inst),
         RuntimeCallTarget::ExceptionChain => lower_exception_chain(ctx, inst),
+        RuntimeCallTarget::ExceptionFinallyChain => lower_exception_finally_chain(ctx, inst),
+        RuntimeCallTarget::ExceptionDiscard => lower_exception_discard(ctx, inst),
+        RuntimeCallTarget::ExceptionCatchHostReplacement => {
+            lower_exception_catch_host_replacement(ctx, inst)
+        }
         RuntimeCallTarget::ArrayFetchForWrite
         | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
@@ -78,6 +83,7 @@ pub(super) fn lower(
         | RuntimeCallTarget::CallArgumentCollectPositionals
         | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
+        RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
         }
@@ -86,6 +92,131 @@ pub(super) fn lower(
             super::runtime_functions::lower(ctx, inst, target)
         }
     }
+}
+
+/// Notifies the PHP adapter before performing ordinary native exception chaining.
+fn lower_exception_finally_chain(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 2 {
+        return Err(CodegenIrError::invalid_module(
+            "finally exception chaining requires two operands",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let replacement = expect_operand(inst, 0)?;
+        let pending = expect_operand(inst, 1)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(pending)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        ctx.load_value_to_result(replacement)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        let replacement_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let pending_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, replacement_arg, 0);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, pending_arg, 16);
+        ctx.emitter.bl_c("elephc_php_finally_chain");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        let pending_visit = ctx.next_label("finally_chain_pending_visit");
+        let pending_done = ctx.next_label("finally_chain_pending_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &pending_done);
+        ctx.emitter.label(&pending_visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_finally_chain_pending");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &pending_visit);
+        ctx.emitter.label(&pending_done);
+        let replacement_visit = ctx.next_label("finally_chain_replacement_visit");
+        let replacement_done = ctx.next_label("finally_chain_replacement_done");
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &replacement_done);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &replacement_done);
+        ctx.emitter.label(&replacement_visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter
+            .bl_c("elephc_php_finally_chain_replacement");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &replacement_visit);
+        ctx.emitter.label(&replacement_done);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+    }
+    lower_exception_chain(ctx, inst)
+}
+
+/// Tells the PHP adapter when a native `finally` jump discarded a host escape or replacement.
+fn lower_exception_discard(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "exception discard notification requires one operand",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let discarded = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(discarded)?;
+        abi::emit_push_reg(ctx.emitter, result);
+        ctx.emitter.bl_c("elephc_php_discard_exception_begin");
+        abi::emit_pop_reg(ctx.emitter, result);
+        let visit = ctx.next_label("discard_host_replacement_visit");
+        ctx.emitter.label(&visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_discard_exception");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
+    }
+    Ok(())
+}
+
+/// Tells the PHP adapter when a caught native chain contains a replacement exception.
+fn lower_exception_catch_host_replacement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(
+            "caught host replacement notification requires one operand",
+        ));
+    }
+    if ctx.emitter.phpext_output {
+        let caught = expect_operand(inst, 0)?;
+        let result = abi::int_result_reg(ctx.emitter);
+        ctx.load_value_to_result(caught)?;
+        let visit = ctx.next_label("catch_host_replacement_visit");
+        ctx.emitter.label(&visit);
+        abi::emit_push_reg(ctx.emitter, result);
+        abi::emit_reg_move(
+            ctx.emitter,
+            abi::int_arg_reg_name(ctx.emitter.target, 0),
+            result,
+        );
+        ctx.emitter.bl_c("elephc_php_catch_host_replacement");
+        abi::emit_pop_reg(ctx.emitter, result);
+        abi::emit_call_label(ctx.emitter, "__rt_throwable_previous");
+        abi::emit_branch_if_int_result_nonzero(ctx.emitter, &visit);
+    }
+    Ok(())
 }
 
 /// Checks the uniform cell header without adding an owner that would change the answer.
@@ -402,6 +533,40 @@ fn lower_unary_string(
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
         ctx.emitter.label(&ready);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP's string offset write through `__rt_str_offset_set`.
+///
+/// Operands are the subject string, the already-resolved integer offset, and the string value.
+/// ARM64 passes the subject in `x1`/`x2`, the offset in `x0`, and the value in `x3`/`x4`;
+/// x86_64 passes the subject in `rax`/`rdx`, the offset in `rcx`, and the value in `rdi`/`rsi`.
+/// The result is the updated string in the target's string result pair.
+fn lower_string_offset_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime string.offset_set expected 3 operands, got {}",
+            inst.operands.len(),
+        )));
+    }
+    let subject = expect_operand(inst, 0)?;
+    let offset = expect_operand(inst, 1)?;
+    let value = expect_operand(inst, 2)?;
+    let (subject_ptr, subject_len, offset_reg, value_ptr, value_len) = match ctx.emitter.target.arch {
+        crate::codegen::platform::Arch::AArch64 => ("x1", "x2", "x0", "x3", "x4"),
+        crate::codegen::platform::Arch::X86_64 => ("rax", "rdx", "rcx", "rdi", "rsi"),
+    };
+    // Plain frame-slot or register-home loads: none of them clobbers another argument register.
+    ctx.load_string_value_to_regs(value, value_ptr, value_len)?;
+    let offset_ty = ctx.load_value_to_reg(offset, offset_reg)?.codegen_repr();
+    if !matches!(offset_ty, PhpType::Int | PhpType::Bool) {
+        return Err(CodegenIrError::invalid_module(format!(
+            "typed runtime string.offset_set expected an integer offset, got {:?}",
+            offset_ty,
+        )));
+    }
+    ctx.load_string_value_to_regs(subject, subject_ptr, subject_len)?;
+    abi::emit_call_label(ctx.emitter, "__rt_str_offset_set");
     store_if_result(ctx, inst)
 }
 

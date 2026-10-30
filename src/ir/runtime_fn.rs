@@ -1179,6 +1179,15 @@ impl RuntimeFnId {
             );
         }
         match self {
+            // Persistent web requests retire the preceding ambient context owner on replacement.
+            // Captured objects can run destructors, mutate globals, and throw during that release.
+            RuntimeFnId::StreamContextCreate | RuntimeFnId::StreamContextSetDefault
+            | RuntimeFnId::StreamContextSetParams | RuntimeFnId::StreamContextSetOption
+            => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::all().bits()
+                    & !crate::ir::Effects::BLOCKING_IO.bits()
+                    & !crate::ir::Effects::NETWORK_IO.bits(),
+            ),
             RuntimeFnId::TokenizerErrorLocation => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::WRITES_HEAP.bits(),
             ),
@@ -2768,9 +2777,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ElephcZvalUnpack
                 // Parsed values own their storage independently of the wire input and options.
                 | RuntimeFnId::Unserialize
-                // Both callback replacement and shell output reserve or persist their own
-                // result storage; failure paths copy the borrowed subject/empty output.
+                // Success copies the owned output buffer into a Mixed string and releases
+                // that buffer. An invalid pattern or the removed `/e` modifier boxes PHP
+                // null. Neither cell aliases an argument.
                 | RuntimeFnId::PregReplaceCallback
+                // `shell_exec` reserves or persists its own result; failure copies the
+                // empty output rather than aliasing an argument.
                 | RuntimeFnId::ShellExec
                 // These string transforms always answer with a fresh mutable copy. The
                 // caller persists it for assignment and may then release the original result.

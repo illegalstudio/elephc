@@ -42,11 +42,12 @@ use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
+mod gc_owners;
 pub(super) use destructor_cleanup::is_destructor;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
-const EXCEPTION_ACTIVATION_BYTES: usize = 40;
+const EXCEPTION_ACTIVATION_BYTES: usize = crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET + 8;
 
 /// Bytes reserved for one addressable iterator state record.
 ///
@@ -643,6 +644,14 @@ fn emit_exception_activation_push(ctx: &mut FunctionContext<'_>, entry_label: &s
         abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_php_backtrace_next_line", 0);
     }
     abi::store_at_offset(ctx.emitter, scratch, offset - 32);
+    if ctx.exception_cleanup_activation
+        && (ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator)
+    {
+        abi::emit_symbol_address(ctx.emitter, scratch, &format!("{entry_label}__gc_frame_owners"));
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
+    }
+    abi::store_at_offset(ctx.emitter, scratch, offset - crate::codegen_support::try_handlers::ACTIVATION_OWNER_VISITOR_OFFSET);
     abi::emit_frame_slot_address(ctx.emitter, scratch, offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_call_frame_top", 0);
 }
@@ -676,6 +685,9 @@ pub(super) fn emit_exception_cleanup_callback(
     }
     if !ctx.exception_cleanup_activation {
         return;
+    }
+    if ctx.module.required_runtime_features.fiber || ctx.module.required_runtime_features.generator {
+        gc_owners::emit(ctx, entry_label);
     }
     let callback = format!("{entry_label}__cdylib_exception_cleanup");
     ctx.emitter.blank();
@@ -988,6 +1000,11 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    if ctx.module.web_application {
+        let register = abi::int_result_reg(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, register, crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_ENTRY);
+        abi::emit_store_reg_to_symbol(ctx.emitter, register, crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_SLOT, 0);
+    }
     // A hosted PHP extension lives for the whole worker, but its request does not: the reset
     // ended the previous request (RSHUTDOWN); start this one (RINIT).
     if super::block_emit::module_hosts_php_ext(ctx.module) {
@@ -1210,13 +1227,29 @@ pub(super) fn emit_web_entry_stub(
     let handler_reg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
-    abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+    let bridge_symbol = if ctx.module.web_application {
+        use crate::codegen::data_section::DataWord;
+        let callbacks = ctx.data.add_words(vec![
+            DataWord::Symbol(WEB_HANDLER_SYMBOL.to_string()),
+            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::READY)),
+            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::REQUEST)),
+            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::SHUTDOWN)),
+        ]);
+        abi::emit_symbol_address(ctx.emitter, handler_reg, &callbacks);
+        "elephc_web_run_application"
+    } else {
+        abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+        isolation.bridge_symbol()
+    };
     // The selected entry is a `#[no_mangle] extern "C"` Rust symbol in the bridge
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
-    let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
+    let bridge_entry = target.extern_symbol(bridge_symbol);
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+    if ctx.module.web_application {
+        crate::codegen::lower_inst::builtins::io::emit_application_stream_closer(ctx);
+    }
     Ok(())
 }
 
@@ -1547,13 +1580,13 @@ pub(super) fn emit_main_string_cleanup(ctx: &mut FunctionContext<'_>, offset: us
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
+                .instruction(&format!("mov {}, {}", result_reg, ptr_reg));      // pass the local string pointer to the validating heap-free helper
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
         Arch::X86_64 => {
             if ptr_reg != result_reg {
                 ctx.emitter
-                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg)); // pass the local string pointer to the validating heap-free helper
+                    .instruction(&format!("mov {}, {}", result_reg, ptr_reg));  // pass the local string pointer to the validating heap-free helper
             }
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
@@ -1568,11 +1601,11 @@ pub(super) fn emit_main_refcounted_cleanup(ctx: &mut FunctionContext<'_>, offset
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
-                .instruction(&format!("cbz {}, {}", result_reg, done)); // skip uninitialized refcounted locals
+                .instruction(&format!("cbz {}, {}", result_reg, done));         // skip uninitialized refcounted locals
         }
         Arch::X86_64 => {
             ctx.emitter
-                .instruction(&format!("test {}, {}", result_reg, result_reg)); // check whether the refcounted local is initialized
+                .instruction(&format!("test {}, {}", result_reg, result_reg));  // check whether the refcounted local is initialized
             ctx.emitter.instruction(&format!("je {}", done));                   // skip uninitialized refcounted locals
         }
     }
@@ -1762,7 +1795,7 @@ pub(super) fn emit_owned_local_cleanup(
                     &format!("test {}, {}", state_reg, state_reg)
                 );
                 ctx.emitter
-                    .instruction(&format!("jne {}", done));                      // skip raw cleanup for the ref-cell representation
+                    .instruction(&format!("jne {}", done));                     // skip raw cleanup for the ref-cell representation
             }
         }
     }

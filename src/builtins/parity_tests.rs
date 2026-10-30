@@ -110,6 +110,7 @@ fn injected_prelude_programs() -> Vec<(&'static str, crate::parser::ast::Program
             ),
         ),
         ("web_prelude(wrap)", vec![crate::web_prelude::web_wrap_stmt()]),
+        ("web_application", crate::web_prelude::application::declarations()),
     ];
     // The mysqli prelude is a second bridge surface built as Rust AST like the others; the
     // gate must cover its `__elephc_*` internal-alias discipline too. The shared `elephc_pdo`
@@ -184,6 +185,11 @@ fn prelude_sources() -> Vec<(&'static str, String)> {
         .map(|(name, program)| {
             let source = if name == "curl_prelude" {
                 crate::curl_prelude::CURL_PRELUDE_SRC.to_string()
+            } else if name == "web_application" {
+                // The source is already PHP and includes an explicitly global namespace block.
+                // The built-prelude printer deliberately does not model that parsed construct.
+                format!("{}\n{}", crate::web_prelude::application::CONTRACT_SOURCE,
+                    crate::web_prelude::application::ADAPTER_SOURCE.replacen("<?php", "", 1))
             } else {
                 crate::synthetic_class::print::print_program(&program)
             };

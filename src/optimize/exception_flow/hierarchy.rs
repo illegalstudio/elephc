@@ -336,6 +336,9 @@ impl ExceptionHierarchy {
     /// term; anything unproven keeps the caller on the conservative program-wide destructor
     /// summary.
     pub(super) fn class_owns_no_destructible_storage(&self, class_name: &str) -> bool {
+        if matches!(php_symbol_key(class_name).as_str(), "fiber" | "generator") {
+            return false;
+        }
         if self.flattened_storage_proofs {
             return self
                 .scalar_only_storage_classes

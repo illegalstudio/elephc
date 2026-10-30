@@ -307,6 +307,41 @@ pub(crate) fn emit_copy_static_descriptor_to_runtime(
         abi::emit_load_from_address(emitter, word_reg, source_reg, offset);
         abi::emit_store_to_address(emitter, word_reg, dest_reg, offset);
     }
+    emit_initialize_runtime_descriptor(emitter, dest_reg);
+}
+
+/// Clears capture storage before publishing a fresh allocation as a managed callable node.
+pub(crate) fn emit_initialize_runtime_descriptor(emitter: &mut Emitter, dest: &str) {
+    use crate::codegen_support::{platform::Arch, sentinels::{CALLABLE_HEAP_KIND, x86_64_heap_kind_word}};
+    // -- recycled captures must be null before any later allocation or ownership cleanup --
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr w9, [{dest}, #-16]"));            // bound initialization by the allocator's actual payload capacity
+            emitter.instruction("mov x10, #64");                                // preserve the copied fixed descriptor header
+            emitter.label("1");
+            emitter.instruction("cmp x10, x9");                                 // stop before crossing the allocated descriptor payload
+            emitter.instruction("b.hs 2f");                                     // descriptors without captures need no slot initialization
+            emitter.instruction(&format!("str xzr, [{dest}, x10]"));            // leave every not-yet-written capture null for nested cleanup
+            emitter.instruction("add x10, x10, #8");                            // initialize the next capture word, including metadata halves
+            emitter.instruction("b 1b");                                        // finish initialization before publishing the graph kind
+            emitter.label("2");
+            emitter.instruction(&format!("mov x9, #{CALLABLE_HEAP_KIND}"));     // register callable ownership independently from raw helper buffers
+            emitter.instruction(&format!("str x9, [{dest}, #-8]"));             // publish the canonical managed callable kind
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("mov r11d, DWORD PTR [{dest} - 16]")); // bound initialization by the allocator's actual payload capacity
+            emitter.instruction("mov r10d, 64");                                // preserve the copied fixed descriptor header
+            emitter.label("1");
+            emitter.instruction("cmp r10, r11");                                // stop before crossing the allocated descriptor payload
+            emitter.instruction("jae 2f");                                      // descriptors without captures need no slot initialization
+            emitter.instruction(&format!("mov QWORD PTR [{dest} + r10], 0"));   // leave every not-yet-written capture null for nested cleanup
+            emitter.instruction("add r10, 8");                                  // initialize the next capture word, including metadata halves
+            emitter.instruction("jmp 1b");                                      // finish initialization before publishing the graph kind
+            emitter.label("2");
+            emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(CALLABLE_HEAP_KIND))); // preserve canonical heap magic while registering callable ownership
+            emitter.instruction(&format!("mov QWORD PTR [{dest} - 8], r10"));   // publish the canonical managed callable kind
+        }
+    }
 }
 
 /// Stores the current result registers into a runtime descriptor capture slot.

@@ -15,6 +15,8 @@ mod loop_entry;
 mod narrowing;
 pub(super) use narrowing::type_is_definitely_non_null;
 
+pub(super) use assignments::expr_is_string_offset_target;
+
 use std::collections::HashSet;
 
 use crate::errors::CompileError;

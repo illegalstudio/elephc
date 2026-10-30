@@ -91,6 +91,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
+    strings::emit_str_offset_set(emitter);
     strings::emit_substr_count(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
@@ -176,7 +177,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::objects::emit_weak_map(emitter);
     system::emit_getenv(emitter);
     system::emit_getenv_all(emitter);
-    system::emit_shell_exec(emitter);
+    system::emit_shell_exec(emitter, features.web);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);
     system::emit_checkdate(emitter);

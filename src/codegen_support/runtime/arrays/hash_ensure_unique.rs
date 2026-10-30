@@ -51,10 +51,10 @@ pub fn emit_hash_ensure_unique(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #16");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the shared source hash pointer
     emitter.instruction("bl __rt_hash_clone_shallow");                          // clone the shared hash for this mutating owner
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the previous shared hash pointer
-    emitter.instruction("ldr w10, [x9, #-12]");                                 // reload the old shared refcount
-    emitter.instruction("sub w10, w10, #1");                                    // drop this mutator's old owner slot from the shared hash
-    emitter.instruction("str w10, [x9, #-12]");                                 // persist the decremented refcount on the old shared hash
+    emitter.instruction("str x0, [sp, #8]");                                    // preserve the new clone while retiring the old mutator owner
+    emitter.instruction("ldr x0, [sp]");                                        // release the old owner through the shared candidate hook
+    emitter.instruction("bl __rt_decref_hash");                                 // nonfinal COW releases can make an old cycle unreachable
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the new unique container
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate the split-path stack frame
 
@@ -89,10 +89,10 @@ fn emit_hash_ensure_unique_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve one aligned spill slot for the shared associative-array pointer across the clone call
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the shared associative-array pointer across the clone helper call
     emitter.instruction("call __rt_hash_clone_shallow");                        // clone the shared associative array so this mutator gets an isolated owner copy
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the previous shared associative-array pointer after the clone helper returns
-    emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");                      // reload the shared associative-array refcount before dropping this mutator's owner slot
-    emitter.instruction("sub r11d, 1");                                         // remove this mutator from the shared associative-array refcount after cloning
-    emitter.instruction("mov DWORD PTR [r10 - 12], r11d");                      // persist the decremented refcount back into the previous shared associative-array header
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // preserve the new clone while retiring the old mutator owner
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // recover the old shared container
+    emitter.instruction("call __rt_decref_hash");                               // record a suspect if its final external owner moved to the clone
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the new unique container
     emitter.instruction("add rsp, 16");                                         // release the aligned copy-on-write spill slot before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the copy-on-write split
     emitter.label("__rt_hash_ensure_unique_done");

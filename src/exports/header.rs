@@ -327,6 +327,7 @@ mod tests {
             source_sig: source_sig.clone(),
             internal_sig: source_sig,
             span: Span::dummy(),
+            php_void_return: false,
         }
     }
 

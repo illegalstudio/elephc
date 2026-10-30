@@ -55,6 +55,12 @@ env:
     -p elephc-zend
 
 jobs:
+  # The required gate waits for real PHP on the queue's actual integration commit.
+  phpext-host-sdk:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/phpext-host-sdk.yml
+
   # Chooses the tiers this run executes (scripts/ci/plan_tiers.sh, CONTRIBUTING.md § "CI
   # tiers and the merge queue"). Pull requests run every Linux job plus the macOS compile,
   # doctests and managed-native smoke; the macOS test matrix and the iOS links run in the
@@ -2770,20 +2776,6 @@ jobs:
         # outcome; tests only elephc runs (the .lfc files) are informational.
         run: python3 scripts/test-differential.py examples/testing --elephc target/debug/elephc
 
-      - name: Install the runtime's stream libraries
-        # The DOOM engine reads its WAD with file_get_contents() on a run-time path,
-        # which links the runtime's stream layer (`-lz -lbz2`,
-        # src/builtins/requirements.rs); the runner image has no libbz2-dev.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libbz2-dev zlib1g-dev
-
-      - name: DOOM showcase suite
-        # Runs here because this job already builds the compiler. Map changes, specials,
-        # pickups and rendering against a small WAD the tests write themselves: no SDL,
-        # display or DOOM1.WAD needed.
-        run: target/debug/elephc test showcases/doom/tests
-
   curl-feature-contract:
     name: Curl feature contract coverage
     runs-on: ubuntu-latest
@@ -3161,6 +3153,7 @@ jobs:
       - action-pins
       - frame-assertions-release
       - benchmark-tooling
+      - phpext-host-sdk
     if: always()
     steps:
       - name: Merge JUnit reports
@@ -3183,6 +3176,7 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           RUN_TIER: ${{ needs.plan.outputs.run }}
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
+          SDK_TIER: ${{ needs.plan.outputs.run == 'true' && github.event_name != 'pull_request' }}
         run: |
           always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
             build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
@@ -3210,6 +3204,8 @@ jobs:
               if [ "$RUN_TIER" = true ]; then want=success; else want=skipped; fi
             elif in_list "$job" "$extended_tier"; then
               if [ "$EXTENDED_TIER" = true ]; then want=success; else want=skipped; fi
+            elif [ "$job" = phpext-host-sdk ]; then
+              if [ "$SDK_TIER" = true ]; then want=success; else want=skipped; fi
             else
               echo "::error::$job is in needs but in none of this gate's tier lists"
               status=1

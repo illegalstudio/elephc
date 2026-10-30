@@ -236,6 +236,10 @@ fn lower_array_assign_with_update(
     key_already_diagnosed: bool,
     incdec: Option<bool>,
 ) {
+    if string_offset_writes::local_is_string_offset_target(ctx, array) {
+        string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
+        return;
+    }
     let array_value = load_array_local_for_write(ctx, array, span);
     if let Some(update) = incdec.and_then(|increment| {
         super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
@@ -432,7 +436,7 @@ pub(super) fn lower_boxed_array_set(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
-    let (array, receiver_owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, array, span);
+    let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
     if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut lower_operand = |ctx: &mut LoweringContext<'_, '_>, expr: &Expr| {
         let value = lower_expr(ctx, expr);
@@ -448,12 +452,8 @@ pub(super) fn lower_boxed_array_set(
         let index = lower_operand(ctx, index);
         (index, lower_operand(ctx, value))
     };
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![array.value, index.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        Op::RuntimeCall.default_effects(),
-        Some(span),
+    string_offset_writes::lower_boxed_set(
+        ctx, array, index, value, span, key_already_diagnosed,
     );
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
@@ -470,6 +470,8 @@ pub(super) fn lower_boxed_array_set_values(
     key_already_diagnosed: bool,
 ) {
     let mut roots = Vec::new();
+    let (array, receiver_owner) = super::nested_array_writes::root_static_update_receiver(ctx, array, span);
+    if let Some(owner) = receiver_owner { roots.push(owner); }
     let mut root = |ctx: &mut LoweringContext<'_, '_>, operand: LoweredValue| {
         let (operand, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, operand, span);
         if let Some(owner) = owner {
@@ -477,15 +479,10 @@ pub(super) fn lower_boxed_array_set_values(
         }
         operand
     };
-    let array = root(ctx, array);
     let index = root(ctx, index);
     let value = root(ctx, value);
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![array.value, index.value, value.value],
-        key_already_diagnosed.then_some(Immediate::Bool(true)),
-        Op::RuntimeCall.default_effects(),
-        Some(span),
+    string_offset_writes::lower_boxed_set(
+        ctx, array, index, value, span, key_already_diagnosed,
     );
     for root in roots.into_iter().rev() {
         crate::ir_lower::expr::retire_owned_call_operand(ctx, root, span);
@@ -579,6 +576,9 @@ pub(super) fn lower_mixed_key_array_set(
         Op::ArraySetMixedKey.default_effects(),
         Some(span),
     );
+    // The runtime consumes one destination owner and transfers its replacement to the store.
+    // Final Mixed frame storage must adopt that owner rather than retain and abandon it.
+    ctx.builder.set_value_ownership(result.value, crate::ir::Ownership::Owned);
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, operand_pins, span);
     // The backend retains a Mixed value before the helper stores it, so a call's fresh value cell
     // is released here like any other Mixed-element write operand (`$map[$k] = value()`). The key

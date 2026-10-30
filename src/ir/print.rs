@@ -235,6 +235,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::ClassRef(id) => {
             let _ = write!(out, " class#{}", id);
         }
+        Immediate::ClosureBindScope(class) => match class {
+            Some(id) => { let _ = write!(out, " scope=class#{}", id); }
+            None => out.push_str(" scope=global"),
+        },
+        Immediate::ClosureBindObjectScope(class) => match class {
+            Some(id) => { let _ = write!(out, " scope=object(class#{})", id); }
+            None => out.push_str(" scope=object"),
+        },
         Immediate::EnumCaseRef { enum_id, case_id } => {
             let _ = write!(out, " enum#{}::case#{}", enum_id, case_id);
         }

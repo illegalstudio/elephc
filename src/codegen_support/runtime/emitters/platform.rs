@@ -68,7 +68,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_socket_recvfrom(emitter);
     io::emit_stream_socket_get_name(emitter);
     io::emit_stream_socket_pair(emitter);
-    io::emit_popen(emitter);
+    io::emit_popen(emitter, features.web);
     io::emit_pclose(emitter);
     io::emit_opendir(emitter);
     io::emit_readdir(emitter);
@@ -258,6 +258,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     fibers::emit_fiber_free_stack(emitter);
     fibers::emit_fiber_switch(emitter);
     fibers::emit_fiber_entry(emitter);
+    fibers::force_close::emit(emitter);
     fibers::emit_fiber_construct(emitter);
     fibers::emit_fiber_throw_state_error(emitter);
     fibers::emit_fiber_start(emitter);

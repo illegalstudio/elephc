@@ -10,11 +10,12 @@
 
 use crate::codegen_support::runtime::arrays::hash_layout;
 use crate::codegen_support::emit::Emitter;
+use super::gc_candidates::scans;
 use crate::codegen_support::runtime::exceptions::deep_cleanup::Scope;
 
 const CLEANUP: Scope = Scope { arm: 104, x86: 64 };
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::sentinels::REFERENCE_CELL_HEAP_KIND;
+use crate::codegen_support::sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND};
 
 use super::gc_collect_cycles_x86_64::emit_gc_collect_cycles_linux_x86_64;
 
@@ -78,11 +79,14 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
     emitter.label("__rt_gc_collect_cycles_recount");
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_gc_prepare_candidates");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
     emitter.instruction("str x9, [sp, #16]");                                   // save the heap base for later scans
     crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
     emitter.instruction("ldr x10, [x10]");                                      // load the current heap offset
     emitter.instruction("add x10, x9, x10");                                    // compute the current heap end
+    scans::bounds(emitter, ("x9", "x10"), ("r8", "r9"), "collector");
+    emitter.instruction("str x9, [sp, #16]");                                   // retain the selected scan beginning
     emitter.instruction("str x10, [sp, #8]");                                   // save the initial heap end for the metadata passes
     emitter.instruction("str x9, [sp, #0]");                                    // initialize the scan pointer to the heap base
     emitter.instruction("str xzr, [sp, #80]");                                  // initialize the collected graph-node count
@@ -93,18 +97,20 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the initial heap end
     emitter.instruction("cmp x9, x10");                                         // reached the end of the bump region?
     emitter.instruction("b.ge __rt_gc_collect_cycles_count_init");              // move on once every live block has been reset
+    scans::header(emitter, "x9", "r8", "clear", None);
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_clear_next");          // free-list blocks keep kind=0 and need no reset
     emitter.instruction("ldr x13, [x9, #8]");                                   // load the full kind word with any stale GC metadata
     emitter.instruction("mov x14, #0xffff");                                    // preserve kind and indexed element storage
-    emitter.instruction("movk x14, #6, lsl #16");                               // preserve destructor completion and snapshot pins while clearing marks
+    emitter.instruction("movk x14, #0x8006, lsl #16");                          // preserve destructor completion and snapshot pins while clearing marks
     emitter.instruction("and x13, x13, x14");                                   // clear the transient incoming-count and reachable bits
     emitter.instruction("orr x13, x13, #0x20000");                              // mark only this scan's original live blocks as collection candidates
     emitter.instruction("str x13, [x9, #8]");                                   // persist the reset kind word
     emitter.label("__rt_gc_collect_cycles_clear_next");
     emitter.instruction("add x9, x9, x11");                                     // advance by the payload size
     emitter.instruction("add x9, x9, #16");                                     // skip the uniform 16-byte heap header
+    scans::next(emitter, "x9", "r8", "[sp]", "[rbp - 24]", "arm_advance_3");
     emitter.instruction("str x9, [sp, #0]");                                    // save the next heap header scan pointer
     emitter.instruction("b __rt_gc_collect_cycles_clear_loop");                 // continue clearing transient metadata
 
@@ -117,6 +123,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the initial heap end
     emitter.instruction("cmp x9, x10");                                         // reached the end of the bump region?
     emitter.instruction("b.ge __rt_gc_collect_cycles_root_init");               // move on once every live block has been scanned
+    scans::header(emitter, "x9", "r8", "count", None);
     emitter.instruction("ldr w20, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("add x12, x9, #16");                                    // compute the user pointer for this heap block
     emitter.instruction("ldr w13, [x9, #4]");                                   // load this block refcount from the heap header
@@ -127,6 +134,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // strings/raw blocks contribute no outgoing cycle edges
     emitter.instruction("cmp x15, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_collect_cycles_count_known");             // accept the existing container kind range
+    emitter.instruction(&format!("cmp x15, #{CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_callable");          // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x15, #{REFERENCE_CELL_HEAP_KIND}"));      // also trace independently owned reference cells
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_reference");         // count the cell's typed payload edge
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // ignore non-graph heap kinds
@@ -138,12 +147,21 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x15, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_mixed");             // scan the boxed mixed child pointer
     emitter.instruction("b __rt_gc_collect_cycles_count_object");               // remaining refcounted kind 4 is an object
+    emitter.label("__rt_gc_collect_cycles_count_callable");
+    emitter.instruction("add x0, x9, #16");                                     // pass the current descriptor payload, keeping the header cursor saved
+    emitter.instruction("mov x1, #0");                                          // ARM counts every actual child in its transient header
+    emitter.instruction("mov x2, #0");                                          // select incoming-edge accounting without reachability changes
+    emitter.instruction("bl __rt_gc_callable_children");                        // include all typed native capture owners in the graph
+    emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // restore the stable source cursor before advancing
     emitter.label("__rt_gc_collect_cycles_count_reference");
     emitter.instruction("ubfx x15, x14, #8, #7");                               // read the cell payload descriptor from its header
     emitter.instruction("cmp x15, #4");                                         // scalar and string values cannot own a cyclic graph edge
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // skip non-graph cell payloads
+    emitter.instruction("cmp x15, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_153");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x15, #7");                                         // only container and boxed payloads are collector nodes
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // ignore resource and callable scalar descriptors
+    emitter.label("__rt_gc_collect_cycles_callable_tag_153");
     emitter.instruction("ldr x0, [x12]");                                       // load the reference cell's contained graph child
     emitter.instruction("bl __rt_gc_note_child_ref");                           // account for the cell's single payload ownership
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // continue with the next heap node
@@ -157,8 +175,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array_setup");       // scan nested hash child pointers
     emitter.instruction("cmp x15, #6");                                         // is this an array-of-objects payload?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array_setup");       // scan nested object child pointers
+    emitter.instruction("cmp x15, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_168");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x15, #7");                                         // is this an array-of-mixed payload?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_next");              // scalar/string arrays contribute no refcounted edges
+    emitter.label("__rt_gc_collect_cycles_callable_tag_168");
     emitter.label("__rt_gc_collect_cycles_count_array_setup");
     emitter.instruction("ldr x13, [x12]");                                      // load the array length
     emitter.instruction("str x13, [sp, #24]");                                  // save the array length for the loop bound
@@ -194,8 +215,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_hash_next");         // scalar/string entries contribute no graph edges
     emitter.instruction("cmp x0, #11");                                         // is this entry a member of a PHP reference set?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash_child");        // managed reference cells are ordinary graph edges
+    emitter.instruction("cmp x0, #10");                                         // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_205");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x0, #7");                                          // do the per-entry heap-backed tags stay within range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_hash_next");         // unknown per-entry tags are ignored
+    emitter.label("__rt_gc_collect_cycles_callable_tag_205");
     emitter.label("__rt_gc_collect_cycles_count_hash_child");
     emitter.instruction("ldr x0, [x15, #24]");                                  // load the nested child pointer from the hash value
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the parent hash pointer across the helper call
@@ -213,8 +237,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x15, [x12]");                                      // load the boxed mixed runtime value_tag
     emitter.instruction("cmp x15, #4");                                         // does the boxed mixed value hold a heap-backed child?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // scalar/string/null mixed payloads contribute no graph edges
+    emitter.instruction("cmp x15, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_224");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x15, #7");                                         // do boxed mixed tags stay within the supported heap-backed range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // unknown mixed tags are ignored
+    emitter.label("__rt_gc_collect_cycles_callable_tag_224");
     emitter.instruction("ldr x0, [x12, #8]");                                   // load the boxed mixed child pointer
     emitter.instruction("bl __rt_gc_note_child_ref");                           // add one incoming heap edge to the boxed child
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // mixed-child counting is complete
@@ -223,8 +250,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x12");                                         // pass the owning object to the optional eval-edge walker
     emitter.instruction("mov x1, xzr");                                         // ARM64 counts every edge directly in the child header
     emitter.instruction("mov x2, xzr");                                         // select incoming-edge counting rather than marking
-    emitter.instruction("bl __rt_gc_eval_object_children");                     // include retained closure receivers in heap graph accounting
+    emitter.instruction("bl __rt_gc_object_children");                          // include retained closure receivers in heap graph accounting
     emitter.instruction("ldr x12, [sp]");                                       // recover the current heap header after callback clobbers
+    scans::header(emitter, "x12", "rdx", "count_object_restore", None);
     emitter.instruction("add x12, x12, #16");                                   // restore the source object payload pointer
     emitter.instruction("ldr x14, [x12]");                                      // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_gc_desc_count");
@@ -258,8 +286,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count nested hash property pointers
     emitter.instruction("cmp x10, #6");                                         // is this a compile-time object property?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_object_child");      // count compile-time object property pointers
+    emitter.instruction("cmp x10, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_269");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x10, #7");                                         // is this a compile-time mixed property?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_object_next");       // scalar and string properties contribute no refcounted edges
+    emitter.label("__rt_gc_collect_cycles_callable_tag_269");
     // Mixed properties own a boxed cell; its visitor inspects the runtime payload tag.
     emitter.label("__rt_gc_collect_cycles_count_object_child");
     emitter.instruction("ldr x0, [x12, x0]");                                   // load the nested child pointer from the property slot
@@ -279,6 +310,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     // -- dynamic-property storage is an owned graph edge, including stdClass --
     emitter.label("__rt_gc_collect_cycles_count_object_dynamic");
     emitter.instruction("ldr x12, [sp, #0]");                                   // reload the source heap header after fixed-slot traversal
+    scans::header(emitter, "x12", "rdx", "count_dynamic_restore", None);
     emitter.instruction("add x12, x12, #16");                                   // recover the object payload pointer
     emitter.instruction("ldr x14, [x12]");                                      // read the already-validated runtime class id
     crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_class_object_dynamic_prop_flags");
@@ -292,8 +324,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_count_next");
     emitter.instruction("ldr x9, [sp, #0]");                                    // restore the current heap header scan pointer after nested helper calls
+    scans::header(emitter, "x9", "rdx", "count_next", None);
     emitter.instruction("add x9, x9, x20");                                     // advance by this block payload size
     emitter.instruction("add x9, x9, #16");                                     // skip the uniform 16-byte heap header
+    scans::next(emitter, "x9", "r8", "[sp]", "[rbp - 24]", "arm_advance_2");
     emitter.instruction("str x9, [sp, #0]");                                    // save the next heap header scan pointer
     emitter.instruction("b __rt_gc_collect_cycles_count_loop");                 // continue counting incoming heap edges
 
@@ -306,6 +340,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // reload the initial heap end
     emitter.instruction("cmp x9, x10");                                         // reached the end of the bump region?
     emitter.instruction("b.ge __rt_gc_collect_cycles_free_init");               // move on once every root candidate has been checked
+    scans::header(emitter, "x9", "r8", "root", None);
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_root_next");           // free blocks are not GC roots
@@ -315,6 +350,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_root_next");               // strings/raw blocks are outside the cycle collector set
     emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_collect_cycles_root_known");              // accept existing container candidates
+    emitter.instruction(&format!("cmp x14, #{CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells can have external local aliases
     emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // compare cell owners against incoming object edges
     emitter.instruction("b __rt_gc_collect_cycles_root_next");                  // skip non-graph heap kinds
@@ -329,8 +366,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // refcounted array payloads participate in cycle collection
     emitter.instruction("cmp x15, #6");                                         // is this an array of objects?
     emitter.instruction("b.eq __rt_gc_collect_cycles_root_refcounted");         // refcounted array payloads participate in cycle collection
+    emitter.instruction("cmp x15, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_345");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x15, #7");                                         // is this an array of mixed boxes?
     emitter.instruction("b.ne __rt_gc_collect_cycles_root_next");               // scalar/string arrays are never cycle-collector candidates
+    emitter.label("__rt_gc_collect_cycles_callable_tag_345");
     emitter.label("__rt_gc_collect_cycles_root_refcounted");
     emitter.instruction("ubfx x15, x13, #18, #1");                              // inspect the artificial snapshot owner marker
     emitter.instruction("sub w12, w12, w15");                                   // pins are not external PHP roots
@@ -347,6 +387,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_next");
     emitter.instruction("add x9, x9, x11");                                     // advance by this block payload size
     emitter.instruction("add x9, x9, #16");                                     // skip the uniform 16-byte heap header
+    scans::next(emitter, "x9", "r8", "[sp]", "[rbp - 24]", "arm_advance_1");
     emitter.instruction("str x9, [sp, #0]");                                    // save the next heap header scan pointer
     emitter.instruction("b __rt_gc_collect_cycles_root_loop");                  // continue looking for externally-rooted nodes
 
@@ -369,8 +410,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_off");
     emitter.instruction("ldr x11, [x11]");                                      // load the current heap offset after any tail trimming
     emitter.instruction("add x10, x10, x11");                                   // compute the current heap end after collection frees
+    scans::bounds(emitter, ("x16", "x10"), ("r8", "r9"), "arm_free");
     emitter.instruction("cmp x9, x10");                                         // reached the end of the current bump region?
     emitter.instruction("b.ge __rt_gc_collect_cycles_finish");                  // finish once every surviving header was scanned
+    scans::header(emitter, "x9", "r8", "free", Some("__rt_gc_collect_cycles_free_next"));
     emitter.instruction("ldr w11, [x9]");                                       // load this block payload size from the heap header
     emitter.instruction("ldr w12, [x9, #4]");                                   // load this block refcount from the heap header
     emitter.instruction("cbz w12, __rt_gc_collect_cycles_free_next");           // free-list blocks are already reclaimed
@@ -380,6 +423,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.lo __rt_gc_collect_cycles_free_next");               // strings/raw blocks are outside the cycle collector set
     emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
     emitter.instruction("b.ls __rt_gc_collect_cycles_free_known");              // accept existing container candidates
+    emitter.instruction(&format!("cmp x14, #{CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // owned reference cells are swept independently
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // apply reachability to the cell node
     emitter.instruction("b __rt_gc_collect_cycles_free_next");                  // skip non-graph heap kinds
@@ -394,8 +439,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // refcounted array payloads participate in cycle collection
     emitter.instruction("cmp x15, #6");                                         // is this an array of objects?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcounted");         // refcounted array payloads participate in cycle collection
+    emitter.instruction("cmp x15, #10");                                        // callable slots own descriptors with managed capture graphs
+    emitter.instruction("b.eq __rt_gc_collect_cycles_callable_tag_415");        // admit callable ownership without admitting scalar tags
     emitter.instruction("cmp x15, #7");                                         // is this an array of mixed boxes?
     emitter.instruction("b.ne __rt_gc_collect_cycles_free_next");               // scalar/string arrays are never cycle-collector candidates
+    emitter.label("__rt_gc_collect_cycles_callable_tag_415");
     emitter.label("__rt_gc_collect_cycles_free_refcounted");
     emitter.instruction("mov x15, #1");                                         // prepare the reachable-bit mask
     emitter.instruction("lsl x15, x15, #16");                                   // x15 = GC reachable bit in the kind word
@@ -406,6 +454,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #80]");                                  // persist the updated collection result
     emitter.instruction("add x10, x9, x11");                                    // compute the next header before reclaiming this block
     emitter.instruction("add x10, x10, #16");                                   // account for the 16-byte heap header
+    scans::next(emitter, "x10", "r10", "[sp]", "[rbp - 24]", "arm_sweep");
     emitter.instruction("str x10, [sp, #0]");                                   // save the next header before deep-freeing this block
     emitter.instruction("ldr w10, [x9, #4]");                                   // retain the guard left by the earlier object destructor phase
     emitter.instruction("and w10, w10, #0x80000000");                           // clear ordinary owners while preserving destruction-in-progress
@@ -417,6 +466,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_hash");               // deep-free unreachable hashes
     emitter.instruction("cmp x14, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_mixed");              // deep-free unreachable mixed cells
+    emitter.instruction(&format!("cmp x14, #{CALLABLE_HEAP_KIND}"));            // callable descriptors own graph captures
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_callable");           // select callable traversal or ownership dispatch
     emitter.instruction(&format!("cmp x14, #{REFERENCE_CELL_HEAP_KIND}"));      // distinguish cell nodes from ordinary object storage
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_reference");          // retire an unreachable cell with its typed payload
     emitter.instruction("bl __rt_object_free_deep");                            // deep-free unreachable objects
@@ -430,16 +481,21 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_free_mixed");
     emitter.instruction("bl __rt_mixed_free_deep");                             // deep-free the unreachable mixed graph node
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // resume after releasing the Mixed node
+    emitter.label("__rt_gc_collect_cycles_free_callable");
+    CLEANUP.call(emitter, "__rt_callable_descriptor_free_deep", false); // retire doomed captures through protected final-owner cleanup
+    emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // resume the stable heap or candidate-vector scan
     emitter.label("__rt_gc_collect_cycles_free_reference");
     emitter.instruction("bl __rt_reference_cell_free_deep");                    // free the unreachable reference cell without revisiting doomed children
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_next");
     emitter.instruction("add x9, x9, x11");                                     // advance by this block payload size
     emitter.instruction("add x9, x9, #16");                                     // skip the uniform 16-byte heap header
+    scans::next(emitter, "x9", "r8", "[sp]", "[rbp - 24]", "arm_advance_0");
     emitter.instruction("str x9, [sp, #0]");                                    // save the next heap header scan pointer
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning for unreachable graph nodes
 
     emitter.label("__rt_gc_collect_cycles_finish");
+    crate::codegen_support::abi::emit_call_label(emitter, "__rt_gc_finish_candidates");
     emitter.instruction("bl __rt_gc_drop_pins");                                // dispose snapshots without touching already reclaimed PHP nodes
     crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_gc_freeing_unreachable", 0);
     emitter.instruction("bl __rt_gc_collector_end");                            // accumulate collector and graph-free phase durations
@@ -479,6 +535,26 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Object traversal restores an actual header from candidate slots before reading class data.
+    #[test]
+    fn aarch64_candidate_object_restores_resolve_vector_slots() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            for pic in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.pic_data_refs = pic;
+                emit_gc_collect_cycles(&mut emitter);
+                let output = emitter.output();
+                for phase in ["count_object_restore", "count_dynamic_restore"] {
+                    let end = output.find(&format!("__rt_gc_{phase}_header_ready:")).unwrap();
+                    let begin = output[..end].rfind("ldr x12, [sp").unwrap();
+                    assert!(output[begin..end].contains("ldr x12, [x12]"), "{name}, PIC={pic}, {phase}");
+                    assert!(output[end..].find("add x12, x12, #16").unwrap()
+                        < output[end..].find("ldr x14, [x12]").unwrap(), "{name}, {phase}");
+                }
+            }
+        }
+    }
 
     #[test]
     /// Verifies suppressed collection leaves the active flag unset on every AArch64 target.

@@ -10,6 +10,7 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+elephc-process-context = { path = "../elephc-process-context" }
 # hyper 1.x is the HTTP engine; http carries the Request/Response types.
 hyper = { version = "1", features = ["server", "http1"] }
 http = "1"

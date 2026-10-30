@@ -65,7 +65,7 @@ pub fn emit_decref_object(emitter: &mut Emitter) {
     emitter.instruction("str w9, [x0, #-12]");                                  // store decremented refcount
     emitter.instruction("b.eq __rt_decref_object_free");                        // zero refcount means the object can be freed immediately
 
-    emitter.instruction("b __rt_decref_object_skip");                           // non-zero refcount stays alive until an explicit GC safe point
+    emitter.instruction("b __rt_gc_note_candidate");                            // non-zero refcount stays alive until an explicit GC safe point
 
     // -- refcount reached zero: deep free the object --
     emitter.label("__rt_decref_object_free");
@@ -119,7 +119,7 @@ fn emit_decref_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r10d, 1");                                         // decrement the object refcount for the releasing x86_64 owner
     emitter.instruction("mov DWORD PTR [rax - 12], r10d");                      // store the decremented object refcount back into the uniform heap header
     emitter.instruction("jz __rt_decref_object_free");                          // zero refcount means the object properties and storage can be released now
-    emitter.instruction("jmp __rt_decref_object_skip");                         // non-zero refcount stays alive until an explicit GC safe point
+    emitter.instruction("jmp __rt_gc_note_candidate");                          // non-zero refcount stays alive until an explicit GC safe point
 
     emitter.label("__rt_decref_object_skip");
     emitter.instruction("ret");                                                 // nothing else needs to happen for non-zero refcounts or foreign pointers

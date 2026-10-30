@@ -34,6 +34,8 @@ pub struct Emitter {
     /// This is deliberately independent from position-independent addressing:
     /// PIC is a relocation choice, while boundary recovery is an ABI contract.
     pub cdylib_boundary: bool,
+    /// Routes final output to a malloc-only producer callback, never to the host stdout fd.
+    pub phpext_output: bool,
     /// When `true`, macOS runtime emission is prepared for per-symbol dead
     /// stripping: `label()` records each internal label name in
     /// `internal_labels` so the final assembly can rename them to Mach-O
@@ -76,6 +78,7 @@ impl Emitter {
             pic_data_refs: false,
             concat_capacity: 65_536,
             cdylib_boundary: false,
+            phpext_output: false,
             dead_strip: false,
             exit_hook: None,
             internal_labels: HashSet::new(),

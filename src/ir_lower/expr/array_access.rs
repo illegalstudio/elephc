@@ -427,6 +427,11 @@ fn lower_array_access_from_values_with_receiver_pins(
         ctx.unguard_call_argument(result.value, expr.span);
     } else {
         release_coerced_source_if_owned(ctx, index_value, Some(index.span));
+        // A string key is not a coerced Mixed/array source, so the call above
+        // leaves a normalized `(string)` copy alive after `hash_get_silent`.
+        crate::ir_lower::ownership::release_marked_normalized_cast_copies(
+            ctx, index_value, Some(index.span),
+        );
     }
     // Array access consumes an owning receiver produced by an earlier read,
     // call, or one-shot temp. Preserve borrowed string/callable payloads before

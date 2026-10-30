@@ -91,6 +91,7 @@ pub fn emit_array_new(emitter: &mut Emitter) {
 
     // -- fatal error: requested array size cannot be represented --
     emitter.label("__rt_array_cap_overflow");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     abi::emit_symbol_address(emitter, "x1", "_arr_cap_err_msg");
     emitter.instruction(&format!("mov x2, #{}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
@@ -163,6 +164,7 @@ fn emit_array_new_linux_x86_64(emitter: &mut Emitter) {
 
     // -- fatal error: requested array size cannot be represented --
     emitter.label("__rt_array_cap_overflow");
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // fd = stderr for the array-size fatal error message
     abi::emit_symbol_address(emitter, "rsi", "_arr_cap_err_msg");
     emitter.instruction(&format!("mov edx, {}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count

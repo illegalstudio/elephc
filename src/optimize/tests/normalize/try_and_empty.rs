@@ -196,9 +196,10 @@ fn test_normalize_control_flow_inlines_non_throwing_try_catch() {
 /// and a finally clause exists, preserving execution order.
 #[test]
 fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
+    let value = Stmt::assign("value", Expr::int_lit(7));
     let program = vec![Stmt::new(
         StmtKind::Try {
-            try_body: vec![Stmt::echo(Expr::int_lit(7))],
+            try_body: vec![value.clone()],
             catches: Vec::new(),
             finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
         },
@@ -207,7 +208,7 @@ fn test_normalize_control_flow_inlines_non_throwing_try_finally_fallthrough() {
 
     let pruned = normalize_control_flow(program);
 
-    assert_eq!(pruned, vec![Stmt::echo(Expr::int_lit(7)), Stmt::echo(Expr::int_lit(9))]);
+    assert_eq!(pruned, vec![value, Stmt::echo(Expr::int_lit(9))]);
 }
 
 /// Preserves the full try/finally structure when the try body contains
@@ -310,10 +311,11 @@ fn test_normalize_control_flow_folds_outer_finally_into_single_inner_try() {
 /// out of the try body, emitting them before the try structure.
 #[test]
 fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
+    let value = Stmt::assign("value", Expr::int_lit(7));
     let program = vec![Stmt::new(
         StmtKind::Try {
             try_body: vec![
-                Stmt::echo(Expr::int_lit(7)),
+                value.clone(),
                 Stmt::new(StmtKind::Throw(Expr::var("boom")), Span::dummy()),
             ],
             catches: vec![crate::parser::ast::CatchClause {
@@ -330,8 +332,46 @@ fn test_normalize_control_flow_hoists_non_throwing_try_prefix() {
     let pruned = normalize_control_flow(program);
 
     assert_eq!(pruned.len(), 2);
-    assert_eq!(pruned[0], Stmt::echo(Expr::int_lit(7)));
+    assert_eq!(pruned[0], value);
     assert!(matches!(pruned[1].kind, StmtKind::Try { .. }));
+}
+
+/// Hosted echo and print can throw, so each must remain inside its protected region.
+#[test]
+fn test_normalize_control_flow_keeps_output_inside_try() {
+    let print = Stmt::new(
+        StmtKind::ExprStmt(Expr::new(
+            ExprKind::Print(Box::new(Expr::int_lit(7))),
+            Span::dummy(),
+        )),
+        Span::dummy(),
+    );
+    for output in [Stmt::echo(Expr::int_lit(7)), print] {
+        let program = vec![Stmt::new(
+            StmtKind::Try {
+                try_body: vec![
+                    output.clone(),
+                    Stmt::new(StmtKind::Throw(Expr::var("boom")), Span::dummy()),
+                ],
+                catches: Vec::new(),
+                finally_body: Some(vec![Stmt::echo(Expr::int_lit(9))]),
+            },
+            Span::dummy(),
+        )];
+
+        // This fixture declares no native output callback. Preserve the existing profile
+        // approximation without claiming that chunked ob_start callbacks cannot throw.
+        let native = normalize_control_flow(program.clone());
+        assert_eq!(native.len(), 2, "standalone profile retains its existing prefix approximation");
+        assert_eq!(native[0], output);
+        let pruned = with_hosted_output(true, || normalize_control_flow(program));
+
+        assert_eq!(pruned.len(), 1);
+        let StmtKind::Try { try_body, .. } = &pruned[0].kind else {
+            panic!("expected protected output");
+        };
+        assert_eq!(try_body.first(), Some(&output));
+    }
 }
 
 /// A `return` nested in a branch of a non-throwing `try` body still runs `finally` under PHP,

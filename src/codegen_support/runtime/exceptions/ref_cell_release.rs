@@ -36,13 +36,13 @@ pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
             emitter.instruction("cbz w9, __rt_local_ref_cell_release_return");  // ignore reentrant retirement of an already released cell
             emitter.instruction("subs w9, w9, #1");                             // retire this alias without releasing shared contents
             emitter.instruction("str w9, [x0, #-12]");                          // publish the remaining owner count
-            emitter.instruction("b.ne __rt_local_ref_cell_release_return");     // other aliases still own the cell and its value
+            emitter.instruction("b.ne __rt_local_ref_cell_release_candidate");  // other aliases still own the cell and its value
         }
         Arch::X86_64 => {
             emitter.instruction("cmp DWORD PTR [rax - 12], 0");                 // detect reentrant retirement before decrementing ownership
             emitter.instruction("je __rt_local_ref_cell_release_return");       // already released cells own no payload
             emitter.instruction("sub DWORD PTR [rax - 12], 1");                 // retire this alias from the uniform heap header
-            emitter.instruction("jne __rt_local_ref_cell_release_return");      // keep the cell and its contents while another owner remains
+            emitter.instruction("jne __rt_local_ref_cell_release_candidate");   // keep the cell and its contents while another owner remains
         }
     }
     match emitter.target.arch {
@@ -85,6 +85,8 @@ pub fn emit_local_ref_cell_release(emitter: &mut Emitter) {
     abi::emit_branch_if_int_result_nonzero(emitter, "__rt_local_ref_cell_release_return");
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_jump(emitter, "__rt_throw_current");
+    emitter.label("__rt_local_ref_cell_release_candidate");
+    abi::emit_call_label(emitter, "__rt_gc_note_candidate");
     emitter.label("__rt_local_ref_cell_release_return");
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);

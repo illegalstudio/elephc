@@ -117,20 +117,20 @@ unset($aliases);
 
 /// A value immediately below saturation uses its exact cached incoming count.
 #[test]
-fn test_gc_incoming_cache_fan_in_8190() {
-    check_gc_cache_fan_in(8190);
+fn test_gc_incoming_cache_fan_in_4094() {
+    check_gc_cache_fan_in(4094);
 }
 
 /// The saturation sentinel itself must select a precise fallback rather than root by approximation.
 #[test]
-fn test_gc_incoming_cache_fan_in_8191() {
-    check_gc_cache_fan_in(8191);
+fn test_gc_incoming_cache_fan_in_4095() {
+    check_gc_cache_fan_in(4095);
 }
 
 /// Crossing the packed count capacity preserves a child whose only owners are heap edges.
 #[test]
-fn test_gc_incoming_cache_fan_in_8192() {
-    check_gc_cache_fan_in(8192);
+fn test_gc_incoming_cache_fan_in_4096() {
+    check_gc_cache_fan_in(4096);
 }
 
 /// Larger incoming totals cannot wrap into the heap marker or misclassify a live child.

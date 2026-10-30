@@ -495,6 +495,10 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     ctx.store_result_value(hash)?;
     receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
+    if matches!(ctx.value_php_type(key)?.codegen_repr(), PhpType::Float | PhpType::Mixed) {
+        ctx.load_value_to_result(hash)?;
+        return super::offset_unset::lower_array_unset_with_key_diagnostics(ctx, key);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             materialize_hash_key_aarch64(ctx, key)?;

@@ -111,6 +111,9 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
 /// The synthetic function the `--web` entry stub calls before it starts serving.
 pub const PRELOAD_STARTUP_FN: &str = "__elephc_opcache_run_preload";
 
+/// Optional post-fork application bootstrap and typed request dispatch.
+pub mod application;
+
 /// Moves `opcache.preload`'s inlined body out of the per-request handler.
 ///
 /// Under `--web` the top-level body IS the request handler, so the preload's executable

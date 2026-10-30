@@ -75,9 +75,17 @@ pub(super) fn lower_assignment_expr(
         }
     }
     if assigned_name.is_none() {
+        // PHP's `($s[$i] = $v)` on a string evaluates to the byte it stored (or `null`), not to
+        // `$v`, so the string write produces its own result. The checker refuses the compound
+        // and increment forms, so only a plain `=` reaches here.
+        if let Some(result) = lower_string_offset_assignment_expr(
+            ctx, target, value, result_target, prelude, expr.span, key_already_diagnosed,
+        ) {
+            return result;
+        }
         if let Some(result_target) = result_target {
             let rhs_owner = if compound_receiver.is_none() {
-                super::assignment_rhs_capture::publish_static_assignment_rhs(
+                super::assignment_rhs_capture::publish_assignment_rhs(
                     ctx, target, value, result_target, prelude, expr.span,
                 )
             } else { None };
@@ -88,7 +96,7 @@ pub(super) fn lower_assignment_expr(
             );
             let result = lower_expr(ctx, result_target);
             finish_static_compound_receiver(ctx, compound_receiver, expr.span);
-            return super::assignment_rhs_capture::finish_static_assignment_rhs(
+            return super::assignment_rhs_capture::finish_assignment_rhs(
                 ctx, rhs_owner, result, expr.span,
             );
         }
@@ -326,7 +334,7 @@ pub(super) fn lower_non_local_assignment_write(
 }
 
 /// Writes an assignment target whose key may already have been diagnosed by its read half.
-fn lower_non_local_assignment_write_with_diagnosed_key(
+pub(super) fn lower_non_local_assignment_write_with_diagnosed_key(
     ctx: &mut LoweringContext<'_, '_>,
     target: &Expr,
     value: &Expr,

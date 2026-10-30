@@ -197,7 +197,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("cbz x10, __rt_uncaught_exit");                         // ordinary uncaught exception: the report is complete
     emitter.instruction("bl __rt_debuginfo_fatal_text");                        // PHP follows the warning with the `__debuginfo() must return an array` fatal
     emitter.label("__rt_uncaught_exit");
-    emitter.instruction("bl __rt_run_exit_hook");                              // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
+    emitter.instruction("bl __rt_run_exit_hook");                               // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.syscall(1);
 
@@ -206,7 +206,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov x2, #{}", UNCAUGHT_FALLBACK_LEN));        // the pre-existing constant message
     emitter.instruction("mov x0, #1");                                          // fd = stdout
     emitter.syscall(4);
-    emitter.instruction("bl __rt_run_exit_hook");                              // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
+    emitter.instruction("bl __rt_run_exit_hook");                               // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.syscall(1);
 
@@ -442,7 +442,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.instruction("mov x29, sp");                                         // establish the frame pointer
     emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the fatal is written
     emitter.instruction("bl __rt_debuginfo_fatal_text");                        // the fatal line with its location
-    emitter.instruction("bl __rt_run_exit_hook");                              // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
+    emitter.instruction("bl __rt_run_exit_hook");                               // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov x0, #{}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 on a fatal error
     emitter.syscall(1);
 
@@ -484,6 +484,12 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     emitter.comment("--- runtime: report_debuginfo_exception ---");
     emitter.label_global("__rt_report_debuginfo_exception");
     emitter.instruction("bl __rt_debuginfo_pre_report");                        // var_dump: PHP has already printed the nested value's indent
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
+    emitter.instruction("cbz x9, __rt_debuginfo_report_value_ready");           // keep the existing null fallback for an absent thrown value
+    emitter.instruction("ldr x9, [x9]");                                        // inspect only the class word of the private eight-byte marker
+    emitter.instruction("cmn x9, #3");                                          // coroutine cancellation is not a PHP Throwable
+    abi::emit_branch_if_equal_wide(emitter, "__rt_debuginfo_fatal");
+    emitter.label("__rt_debuginfo_report_value_ready");
     emitter.instruction("mov x10, #1");                                         // select the `Warning: Uncaught ...` + fatal report flavour
     abi::emit_store_reg_to_symbol(emitter, "x10", "_uncaught_report_mode", 0);
     emitter.instruction("b __rt_report_uncaught_exception");                    // share the class/message/location/trace writer
@@ -567,7 +573,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_uncaught_exit");                               // ordinary uncaught exception: the report is complete
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // PHP follows the warning with the `__debuginfo() must return an array` fatal
     emitter.label("__rt_uncaught_exit");
-    emitter.instruction("call __rt_run_exit_hook");                            // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
+    emitter.instruction("call __rt_run_exit_hook");                             // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after reporting the throwable
@@ -580,7 +586,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
     emitter.instruction("syscall");                                             // write the constant fallback diagnostic to stdout
     emitter.instruction("and rsp, -16");                                        // align the stack for the exit hook (this path never returns)
-    emitter.instruction("call __rt_run_exit_hook");                            // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
+    emitter.instruction("call __rt_run_exit_hook");                             // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.instruction("mov eax, 60");                                         // syscall 60 = exit
     emitter.instruction("syscall");                                             // exit the process after the fallback diagnostic
@@ -823,7 +829,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the fatal is written
     emitter.instruction("call __rt_debuginfo_fatal_text");                      // the fatal line with its location
-    emitter.instruction("call __rt_run_exit_hook");                            // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
+    emitter.instruction("call __rt_run_exit_hook");                             // shut hosted PHP extensions down (RSHUTDOWN, MSHUTDOWN)
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 on a fatal error
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
     emitter.instruction("syscall");                                             // terminate the process
@@ -868,6 +874,12 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_report_debuginfo_exception");
     emitter.instruction("and rsp, -16");                                        // the tail jump from __rt_throw_current may arrive 8-off: realign before the call
     emitter.instruction("call __rt_debuginfo_pre_report");                      // var_dump: PHP has already printed the nested value's indent
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_value", 0);
+    emitter.instruction("test r10, r10");                                       // keep the existing null fallback for an absent thrown value
+    emitter.instruction("jz __rt_debuginfo_report_value_ready");                // no object header is available to inspect
+    emitter.instruction("cmp QWORD PTR [r10], -3");                             // cancellation owns only its private class word
+    emitter.instruction("je __rt_debuginfo_fatal");                             // preserve PHP's fatal without rendering the private marker
+    emitter.label("__rt_debuginfo_report_value_ready");
     emitter.instruction("mov r10, 1");                                          // select the `Warning: Uncaught ...` + fatal report flavour
     abi::emit_store_reg_to_symbol(emitter, "r10", "_uncaught_report_mode", 0);
     emitter.instruction("jmp __rt_report_uncaught_exception");                  // share the class/message/location/trace writer
@@ -889,9 +901,38 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
 }
 
 #[cfg(test)]
+mod assembly_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
+
+    /// Private cancellation reaches only the debug-info fatal, before any Throwable field read.
+    #[test]
+    fn debuginfo_cancellation_bypasses_throwable_report_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            for pic in [false, true] {
+                let mut emitter = Emitter::new(target);
+                emitter.pic_data_refs = pic;
+                emit_report_uncaught_exception(&mut emitter);
+                let assembly = emitter.output();
+                let start = assembly.find("__rt_report_debuginfo_exception:\n").unwrap();
+                let entry = &assembly[start..];
+                let pre_report = entry.find("__rt_debuginfo_pre_report").unwrap();
+                let (marker, fatal, report) = if target.arch == Arch::AArch64 {
+                    ("cmn x9, #3", "b __rt_debuginfo_fatal", "b __rt_report_uncaught_exception")
+                } else {
+                    ("cmp QWORD PTR [r10], -3", "je __rt_debuginfo_fatal", "jmp __rt_report_uncaught_exception")
+                };
+                let marker = entry.find(marker).unwrap();
+                let fatal = entry.find(fatal).unwrap();
+                let report = entry.find(report).unwrap();
+                assert!(pre_report < marker && marker < fatal && fatal < report, "{name}, PIC {pic}: {entry}");
+            }
+        }
+    }
 
     /// Verifies the AArch64 report reads the Throwable rather than writing a fixed string.
     ///

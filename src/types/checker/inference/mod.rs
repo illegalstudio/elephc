@@ -20,3 +20,4 @@ pub(super) mod syntactic;
 
 pub use syntactic::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use expr::closure_body_uses_this;
+pub(super) use expr::is_valid_string_offset_index;

@@ -9,6 +9,21 @@
 
 use crate::ir::{Effects, Op, RuntimeFnId};
 
+/// Every direct output opcode can cross into a throwing hosted PHP callback.
+#[test]
+fn hosted_output_opcodes_are_throwing_effect_boundaries() {
+    let required = Effects::OUTPUT | Effects::MAY_THROW;
+    for op in [
+        Op::EchoValue,
+        Op::PrintValue,
+        Op::WriteStrStdout,
+        Op::WriteStdout,
+        Op::Warn,
+    ] {
+        assert!(op.default_effects().contains(required), "{op:?}");
+    }
+}
+
 /// Replacement results use independent scratch storage rather than borrowing their inputs.
 #[test]
 fn string_replacement_results_do_not_keep_argument_owners_alive() {

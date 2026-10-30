@@ -206,7 +206,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `grapheme_strrev()` | String | Reverses a string by grapheme cluster, returning false on failure. *(No PHP equivalent (not in PHP 8.4/8.5 intl))* |
 | `is_real()` | Type | Alias of is_float(). *(Removed in PHP 8.0; kept as a compatibility alias of is_float())* |
 
-Classes: `DateUnknownException` (`date`), `Elephc\Testing\AssertionFailedError`, `Elephc\Testing\IncompleteTestError`, `Elephc\Testing\Runner`, `Elephc\Testing\SkippedTestError`, `Elephc\Testing\TestCase`, `ImageException` (`gd`), `PHPUnit\Framework\TestCase`.
+Classes: `DateUnknownException` (`date`), `Elephc\Testing\AssertionFailedError`, `Elephc\Testing\IncompleteTestError`, `Elephc\Testing\Runner`, `Elephc\Testing\SkippedTestError`, `Elephc\Testing\TestCase`, `Elephc\Web\Request`, `Elephc\Web\Worker`, `Elephc\Web\WorkerApplication`, `ImageException` (`gd`), `PHPUnit\Framework\TestCase`.
 
 Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli`).
 

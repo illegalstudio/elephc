@@ -58,6 +58,7 @@ mod externs;
 mod floats;
 mod hashes;
 mod offset_unset;
+mod closure_binding;
 mod iterators;
 mod objects;
 mod ownership;
@@ -423,7 +424,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             static_properties::lower_store_reflection_static_property(ctx, &inst)
         }
         Op::Call => lower_direct_call(ctx, &inst),
-        Op::ClosureBind => builtins::lower_closure_bind(ctx, &inst),
+        Op::ClosureBind => closure_binding::lower_closure_bind(ctx, &inst),
         Op::ClosureCall => callables::lower_closure_call(ctx, &inst),
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),

@@ -123,6 +123,8 @@ mod omitted_by_ref_default_args;
 mod callable_property_owners;
 #[path = "runtime_gc/foreach_object_source.rs"]
 mod foreach_object_source;
+mod foreach_nested_owners;
+mod fiber_transfer_owners;
 #[path = "runtime_gc/foreach_iterator_aggregate_owner.rs"]
 mod foreach_iterator_aggregate_owner;
 #[path = "runtime_gc/nested_property_defaults.rs"]
@@ -143,6 +145,7 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod offset_unset_key_guards;
 mod array_edge_type_errors;
 mod call_coercion_owners;
 mod eval_sparse_arrays;
@@ -217,11 +220,36 @@ mod class_param_return;
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
 mod tagged_scalar_boxing;
+#[path = "runtime_gc/string_offset_writes.rs"]
+mod string_offset_writes;
 #[path = "runtime_gc/gc_incoming_cache.rs"]
 mod gc_incoming_cache;
 #[path = "runtime_gc/unshift_reference_cow.rs"]
 mod unshift_reference_cow;
 
 mod entity_slot_owners;
+
+#[path = "runtime_gc/heap_small_bins.rs"]
+mod heap_small_bins;
+
+#[path = "runtime_gc/gc_candidate_cost.rs"]
+mod gc_candidate_cost;
+
+mod callable_cycles;
+
+mod native_object_cycles;
+
+mod incomplete_object_cycles;
+
+mod coroutine_cancellation;
+#[path = "runtime_gc/coroutine_boundaries.rs"]
+mod coroutine_boundaries;
+#[path = "runtime_gc/coroutine_eval.rs"]
+mod coroutine_eval;
+
+#[path = "runtime_gc/coroutine_debuginfo.rs"]
+mod coroutine_debuginfo;
+
+mod coroutine_slot_set;
 #[path = "runtime_gc/counter_regions.rs"]
 mod counter_regions;

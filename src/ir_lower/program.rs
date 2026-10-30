@@ -171,6 +171,7 @@ fn lower_on_compiler_stack(
         &fiber_return_sigs,
     )?;
     super::boxed_array_appends::normalize_module(&mut module);
+    super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
     // A refused shape is reported before validation: the placeholder EIR those sites emit

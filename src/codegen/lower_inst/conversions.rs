@@ -8,6 +8,8 @@
 //! Key details:
 //! - Concrete scalar casts stay inline; Mixed numeric casts delegate to boxed runtime helpers.
 //! - String numeric parsing delegates to shared runtime routines.
+//! - A string-to-string cast replaces the missing typed-array sentinel with the
+//!   canonical empty string and leaves every other string payload unchanged.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -253,29 +255,28 @@ pub(super) fn lower_cast_to_string(
 /// Converts the runtime's in-band missing-string marker into a real empty string.
 ///
 /// A missing element of a concrete typed array reaches a `(string)` cast as the
-/// shared `NULL_SENTINEL` pointer with zero length. The cast must publish the
-/// canonical empty-string pair instead, leaving a bare read's `NULL` distinction
-/// intact for `var_dump` and null checks.
+/// shared null sentinel with zero length, including after that value has been
+/// stored in a variable. The cast publishes the canonical empty string instead.
+/// A bare read keeps the sentinel, so `var_dump` and `is_null` still see null.
+/// A zero pointer is not that empty string: on x86_64 the sentinel already
+/// occupies the string pointer register, and later readers must not treat it as null.
 fn normalize_missing_string_cast(ctx: &mut FunctionContext<'_>) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let scratch = abi::secondary_scratch_reg(ctx.emitter);
-    let done = ctx.next_label("str_cast_missing_done");
+    let keep = ctx.next_label("str_cast_keep");
     abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::sentinels::NULL_SENTINEL);
-    ctx.emitter
-        .instruction(&format!("cmp {}, {}", ptr_reg, scratch));                 // is the cast source the missing-string marker?
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("b.ne {}", done));                 // real strings keep their original payload
-            ctx.emitter.instruction(&format!("mov {}, #0", ptr_reg));           // publish the canonical empty-string pointer
-            ctx.emitter.instruction(&format!("mov {}, #0", len_reg));           // publish the canonical empty-string length
+            ctx.emitter.instruction(&format!("cmp {}, {}", ptr_reg, scratch));  // is the cast source the missing-string marker?
+            ctx.emitter.instruction(&format!("b.ne {}", keep));                 // real strings keep their original payload
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("jne {}", done));                  // real strings keep their original payload
-            ctx.emitter.instruction("xor eax, eax");                            // publish the canonical empty-string pointer
-            ctx.emitter.instruction("xor edx, edx");                            // publish the canonical empty-string length
+            ctx.emitter.instruction(&format!("cmp {}, {}", ptr_reg, scratch));  // is the cast source the missing-string marker?
+            ctx.emitter.instruction(&format!("jne {}", keep));                  // real strings keep their original payload
         }
     }
-    ctx.emitter.label(&done);
+    strings::emit_canonical_empty_string(ctx);
+    ctx.emitter.label(&keep);
 }
 
 /// Leaves a string result for a boxed Mixed value, dispatching objects through `__toString()`.

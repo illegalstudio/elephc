@@ -32,6 +32,7 @@ crate-type = ["staticlib", "rlib"]
 curl = ["elephc-builtin-contract/curl"]
 
 [dependencies]
+elephc-process-context = { path = "../elephc-process-context" }
 elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine" }
 elephc-generics = { path = "../elephc-generics" }
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }

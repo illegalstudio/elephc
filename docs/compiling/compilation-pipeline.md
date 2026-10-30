@@ -48,7 +48,7 @@ Physical source (.php or .lfc)
   -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           seed CLI superglobals + AST constant folding
   -> typecheck          Type checking, generic specialization, and warnings
-  -> exports-scan       collect #[Export] functions (cdylib)
+  -> exports-scan       collect #[Export] functions (cdylib, staticlib, or phpext)
   -> opt-prop           AST constant propagation
   -> opt-post           prune constant control flow
   -> opt-norm           control-flow normalization
@@ -60,6 +60,8 @@ Physical source (.php or .lfc)
   -> codegen            EIR -> target assembly
   -> write-asm          write the generated assembly
   -> source-map         write the .map sidecar (with --source-map)
+  -> php-extension-link discover the SDK, compile the adapter, and link a PHP module
+                        (with --emit phpext; then stop)
   -> runtime-cache      build/reuse the prebuilt runtime object
   -> assemble           assembler: assembly -> object file
   -> link               linker: object files -> binary
@@ -168,6 +170,10 @@ behind a flag.
   See [The Code Generator](../internals/the-codegen.md).
 - **write-asm / source-map** — the generated assembly and optional source-map
   sidecar are materialized before runtime-object preparation.
+- **php-extension-link**: for [`--emit phpext`](../beyond-php/phpext.md),
+  discovers and probes the selected PHP 8.5 SDK, compiles the Zend adapter, and
+  links the loadable module. This producer path stops here instead of using the
+  standalone runtime-cache, assemble, and link phases below.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
@@ -190,8 +196,8 @@ You do not have to run the whole pipeline. Several flags stop early or dump an
 intermediate artifact:
 
 - [`--check`](output-and-diagnostics.md#--check) normally runs the front end
-  only; when `#[Export]` is present it also lowers EIR and runs cdylib
-  call-graph safety without emitting code.
+  only; when `#[Export]` is present it also lowers EIR and runs library and PHP
+  extension call-graph safety without emitting code.
 - [`--emit-ir`](output-and-diagnostics.md#--emit-ir) prints EIR (after `ir-opt`) and stops.
 - [`--emit-asm`](output-and-diagnostics.md#--emit-asm) writes assembly and stops before
   runtime-object preparation, native assembly, or linking.

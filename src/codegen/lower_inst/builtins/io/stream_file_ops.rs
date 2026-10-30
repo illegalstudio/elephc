@@ -16,12 +16,19 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let captured = capture_resource_box_for_release(ctx, stream)?;
     load_stream_fd_to_result(ctx, stream, "fclose")?;
     apply_resource_release_sentinel(ctx, captured);
+    emit_close_loaded_stream_fd(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Emits the same descriptor teardown for explicit fclose and application last-owner cleanup.
+fn emit_close_loaded_stream_fd(ctx: &mut FunctionContext<'_>) {
     let success_label = ctx.next_label("fclose_ok");
     let done_label = ctx.next_label("fclose_done");
     let user_wrapper_label = ctx.next_label("fclose_user_wrapper");
     let phar_label = ctx.next_label("fclose_phar");
     let not_phar_label = ctx.next_label("fclose_not_phar");
     let after_dispatch_label = ctx.next_label("fclose_after_dispatch");
+    let native_close_label = ctx.next_label("fclose_native_close");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov w9, #0x5000");                         // low half of the phar-write descriptor base 0x50000000
@@ -50,10 +57,15 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             ctx.emitter.instruction(&format!("jge {}", user_wrapper_label));    // dispatch synthetic handles without indexing fd tables
         }
     }
+    if ctx.module.web_application {
+        ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "cmp x0, #256" } else { "cmp rax, 256" }); // metadata tables cover only the bounded descriptor range
+        ctx.emitter.instruction(&format!("{} {native_close_label}", if ctx.emitter.target.arch == Arch::AArch64 { "b.ge" } else { "jge" })); // ordinary higher descriptors still close without indexing side tables
+    }
     emit_zlib_flush_on_close_for_current_fd(ctx);
     emit_bz2_flush_on_close_for_current_fd(ctx);
     emit_iconv_flush_on_close_for_current_fd(ctx);
     emit_tls_session_teardown_for_current_fd(ctx);
+    if ctx.module.web_application { retire_fd_metadata(ctx); }
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
     }
@@ -64,6 +76,7 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear any read filter before the descriptor can be reused
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear any write filter before the descriptor can be reused
+            ctx.emitter.label(&native_close_label);
             ctx.emitter.syscall(6);
             ctx.emitter.instruction("cmp x0, #0");                              // test whether close() reported success
             ctx.emitter.instruction(&format!("b.eq {}", success_label));        // branch to the true result when the stream closed cleanly
@@ -77,6 +90,7 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any read filter before the descriptor can be reused
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear any write filter before the descriptor can be reused
+            ctx.emitter.label(&native_close_label);
             ctx.emitter.instruction("mov rdi, rax");                            // pass the stream fd to libc close()
             ctx.emitter.instruction("call close");                              // close the requested stream descriptor
             ctx.emitter.instruction("cmp rax, 0");                              // test whether close() reported success
@@ -115,7 +129,42 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     }
     abi::emit_call_label(ctx.emitter, "__rt_phar_write_finalize");
     ctx.emitter.label(&after_dispatch_label);
-    store_if_result(ctx, inst)
+}
+
+/// Detaches descriptor metadata before a user filter close hook can throw.
+fn retire_fd_metadata(ctx: &mut FunctionContext<'_>) {
+    // -- retire the independently persisted connection host while preserving the descriptor --
+    let fd = abi::int_result_reg(ctx.emitter);
+    let base = if ctx.emitter.target.arch == Arch::AArch64 { "x9" } else { "r9" };
+    abi::emit_push_reg(ctx.emitter, fd);
+    abi::emit_symbol_address(ctx.emitter, base, "_stream_connect_host");
+    ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "add x9, x9, x0, lsl #4" } else { "shl rax, 4" }); // derive the connection-host pair index
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("add r9, rax");                                 // select this descriptor's persisted host pair
+    }
+    abi::emit_load_from_address(ctx.emitter, fd, base, 0);
+    abi::emit_store_zero_to_address(ctx.emitter, base, 0);
+    abi::emit_store_zero_to_address(ctx.emitter, base, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+    abi::emit_pop_reg(ctx.emitter, fd);
+    // -- clear scalar state before the operating system can reuse the descriptor number --
+    for symbol in ["_stream_read_filters", "_stream_write_filters", "_eof_flags", "_stream_chunk_size"] {
+        abi::emit_symbol_address(ctx.emitter, base, symbol);
+        if symbol == "_stream_chunk_size" {
+            ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "str xzr, [x9, x0, lsl #3]" } else { "mov QWORD PTR [r9 + rax * 8], 0" }); // retire the stream's configured chunk size
+        } else {
+            ctx.emitter.instruction(if ctx.emitter.target.arch == Arch::AArch64 { "strb wzr, [x9, x0]" } else { "mov BYTE PTR [r9 + rax], 0" }); // retire filter IDs and EOF state with this descriptor
+        }
+    }
+}
+
+/// Publishes an assembly-only callback so implicit close never enters PHP through a Rust frame.
+pub(crate) fn emit_application_stream_closer(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.label_global(crate::codegen_support::runtime::data::WEB_STREAM_CLOSE_ENTRY);
+    abi::emit_frame_prologue(ctx.emitter, 16);
+    emit_close_loaded_stream_fd(ctx);
+    abi::emit_frame_restore(ctx.emitter, 16);
+    abi::emit_return(ctx.emitter);
 }
 
 /// Lowers `fread(stream, length)` using the shared runtime file-read helper.
