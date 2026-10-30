@@ -154,6 +154,24 @@ impl Checker {
         }
     }
 
+    /// Keeps accepted sibling writes available to assignment checks without changing entry reads.
+    pub(in crate::types::checker) fn restore_accumulated_assignment_storage(
+        &mut self, flow: &ConditionalFlow, env: &TypeEnv, rebound: &HashSet<String>,
+    ) {
+        for name in &flow.changed {
+            if rebound.contains(name) { continue; }
+            let storage = &flow.physical[name];
+            if matches!(storage.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+                && env.get(name).is_some_and(|view|
+                    self.merged_assignment_type(storage, view).as_ref() == Some(storage))
+            {
+                self.guarded_union_types.insert(name.clone(), GuardedLocalStorage {
+                    ty: storage.clone(), coalesced: false,
+                });
+            }
+        }
+    }
+
     /// Restores one alternative's storage entry without touching sibling guard facts.
     fn restore_conditional_local_storage(&mut self, flow: &ConditionalFlow, name: &str) {
         if let Some(storage) = flow.storage.get(name) {

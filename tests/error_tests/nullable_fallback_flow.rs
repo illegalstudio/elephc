@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// A skipped nullable default keeps a non-null read but still receives diagnostic checking.
+#[test]
+fn test_nullable_fallback_flow_review_recoalesce_contracts() {
+    for assignment in ["$value = $value ??", "$value ??="] {
+        let source = format!("<?php function repeated(?string $value, ?string $default): string {{ {assignment} 'x'; {assignment} $default; return $value; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        expect_error(&source.replace("$default; return", "unknownRecoalesceDefault(); return"),
+            "Undefined function");
+    }
+}
+
+/// Switch assignment compatibility can widen independently of each arm's entry read type.
+#[test]
+fn test_nullable_fallback_flow_review_switch_assignment_contracts() {
+    let checked = check_source_full("<?php function switchedValue(int $key) { $value = 0; switch ($key) { case 1: $value = 2.5; break; case 2: $value = 'two'; break; default: $value = $key; } return $value; }").unwrap();
+    assert_eq!(checked.functions["switchedValue"].return_type, types::PhpType::Mixed);
+}
+
 /// Nullsafe writes retain both value alternatives in the inferred return contract.
 #[test]
 fn test_nullable_fallback_flow_review_nullsafe_raw_write_contracts() {

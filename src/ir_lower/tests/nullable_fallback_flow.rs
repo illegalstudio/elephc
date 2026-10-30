@@ -13,6 +13,26 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+class RecoalesceTarget { public function __construct(public readonly string $name = 'dflt') {} }
+function repeatedCoalesceTarget(?RecoalesceTarget $value, ?RecoalesceTarget $default): string {
+    $value = $value ?? new RecoalesceTarget();
+    $value ??= $default;
+    return $value->name;
+}
+function repeatedStringTarget(?string $value, ?string $default): string {
+    $value ??= 'x';
+    $value = $value ?? $default;
+    return $value;
+}
+function switchAssignmentStorageTarget(int $key) {
+    $value = 0;
+    switch ($key) {
+        case 1: $value = 2.5; break;
+        case 2: $value = 'two'; break;
+        default: $value = $key;
+    }
+    return $value;
+}
 packed class RawNullsafeRowTarget { public int $value; }
 class RawPointerSinkTarget { public function take(?ptr<RawNullsafeRowTarget> $value): void {} }
 function rawNullsafePointerTarget(?RawPointerSinkTarget $receiver, buffer<RawNullsafeRowTarget> $rows): ?ptr<RawNullsafeRowTarget> {

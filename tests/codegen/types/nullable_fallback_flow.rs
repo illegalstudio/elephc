@@ -9,6 +9,74 @@
 
 use super::*;
 
+/// Repeated coalescing preserves a proven value and skips nullable defaults in both forms.
+#[test]
+fn test_nullable_fallback_flow_review_recoalesce_runtime() {
+    let source = r#"<?php
+class RecoalesceBox { public function __construct(public readonly string $name = 'dflt') {} }
+function nullableBox(int $key): ?RecoalesceBox { echo 'default-called'; return null; }
+function resetBox(?RecoalesceBox &$box): void { $box = null; }
+function repeatedObject(?RecoalesceBox $box, int $key): string {
+    $box = $box ?? new RecoalesceBox();
+    $box = $box ?? nullableBox($key);
+    return $box->name;
+}
+function repeatedObjectVariable(?RecoalesceBox $box, ?RecoalesceBox $default): string {
+    $box = $box ?? new RecoalesceBox();
+    $box = $box ?? $default;
+    return $box->name;
+}
+function repeatedString(?string $value, ?string $default): string {
+    $value = $value ?? 'x';
+    $value = $value ?? $default;
+    return $value;
+}
+function invalidatedObject(?RecoalesceBox $box, int $key): ?RecoalesceBox {
+    $box = $box ?? new RecoalesceBox();
+    resetBox($box);
+    $box = $box ?? nullableBox($key);
+    return $box;
+}
+echo repeatedObject(null, 2), ' ', repeatedObject(new RecoalesceBox('x'), 1), "\n";
+echo repeatedObjectVariable(null, null), "\n";
+var_dump(repeatedString(null, null), repeatedString('a', 'b'));
+var_dump(invalidatedObject(null, 2));
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for source in [source.to_string(), source
+                .replace("$box = $box ??", "$box ??=")
+                .replace("$value = $value ??", "$value ??=")]
+            {
+                assert_nullable_flow_heap_output(&source,
+                    "dflt x\ndflt\nstring(1) \"x\"\nstring(1) \"a\"\ndefault-calledNULL\n");
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Independent switch reads retain accepted boxed assignment storage from preceding arms.
+#[test]
+fn test_nullable_fallback_flow_review_switch_assignment_storage_runtime() {
+    let source = r#"<?php
+function switchedValue(int $key) {
+    $value = 0;
+    switch ($key) {
+        case 1: $value = 2.5; break;
+        case 2: $value = 'two'; break;
+        default: $value = $key;
+    }
+    return $value;
+}
+var_dump(switchedValue(1), switchedValue(2), switchedValue(3));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "float(2.5)\nstring(3) \"two\"\nint(3)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// A nullsafe write retains the existing nullable pointer ABI and its skipped null value.
 #[test]
 fn test_nullable_fallback_flow_review_nullsafe_pointer_storage_runtime() {

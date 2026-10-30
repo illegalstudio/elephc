@@ -532,6 +532,7 @@ impl Checker {
                     inputs.extend(fallthrough.take());
                     let joined = self.join_flow_snapshots(&inputs).expect("switch entry");
                     self.restore_flow_snapshot(&joined, env);
+                    self.restore_switch_assignment_storage(env);
                     let invalidated = self.conditional_boxed_ref_invalidations.last()
                         .cloned().unwrap_or_default();
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.iter()

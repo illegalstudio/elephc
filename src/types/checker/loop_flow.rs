@@ -85,6 +85,13 @@ impl Checker {
         self.loop_flow_frames.push(frame);
     }
 
+    /// Restores a switch's accepted assignment contracts after selecting the arm's entry reads.
+    pub(super) fn restore_switch_assignment_storage(&mut self, env: &TypeEnv) {
+        let frame = self.loop_flow_frames.pop().expect("active switch");
+        self.restore_accumulated_assignment_storage(&frame.flow, env, &frame.rebound);
+        self.loop_flow_frames.push(frame);
+    }
+
     /// Replaces body back edges with the state after the update or trailing condition.
     pub(super) fn record_loop_tail_end(&mut self, env: &TypeEnv, reachable: bool) {
         let edge = reachable.then(|| self.snapshot_flow_exit(env));

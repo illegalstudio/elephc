@@ -288,7 +288,7 @@ function fallback(?string $raw, ?int $default = null): int {
 }
 ```
 
-Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type.
+Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type when the current value may be null. After a stable non-null fact, another coalescing assignment keeps that fact and skips its default, even when the default is nullable. The skipped expression is still checked for diagnostics.
 
 Existing locals assigned inside nullsafe arguments or dynamic member names keep the skipped and evaluated alternatives in following reads. The assignment runs only when the receiver is non-null.
 

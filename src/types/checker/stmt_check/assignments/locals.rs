@@ -191,7 +191,8 @@ fn check_assign_value_type(
                 {
                     // Validate an unreachable default without publishing its local writes.
                     let mut default_env = env.clone();
-                    checker.infer_type_with_assignment_effects(default, &mut default_env)?
+                    checker.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    return Ok(existing);
                 } else {
                     let mut flow = checker.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();
