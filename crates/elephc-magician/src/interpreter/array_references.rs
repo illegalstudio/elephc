@@ -41,6 +41,13 @@ pub(in crate::interpreter) fn eval_owned_reference_target_value(
             owners.push(array);
             values.array_get(array, *index)
         },
+        EvalReferenceTarget::PersistentArrayElement { array_target, key } => {
+            let index = materialize_array_reference_key(key, values)?;
+            owners.push(index);
+            let array = eval_owned_reference_target_value(array_target, context, values, owners)?;
+            owners.push(array);
+            values.array_get(array, index)
+        },
         EvalReferenceTarget::ObjectProperty { object, property, access_scope } => {
             let previous = context.replace_execution_scope(access_scope.clone());
             let result = eval_property_get_result_with_ownership(*object, property, context, values, Some(owners));
