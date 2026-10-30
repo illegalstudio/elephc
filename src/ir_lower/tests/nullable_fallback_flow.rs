@@ -29,6 +29,19 @@ function boxedArrayReductionTarget(?array $value): int {
     $value[] = 5;
     return max($value);
 }
+interface CIEmitSink { public function write(): void; }
+interface CIEmitWatch { public function touch(): void; }
+function ciInterfaceJoinTarget(?CIEmitSink $handler, bool $lazy): void {
+    if ($handler !== null) {
+        if ($lazy) { if ($handler instanceof CIEmitWatch) { $handler->touch(); } }
+        $handler->write();
+    }
+}
+function ciOptionJoinTarget(array<string,string|int|bool> $options): mixed {
+    $flag = false;
+    foreach ($options as $key => $value) { if ($key === 'read_and_close') { $flag = $value; } }
+    return $flag;
+}
 function concreteChunksTarget(bool $flag): void {
     $a = $flag ? [1, 2] : null;
     $a ??= [3, 4];

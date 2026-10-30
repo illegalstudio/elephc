@@ -79,6 +79,10 @@ impl ReturnBoundaryFacts {
                     .filter(|def| matches!(def.spec.semantics.result_type,
                         crate::builtins::semantics::BuiltinResultType::Declared))
                     .map(|def| def.return_type.clone())).unwrap_or(PhpType::Mixed),
+            ExprKind::MethodCall { object, method, .. } =>
+                effects::instance_method_result_type(object, method).unwrap_or(PhpType::Mixed),
+            ExprKind::StaticMethodCall { receiver, method, .. } =>
+                effects::static_method_result_type(receiver, method).unwrap_or(PhpType::Mixed),
             ExprKind::BinaryOp { op: BinOp::Concat, .. } => PhpType::Str,
             ExprKind::BinaryOp { op, .. } if matches!(op,
                 BinOp::Eq | BinOp::NotEq | BinOp::StrictEq | BinOp::StrictNotEq

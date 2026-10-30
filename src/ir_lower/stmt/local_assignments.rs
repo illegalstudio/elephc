@@ -309,8 +309,13 @@ pub(super) fn contextualize_local_assignment(
 pub(in crate::ir_lower) fn union_local_storage_type(
     ctx: &LoweringContext<'_, '_>, name: &str, value: &Expr, source: &PhpType,
 ) -> Option<PhpType> {
+    // Final checker facts do not establish storage before this binding's first store.
+    if !ctx.has_local_slot(name) { return None; }
     let storage = ctx.local_type(name);
     let PhpType::Union(members) = &storage else { return None; };
+    // Numeric overflow unions belong to the ordinary numeric storage replay. Only
+    // nullable bindings need this guard against losing their established representation.
+    if !members.contains(&PhpType::Void) { return None; }
     if storage.codegen_repr() == PhpType::TaggedScalar
         && !matches!(source.codegen_repr(), PhpType::Int | PhpType::Void | PhpType::TaggedScalar)
     {

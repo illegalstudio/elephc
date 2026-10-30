@@ -243,6 +243,29 @@ pub(in crate::optimize) fn instance_method_call_effect(
     })
 }
 
+/// Resolves a return representation only when every closed-world dispatch target agrees.
+pub(in crate::optimize) fn instance_method_result_type(
+    object: &Expr, method_name: &str,
+) -> Option<crate::types::PhpType> {
+    let receiver = resolve_instance_receiver(object, method_name)?;
+    let targets = instance_dispatch_targets(&receiver, method_name)?;
+    with_active_function_effects(|functions| {
+        let functions = functions?;
+        let mut results = targets.iter().map(|key| functions.method_result_type(key));
+        let first = results.next()??;
+        results.all(|result| result.as_ref() == Some(&first)).then_some(first)
+    })
+}
+
+/// Reads the declared result of a statically resolved method without assuming dynamic dispatch.
+pub(in crate::optimize) fn static_method_result_type(
+    receiver: &crate::parser::ast::StaticReceiver, method_name: &str,
+) -> Option<crate::types::PhpType> {
+    let class = resolve_static_receiver_class(receiver)?;
+    with_active_function_effects(|functions|
+        functions?.method_result_type(&method_effect_key(&class, method_name)))
+}
+
 /// Resolves a named instance-property read for syntactically bounded receiver classes.
 ///
 /// Untyped declared slots are non-throwing reads. Typed slots may raise the catchable

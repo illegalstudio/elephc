@@ -217,6 +217,19 @@ pub(crate) fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bo
         )
 }
 
+/// Removes null and false from the arm a short ternary selects only when truthy.
+fn truthy_short_ternary_type(checker: &Checker, ty: PhpType) -> PhpType {
+    match ty {
+        PhpType::Void | PhpType::False => PhpType::Never,
+        PhpType::Union(members) => {
+            let members: Vec<_> = members.into_iter()
+                .filter(|ty| !matches!(ty, PhpType::Void | PhpType::False)).collect();
+            if members.is_empty() { PhpType::Never } else { checker.normalize_union_type(members) }
+        }
+        other => other,
+    }
+}
+
 /// Merges two match arm result types: identical arms keep their type,
 /// `Never`-typed arms (`throw`, normalized at the call site) defer to the
 /// other arm's type, `Void`-typed arms (checker `null`) keep the merge

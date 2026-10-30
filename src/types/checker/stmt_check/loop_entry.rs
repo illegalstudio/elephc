@@ -162,3 +162,18 @@ pub(super) fn stabilize_loop_storage(
     }
 }
 
+
+/// Includes checked counter overflow in a later for iteration without evaluating its update early.
+pub(super) fn prepare_for_update_reads(checker: &mut Checker, update: Option<&Stmt>, env: &mut TypeEnv) {
+    let Some(update) = update else { return; };
+    let mut writes = super::super::loop_storage::LoopWrites::default();
+    super::super::loop_storage::collect_value_assignment_stmt(update, &mut writes);
+    for (name, value) in writes.values {
+        if matches!(value, super::super::loop_storage::AssignedValue::Increment(_))
+            && env.get(name) == Some(&PhpType::Int)
+            && !checker.has_fixed_tagged_reference_storage(name, env)
+        {
+            env.insert(name.to_string(), PhpType::Union(vec![PhpType::Int, PhpType::Float]));
+        }
+    }
+}

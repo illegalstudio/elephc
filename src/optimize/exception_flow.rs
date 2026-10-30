@@ -598,9 +598,13 @@ impl ExceptionFlowAnalysis {
             // Rebinding retires the target's previous value, and that value's destructor runs
             // in THIS frame, so a same-frame catch can still see it.
             StmtKind::Assign { value, .. }
-            | StmtKind::TypedAssign { value, .. }
-            | StmtKind::RefAssign { source: value, .. } => operand(value)
+            | StmtKind::TypedAssign { value, .. } => operand(value)
                 .combined(overwrite()),
+            // The untyped optimizer cannot prove reference rebinding harmless. The
+            // checker boundary has already validated its source and supplies target storage.
+            StmtKind::RefAssign { source, .. } => operand(source).combined(overwrite())
+                .combined(if include_operands { ThrownTypes::unknown() }
+                    else { ThrownTypes::default() }),
             StmtKind::StaticPropertyAssign { receiver, value, .. } => {
                 let initialization = resolve_exception_receiver(receiver, class_context)
                     .filter(|name| self.constructor_default_errors.contains(&php_symbol_key(name)))

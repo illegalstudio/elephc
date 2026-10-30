@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Inferred boolean flags accept a containing scalar union without relaxing fixed contracts.
+#[test]
+fn test_nullable_fallback_flow_ci_boolean_option_union() {
+    for initial in ["false", "true"] {
+        let source = format!("<?php function options(array<string,string|int|bool> $options): void {{ $flag = {initial}; foreach ($options as $key => $value) {{ if ($key === 'read_and_close') {{ $flag = $value; }} }} echo (int)$flag; }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    expect_error("<?php function fixedOption(bool &$flag, string|int|bool $value): void { $flag = $value; }", "cannot reassign");
+    expect_error("<?php function declaredOption(bool $flag, string|int|bool $value): void { if ($flag) { $flag = $value; } }", "cannot reassign");
+}
+
+/// An interface probe adds a scoped capability without rebinding the original receiver.
+#[test]
+fn test_nullable_fallback_flow_ci_interface_probe_join() {
+    let declarations = "interface CISink { public function write(): void; public function close(): void; } interface CIWatcher { public function touch(): void; }";
+    for probe in [
+        "if ($ci_handler instanceof CIWatcher) { $ci_handler->touch(); }",
+        "if ($skip) { if ($ci_handler instanceof CIWatcher) { $ci_handler->touch(); $done = true; } }",
+    ] {
+        let source = format!("<?php {declarations} function consume(?CISink $ci_handler, bool $skip): void {{ if ($ci_handler !== null) {{ $done = false; {probe} if (!$done) {{ $ci_handler->write(); }} $ci_handler->close(); }} }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    expect_error(&format!("<?php {declarations} function consume(?CISink $ci_handler): void {{ if ($ci_handler === null) {{ return; }} if ($ci_handler instanceof CIWatcher) {{ $ci_handler->touch(); }} $ci_handler->touch(); }}"), "Undefined method");
+}
+
 /// Loops that must execute publish their actual exits without a zero-iteration alternative.
 #[test]
 fn test_nullable_fallback_flow_review_must_run_loops() {
@@ -223,7 +248,10 @@ fn test_nullable_fallback_flow_review_plain_loop_nullability() {
         let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs, bool $flag): void {{ foreach ($xs as $x) {{ need($value); $value = {rhs}; }} }}");
         expect_error(&source, "expects int");
     }
-    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : $i; } return $value; }", "return type expects int");
+    // The counter's next iteration can be float in the checker. Keep that assignment
+    // diagnostic separate from the nullable return, whose payload is explicitly int.
+    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : $i; } return $value; }", "cannot reassign $value from int|null to int|float|null");
+    expect_error("<?php function run(?int $value, bool $flag): int { for ($i = 0; $i < 2; $i++) { $value = $flag ? null : (int)$i; } return $value; }", "return type expects int");
     check_source("<?php function resetValue(?int &$value): void { $value = null; } function run(?int $value, array $xs, bool $flag): void { foreach ($xs as $x) { $value = $flag ? null : 1; } resetValue($value); }").unwrap();
 }
 

@@ -22,6 +22,8 @@ pub(super) use calls::{
     function_call_effect,
     instance_property_read_effect,
     instance_method_call_effect,
+    instance_method_result_type,
+    static_method_result_type,
     static_method_call_effect,
 };
 

@@ -193,21 +193,21 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
-                let flow = if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?;
-                    None
+                let (default_ty, flow) = if matches!(value_ty, PhpType::Void | PhpType::False) {
+                    (self.infer_type_with_assignment_effects(default, env)?, None)
                 } else {
                     let mut flow = self.snapshot_conditional_flow(env);
                     let mut default_env = env.clone();
-                    self.with_conditional_flow_arm(&mut flow, &mut default_env,
+                    let ty = self.with_conditional_flow_arm(&mut flow, &mut default_env,
                         |checker, env| checker.infer_type_with_assignment_effects(default, env))?;
                     merge_array_storage_effects(env, &default_env);
-                    Some(flow)
+                    (ty, Some(flow))
                 };
-                // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
-                let result = self.infer_type(expr, env);
+                let arms = [(&**value, value_ty.clone()), (&**default, default_ty.clone())];
+                let result = buffer_merge_result_type("a `?:`", &arms, expr.span)?.unwrap_or_else(||
+                    merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty));
                 if let Some(flow) = flow { self.finish_conditional_flow(flow, env); }
-                result
+                Ok(result)
             }
             ExprKind::Ternary {
                 condition,

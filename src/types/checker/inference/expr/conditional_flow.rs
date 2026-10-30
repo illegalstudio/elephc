@@ -38,7 +38,8 @@ impl Checker {
     pub(in crate::types::checker) fn snapshot_conditional_flow(&self, env: &TypeEnv) -> ConditionalFlow {
         let views: TypeEnv = self.guarded_union_types.keys()
             .chain(self.narrowed_local_origins.iter().filter_map(|(name, origin)|
-                origin.view.as_ref().map(|_| name)))
+                origin.view.as_ref().filter(|_| matches!(origin.origin.codegen_repr(),
+                    PhpType::Mixed | PhpType::TaggedScalar)).map(|_| name)))
             .chain(env.iter().filter(|(name, ty)| !name.starts_with('\u{1}')
                 && matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar))
                 .map(|(name, _)| name))
@@ -192,6 +193,14 @@ impl Checker {
                 (None, None) => false,
             };
             let Some(exit_view) = edge.views.get(name) else { continue; };
+            // An instanceof capability can intersect an unrelated interface without
+            // rebinding the receiver. Preserve the entry contract at the join when the
+            // guard-only view cannot express that intersection as a subtype.
+            let guard_only_view = edge.origins.get(name).is_some_and(|origin|
+                !origin.stored_in_region && origin.view.as_ref() == Some(exit_view));
+            let exit_read = if guard_only_view && !self.type_accepts(entry_view, exit_view) {
+                entry_view
+            } else { exit_view };
             let exit_storage = edge.storage.get(name).filter(|storage|
                 self.merged_assignment_type(&storage.ty, exit_view).as_ref() == Some(&storage.ty))
                 .map(|storage| &storage.ty)
@@ -207,8 +216,8 @@ impl Checker {
             if &storage_join != previous_storage { flow.changed.insert(name.clone()); }
             flow.physical.insert(name.clone(), storage_join);
             let previous = flow.joined.get(name);
-            let joined = if reads { previous.map_or_else(|| exit_view.clone(), |previous|
-                self.join_flow_views(previous, exit_view)) }
+            let joined = if reads { previous.map_or_else(|| exit_read.clone(), |previous|
+                self.join_flow_views(previous, exit_read)) }
                 else { previous.unwrap_or(entry_view).clone() };
             if &joined != entry_view || storage_changed || origin_changed {
                 flow.changed.insert(name.clone());
@@ -223,6 +232,25 @@ impl Checker {
             && self.type_accepts(left, right)) { left.clone() }
         else if matches!((left, right), (PhpType::Object(_), PhpType::Object(_)))
             && self.type_accepts(right, left) { right.clone() }
+        // A general PHP-array contract absorbs a more precise container without losing
+        // the array family when the value itself remains boxed.
+        else if (left.is_php_array() && matches!(right, PhpType::Array(_) | PhpType::AssocArray { .. }))
+            || (right.is_php_array() && matches!(left, PhpType::Array(_) | PhpType::AssocArray { .. }))
+        { PhpType::php_array() }
+        else if let (PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value }) = (left, right)
+        {
+            let payload = if left_value.is_php_array() || right_value.is_php_array() {
+                self.join_flow_views(left_value, right_value)
+            } else {
+                PhpType::widen_array_branch_element((**left_value).clone(), (**right_value).clone())
+            };
+            PhpType::AssocArray {
+                key: Box::new(PhpType::widen_array_branch_element((**left_key).clone(), (**right_key).clone())),
+                value: Box::new(payload),
+            }
+        }
+        else if let Some(array) = super::merge_array_branch_types(left, right) { array }
         else { self.normalize_union_type(vec![left.clone(), right.clone()]) }
     }
 

@@ -9,6 +9,55 @@
 
 use super::*;
 
+/// Session-style option unions and interface probes retain their continuing value contracts.
+#[test]
+fn test_nullable_fallback_flow_ci_session_joins_runtime() {
+    let source = r#"<?php
+interface CIFlowSink { public function write(): void; public function close(): void; }
+interface CIFlowWatch { public function touch(): void; }
+class CIFlowBoth implements CIFlowSink, CIFlowWatch {
+    public function write(): void { echo 'w'; }
+    public function close(): void { echo 'c'; }
+    public function touch(): void { echo 't'; }
+}
+class CIFlowSinkOnly implements CIFlowSink {
+    public function write(): void { echo 'w'; }
+    public function close(): void { echo 'c'; }
+}
+function ciOptionValue(array $options): mixed {
+    $flag = false;
+    foreach ($options as $key => $value) {
+        if (!is_string($value) && !is_int($value) && !is_bool($value)) { continue; }
+        if ($key === 'read_and_close') { $flag = $value; }
+    }
+    return $flag;
+}
+function ciUseHandler(?CIFlowSink $handler, bool $lazy): void {
+    if ($handler !== null) {
+        $done = false;
+        if ($lazy) { if ($handler instanceof CIFlowWatch) { $handler->touch(); $done = true; } }
+        if (!$done) { $handler->write(); }
+        $handler->close();
+    }
+}
+$input = $argc > 0 ? 'yes' : 2;
+var_dump(ciOptionValue([]), ciOptionValue(['read_and_close' => $input]), ciOptionValue(['read_and_close' => false]), ciOptionValue(['read_and_close' => 2]));
+ciUseHandler(new CIFlowBoth(), true); echo '|';
+ciUseHandler(new CIFlowBoth(), false); echo '|';
+ciUseHandler(new CIFlowSinkOnly(), true); echo '|';
+ciUseHandler(null, true); echo "\n";
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            let out = compile_and_run_with_heap_debug(source);
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, "bool(false)\nstring(3) \"yes\"\nbool(false)\nint(2)\ntc|wc|wc|\n");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Boxed concrete arrays keep element and key layouts across value-reading builtins.
 #[test]
 fn test_nullable_fallback_flow_review_typed_array_builtins_runtime() {

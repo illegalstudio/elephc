@@ -290,6 +290,8 @@ function fallback(?string $raw, ?int $default = null): int {
 
 Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type.
 
+An `instanceof` check against a second interface grants that interface inside the guarded branch. After the branch, the receiver keeps its original interface contract unless an assignment changes it.
+
 More precise compound guards can expose an existing parameter-coercion limitation. Inside `if (is_float($value) || is_bool($value))`, a `mixed` value reads as `float|bool`; passing it to an `int` parameter requires an explicit `(int)` cast because converting a runtime float can lose precision. A call that compiled while the value stayed opaque `mixed` can therefore produce a diagnostic after narrowing. See [Parameter type coercion](#parameter-type-coercion).
 
 A narrowed read keeps the variable's original storage representation. A nullable or union scalar cannot be passed to a concrete scalar parameter by reference when that parameter requires raw scalar storage. Declare the reference parameter nullable or `mixed` to match the variable's storage. Coalescing does not establish a persistent non-null fact for reference-aliased, global or static bindings. Inside a loop, a retained non-null fact must also hold on later iterations: a nullable write on a continuing path restores the nullable view at loop entry. Writes followed by `break` or `return` affect their exit path without changing a reachable guard complement in the loop body.

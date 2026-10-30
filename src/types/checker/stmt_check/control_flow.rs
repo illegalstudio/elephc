@@ -526,6 +526,7 @@ impl Checker {
                 }
                 let last_arm = arms.len().saturating_sub(1);
                 let mut fallthrough = None;
+                let mut strict_arm_bindings = TypeEnv::new();
                 for (index, body) in arms.into_iter().enumerate() {
                     let mut inputs = vec![entry.clone()];
                     inputs.extend(fallthrough.take());
@@ -537,6 +538,21 @@ impl Checker {
                         .filter(|name| !invalidated.contains(*name)).cloned().collect();
                     let (arm_errors, falls_through) = self.check_body_flow(body, env);
                     errors.extend(arm_errors);
+                    // Strict local contracts span alternative arms, while their read facts
+                    // still come only from entry and actual fallthrough predecessors.
+                    if self.strict_locals {
+                        for (name, ty) in env.iter().filter(|(name, _)|
+                            !name.starts_with('\u{1}') && !entry.views.contains_key(*name))
+                        {
+                            if let Some(previous) = strict_arm_bindings.get(name) {
+                                if self.merged_assignment_type(previous, ty).is_none() {
+                                    errors.push(CompileError::new(body.first().map_or(stmt.span, |stmt| stmt.span),
+                                        &format!("Type error: cannot reassign ${name} from {previous} to {ty}")));
+                                }
+                            }
+                            strict_arm_bindings.insert(name.clone(), ty.clone());
+                        }
+                    }
                     fallthrough = falls_through.then(|| self.snapshot_flow_exit(env));
                     self.record_switch_case_end(env, index == last_arm && falls_through);
                 }
@@ -877,6 +893,7 @@ impl Checker {
                     env,
                     packed_counter_name.as_deref(),
                 );
+                super::loop_entry::prepare_for_update_reads(self, update.as_deref(), env);
                 // The rest of the arm re-walks this same body, so the counter stays registered
                 // through it — the storage decision must not come out differently on the second
                 // walk than on the first — and is restored on every exit, error paths included.

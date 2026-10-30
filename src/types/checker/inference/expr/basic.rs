@@ -319,7 +319,7 @@ impl Checker {
                     return Ok(buffer);
                 }
                 let [(_, value_ty), (_, default_ty)] = arms;
-                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
+                Ok(merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty))
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;

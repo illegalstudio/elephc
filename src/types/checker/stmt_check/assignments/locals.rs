@@ -1057,7 +1057,20 @@ fn merge_local_assignment_type(
     }
     if let Some(existing) = env.get(name) {
         let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+            // An inferred boolean flag can widen into a scalar union that already contains
+            // every bool value. Its ordinary local slot can become boxed; declared or
+            // externally shared boolean storage must retain its existing contract.
+            let containing_scalar_union = matches!(ty, PhpType::Union(members)
+                if members.contains(&PhpType::Bool) && members.iter().all(|member|
+                    matches!(member, PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Float | PhpType::Str)));
+            (matches!(existing, PhpType::Bool | PhpType::False) && containing_scalar_union
+                && checker.local_flow_read_is_stable(name)
+                && !checker.local_parameter_names.contains(name)
+                && !checker.typed_local_names.contains_key(name)).then(|| ty.clone())
+        }).or_else(|| {
             checker.guarded_union_types.get(name)
+                .filter(|storage| checker.narrowed_local_origins.get(name)
+                    .is_none_or(|origin| origin.origin == storage.ty))
                 .filter(|original| checker.merged_assignment_type(&original.ty, existing).as_ref() == Some(&original.ty))
                 .and_then(|original| checker.merged_assignment_type(&original.ty, ty))
         });

@@ -32,6 +32,11 @@ impl FunctionEffectLookup {
         Some(self.results.get(canonical).cloned().unwrap_or(crate::types::PhpType::Mixed))
     }
 
+    /// Looks up a method contract using the canonical dispatch key from the effect analysis.
+    pub(super) fn method_result_type(&self, key: &str) -> Option<crate::types::PhpType> {
+        self.results.get(key).cloned()
+    }
+
     /// Resolves exact and case-insensitive names without scanning unrelated declarations.
     pub(super) fn get(&self, name: &str) -> Option<&Effect> {
         self.effects.get(name).or_else(|| self.names.get(&php_symbol_key(name))
@@ -83,7 +88,11 @@ pub(super) fn compute_program_callable_effects(
     let function_names = Rc::new(function_bodies.keys().map(|name|
         (php_symbol_key(name), name.clone())).collect());
     let function_results = Rc::new(function_bodies.iter().map(|(name, body)|
-        (name.clone(), body.return_boundary.declared_result())).collect());
+        (name.clone(), body.return_boundary.declared_result()))
+        .chain(static_method_bodies.iter().map(|(name, body)|
+            (name.clone(), body.return_boundary.declared_result())))
+        .chain(instance_method_bodies.iter().map(|(name, body)|
+            (name.clone(), body.return_boundary.declared_result()))).collect());
     loop {
         let (function_updates, static_method_updates, instance_method_updates) =
             ACTIVE_FUNCTION_EFFECTS.with(|function_slot| {
