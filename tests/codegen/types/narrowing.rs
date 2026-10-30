@@ -724,3 +724,36 @@ echo S::get()->v;
     );
     assert_eq!(out, "7");
 }
+
+/// A guard on a `readonly` property of `$this` survives a call: `$this->plugin->name()` inside
+/// `if ($this->plugin instanceof Sold)` cannot write `$this->plugin` again, and `$this` cannot
+/// be rebound, so a later `$this->plugin->count()` still reads it as `Sold`. Every call used to
+/// drop all property narrowings, and the second read failed with "Undefined method:
+/// Plugin::count".
+#[test]
+fn test_readonly_property_narrowing_survives_a_call() {
+    let out = compile_and_run(
+        r#"<?php
+interface Plugin { public function name(): string; }
+final readonly class Sold implements Plugin
+{
+    public function name(): string { return "sold"; }
+    public function count(): int { return 7; }
+}
+final readonly class Other implements Plugin { public function name(): string { return "other"; } }
+final readonly class Report
+{
+    public function __construct(private Plugin $plugin) {}
+    public function line(): string
+    {
+        if ($this->plugin instanceof Sold) {
+            return $this->plugin->name() . " " . $this->plugin->count();
+        }
+        return $this->plugin->name();
+    }
+}
+echo (new Report(new Sold()))->line(), "|", (new Report(new Other()))->line(), "\n";
+"#,
+    );
+    assert_eq!(out, "sold 7|other\n");
+}

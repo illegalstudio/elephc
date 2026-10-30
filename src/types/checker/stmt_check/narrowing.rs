@@ -20,7 +20,8 @@
 //! - Guarded places are locals, simple instance properties (`$var->p`, `$this->p`) and simple
 //!   static properties (`self::$p`, `Cls::$p`); `static::$p` is excluded because late static
 //!   binding can select a different storage. Property places are keyed under a `\x01` sigil, so
-//!   `purge_property_narrowings` drops all of them after any call.
+//!   `purge_property_narrowings` drops all of them after any call, except a `readonly` property
+//!   of `$this` in a hierarchy that declares no `__clone` (`purge_property_narrowings_after_call`).
 //! - A completed `$this->p = <non-null>` / `self::$p = <non-null>` write re-establishes the fact
 //!   for that place (as the DECLARED type minus null), and `control_flow` joins that branch-exit
 //!   fact with the guard complement. Together these make PHP's lazy-initialization idiom
@@ -263,6 +264,53 @@ impl Checker {
     /// visible assignments already update those bindings directly.
     pub(crate) fn purge_property_narrowings(env: &mut TypeEnv) {
         env.retain(|key, _| !key.starts_with('\u{1}'));
+    }
+
+    /// Drops the property narrowings a call may invalidate. A call can reassign any reachable
+    /// property, except an initialized `readonly` one reached through `$this`: the property
+    /// cannot be written again and `$this` cannot be rebound, so a guard on `$this->plugin`
+    /// still holds after the call (`$this->plugin->name() . $this->plugin->count()` inside
+    /// `instanceof Sold`). Any other root can be rebound by the call (a by-reference parameter,
+    /// a `=&` alias, a global, a by-reference closure capture), so its facts are dropped.
+    pub(crate) fn purge_property_narrowings_after_call(&self, env: &mut TypeEnv) {
+        let kept: Vec<String> = env
+            .keys()
+            .filter(|key| self.narrowed_property_survives_calls(key))
+            .cloned()
+            .collect();
+        env.retain(|key, _| !key.starts_with('\u{1}') || kept.contains(key));
+    }
+
+    /// Returns whether an instance-property narrowing key names a `readonly` property of `$this`
+    /// that no call can change. PHP 8.3+ lets a readonly property be reinitialized while an
+    /// object is cloned, from `__clone` or any method it calls, so a hierarchy that declares
+    /// `__clone` anywhere keeps no fact across a call. Constructors keep none either: lowering
+    /// carries no receiver fact there, although a second write would be an `Error` in PHP.
+    fn narrowed_property_survives_calls(&self, key: &str) -> bool {
+        let Some(property) = key.strip_prefix("\u{1}prop\u{1}$this->") else {
+            return false;
+        };
+        if self.current_method.as_deref().is_some_and(|method| method.eq_ignore_ascii_case("__construct")) {
+            return false;
+        }
+        let Some(class_name) = self.current_class.as_deref() else {
+            return false;
+        };
+        let class_name = class_name.trim_start_matches('\\');
+        self.classes.get(class_name).is_some_and(|info| {
+            info.is_readonly_class || info.readonly_properties.contains(property)
+        }) && !self.hierarchy_declares_clone(class_name)
+    }
+
+    /// Returns whether `class_name`, one of its ancestors or one of its descendants has a
+    /// `__clone` method, any of which may run while an object of that class is cloned.
+    fn hierarchy_declares_clone(&self, class_name: &str) -> bool {
+        self.classes.iter().any(|(name, info)| {
+            (name == class_name
+                || self.is_subclass_of(name, class_name)
+                || self.is_subclass_of(class_name, name))
+                && info.methods.contains_key("__clone")
+        })
     }
 
     /// Drops synthetic property narrowings rooted at one local variable after that local is

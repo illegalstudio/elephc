@@ -373,8 +373,9 @@ impl Checker {
                 }
                 let ty = self.infer_type(expr, env)?;
                 // The callee may mutate any reachable object; drop property narrowings. (The
-                // call's own argument checking above still saw them.)
-                Self::purge_property_narrowings(env);
+                // call's own argument checking above still saw them.) A `readonly` property's
+                // narrowing survives: no call can reassign it.
+                self.purge_property_narrowings_after_call(env);
                 for (idx, arg) in expanded_args.iter().enumerate() {
                     if let Some(output_ty) = preg_output_type(builtin_name, arg, idx) {
                         if let Some(name) = output_variable(arg) {
@@ -524,7 +525,7 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::ClosureCall { var, args } => {
@@ -544,7 +545,7 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::ExprCall { callee, args } => {
@@ -563,7 +564,7 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::NamedArg { value, .. } => {
@@ -598,7 +599,7 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             ExprKind::NullsafeDynamicMethodCall {
@@ -624,7 +625,7 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
+                self.purge_property_narrowings_after_call(env);
                 Ok(ty)
             }
             _ => self.infer_type(expr, env),
