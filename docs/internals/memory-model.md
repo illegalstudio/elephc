@@ -616,6 +616,13 @@ temporary staging and validate their writeback before publishing it.
 Numeric and named variadic marker writes update the wrapper's child, as do native
 builtin outputs. A property write fetch clones and replaces that child before
 releasing the old box, preserving the wrapper used by escaping eval aliases.
+A call temporary created for a fixed scalar, string, or array property sets its
+header flag bit `19` and appends four metadata words after the payload: a static
+diagnostic-suffix pointer and length, a declared-type acceptance code, and a
+reserved word. The callee's `StoreRefCell` guard reads that metadata before
+coercion and raises PHP's reference-form `TypeError` when the source cannot bind
+to the property. Ordinary local and variadic cells leave the flag clear, so their
+layout and release path are unchanged.
 Each alias owns the cell separately from the contained value. Rebinding acquires
 the new cell before retiring the previous local, which may own the source object.
 Cloning separates a singleton cell and shares one with live aliases, excluding
