@@ -208,6 +208,7 @@ pub(crate) struct LoweringSnapshot {
     refusals: usize,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
+    borrowed_call_results: HashSet<ValueId>,
     /// Provisional offset receiver reads belonging to this speculative function state.
     string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
@@ -304,6 +305,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
+    /// User call results that hand back an argument the caller only lent; see
+    /// `value_is_borrowed_user_call_result`.
+    pub(crate) borrowed_call_results: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
     /// PHP locals whose `(string)` cast must copy: the finished frame slot frees the load.
     ///
@@ -654,6 +658,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
+            borrowed_call_results: HashSet::new(),
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
@@ -724,6 +729,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             refusals: crate::ir_lower::diagnostics::mark(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
+            borrowed_call_results: self.borrowed_call_results.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             owned_string_cast_locals: self.owned_string_cast_locals.clone(),
@@ -832,6 +838,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pointer_reference_bindings.truncate(snapshot.pointer_reference_bindings);
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
+        self.borrowed_call_results = snapshot.borrowed_call_results;
         self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
@@ -3838,8 +3845,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// Callee-owned entry shadows and by-value reads from reference parameters return independent owners.
     /// Other refcounted parameters may forward a borrowed argument, or transfer
-    /// the owner of a temporary argument through the call.
+    /// the owner of a temporary argument through the call. Function calls are answered from the
+    /// function's summary here; method, static-method and nullsafe results are recorded in
+    /// `borrowed_call_results` when their arguments are released, where the summary is at hand.
     fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
+        if self.borrowed_call_results.contains(&result) {
+            return true;
+        }
         let Some(inst) = self.builder.value_defining_instruction(result) else {
             return false;
         };
@@ -3872,24 +3884,76 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 {
                     return false;
                 }
-                let lowered = LoweredValue {
-                    value: *argument,
-                    ir_type: self.builder.value_type(*argument),
-                };
-                // A plain load of a PHP local reads as an owning temporary, but that answer is
-                // PROVISIONAL: it exists so a later store can widen the slot, and the argument's
-                // own release is repaired at builder finalization. The caller owes no release on
-                // the load itself — the local's lifetime covers it — so for the question here it
-                // is the wrong answer. Taking it made the caller release a class-typed value the
-                // callee handed back at `+0` (issue #1203). A freshly built operand is not a
-                // local load and still refuses, which is what #486 needs.
-                // A concrete string projected from final Mixed storage is the exception:
-                // its cast detached an owned string, whose lease flows through a passthrough.
-                let argument_is_a_caller_temporary = self.value_is_owning_temporary(lowered)
-                    && (!self.value_is_owned_unboxed_local_load(*argument)
-                        || self.builder.value_php_type(*argument).codegen_repr() == PhpType::Str);
-                !argument_is_a_caller_temporary
+                !self.call_argument_is_caller_temporary(*argument)
             })
+    }
+
+    /// Returns whether a call argument is a temporary the caller owns, so a callee that hands
+    /// it straight back transfers that owner through its result.
+    ///
+    /// A plain load of a PHP local reads as an owning temporary, but that answer is
+    /// PROVISIONAL: it exists so a later store can widen the slot, and the argument's own
+    /// release is repaired at builder finalization. The caller owes no release on the load
+    /// itself — the local's lifetime covers it — so for the question here it is the wrong
+    /// answer. Taking it made the caller release a class-typed value the callee handed back at
+    /// `+0` (issue #1203). A freshly built operand is not a local load and still refuses, which
+    /// is what #486 needs. A concrete string projected from final Mixed storage is the
+    /// exception: its cast detached an owned string, whose lease flows through a passthrough.
+    ///
+    /// A string view a builtin returned into its argument (`dirname($path)`, `trim($s)`) owns
+    /// nothing of its own: it is a caller temporary only when its source is. Counting the view
+    /// itself made the caller release `same(dirname($path))`'s result, whose pointer is the
+    /// base of `$path`'s block, and free the caller's string.
+    pub(crate) fn call_argument_is_caller_temporary(&self, argument: ValueId) -> bool {
+        if let Some(sources) = self.borrowed_string_view_sources(argument) {
+            return sources
+                .into_iter()
+                .any(|source| self.call_argument_is_caller_temporary(source));
+        }
+        let lowered = LoweredValue {
+            value: argument,
+            ir_type: self.builder.value_type(argument),
+        };
+        self.value_is_owning_temporary(lowered)
+            && (!self.value_is_owned_unboxed_local_load(argument)
+                || self.builder.value_php_type(argument).codegen_repr() == PhpType::Str)
+    }
+
+    /// Returns the lifetime-tracked operands of a string a runtime builtin returned without
+    /// owning it (a view into, or an alias of, its arguments), or `None` for any other value.
+    fn borrowed_string_view_sources(&self, value: ValueId) -> Option<Vec<ValueId>> {
+        if self.builder.value_php_type(value).codegen_repr() != PhpType::Str {
+            return None;
+        }
+        let inst = self.builder.value_defining_instruction(value)?;
+        if inst.op != Op::RuntimeCall {
+            return None;
+        }
+        let target = match inst.immediate {
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target)))
+            | Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ProfiledFunction {
+                target,
+                ..
+            })) => target,
+            _ => return None,
+        };
+        if !matches!(
+            target.result_ownership(),
+            crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments
+                | crate::builtins::semantics::BuiltinResultOwnership::Borrowed
+                | crate::builtins::semantics::BuiltinResultOwnership::Aliases(_)
+        ) {
+            return None;
+        }
+        Some(
+            inst.operands
+                .iter()
+                .copied()
+                .filter(|operand| {
+                    Ownership::php_type_needs_lifetime_tracking(&self.builder.value_php_type(*operand))
+                })
+                .collect(),
+        )
     }
 
     /// Returns whether a call result can legally reuse one argument's refcounted payload.

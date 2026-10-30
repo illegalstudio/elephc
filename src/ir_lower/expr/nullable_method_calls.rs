@@ -317,6 +317,11 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     roots: &[(usize, crate::ir::LocalSlotId)],
     span: Span,
 ) {
+    if let Some(result) = result.filter(|result| {
+        call_result_hands_back_a_lent_string(ctx, args, *result, return_alias, signature)
+    }) {
+        ctx.borrowed_call_results.insert(result);
+    }
     let owned_object_result = result.is_some_and(|result| {
         matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
             && signature.is_some_and(|signature| !signature.by_ref_return)
@@ -527,6 +532,37 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     if let Some(value) = guarded_result {
         ctx.unguard_call_argument(value, span);
     }
+}
+
+/// Returns whether a method, static-method or nullsafe call's string result is an argument the
+/// caller only lent: the callee is proven to return that parameter as-is, and the argument is
+/// no temporary the caller owns (a local, or a builtin's view into one). The result then
+/// borrows the caller's string, and releasing it as an owned call result freed the caller's
+/// own block: `$r = self::same($d)` left `$d` pointing at freed memory. Plain function calls
+/// are answered from the function's summary by `value_is_borrowed_user_call_result`.
+fn call_result_hands_back_a_lent_string(
+    ctx: &LoweringContext<'_, '_>,
+    args: &[crate::ir::ValueId],
+    result: crate::ir::ValueId,
+    return_alias: &ReturnArgAlias,
+    signature: Option<&FunctionSig>,
+) -> bool {
+    if ctx.builder.value_php_type(result).codegen_repr() != PhpType::Str
+        || signature.is_some_and(|signature| signature.by_ref_return)
+        || !matches!(
+            ctx.builder.value_defining_op(result),
+            Some(Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall)
+        )
+    {
+        return false;
+    }
+    args.iter().enumerate().any(|(parameter_index, argument)| {
+        !signature.is_some_and(|signature| {
+            signature.returned_parameter_has_independent_owner(parameter_index)
+        }) && return_alias.proven_aliases_parameter(parameter_index)
+            && ctx.call_result_may_alias_arg(*argument, result)
+            && !ctx.call_argument_is_caller_temporary(*argument)
+    })
 }
 
 /// Releases a normalized string-cast copy nested under a call argument.

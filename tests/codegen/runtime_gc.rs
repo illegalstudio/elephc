@@ -216,6 +216,8 @@ mod resource_scope_cleanup;
 mod resource_inventory;
 #[path = "runtime_gc/class_param_return.rs"]
 mod class_param_return;
+#[path = "runtime_gc/string_param_return.rs"]
+mod string_param_return;
 #[path = "runtime_gc/reflection_attribute_filter.rs"]
 mod reflection_attribute_filter;
 #[path = "runtime_gc/tagged_scalar_boxing.rs"]
