@@ -518,7 +518,7 @@ impl Checker {
                     }
                 }
                 let entry = self.snapshot_flow_exit(env);
-                let flow = self.snapshot_conditional_flow(env);
+                let flow = self.snapshot_switch_flow(env);
                 self.begin_switch_flow(flow, default.is_none());
                 let mut arms: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
                 if let Some(body) = default {
@@ -526,7 +526,7 @@ impl Checker {
                 }
                 let last_arm = arms.len().saturating_sub(1);
                 let mut fallthrough = None;
-                let mut strict_arm_bindings = TypeEnv::new();
+                let mut strict_arm_bindings = super::switch_storage::entry_bindings(self, env);
                 for (index, body) in arms.into_iter().enumerate() {
                     let mut inputs = vec![entry.clone()];
                     inputs.extend(fallthrough.take());
@@ -537,21 +537,11 @@ impl Checker {
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs.iter()
                         .filter(|name| !invalidated.contains(*name)).cloned().collect();
                     let (arm_errors, falls_through) = self.check_body_flow(body, env);
+                    let arm_valid = arm_errors.is_empty();
                     errors.extend(arm_errors);
-                    // Strict local contracts span alternative arms, while their read facts
-                    // still come only from entry and actual fallthrough predecessors.
-                    if self.strict_locals {
-                        for (name, ty) in env.iter().filter(|(name, _)|
-                            !name.starts_with('\u{1}') && !entry.views.contains_key(*name))
-                        {
-                            if let Some(previous) = strict_arm_bindings.get(name) {
-                                if self.merged_assignment_type(previous, ty).is_none() {
-                                    errors.push(CompileError::new(body.first().map_or(stmt.span, |stmt| stmt.span),
-                                        &format!("Type error: cannot reassign ${name} from {previous} to {ty}")));
-                                }
-                            }
-                            strict_arm_bindings.insert(name.clone(), ty.clone());
-                        }
+                    if arm_valid {
+                        errors.extend(super::switch_storage::observe_arm(
+                            self, &mut strict_arm_bindings, body, env, stmt.span));
                     }
                     fallthrough = falls_through.then(|| self.snapshot_flow_exit(env));
                     self.record_switch_case_end(env, index == last_arm && falls_through);

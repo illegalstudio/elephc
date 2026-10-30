@@ -13,6 +13,16 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+function rawSwitchExitTarget(int $key) {
+    $value = 1;
+    switch ($key) { case 1: $value = 2.5; break; default: $value = 3; }
+    return $value;
+}
+function nullableAccumulatorTarget(?int $value): int {
+    $value ??= 0;
+    for ($i = 0; $i < 3; $i++) { $value = $value + $i; }
+    return $value;
+}
 function containerFinallyTarget(bool $flag): int {
     $value = $flag ? [1, 2] : null;
     try { if ($value === null) { return 0; } }

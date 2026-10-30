@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// A preceding switch arm's array layout remains part of the following return contract.
+#[test]
+fn test_nullable_fallback_flow_review_switch_array_exit_contract() {
+    expect_error("<?php function rows(int $key): array<int> { $rows = []; switch ($key) { case 1: $rows = ['x']; break; default: $rows = [1]; } return $rows; }",
+        "returns array<mixed>");
+    let checked = check_source_full("<?php function unmatchedSwitch(int $key) { $value = 1; switch ($key) { case 1: $value = 2.5; break; case 2: $value = 3; } return $value; }").unwrap();
+    assert_eq!(checked.functions["unmatchedSwitch"].return_type, types::PhpType::Mixed);
+}
+
 /// Inferred boolean flags accept a containing scalar union without relaxing fixed contracts.
 #[test]
 fn test_nullable_fallback_flow_ci_boolean_option_union() {

@@ -17,6 +17,7 @@ use super::super::super::{Checker, GuardedLocalStorage, NarrowedLocalOrigin};
 
 /// Entry contracts and accumulated exit views for one conditional construct.
 pub(in crate::types::checker) struct ConditionalFlow {
+    all_locals: bool,
     storage: HashMap<String, GuardedLocalStorage>,
     origins: HashMap<String, NarrowedLocalOrigin>,
     views: TypeEnv,
@@ -36,12 +37,22 @@ pub(in crate::types::checker) struct FlowSnapshot {
 impl Checker {
     /// Saves guarded reads and boxed locals that a fresh guard may narrow before a write.
     pub(in crate::types::checker) fn snapshot_conditional_flow(&self, env: &TypeEnv) -> ConditionalFlow {
+        self.snapshot_conditional_flow_inputs(env, false)
+    }
+
+    /// Tracks every switch binding, including raw locals written by an earlier arm.
+    pub(in crate::types::checker) fn snapshot_switch_flow(&self, env: &TypeEnv) -> ConditionalFlow {
+        self.snapshot_conditional_flow_inputs(env, true)
+    }
+
+    /// Selects a construct's read inputs without changing their physical provenance.
+    fn snapshot_conditional_flow_inputs(&self, env: &TypeEnv, all_locals: bool) -> ConditionalFlow {
         let views: TypeEnv = self.guarded_union_types.keys()
             .chain(self.narrowed_local_origins.iter().filter_map(|(name, origin)|
                 origin.view.as_ref().filter(|_| matches!(origin.origin.codegen_repr(),
                     PhpType::Mixed | PhpType::TaggedScalar)).map(|_| name)))
             .chain(env.iter().filter(|(name, ty)| !name.starts_with('\u{1}')
-                && matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar))
+                && (all_locals || matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)))
                 .map(|(name, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
@@ -50,6 +61,7 @@ impl Checker {
             (name.clone(), ty.clone())
         }).collect();
         ConditionalFlow {
+            all_locals,
             storage: self.guarded_union_types.clone(),
             origins: self.narrowed_local_origins.clone(),
             joined: views.clone(), views, physical, changed: HashSet::new(),
@@ -177,6 +189,14 @@ impl Checker {
 
     /// Joins an edge's logical values separately from its retained physical representation.
     pub(in crate::types::checker) fn observe_flow_snapshot(&self, flow: &mut ConditionalFlow, edge: &FlowSnapshot, reads: bool) {
+        if flow.all_locals {
+            for (name, view) in &edge.views {
+                if name.starts_with('\u{1}') { continue; }
+                flow.views.entry(name.clone()).or_insert_with(|| view.clone());
+                flow.physical.entry(name.clone()).or_insert_with(||
+                    self.snapshot_storage_type(edge, name).unwrap_or(view).clone());
+            }
+        }
         for (name, entry_view) in &flow.views {
             let storage_changed = match (flow.storage.get(name), edge.storage.get(name)) {
                 (Some(before), Some(after)) => before.ty != after.ty || before.coalesced != after.coalesced,

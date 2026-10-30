@@ -2224,21 +2224,20 @@ fn test_marked_local_assigned_across_switch_arms() {
 /// The mixed-storage WARNING the `switch` shape produces, and its `--strict-locals` rejection.
 #[test]
 fn test_marked_local_across_switch_arms_warns_and_is_strict_rejected() {
-    let source = "<?php switch ($argc) { case 1: $a = 0; break; default: $a = \"ciao\"; } echo $a;";
-    let warnings = check_files_diagnostics(&[("main.php", source)], "main.php", false)
-        .expect("the switch fixture must type-check");
-    assert_eq!(
-        warnings,
-        vec![
+    for initial in ["", "$a = null;"] {
+        let source = format!("<?php {initial} switch ($argc) {{ case 1: $a = 0; break; default: $a = \"ciao\"; }} echo $a;");
+        let warnings = check_files_diagnostics(&[("main.php", &source)], "main.php", false)
+            .expect("the switch fixture must type-check");
+        assert_eq!(warnings, vec![
             "$a is assigned incompatible types (int and string); it is compiled as boxed mixed storage (compile with --strict-locals to make this an error)".to_string(),
-        ],
-    );
-    let error = check_files_diagnostics(&[("main.php", source)], "main.php", true)
-        .expect_err("--strict-locals must reject the marked switch local");
-    assert!(
-        error.contains("cannot reassign $a"),
-        "expected the strict rejection, got: {error}"
-    );
+        ]);
+        let error = check_files_diagnostics(&[("main.php", &source)], "main.php", true)
+            .expect_err("--strict-locals must reject the marked switch local");
+        assert!(error.contains("cannot reassign $a"), "expected the strict rejection, got: {error}");
+    }
+    let guarded = "<?php function guarded(mixed $value, int $key): void { switch ($key) { case 1: if (!is_int($value)) { return; } break; default: if (!is_string($value)) { return; } } } guarded($argc, $argc);";
+    assert!(check_files_diagnostics(&[("main.php", guarded)], "main.php", true)
+        .expect("guard-only views must not become strict assignment conflicts").is_empty());
 }
 
 /// A marked store inside the `default` arm of a single-case `switch` on a runtime subject, which

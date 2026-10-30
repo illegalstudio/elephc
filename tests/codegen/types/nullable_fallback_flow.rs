@@ -9,6 +9,36 @@
 
 use super::*;
 
+/// Checks PHP output and the ownership balance of a nullable flow fixture.
+fn assert_nullable_flow_heap_output(source: &str, expected: &str) {
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Exhaustive switch return inference includes broken arms and fresh bindings.
+#[test]
+fn test_nullable_fallback_flow_review_switch_raw_exit_runtime() {
+    let source = r#"<?php
+function initializedSwitch(int $key) {
+    $value = 1;
+    switch ($key) { case 1: $value = 2.5; break; default: $value = 3; }
+    return $value;
+}
+function freshSwitch(int $key) {
+    switch ($key) { case 1: $value = 2; break; default: $value = 3.5; }
+    return $value;
+}
+var_dump(initializedSwitch(1), initializedSwitch(2), freshSwitch(1), freshSwitch(2));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "float(2.5)\nint(3)\nint(2)\nfloat(3.5)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Session-style option unions and interface probes retain their continuing value contracts.
 #[test]
 fn test_nullable_fallback_flow_ci_session_joins_runtime() {
@@ -1139,7 +1169,7 @@ echo gettype(guardedIf(9223372036854775807)), "\n";
 var_dump(guardedWhile(5), guardedWhile(null), guardedTernary(5), guardedTernary(null), guardedAnd(5), guardedAnd(null));
 "#;
     for optimized in [true, false] {
-        let run = || assert_eq!(compile_and_run(source), "int(6)\nNULL\ndouble\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\n");
+        let run = || assert_nullable_flow_heap_output(source, "int(6)\nNULL\ndouble\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\n");
         if optimized { run(); } else { without_ir_opt(run); }
     }
 }
@@ -1168,7 +1198,7 @@ function coalesced(?int $value): void {
 run(10); run(null); coalesced(null);
 "#;
     for optimized in [true, false] {
-        let run = || assert_eq!(compile_and_run(source), "int(10)\nint(2)\nint(3)\nint(4)\nNULL\nint(2)\nint(3)\nint(4)\nint(10)\nint(11)\nint(12)\n");
+        let run = || assert_nullable_flow_heap_output(source, "int(10)\nint(2)\nint(3)\nint(4)\nNULL\nint(2)\nint(3)\nint(4)\nint(10)\nint(11)\nint(12)\n");
         if optimized { run(); } else { without_ir_opt(run); }
     }
 }
@@ -1183,10 +1213,10 @@ run(5); run(null);
 "#;
     for optimized in [true, false] {
         let run = || {
-            assert_eq!(compile_and_run(source), "int(6)\nNULL\n");
+            assert_nullable_flow_heap_output(source, "int(6)\nNULL\n");
             let loop_source = source.replace("if ($value !== null) { $value++; }",
                 "foreach ([1] as $i) { if ($value !== null) { $value++; } }");
-            assert_eq!(compile_and_run(&loop_source), "int(6)\nNULL\n");
+            assert_nullable_flow_heap_output(&loop_source, "int(6)\nNULL\n");
             for (update, initial) in [("$value++;", "9223372036854775807"), ("$value--;", "(-9223372036854775807 - 1)")] {
                 for body in [format!("if ($value !== null) {{ {update} }}"),
                     format!("foreach ([1] as $i) {{ if ($value !== null) {{ {update} }} }}")]
@@ -1254,7 +1284,7 @@ runIncrement(5); runDecrement(5); runDecrement(null); captured(5); capturedLoop(
 maybeCaptured(5, false); maybeCaptured(5, true); detachedCapture(5);
 "#;
     for optimized in [true, false] {
-        let run = || assert_eq!(compile_and_run(source), "NULL\nint(4)\nNULL\nNULL\nint(2)\nint(3)\nNULL\nint(5)\nNULL\ndouble\nint(5)\n");
+        let run = || assert_nullable_flow_heap_output(source, "NULL\nint(4)\nNULL\nNULL\nint(2)\nint(3)\nNULL\nint(5)\nNULL\ndouble\nint(5)\n");
         if optimized { run(); } else { without_ir_opt(run); }
     }
 }

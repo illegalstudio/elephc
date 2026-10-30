@@ -12,6 +12,7 @@
 mod assignments;
 mod control_flow;
 mod loop_entry;
+mod switch_storage;
 mod narrowing;
 pub(super) use narrowing::type_is_definitely_non_null;
 
