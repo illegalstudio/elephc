@@ -35,13 +35,6 @@ pub(super) fn guard_property_dimension_readwrite(
     receiver.finish(ctx, span);
 }
 
-/// Protects an independently owned nested receiver while checking its declared write container.
-pub(crate) fn guard_property_dimension_write(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
-) {
-    guard_property_dimension_fetch(ctx, object, property, span, PropertyDimensionFetchMode::Write);
-}
-
 /// Keeps the owning receiver visible across either write-only or read-modify-write validation.
 pub(crate) fn guard_property_dimension_fetch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,

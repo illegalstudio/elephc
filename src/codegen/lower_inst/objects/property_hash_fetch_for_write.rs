@@ -12,7 +12,7 @@
 use super::*;
 
 /// Returns an owned installed child, publishing a separated hash before the caller mutates it.
-pub(super) fn lower_property_hash_fetch_for_write(
+pub(in crate::codegen::lower_inst) fn lower_property_hash_fetch_for_write(
     ctx: &mut FunctionContext<'_>, inst: &Instruction,
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -51,7 +51,7 @@ pub(super) fn lower_property_hash_fetch_for_write(
 }
 
 /// Reads entry presence independently of its value or magic property accessors.
-pub(super) fn lower_property_hash_contains(
+pub(in crate::codegen::lower_inst) fn lower_property_hash_contains(
     ctx: &mut FunctionContext<'_>, inst: &Instruction,
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;
@@ -85,7 +85,7 @@ pub(super) fn lower_property_hash_contains(
 }
 
 /// Returns an independent PHP value without getter calls, creation diagnostics or hash mutation.
-pub(super) fn lower_property_hash_read(
+pub(in crate::codegen::lower_inst) fn lower_property_hash_read(
     ctx: &mut FunctionContext<'_>, inst: &Instruction,
 ) -> Result<()> {
     let object = expect_operand(inst, 0)?;

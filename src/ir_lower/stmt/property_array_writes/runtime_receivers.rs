@@ -10,6 +10,7 @@
 //! - Ordinary dynamic appends reuse attached hash cells; accessor fallbacks retain writeback.
 
 use super::*;
+use crate::ir::ValueId;
 
 use super::PropertyDimensionFetchMode as FetchMode;
 

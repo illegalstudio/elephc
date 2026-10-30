@@ -95,7 +95,7 @@ use instance_property_writes::*;
 use static_property_writes::*;
 use property_array_writes::*;
 pub(crate) use property_array_writes::{
-    guard_property_dimension_write, guard_property_dimension_fetch, PropertyDimensionFetchMode,
+    guard_property_dimension_fetch, PropertyDimensionFetchMode,
 };
 use metadata_control::*;
 use return_coercions::*;
