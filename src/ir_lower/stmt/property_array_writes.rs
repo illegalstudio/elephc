@@ -13,6 +13,7 @@ use crate::parser::ast::BinOp;
 mod native_xml;
 mod compound;
 mod incdec;
+mod runtime_receivers;
 pub(super) use incdec::native as lower_native_incdec;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
@@ -435,6 +436,9 @@ fn lower_property_array_assign_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
     value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
+    if runtime_receivers::lower(ctx, object, property, index, value, span, key_already_diagnosed) {
+        return;
+    }
     if object_property_type(ctx, object.value, property)
         .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
     {
@@ -592,14 +596,7 @@ fn lower_property_array_assign_value(
     // `$o->a[$i] = ($i = 1)` writes index 1. The bare-local write already used this
     // rule; sharing the helper is what keeps the two from answering differently for
     // the same source line.
-    let data = ctx.intern_string(property);
-    ctx.emit_void(
-        Op::RuntimeCall,
-        vec![object.value, index.value, value.value],
-        Some(Immediate::Data(data)),
-        effects_lookup::runtime_effects(),
-        Some(span),
-    );
+    runtime_receivers::fallback(ctx, object, property, index, value, span);
 }
 
 /// Lowers `unset($object->prop[$key])` once the receiver and the key have been evaluated.

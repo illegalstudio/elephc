@@ -86,9 +86,12 @@ fn step(
     let expression = Expr::new(if increment { ExprKind::PreIncrement(name) } else { ExprKind::PreDecrement(name) }, span);
     let result = lower_expr(ctx, &expression);
     let ty = ctx.builder.value_php_type(result.value);
-    let borrowed = ctx.emit_value(Op::Borrow, vec![result.value], None, ty,
-        Op::Borrow.default_effects(), Some(span));
-    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let borrowed = if Ownership::php_type_needs_lifetime_tracking(&ty) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![result.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { result };
     finish(ctx, borrowed);
     if rooted { crate::ir_lower::expr::unregister_owned_call_operand(ctx, slot, span); }
     ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),

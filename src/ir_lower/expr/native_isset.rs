@@ -315,7 +315,7 @@ fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Optio
 }
 
 /// Returns whether a named property can use normal `isset()` value probing.
-pub(super) fn property_is_accessible_for_ir(
+pub(crate) fn property_is_accessible_for_ir(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     class_info: &crate::types::ClassInfo,
@@ -338,7 +338,7 @@ pub(super) fn property_is_accessible_for_ir(
 }
 
 /// Checks PHP member visibility from the current lowering class scope.
-pub(super) fn ir_can_access_member(
+pub(crate) fn ir_can_access_member(
     ctx: &LoweringContext<'_, '_>,
     declaring_class: &str,
     visibility: &Visibility,

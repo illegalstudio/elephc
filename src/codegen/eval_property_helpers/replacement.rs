@@ -20,6 +20,8 @@ pub(super) fn emit_owned_slot_replacement(emitter: &mut Emitter, slot: &EvalProp
     let previous = abi::secondary_scratch_reg(emitter);
     let result = abi::int_result_reg(emitter);
     abi::load_at_offset(emitter, object, object_frame_offset);
+    let payload = super::reference_slots::payload_slot(emitter, slot, object);
+    let slot = payload.as_ref();
     abi::emit_load_from_address(emitter, previous, object, slot.offset);
     if slot.ty.codegen_repr() == PhpType::Str {
         let (pointer, length) = abi::string_result_regs(emitter);

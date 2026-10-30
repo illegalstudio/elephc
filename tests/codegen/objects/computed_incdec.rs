@@ -9,6 +9,28 @@
 
 use crate::support::*;
 
+/// Erased declared-array receivers keep COW and update their actual property for every write form.
+#[test]
+fn test_erased_declared_property_dimension_writeback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedPropertyContainer {
+    public array $items = ['9', 4];
+    public function receiver(): mixed { echo 'receiver|'; return $this; }
+}
+$object = new ErasedPropertyContainer();
+$copy = $object->items;
+$object->receiver()->items[0]++;
+--$object->receiver()->items[1];
+$object->receiver()->items[1] += 4;
+$object->receiver()->items['new'] = 8;
+echo json_encode($object->items), ':', json_encode($copy);
+unset($object, $copy);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "receiver|receiver|receiver|receiver|{\"0\":10,\"1\":7,\"new\":8}:[\"9\",4]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Computed property updates preserve typed storage, lexical visibility and magic hooks.
 #[test]
 fn test_computed_receiver_ordinary_property_incdec_bundle() {

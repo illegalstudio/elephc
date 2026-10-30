@@ -30,6 +30,7 @@ mod private_shadow;
 mod replacement;
 mod unset;
 mod unset_boundary;
+mod reference_slots;
 use replacement::emit_owned_slot_replacement;
 use dynamic_properties::{
     emit_dynamic_property_get_fallback, emit_dynamic_property_set_fallback,
@@ -939,7 +940,8 @@ fn emit_aarch64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalProp
         return;
     }
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer
-    emitter.instruction(&format!("ldr x11, [x10, #{}]", slot.offset + 8));      // load the typed-property initialization marker
+    let marker = reference_slots::marker_address(emitter, slot, "x10");
+    emitter.instruction(&format!("ldr x11, [x10, #{}]", marker));               // load the typed-property initialization marker
     abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x11, x12");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction("cset x0, ne");                                         // materialize true when the instance property is initialized
@@ -952,8 +954,9 @@ fn emit_x86_64_property_initialized_flag(emitter: &mut Emitter, slot: &EvalPrope
         return;
     }
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
+    let marker = reference_slots::marker_address(emitter, slot, "r11");
     emitter.instruction(                                                        // load the typed-property initialization marker
-        &format!("mov rax, QWORD PTR [r11 + {}]", slot.offset + 8)
+        &format!("mov rax, QWORD PTR [r11 + {}]", marker)
     );
     abi::emit_load_int_immediate(emitter, "r10", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r10");                                        // compare the property marker against the uninitialized sentinel
@@ -977,7 +980,8 @@ fn emit_aarch64_uninitialized_property_get_guard(
         slot_body_label_raw(slot, "get")
     );
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer for marker inspection
-    emitter.instruction(&format!("ldr x11, [x10, #{}]", slot.offset + 8));      // load the typed-property initialization marker
+    let marker = reference_slots::marker_address(emitter, slot, "x10");
+    emitter.instruction(&format!("ldr x11, [x10, #{}]", marker));               // load the typed-property initialization marker
     abi::emit_load_int_immediate(emitter, "x12", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x11, x12");                                        // compare the property marker against the uninitialized sentinel
     emitter.instruction(&format!("b.ne {}", initialized_label));                // continue boxing once the instance property is initialized
@@ -1006,8 +1010,9 @@ fn emit_x86_64_uninitialized_property_get_guard(
         slot_body_label_raw(slot, "get")
     );
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for marker inspection
+    let marker = reference_slots::marker_address(emitter, slot, "r10");
     emitter.instruction(                                                        // load the typed-property initialization marker
-        &format!("mov rax, QWORD PTR [r10 + {}]", slot.offset + 8)
+        &format!("mov rax, QWORD PTR [r10 + {}]", marker)
     );
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp rax, r11");                                        // compare the property marker against the uninitialized sentinel
@@ -1052,6 +1057,9 @@ fn emit_eval_untyped_removed_read(
 /// Boxes a property value loaded from an ARM64 object slot into a Mixed cell.
 fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer
+    let reference_payload = slot.is_reference;
+    let payload = reference_slots::payload_slot(emitter, slot, "x9");
+    let slot = payload.as_ref();
     match slot.ty.codegen_repr() {
         PhpType::Int
         | PhpType::Bool
@@ -1096,7 +1104,7 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
             );
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the stored Mixed property cell
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null property storage reads as PHP null
-            if slot.ty.is_php_array() {
+            if slot.ty.is_php_array() || reference_payload {
                 emitter.instruction("bl __rt_mixed_clone");                     // detach the array zval so eval writes preserve property COW aliases
             } else {
                 emitter.instruction("bl __rt_incref");                          // retain the stored Mixed cell for the eval caller
@@ -1117,6 +1125,9 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
 /// Boxes a property value loaded from an x86_64 object slot into a Mixed cell.
 fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer
+    let reference_payload = slot.is_reference;
+    let payload = reference_slots::payload_slot(emitter, slot, "r11");
+    let slot = payload.as_ref();
     match slot.ty.codegen_repr() {
         PhpType::Int | PhpType::Bool | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             emitter.instruction(                                                // load the property payload low word
@@ -1168,7 +1179,7 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             );
             emitter.instruction("test rax, rax");                               // check whether the property storage is initialized
             emitter.instruction(&format!("jz {}", null_label));                 // null property storage reads as PHP null
-            if slot.ty.is_php_array() {
+            if slot.ty.is_php_array() || reference_payload {
                 emitter.instruction("call __rt_mixed_clone");                   // detach the array zval so eval writes preserve property COW aliases
             } else {
                 emitter.instruction("call __rt_incref");                        // retain the stored Mixed cell for the eval caller
@@ -1209,6 +1220,8 @@ fn emit_aarch64_store_property_slot(
             emitter.instruction("ldr x0, [sp, #24]");                           // reload the boxed eval value for float coercion
             emitter.instruction("bl __rt_mixed_cast_float");                    // coerce the eval value to a PHP float
             emitter.instruction("ldr x9, [sp, #16]");                           // reload the unboxed object pointer for the store
+            let payload = reference_slots::payload_slot(emitter, slot, "x9");
+            let slot = payload.as_ref();
             emitter.instruction(&format!("str d0, [x9, #{}]", slot.offset));    // store the coerced float into the property slot
             emit_aarch64_clear_scalar_property_marker(emitter, slot);
         }
@@ -1267,6 +1280,8 @@ fn emit_x86_64_store_property_slot(
             emitter.instruction("mov rax, QWORD PTR [rbp - 32]");               // reload the boxed eval value for float coercion
             emitter.instruction("call __rt_mixed_cast_float");                  // coerce the eval value to a PHP float
             emitter.instruction("mov r11, QWORD PTR [rbp - 24]");               // reload the unboxed object pointer for the store
+            let payload = reference_slots::payload_slot(emitter, slot, "r11");
+            let slot = payload.as_ref();
             emitter.instruction(                                                // store the coerced float into the property slot
                 &format!("movsd QWORD PTR [r11 + {}], xmm0", slot.offset)
             );
@@ -1314,6 +1329,8 @@ fn emit_aarch64_store_cast_scalar(
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("bl {}", helper));                             // coerce the eval value to the declared property type
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
+    let payload = reference_slots::payload_slot(emitter, slot, "x9");
+    let slot = payload.as_ref();
     emitter.instruction(&format!("str {}, [x9, #{}]", result_reg, slot.offset)); // store the coerced scalar into the property slot
     emit_aarch64_clear_scalar_property_marker(emitter, slot);
 }
@@ -1347,6 +1364,8 @@ fn emit_aarch64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalP
     crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
     emitter.label(&done_label);
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the unboxed object pointer for the store
+    let payload = reference_slots::payload_slot(emitter, slot, "x9");
+    let slot = payload.as_ref();
     emitter.instruction(&format!("str x0, [x9, #{}]", slot.offset));            // store the nullable integer payload into the property slot
     emitter.instruction(&format!("str x1, [x9, #{}]", slot.offset + 8));        // store the nullable integer tag into the property slot
 }
@@ -1361,6 +1380,8 @@ fn emit_x86_64_store_cast_scalar(
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for scalar coercion
     emitter.instruction(&format!("call {}", helper));                           // coerce the eval value to the declared property type
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
+    let payload = reference_slots::payload_slot(emitter, slot, "r11");
+    let slot = payload.as_ref();
     emitter.instruction(                                                        // store the coerced scalar into the property slot
         &format!("mov QWORD PTR [r11 + {}], {}", slot.offset, result_reg)
     );
@@ -1477,6 +1498,8 @@ fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPr
     crate::codegen::sentinels::emit_tagged_scalar_null(emitter);
     emitter.label(&done_label);
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for the store
+    let payload = reference_slots::payload_slot(emitter, slot, "r11");
+    let slot = payload.as_ref();
     emitter.instruction(&format!("mov QWORD PTR [r11 + {}], rax", slot.offset));//store the nullable integer payload into the property slot
     emitter.instruction(                                                        // store the nullable integer tag into the property slot
         &format!("mov QWORD PTR [r11 + {}], rdx", slot.offset + 8)

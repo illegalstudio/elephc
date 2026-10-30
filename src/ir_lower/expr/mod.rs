@@ -160,6 +160,7 @@ use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
 use native_isset::*;
+pub(crate) use native_isset::{ir_can_access_member, property_is_accessible_for_ir};
 use callable_probes::*;
 use descriptor_invoke::*;
 use call_operand_owners::*;

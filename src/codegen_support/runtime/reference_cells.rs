@@ -358,7 +358,7 @@ fn emit_borrowed_reference_return_error(emitter: &mut Emitter) {
 }
 
 /// Emits one `<entry>_new` allocator plus the `<entry>` thrower that publishes and raises it.
-fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str, length: i64) {
+pub(crate) fn emit_reference_escape_error(emitter: &mut Emitter, entry: &str, message: &str, length: i64) {
     emitter.blank();
     emitter.label_global(&format!("{entry}_new"));
     abi::emit_frame_prologue(emitter, 32);

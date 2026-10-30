@@ -9,6 +9,44 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Eval writes preserve promoted native cell aliases and by-value array snapshots.
+#[test]
+fn test_eval_native_reference_property_payloads_and_aliases() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NativeEvalReferencePayloads {
+    public mixed $value = null;
+    public string $text = 'old';
+    public int $number = 1;
+    public float $weight = 1.5;
+    public ?int $maybe = null;
+    public function &valueRef(): mixed { return $this->value; }
+    public function &textRef(): string { return $this->text; }
+    public function &numberRef(): int { return $this->number; }
+    public function &weightRef(): float { return $this->weight; }
+    public function &maybeRef(): ?int { return $this->maybe; }
+}
+$box = new NativeEvalReferencePayloads();
+$value = &$box->valueRef(); $text = &$box->textRef();
+$number = &$box->numberRef(); $weight = &$box->weightRef(); $maybe = &$box->maybeRef();
+$source = $argc > 0 ? '
+$box->value = [1, 2]; $box->text = "new";
+$box->number = 7; $box->weight = 2.5; $box->maybe = 3;
+$copy = $box->value; $copy[0] = 9;
+echo json_encode($box->value), ":", json_encode($copy), "|";
+echo $box->text, ":", $box->number, ":", $box->weight, ":", $box->maybe, "|";
+try { unset($box->value); }
+catch (Error $error) { echo $error->getMessage(), "|"; }
+unset($copy, $error);
+' : '';
+eval($source);
+echo json_encode($value), ':', $text, ':', $number, ':', $weight, ':', $maybe;
+unset($box, $value, $text, $number, $weight, $maybe, $source);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[1,2]:[9,2]|new:7:2.5:3|Unsupported unset(): by-reference property|[1,2]:new:7:2.5:3");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Scalar, array and object reference returns become owned eval values, including static calls.
 #[test]
 fn test_eval_native_reference_method_returns_copy_and_release_cells_bundle() {

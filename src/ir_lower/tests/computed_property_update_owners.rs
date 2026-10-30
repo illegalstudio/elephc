@@ -61,6 +61,27 @@ $xml->a += 1;
     }
 }
 
+/// Erased receivers reach the existing declared-slot COW writer on every supported target.
+#[test]
+fn erased_property_dimension_uses_declared_storage_on_every_target() {
+    let source = "<?php class ErasedWriteStorage { public array $items = [1]; } \
+        function mutateErasedStorage(mixed $box): void { $box->items[0] = 7; } \
+        mutateErasedStorage(new ErasedWriteStorage());";
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "mutateErasedStorage").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGetForWrite),
+            "{target}: the runtime class must write its declared slot\n{}", crate::ir::print_function(function));
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::DynamicPropSet),
+            "{target}: element writes must not introduce magic setters");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Object arithmetic borrows an incdec working slot until overwrite and final cleanup.
 #[test]
 fn native_dimension_incdec_working_slot_has_one_owner_on_every_target() {
