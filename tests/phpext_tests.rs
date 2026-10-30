@@ -32,6 +32,10 @@ mod fibers;
 mod reentry;
 #[path = "phpext/review.rs"]
 mod review;
+#[path = "phpext/constants.rs"]
+mod constants;
+#[path = "phpext/classes.rs"]
+mod classes;
 
 struct Project(PathBuf);
 

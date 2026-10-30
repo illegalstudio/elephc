@@ -40,7 +40,9 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: gc_collect_cycles ---");
+    super::gc_host_roots::entry(emitter);
     emitter.label_global("__rt_gc_collect_cycles_explicit");
+    super::gc_host_roots::begin(emitter);
 
     // -- avoid recursive re-entry while the collector is already running --
     emitter.instruction("mov x0, #0");                                          // a nested collection reports zero collected nodes
@@ -374,6 +376,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.label("__rt_gc_collect_cycles_root_refcounted");
     emitter.instruction("ubfx x15, x13, #18, #1");                              // inspect the artificial snapshot owner marker
     emitter.instruction("sub w12, w12, w15");                                   // pins are not external PHP roots
+    super::gc_host_roots::subtract_wrapper(emitter);
     emitter.instruction("uxtw x12, w12");                                       // widen the 32-bit refcount for comparison
     emitter.instruction("lsr x13, x13, #32");                                   // move the incoming heap-edge count into the low bits
     emitter.instruction("cmp x12, x13");                                        // does this block keep at least one external reference?
@@ -393,6 +396,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     // -- run protected destructors and recount, then sweep the final unreachable graph --
     emitter.label("__rt_gc_collect_cycles_free_init");
+    super::gc_host_roots::publish(emitter);
     emitter.instruction("bl __rt_gc_destructors");                              // protect candidate data and run destructors before reclamation
     emitter.instruction("cbnz x0, __rt_gc_collect_cycles_recount");             // observe mutations and resurrection before choosing doomed nodes
     emitter.instruction("bl __rt_gc_weak_observers");                           // retire weak keys while candidate snapshots still protect callbacks
@@ -510,6 +514,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x0");                                    // include the nodes reclaimed by this pass
     emitter.instruction("str x10, [x9]");                                       // persist the cumulative collected-node count
     emitter.label("__rt_gc_collect_cycles_stats_done");
+    super::gc_host_roots::finish(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
     emitter.instruction("str xzr, [x9]");                                       // mark the collector as inactive again
     CLEANUP.finish(emitter);
@@ -528,6 +533,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b __rt_gc_rethrow_pending");                           // propagate captured throws only after all collector state is balanced
 
     emitter.label("__rt_gc_collect_cycles_done");
+    super::gc_host_roots::finish(emitter);
     emitter.instruction("ret");                                                 // return to the caller
 }
 

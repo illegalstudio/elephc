@@ -48,3 +48,42 @@ function phpext_pause(string $message): void
     if ($missing !== null) { throw new RuntimeException('unexpected array value'); }
     throw new RuntimeException($message, 42);
 }
+
+#[Export]
+final class LifecycleObject
+{
+    public int $value = 0;
+    public ?LifecycleObject $next = null;
+    public array $items = [];
+
+    public function add(int $amount): int
+    {
+        $this->value += $amount;
+        return $this->value;
+    }
+
+    public function pause(string $message): void
+    {
+        $this->value++;
+        phpext_pause($message);
+    }
+}
+
+#[Export]
+function phpext_object_kept(?LifecycleObject $object, bool $set): ?LifecycleObject
+{
+    static $saved = null;
+    if ($set) { $saved = $object; }
+    return $saved;
+}
+
+#[Export]
+function phpext_object_churn(int $count): void
+{
+    for ($i = 0; $i < $count; $i++) {
+        $object = new LifecycleObject();
+        phpext_object_kept($object, true);
+        echo 'object';
+        phpext_object_kept(null, true);
+    }
+}

@@ -81,7 +81,8 @@ def main():
         source = work / "lifecycle.php"
         source.write_bytes((root / "tests/phpext/lifecycle.php").read_bytes())
         env = dict(os.environ, ELEPHC_PHPEXT_PHP_CONFIG=str(config), ELEPHC_PHPEXT_PHP_BINARY=str(php),
-                   PHP_INI_SCAN_DIR="", ELEPHC_EMBED_FIBERS=str(root / "tests/phpext/fibers.php"))
+                   PHP_INI_SCAN_DIR="", ELEPHC_EMBED_FIBERS=str(root / "tests/phpext/fibers.php"),
+                   ELEPHC_EMBED_OBJECTS=str(root / "tests/phpext/objects_lifecycle.php"))
         checked([compiler, "--emit", "phpext", "--heap-size=524288", source], env=env)
         helper = work / "late_resume.so"
         cc = shlex.split(os.environ.get("CC", "cc"))

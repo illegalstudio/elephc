@@ -143,11 +143,11 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
 
     ctx.builder.position_at_end(init_block);
     let value = lower_expr(ctx, init);
-    let slot = ctx.declare_local_with_kind(
-        name,
-        ctx.builder.value_php_type(value.value),
-        LocalKind::StaticLocal,
-    );
+    // The initializer runs once; subsequent calls may enter with an object or another value.
+    // A null initializer therefore requires boxed persistent storage and no null-only flow fact.
+    let initialized_type = ctx.builder.value_php_type(value.value);
+    let storage_type = if initialized_type == PhpType::Void { PhpType::Mixed } else { initialized_type };
+    let slot = ctx.declare_local_with_kind(name, storage_type.clone(), LocalKind::StaticLocal);
     ctx.builder.emit_with_effects(
         Op::InitStaticLocal,
         vec![value.value],
@@ -182,5 +182,6 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         else_args: Vec::new(),
     });
     ctx.builder.position_at_end(after_block);
+    ctx.set_local_type(name, storage_type);
     ctx.clear_static_callable_locals();
 }

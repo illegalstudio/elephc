@@ -113,6 +113,7 @@ pub fn emit_gc_mark_reachable(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_gc_mark_reachable_done");                    // skip duplicate work on already-marked nodes
     emitter.instruction("orr x11, x11, x13");                                   // set the reachable bit for this heap node
     emitter.instruction("str x11, [x0, #-8]");                                  // persist the reachable mark in the heap header
+    super::gc_host_roots::stop_at_exported_object(emitter);
 
     emitter.label_shared("__rt_gc_visit_children");
     emitter.instruction("ldr x11, [x0, #-8]");                                  // direct discovery entry shares the existing one-hop child layouts
@@ -436,6 +437,7 @@ fn emit_gc_mark_reachable_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_gc_mark_reachable_done");                     // yes — skip duplicate recursive work on an already-marked node
     emitter.instruction("or r11, 0x10000");                                     // set the x86_64 reachable bit inside the temporary GC metadata range
     emitter.instruction("mov QWORD PTR [rax - 8], r11");                        // persist the reachable mark in the heap header before traversing children
+    super::gc_host_roots::stop_at_exported_object(emitter);
 
     emitter.label_shared("__rt_gc_visit_children");
     emitter.instruction("mov r11, QWORD PTR [rax - 8]");                        // direct discovery entry shares the existing one-hop child layouts

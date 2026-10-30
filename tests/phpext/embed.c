@@ -74,6 +74,59 @@ static size_t live_malloc_bytes(void)
 #endif
 }
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_elephc_embed_live_malloc, 0, 0, IS_LONG, 0)
+ZEND_END_ARG_INFO()
+
+/* Expose the existing allocator oracle only inside the embed test process. */
+static PHP_FUNCTION(elephc_embed_live_malloc)
+{
+    ZEND_PARSE_PARAMETERS_NONE();
+    RETURN_LONG((zend_long)live_malloc_bytes());
+}
+
+static const zend_function_entry embed_functions[] = {
+    PHP_FE(elephc_embed_live_malloc, arginfo_elephc_embed_live_malloc)
+    PHP_FE_END
+};
+
+static int (*embed_original_startup)(sapi_module_struct *);
+static zend_function_entry *embed_sapi_functions;
+
+/* Register the probe during SAPI startup so Zend interns persistent function metadata normally. */
+static int embed_startup_with_probe(sapi_module_struct *module)
+{
+    size_t count = 0;
+    while (module->additional_functions && module->additional_functions[count].fname) { count++; }
+    embed_sapi_functions = calloc(count + 2, sizeof(*embed_sapi_functions));
+    if (!embed_sapi_functions) { return FAILURE; }
+    if (count) { memcpy(embed_sapi_functions, module->additional_functions, count * sizeof(*embed_sapi_functions)); }
+    embed_sapi_functions[count] = embed_functions[0];
+    module->additional_functions = embed_sapi_functions;
+    return embed_original_startup(module);
+}
+
+/* Sample while one native call is still active, after allocator caches have warmed. */
+static void check_object_churn(void)
+{
+    static const char code[] =
+        "$chunks = 0; $baseline = 0;"
+        "ob_start(function ($bytes) use (&$chunks, &$baseline) {"
+        "  if ($bytes === '') { return ''; }"
+        "  $object = phpext_object_kept(null, false);"
+        "  if (!$object instanceof LifecycleObject) { throw new Exception('churn identity missing'); }"
+        "  if (++$chunks === 500) { $baseline = elephc_embed_live_malloc(); }"
+        "  if ($chunks > 500 && $chunks % 128 === 0 && elephc_embed_live_malloc() > $baseline + 262144) {"
+        "    throw new Exception('object leases grow during one native activation');"
+        "  } return '';"
+        "}, 1);"
+        "phpext_object_churn(6000); ob_end_clean();"
+        "if ($chunks !== 6000) { throw new Exception('object churn did not finish'); }";
+    if (zend_eval_string(code, NULL, "phpext in-call object lease churn") == FAILURE || EG(exception)) {
+        atomic_fetch_add(&failures, 1);
+        if (EG(exception)) { zend_exception_error(EG(exception), E_WARNING); }
+    }
+}
+
 #if defined(__APPLE__) && !defined(EP_SANITIZED_ALLOCATOR)
 typedef struct {
     vm_address_t zone;
@@ -224,8 +277,10 @@ static void run_late_userland_fiber_request(void)
         "ob_start(function ($bytes) {"
         "  if ($bytes === '') { return ''; }"
         "  $GLOBALS['late_fiber'] = new Fiber(function () {"
+        "    $object = new LifecycleObject(); phpext_object_kept($object, true);"
+        "    $peer = new LifecycleObject(); $object->next = $peer; $peer->next = $object; $peer->add(0);"
         "    set_error_handler(function () { Fiber::suspend('parked'); return true; });"
-        "    try { phpext_pause('late userland shutdown'); } catch (RuntimeException $error) {}"
+        "    try { $object->pause('late userland shutdown'); } catch (RuntimeException $error) {}"
         "  });"
         "  if ($GLOBALS['late_fiber']->start() !== 'parked') { throw new Exception('late Fiber did not park'); }"
         "  return '';"
@@ -242,14 +297,15 @@ static void run_abandoned_requests(void)
 {
     static const char code[] =
         "error_reporting(0); ini_set('display_errors', '0'); ini_set('log_errors', '0');"
-        "$GLOBALS['fatal_fiber'] = new Fiber(function () use ($nested) {"
+        "$object = new LifecycleObject(); phpext_object_kept($object, true);"
+        "$GLOBALS['fatal_fiber'] = new Fiber(function () use ($nested, $object) {"
         "  set_error_handler(function () use ($nested) {"
         "    if ($nested) {"
         "      set_error_handler(function () { Fiber::suspend('parked'); return true; });"
         "      try { phpext_pause('nested abandoned'); } catch (RuntimeException $error) {}"
         "    } else { Fiber::suspend('parked'); } return true;"
         "  });"
-        "  try { phpext_pause('abandoned'); } catch (RuntimeException $error) {}"
+        "  try { $object->pause('abandoned'); } catch (RuntimeException $error) {}"
         "});"
         "if ($GLOBALS['fatal_fiber']->start() !== 'parked') { throw new Exception('Fiber did not park'); }"
         "elephc_late_hold($GLOBALS['fatal_fiber'], $resumed);"
@@ -326,7 +382,8 @@ static const char request_code[] =
     "try { phpext_recurse(100000); throw new Exception('missing native stack guard'); }"
     "catch (Error $e) { if (!str_contains($e->getMessage(), 'runtime failed')) { throw $e; } }"
     "if (phpext_counter() !== $limit + 1) { throw new Exception('failed stack recovery'); }"
-    "require getenv('ELEPHC_EMBED_FIBERS');";
+    "require getenv('ELEPHC_EMBED_FIBERS');"
+    "require getenv('ELEPHC_EMBED_OBJECTS');";
 
 /* Each thread owns Zend globals and four complete request lifecycles. */
 static void *run_requests(void *unused)
@@ -366,9 +423,12 @@ int main(int argc, char **argv)
     if (argc != 2) { fprintf(stderr, "usage: embed-test path/to/php.ini\n"); return 2; }
     php_embed_module.php_ini_path_override = argv[1];
     php_embed_module.php_ini_ignore_cwd = 1;
-    if (php_embed_init(1, argv) == FAILURE) { return 3; }
+    embed_original_startup = php_embed_module.startup;
+    php_embed_module.startup = embed_startup_with_probe;
+    if (php_embed_init(1, argv) == FAILURE) { free(embed_sapi_functions); return 3; }
     if (getenv("ELEPHC_EMBED_ALLOCATOR_PROBE")) {
         check_malloc_accounting();
+        check_object_churn();
     } else if (getenv("ELEPHC_EMBED_FATAL_PHASE")) {
         run_abandoned_requests();
     } else {
@@ -394,6 +454,7 @@ int main(int argc, char **argv)
         if (php_request_startup() == FAILURE) { return 4; }
     }
     php_embed_shutdown();
+    free(embed_sapi_functions);
     int result = atomic_load(&failures) ? 1 : 0;
     if (result) {
         fprintf(stderr, "PHP extension request failures: %d\n", atomic_load(&failures));

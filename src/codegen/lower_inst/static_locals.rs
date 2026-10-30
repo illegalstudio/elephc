@@ -80,11 +80,11 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
         abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         loaded_ty = PhpType::Int;
     }
-    // A pointer word (a `?ptr<T>` value, which used to arrive as a Mixed cell) stored into a
-    // Mixed-typed static local is boxed here, a null address as PHP null; the fresh box is the
-    // slot's only owner.
-    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed) && matches!(loaded_ty, PhpType::Pointer(_)) {
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &ctx.mixed_box_type(value)?);
+    // A persistent Mixed slot needs a box even when this arm has a concrete scalar or object.
+    // The fresh box owns its payload independently of the source SSA value.
+    if matches!(slot.php_type.codegen_repr(), PhpType::Mixed) && loaded_ty != PhpType::Mixed {
+        let box_ty = if matches!(loaded_ty, PhpType::Pointer(_)) { ctx.mixed_box_type(value)? } else { loaded_ty.clone() };
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &box_ty);
     } else if loaded_ty.is_refcounted() {
         abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
     }
@@ -268,7 +268,7 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
     if matches!(slot_ty, PhpType::Mixed)
         && matches!(
             value_ty,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float | PhpType::Pointer(_)
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Float | PhpType::Pointer(_) | PhpType::Object(_)
         )
     {
         return true;
