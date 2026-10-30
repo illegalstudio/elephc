@@ -165,6 +165,26 @@ pub(crate) struct ReferenceCallContext {
     pub(crate) adopted: bool,
 }
 
+/// One by-reference property argument awaiting its post-call write-back and type check.
+///
+/// PHP keeps a typed property's declaration when it becomes a reference: a callee that writes
+/// an incompatible value through `&$obj->prop` raises `TypeError` and leaves the property
+/// unchanged. elephc hands the callee a boxed `Mixed` temporary instead (the property's own
+/// slot has a different representation), so the caller records the temporary, the stabilized
+/// property target, and its declared type here and validates plus writes back after the call.
+pub(crate) struct ReferencePropertyGuard {
+    /// Synthetic `Mixed` local handed to the callee in place of the property.
+    pub temp: String,
+    /// Stabilized property target the callee's value is written back to.
+    pub place: Expr,
+    /// Declaring class name, as PHP prints it in the diagnostic.
+    pub class_name: String,
+    /// Property name, as PHP prints it in the diagnostic.
+    pub property: String,
+    /// Declared property type, or `None` for an untyped slot.
+    pub declared: Option<PhpType>,
+}
+
 /// A local bound to a pointer by-reference parameter, with the parameter's declared type.
 struct PointerReferenceBinding {
     slot: LocalSlotId,
@@ -302,6 +322,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
     /// Nested owner ledgers for source-order call argument evaluation.
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
+    /// By-reference property writes awaiting their post-call declared-type check.
+    ///
+    /// Call sites snapshot the length before lowering their arguments and drain the entries
+    /// added afterwards once the call returns. Entries produced by surfaces that never drain
+    /// (a builtin, whose by-reference place lowering already owns the write) stay in the list
+    /// unread, which can only skip a check, never reject a compatible value.
+    pub(crate) reference_property_guards: Vec<ReferencePropertyGuard>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
@@ -653,6 +680,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             expression_depth: 0,
             reference_call_context: None,
             call_argument_evaluation_scopes: Vec::new(),
+            reference_property_guards: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),

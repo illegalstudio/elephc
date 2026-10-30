@@ -90,6 +90,7 @@ pub(super) fn lower_static_method_call(
     let result_staging = prepublish_user_call_result(
         ctx, sig.as_ref(), &return_alias, &result_type, expr.span,
     );
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     let mut operands =
@@ -118,6 +119,11 @@ pub(super) fn lower_static_method_call(
         ctx, call, sig.as_ref(), reference_staging.as_ref(), expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), call, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     release_owned_call_arg_temporaries_with_roots(
         ctx,
         &operands,
@@ -286,6 +292,7 @@ pub(super) fn lower_static_method_descriptor_call(
     let descriptor = lower_first_class_callable(ctx, &target, expr);
     let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
     let mut operands = vec![descriptor.value];
+    let reference_property_guard_mark = ctx.reference_property_guards.len();
     operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
     let result = emit_descriptor_invoker_value(
         ctx,
@@ -296,6 +303,11 @@ pub(super) fn lower_static_method_descriptor_call(
         expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    super::enum_argument_guards::drain_reference_property_guards(
+        ctx,
+        reference_property_guard_mark,
+        expr.span,
+    );
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

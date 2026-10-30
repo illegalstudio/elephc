@@ -337,6 +337,9 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::uri_prelude::inject_if_used_for_version(
+        resolved, false, php_version, &mut prelude_inventory,
+    );
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::random_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -736,17 +739,29 @@ pub(crate) fn compile_and_run_with_counters(source: &str) -> ProgramOutput {
 // capturing stdout and stderr from the resulting binary. Cleans up the temp directory.
 /// Provides the Compile and run capture helper used by the compiler module.
 pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_optional_regex(source, false)
+    compile_and_run_capture_with_optional_regex(source, 8_388_608, false)
+}
+
+/// Compiles and captures a fixture with an explicit heap capacity.
+///
+/// Used by the PHPT matrix for `--INI-- memory_limit` fixtures: the heap capacity is the
+/// compile-time limit the fixture asks for, and the capture keeps the fatal on stderr.
+pub(crate) fn compile_and_run_capture_with_heap_size(
+    source: &str,
+    heap_size: usize,
+) -> ProgramOutput {
+    compile_and_run_capture_with_optional_regex(source, heap_size, false)
 }
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.
 pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput {
-    compile_and_run_capture_with_optional_regex(source, true)
+    compile_and_run_capture_with_optional_regex(source, 8_388_608, true)
 }
 
 /// Compiles and captures one fixture while optionally enabling managed regex support.
 fn compile_and_run_capture_with_optional_regex(
     source: &str,
+    heap_size: usize,
     with_regex: bool,
 ) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -757,7 +772,7 @@ fn compile_and_run_capture_with_optional_regex(
 
     let (user_asm, runtime_asm, required_libraries) =
         compile_source_to_asm_with_options_and_regex(
-            source, &dir, 8_388_608, false, false, false, with_regex,
+            source, &dir, heap_size, false, false, false, with_regex,
         );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(

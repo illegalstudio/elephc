@@ -429,7 +429,7 @@ fn place_object_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Opti
 /// `static_place_type` already resolved, and that resolver matches exactly the variants below.
 /// An unmatched shape is returned unchanged, which is the conservative identity — it cannot be
 /// reached without emitting IR for a place this module then refuses to write back.
-fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
+pub(super) fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
     match &place.kind {
         ExprKind::PropertyAccess { object, property } => {
             let object = stabilize_place(ctx, object);

@@ -37,6 +37,8 @@ mod large_unary_string_results;
 mod static_local_initializers;
 #[path = "runtime_gc/ini_lookup_arguments.rs"]
 mod ini_lookup_arguments;
+#[path = "runtime_gc/memory_limit_runtime.rs"]
+mod memory_limit_runtime;
 #[path = "runtime_gc/mixed_string_cast_return.rs"]
 mod mixed_string_cast_return;
 #[path = "runtime_gc/stream_registry.rs"]

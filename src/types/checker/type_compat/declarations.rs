@@ -306,10 +306,13 @@ impl Checker {
             }
             // `lower_by_ref_array_element_arg_with_signature` widens a local
             // indexed array to Mixed slots before taking the element address.
-            // Only that addressable shape has this conversion, not arbitrary
-            // scalar locals, properties, nested places or tagged nullable slots.
+            // Only an addressable element or property has this conversion, not arbitrary
+            // scalar locals, nested places or tagged nullable slots.
             if expected_ty.codegen_repr() == PhpType::Mixed
-                && matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                && matches!(
+                    arg.kind,
+                    ExprKind::ArrayAccess { .. } | ExprKind::PropertyAccess { .. }
+                )
                 && self.is_by_ref_argument_lvalue(arg, env)?
             {
                 return Ok(());

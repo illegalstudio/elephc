@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1002 / 2169** (46%), classes **184 / 329** (56%), constants **1340 / 3180** (42%).
+Overall coverage: functions **1002 / 2169** (46%), classes **193 / 329** (59%), constants **1340 / 3180** (42%).
 
 ## Coverage by PHP module
 
@@ -76,7 +76,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
 | `tidy` | 0 / 24 · 0% | 0 / 2 · 0% | 0 / 161 · 0% |
 | [`tokenizer`](./tokenizer.md#functions) | 2 / 2 · 100% | 1 / 1 · 100% | 154 / 154 · 100% |
-| `uri` | - | 0 / 9 · 0% | - |
+| `uri` | - | 9 / 9 · 100% | - |
 | [`xml`](./xml.md#functions) | 22 / 22 · 100% | 1 / 1 · 100% | 28 / 28 · 100% |
 | `xmlreader` | - | 0 / 1 · 0% | - |
 | [`xmlwriter`](./xml.md#functions) | 42 / 42 · 100% | 1 / 1 · 100% | - |

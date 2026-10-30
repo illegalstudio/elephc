@@ -93,7 +93,7 @@ fn bind_implicit_integer(
 }
 
 /// Builds the runtime predicate for PHP weak scalar and class parameter acceptance.
-fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
+pub(super) fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
     let predicate = |name| predicate(name, value, span);
     let either = |a, b| Expr::new(ExprKind::BinaryOp {
         left: Box::new(a), op: BinOp::Or, right: Box::new(b),
@@ -139,7 +139,7 @@ fn predicate(name: &str, value: &Expr, span: Span) -> Expr {
 }
 
 /// Produces PHP's diagnostic type names instead of gettype's historical aliases.
-fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
+pub(super) fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
     runtime_type_with_bool_literals(value, contains_false(expected), span)
 }
 
@@ -193,6 +193,74 @@ pub(super) fn concat(left: Expr, right: Expr, span: Span) -> Expr {
     Expr::new(ExprKind::BinaryOp {
         left: Box::new(left), op: BinOp::Concat, right: Box::new(right),
     }, span)
+}
+
+/// Re-checks every by-reference property write performed by the call that just returned.
+///
+/// `mark` is the guard-list length captured before the call's arguments were lowered, so only
+/// guards produced by this call are drained. The property is untouched while the callee runs
+/// (it receives a boxed temporary); a refused value therefore needs no restoration, and the
+/// `TypeError` is thrown before the write-back.
+pub(super) fn drain_reference_property_guards(
+    ctx: &mut LoweringContext<'_, '_>,
+    mark: usize,
+    span: Span,
+) {
+    if ctx.reference_property_guards.len() <= mark {
+        return;
+    }
+    let guards: Vec<_> = ctx.reference_property_guards.drain(mark..).collect();
+    for guard in guards {
+        let temp_expr = Expr::new(ExprKind::Variable(guard.temp.clone()), span);
+        let Some(declared) = guard.declared.clone() else {
+            super::assignments::lower_non_local_assignment_write(
+                ctx, &guard.place, &temp_expr, guard.place.span,
+            );
+            continue;
+        };
+        let accepted = if crate::source::current_strict_types() {
+            crate::types::param_binding::runtime_strict_param_acceptance(&declared, &temp_expr)
+        } else {
+            accepts_type(&declared, &temp_expr, span)
+        };
+        let Some(predicate) = accepted else {
+            super::assignments::lower_non_local_assignment_write(
+                ctx, &guard.place, &temp_expr, guard.place.span,
+            );
+            continue;
+        };
+        let condition = lower_expr(ctx, &predicate);
+        let ok = ctx.builder.create_named_block("ref_property.write.ok", Vec::new());
+        let bad = ctx.builder.create_named_block("ref_property.write.bad", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: condition.value,
+            then_target: ok,
+            then_args: Vec::new(),
+            else_target: bad,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(bad);
+        let type_name = diagnostic_type(&declared);
+        let value_type = runtime_type(&temp_expr, &declared, span);
+        let suffix = format!(
+            " to reference held by property {}::${} of type {}",
+            guard.class_name, guard.property, type_name
+        );
+        let message = concat(
+            Expr::new(ExprKind::StringLiteral("Cannot assign ".to_string()), span),
+            concat(
+                value_type,
+                Expr::new(ExprKind::StringLiteral(suffix), span),
+                span,
+            ),
+            span,
+        );
+        throw_message(ctx, "TypeError", message, span);
+        ctx.builder.position_at_end(ok);
+        super::assignments::lower_non_local_assignment_write(
+            ctx, &guard.place, &temp_expr, guard.place.span,
+        );
+    }
 }
 
 /// Raises a catchable exception while the caller's argument owners remain published.

@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/shared_ini_prelude.rs`:61](https://github.com/illegalstudio/elephc/blob/main/src/shared_ini_prelude.rs#L61) (`ini_get_all`)
+- **Lowering**: [`src/shared_ini_prelude.rs`:318](https://github.com/illegalstudio/elephc/blob/main/src/shared_ini_prelude.rs#L318) (`ini_get_all`)
 - **Function symbol**: `ini_get_all()`
 
 

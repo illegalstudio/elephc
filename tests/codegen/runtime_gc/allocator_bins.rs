@@ -128,7 +128,7 @@ echo count($keep);
     let started = Instant::now();
     let out = compile_and_run_with_flags("elephc_allocator_full", source, &["--heap-size=262144"]);
     assert!(!out.success);
-    assert!(out.stderr.contains("heap memory exhausted"), "{}", out.stderr);
+    assert!(out.stderr.contains("Allowed memory size of"), "{}", out.stderr);
     assert!(started.elapsed() < Duration::from_secs(60), "exhaustion took {:?}", started.elapsed());
 }
 

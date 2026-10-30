@@ -26,8 +26,8 @@
 //!   (`synthetic_class::unread_params`), so it cannot disagree with what `build()` would do.
 
 use crate::parser::ast::{
-    AttributeGroup, BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver, Stmt,
-    StmtKind, TypeExpr, Visibility,
+    AttributeGroup, BinOp, CType, CastType, Expr, ExprKind, Program, StaticReceiver,
+    Stmt, StmtKind, TypeExpr, Visibility,
 };
 use crate::synthetic_class::unread_params;
 
@@ -881,6 +881,45 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                 stmt_vec(body, depth)
             )
         }
+        StmtKind::EnumDecl {
+            name,
+            generics,
+            backing_type,
+            cases,
+            implements,
+            trait_uses,
+            methods,
+            constants,
+        } => {
+            assert!(generics.is_none(), "generic enums are not modelled");
+            assert!(backing_type.is_none(), "backed enums are not modelled");
+            assert!(implements.is_empty(), "enum interfaces are not modelled");
+            assert!(trait_uses.is_empty(), "enum traits are not modelled");
+            assert!(methods.is_empty(), "enum methods are not modelled");
+            assert!(constants.is_empty(), "enum constants are not modelled");
+            let cases = cases
+                .iter()
+                .map(|case| {
+                    assert!(case.value.is_none(), "backed enum cases are not modelled");
+                    assert!(case.attributes.is_empty(), "enum case attributes are not modelled");
+                    format!(
+                        "EnumCaseDecl {{ name: {}.to_string(), value: None, span: Span::dummy(), attributes: Vec::new() }}",
+                        lit(&case.name)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Stmt::new(StmtKind::EnumDecl {{ name: {}.to_string(), generics: None, backing_type: None, cases: vec![{}], implements: Vec::new(), trait_uses: Vec::new(), methods: Vec::new(), constants: Vec::new() }}, Span::dummy())",
+                lit(name),
+                cases
+            )
+        }
+        StmtKind::NestedArrayAssign { target, value } => format!(
+            "Stmt::new(StmtKind::NestedArrayAssign {{ target: {}, value: {} }}, Span::dummy())",
+            expr(target, depth),
+            expr(value, depth)
+        ),
         other => panic!("transcribe: unmodelled statement {:?}", other),
     }
 }
@@ -908,6 +947,7 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
+        ExprKind::Clone(inner) => format!("e_clone({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
             "e_cast(CastType::{}, {})",
             cast_type(target),

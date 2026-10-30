@@ -309,6 +309,9 @@ elephc -V
 # Custom heap size (default: 128 MB)
 elephc --heap-size=16777216 heavy.php
 
+# Lower the runtime memory ceiling (PHP's memory_limit)
+elephc --ini memory_limit=8M app.php
+
 # Enable runtime heap verification while debugging ownership issues
 elephc --heap-debug heavy.php
 
@@ -577,6 +580,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
 - **Random**: PHP's `ext/random` — `mt_srand`/`srand`/`rand`/`mt_rand`/`mt_getrandmax`/`getrandmax`, `random_bytes`, `random_int`, `lcg_value`, `array_rand()`'s multi-key form, the `Random\Engine\Mt19937`, `PcgOneseq128XslRr64`, `Xoshiro256StarStar` and `Secure` engines, `Random\Randomizer` (`nextInt`, `nextFloat`, `getFloat`, `getInt`, `getBytes`, `getBytesFromString`, `shuffleArray`, `shuffleBytes`, `pickArrayKeys`), `Random\IntervalBoundary` and the `Random\*` exception hierarchy, matching php-src 8.5's streams, serialization and deprecations; see the [Random guide](docs/php/random.md)
+- **URI**: PHP 8.5's `ext/uri` — `Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`, `Uri\UriComparisonMode`, `Uri\WhatWg\UrlValidationErrorType`, the `Uri\*` exception hierarchy, and php-src `ext/uri` PHPT parity (the test-only `zend_test` parser helper is emulated in the harness); see the [URI guide](docs/php/uri.md)
 - **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
 - **OPcache**: the API reports the compiled script manifest and a live cache for dynamic `include`/`require` through `eval()`, with optional persistent file caching, revalidation, admission limits, blacklists, and preloading; see the [OPcache guide](docs/php/opcache.md)
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs

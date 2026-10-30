@@ -528,6 +528,22 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
         &mut prelude_inventory,
     );
+    let uri_supported = php_version >= crate::php_version::PhpVersion::Php85;
+    let uri_used = uri_supported
+        && (with_crates.contains("uri")
+            || autoloaded("uri")
+            || crate::uri_prelude::program_uses_uri(&ast));
+    let ast = crate::uri_prelude::inject_if_used_for_version(
+        ast,
+        uri_used,
+        php_version,
+        &mut prelude_inventory,
+    );
+    if uri_used {
+        linked_php_surfaces.push("uri".to_string());
+    }
+    // Declare the URI surface before the core prelude so every later injected prelude sees a
+    // complete class set; the URI prelude itself depends only on checker-injected core classes.
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);

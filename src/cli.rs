@@ -166,7 +166,7 @@ Codegen:
                           or use @file with one name per line)
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
-  --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
+  --ini KEY=VALUE         Bake an INI directive override (memory_limit, OPcache, mbstring startup)
   --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
@@ -361,6 +361,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     }
 
     let mut heap_size: usize = 134_217_728; // 128 MB, PHP's default memory_limit
+    let mut heap_size_explicit = false;
     let mut gc_stats = false;
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
@@ -418,6 +419,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         let arg = &args[i];
         if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = parse_heap_size(val);
+            heap_size_explicit = true;
         } else if arg == "--target" {
             i += 1;
             target = parse_required_target(args, i);
@@ -663,6 +665,28 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         // and are silent whenever it was unambiguous.
         for note in resolved.notes {
             eprintln!("  note: {note}");
+        }
+    }
+
+    // `--ini memory_limit` is the runtime ceiling below the reserved heap. A value above an
+    // explicitly requested `--heap-size` cannot be honored: fail at compile time. Without an
+    // explicit reservation, size the (mostly untouched) heap to the requested limit.
+    if let Some((_, value)) = ini_overrides
+        .iter()
+        .rev()
+        .find(|(key, _)| key.eq_ignore_ascii_case("memory_limit"))
+    {
+        let limit = crate::codegen_support::parse_memory_limit_bytes(value)
+            .unwrap_or_else(|error| fail(&error));
+        if let Some(limit) = limit {
+            if heap_size_explicit && limit > heap_size {
+                fail(&format!(
+                    "--ini memory_limit={value} exceeds --heap-size={heap_size}"
+                ));
+            }
+            if !heap_size_explicit && limit > heap_size {
+                heap_size = limit;
+            }
         }
     }
 

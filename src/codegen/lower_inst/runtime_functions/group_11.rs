@@ -94,6 +94,9 @@ pub(super) fn lower(
         | RuntimeFnId::MemoryGetUsage
         | RuntimeFnId::MemoryResetPeakUsage
         => Some(crate::codegen::lower_inst::builtins::memory::lower(ctx, inst, target)),
+        RuntimeFnId::ElephcSetMemoryLimit => Some({
+            crate::codegen::lower_inst::builtins::memory::lower_set_memory_limit(ctx, inst)
+        }),
         RuntimeFnId::Microtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_microtime(ctx, inst)
         }),

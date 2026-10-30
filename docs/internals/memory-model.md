@@ -940,7 +940,48 @@ elephc --gc-stats heavy.php              # print alloc/free counters to stderr
 elephc --heap-debug heavy.php            # enable runtime heap verification
 ```
 
-The minimum is 64KB.
+The minimum is 64KB. `--heap-size` sets the reserved capacity (`_heap_max`). A separate
+runtime ceiling, `_heap_limit`, defaults to that capacity and is lowered by
+`--ini memory_limit=8M`; allocations stop at the ceiling while the reserved region stays
+available for reuse. An explicit `--heap-size` smaller than the requested `memory_limit` is a
+compile-time error; without an explicit `--heap-size`, a larger `memory_limit` sizes the
+reservation. Heap exhaustion prints php-src's
+`Fatal error: Allowed memory size of N bytes exhausted (tried to allocate M bytes) …` and exits
+with status 255. The runtime cache key includes the limit so a cached object never serves two
+different ceilings.
+
+`memory_limit` is also a runtime directive. `ini_get('memory_limit')` returns the configured
+string exactly as `--ini` (or PHP's `128M` default) spelled it, including suffixes and
+whitespace; it is not normalized to a byte count. `ini_set('memory_limit', $value)`:
+
+- parses the value with the same `zend_ini_parse_quantity` mirror the `opcache.*` directive
+  arms use, so `-1` means unlimited and `K`/`M`/`G` use 1024-based multipliers;
+- emits php-src's `Invalid "memory_limit" setting` quantity diagnostics for missing leading
+  digits, a missing base-prefix digit, unknown multipliers, and trailing data;
+- refuses a finite value below the current real heap usage (live bytes rounded up to php-src's
+  2 MiB allocator chunk, with a 2 MiB floor), emitting php-src's
+  `Warning: Failed to set memory limit to N bytes (Current memory usage is M bytes)` and
+  returning `false` with the previous ceiling intact;
+- installs the new ceiling in `_heap_limit` and returns the previous raw string.
+
+`ini_restore('memory_limit')` reinstalls the startup raw string and ceiling, and
+`ini_get_all()` reports the dynamic row (`global_value` = startup, `local_value` = current,
+`access` = 7) for the null/Core filters.
+
+The unsigned quantity parser reproduces php-src's `u64` result and its `value is out of range`
+diagnostic at the `i64`/`u64` boundaries: values above `i64::MAX` are accepted, `u64::MAX` is the
+unlimited spelling, values above `u64::MAX` warn and use the overflow result, and every other
+negative magnitude keeps its magnitude and warns. Values at or above `2^63` collapse to `-1` for
+the fixed arena because a PHP `int` cannot represent them; the diagnostic still reflects the
+exact u64 result. Raising the limit above the reserved arena is accepted and reported, but the
+allocator clamps the effective ceiling to `_heap_max`, because the arena is a fixed reservation.
+Without an explicit `--ini memory_limit`, `ini_get()` reports PHP's `128M` default; `--heap-size`
+is a separate reservation knob, so a smaller arena caps allocations without changing the
+reported directive.
+
+Allocations performed inside Rust bridge crates are not charged directly against
+`_heap_limit`. The URI prelude compensates for its own bridge by charging the retained path
+footprint in hidden PHP arrays (see `docs/php/uri.md`); other bridges do not yet do so.
 
 ## Array layout
 
