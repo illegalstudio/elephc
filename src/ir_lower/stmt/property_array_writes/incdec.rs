@@ -27,6 +27,7 @@ pub(super) fn ordinary(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str,
     index: LoweredValue, key: &Expr, increment: bool, span: Span,
 ) {
+    runtime_receivers::guard_readwrite(ctx, receiver, property, span);
     let ty = ctx.builder.value_php_type(receiver.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value], None, ty.clone(),
         Op::Borrow.default_effects(), Some(span));

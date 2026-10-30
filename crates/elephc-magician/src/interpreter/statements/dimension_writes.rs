@@ -11,6 +11,7 @@
 
 use super::*;
 use super::property_dimension_writes::{stage_operands, write_value};
+use super::property_dimension_guards::{DimensionFetchMode, selected_property};
 use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
 
 /// One attached parent which can receive a copied child after a nested array mutation.
@@ -33,7 +34,8 @@ pub(super) fn eval_dimension_write(
         let plan = prepare_property_write_receiver(array, &mut owners, context, scope, values)?;
         let (key, assigned) = stage_operands(index, value, &mut owners, context, scope, values)?;
         let mut parents = Vec::new();
-        let current = resolve(plan, &mut parents, &mut owners, context, scope, values)?;
+        let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
+        let current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
         if values.type_tag(current)? != EVAL_TAG_OBJECT
             && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
             return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);
@@ -87,6 +89,7 @@ pub(super) fn eval_dimension_write(
 /// Retains a traversal value and records the storage needed only if an array is replaced.
 fn resolve(
     plan: PreparedWriteReceiver<'_>, parents: &mut Vec<Parent>, owners: &mut Vec<RuntimeCellHandle>,
+    mode: DimensionFetchMode, dimension_container: bool,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let current = match plan {
@@ -111,23 +114,27 @@ fn resolve(
         PreparedWriteReceiver::Late(expr) => eval_owned_expr(expr, context, scope, values)?,
         PreparedWriteReceiver::Value(value) => values.retain(value)?,
         PreparedWriteReceiver::Property(parent, property) => {
-            let object = resolve(*parent, parents, owners, context, scope, values)?;
-            let current = eval_write_property_get_result(object, &property, context, values)?;
+            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?;
+            let current = if dimension_container {
+                selected_property(object, &property, mode, context, values)?
+            } else { eval_write_property_get_result(object, &property, context, values)? };
             parents.push(Parent::Property { object, property });
             current
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
             let early = if name_first { Some(finish_name(property, owners, context, scope, values)?) } else { None };
-            let object = resolve(*parent, parents, owners, context, scope, values)?;
+            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?;
             let property = if let Some(name) = early { name } else {
                 finish_name(property, owners, context, scope, values)?
             };
-            let current = eval_write_property_get_result(object, &property, context, values)?;
+            let current = if dimension_container {
+                selected_property(object, &property, mode, context, values)?
+            } else { eval_write_property_get_result(object, &property, context, values)? };
             parents.push(Parent::Property { object, property });
             current
         }
         PreparedWriteReceiver::Index(parent, index) => {
-            let array = resolve(*parent, parents, owners, context, scope, values)?;
+            let array = resolve(*parent, parents, owners, mode, true, context, scope, values)?;
             let index = finish_index(index, owners, context, scope, values)?;
             let native = super::super::runtime_ops::simplexml_properties::dimension(
                 values, array.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect,

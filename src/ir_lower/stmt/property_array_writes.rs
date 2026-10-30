@@ -17,6 +17,28 @@ mod runtime_receivers;
 pub(super) use incdec::native as lower_native_incdec;
 use compound::{compound_source, with_compound_value, write_ordinary_compound};
 
+/// Guards a stabilized expression increment receiver before its prelude reads the element.
+pub(super) fn guard_property_dimension_readwrite(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &str, span: Span,
+) {
+    if !runtime_receivers::may_need_null_guard(ctx, property)
+        || !matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) { return; }
+    let object = lower_expr(ctx, object);
+    let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+    runtime_receivers::guard_readwrite(ctx, receiver.value, property, span);
+    receiver.finish(ctx, span);
+}
+
+/// Protects an independently owned nested receiver while checking its declared write container.
+pub(crate) fn guard_property_dimension_write(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
+) {
+    if !runtime_receivers::may_need_null_guard(ctx, property) { return; }
+    let pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[object.value], span);
+    runtime_receivers::guard_write(ctx, object, property, span);
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
+}
+
 /// Defers storage-only receiver chains while preserving early evaluation of computed receivers.
 fn deferred_property_receiver(ctx: &LoweringContext<'_, '_>, object: &Expr) -> bool {
     match &object.kind {
@@ -69,6 +91,7 @@ pub(super) fn lower_property_array_push(
 fn lower_property_array_push_value(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, value: LoweredValue, span: Span,
 ) {
+    guard_property_dimension_write(ctx, object, property, span);
     if object_property_type(ctx, object.value, property)
         .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
     {
@@ -236,7 +259,8 @@ pub(super) fn lower_property_array_assign_with_update(
     let compound = compound_source(value, object, property, index, span);
     let index_expression = index;
     let delayed_incdec = match update {
-        PropertyElementUpdate::IncDec(increment) if ctx.classes.contains_key("SimpleXMLElement")
+        PropertyElementUpdate::IncDec(increment) if (ctx.classes.contains_key("SimpleXMLElement")
+            || runtime_receivers::may_need_null_guard(ctx, property))
             && !known_buffer_property(ctx, object, property) => Some(increment),
         _ => None,
     };
@@ -439,6 +463,14 @@ fn lower_property_array_assign_value(
     if runtime_receivers::lower(ctx, object, property, index, value, span, key_already_diagnosed) {
         return;
     }
+    lower_property_array_assign_value_direct(ctx, object, property, index, value, span, key_already_diagnosed);
+}
+
+/// Reuses typed storage after class selection without recursively dispatching an erased fallback.
+fn lower_property_array_assign_value_direct(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, index: LoweredValue,
+    value: LoweredValue, span: Span, key_already_diagnosed: bool,
+) {
     if object_property_type(ctx, object.value, property)
         .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
     {

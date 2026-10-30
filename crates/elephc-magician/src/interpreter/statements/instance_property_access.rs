@@ -42,7 +42,7 @@ pub(super) fn eval_unset_property_get_result(
 }
 
 /// Shares ordinary and quiet container reads without using an isset guard before a getter.
-fn eval_property_read_result(
+pub(super) fn eval_property_read_result(
     object: RuntimeCellHandle, property_name: &str, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps, owned: Option<&mut Vec<RuntimeCellHandle>>, quiet: bool,
 ) -> Result<RuntimeCellHandle, EvalStatus> {

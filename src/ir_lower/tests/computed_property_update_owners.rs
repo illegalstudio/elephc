@@ -13,12 +13,14 @@ fn erased_nullable_property_dimension_guards_on_every_target() {
     use crate::ir::{Op, ValueDef};
     let source = r#"<?php
 class NullableDimensionSlot { public ?ArrayObject $items = null; }
+class NullableIntegerDimensionSlot { public ?int $items = null; }
 class ReadonlyNullableDimensionSlot {
     public readonly ?ArrayObject $items;
     public function __construct() { $this->items = null; }
 }
 function writeNullableDimensionSlot(mixed $box): void { $box->items[0] = 'x'; }
 writeNullableDimensionSlot(new NullableDimensionSlot());
+writeNullableDimensionSlot(new NullableIntegerDimensionSlot());
 writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -33,7 +35,9 @@ writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
                     ValueDef::Instruction { inst, .. } => function.instruction(inst),
                     _ => None,
                 }).is_some_and(|producer| producer.op == Op::PropGet)).collect::<Vec<_>>();
-        assert_eq!(guards.len(), 2, "{target}: nullable declared slots require payload guards");
+        assert_eq!(guards.len(), 3, "{target}: nullable declared slots require payload guards");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::PropInitialized).count(), 3,
+            "{target}: write fetches must test initialization before reading a typed slot");
         for guard in guards {
             assert!(function.instructions.iter().any(|inst| inst.op == Op::Release
                 && inst.operands == guard.operands), "{target}: the guard must retire its property read");
@@ -42,6 +46,39 @@ writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
             message == "Cannot auto-initialize an array inside property NullableDimensionSlot::$items of type ?ArrayObject"));
         assert!(module.data.strings.iter().any(|message|
             message == "Cannot indirectly modify readonly property ReadonlyNullableDimensionSlot::$items"));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Compound and increment paths guard null storage before any warning-producing element read.
+#[test]
+fn erased_nullable_readwrite_guards_precede_element_reads_on_every_target() {
+    use crate::ir::Op;
+    let source = r#"<?php
+class ReadwriteGuardSlot { public ?ArrayObject $items = null; }
+function guardedCompound(mixed $box): void { $box->items[0] += 1; }
+function guardedIncrement(mixed $box): void { $box->items[0]++; }
+function guardedExpression(mixed $box): mixed { return ++$box->items[0]; }
+$box = new ReadwriteGuardSlot();
+guardedCompound($box); guardedIncrement($box); guardedExpression($box);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["guardedCompound", "guardedIncrement", "guardedExpression"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            let check = function.instructions.iter().position(|inst| inst.op == Op::IsNull)
+                .unwrap_or_else(|| panic!("{target}: {name} requires a nullable slot guard"));
+            let read = function.instructions.iter().position(|inst| matches!(inst.op,
+                Op::RuntimeCall | Op::MethodCall | Op::ArrayGet | Op::ArrayGetMixedKey | Op::HashGet)
+                && inst.result.is_some() && inst.operands.len() >= 2
+                && inst.result_php_type.codegen_repr() == crate::types::PhpType::Mixed)
+                .unwrap_or_else(|| panic!("{target}: {name} must retain its element read"));
+            assert!(check < read, "{target}: {name} must refuse null before the element read");
+        }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

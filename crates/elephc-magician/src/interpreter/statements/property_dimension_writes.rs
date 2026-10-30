@@ -88,7 +88,9 @@ fn write_selected(
         values, object, property, elephc_builtin_contract::ObjectProperty::WriteFetch, None,
     )? {
         Some(child) => child,
-        None => eval_property_get_result(object, property, context, values)?,
+        None => property_dimension_guards::ordinary_property(object, property,
+            if op.is_some() { property_dimension_guards::DimensionFetchMode::ReadWrite }
+            else { property_dimension_guards::DimensionFetchMode::Write }, context, values)?,
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     operands.push(current);

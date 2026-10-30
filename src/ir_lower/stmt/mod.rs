@@ -92,6 +92,7 @@ use declarations::*;
 use instance_property_writes::*;
 use static_property_writes::*;
 use property_array_writes::*;
+pub(crate) use property_array_writes::guard_property_dimension_write;
 use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
@@ -128,7 +129,7 @@ pub(in crate::ir_lower) use string_offset_writes::{
     lower_string_offset_write, StringOffsetWriteResult,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
-pub(crate) use buffer_element_updates::{lower_buffer_expression_update, BufferExpressionUpdate};
+pub(crate) use buffer_element_updates::{guard_property_expression_update, lower_buffer_expression_update, BufferExpressionUpdate};
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(crate) use nested_array_writes::lower_nested_array_assign_after_read;
 pub(super) use array_write_storage::{

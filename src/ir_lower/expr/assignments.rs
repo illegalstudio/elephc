@@ -52,6 +52,11 @@ pub(super) fn lower_assignment_expr(
                 }
             }
         }
+        if let Some(update) = buffer_update.as_ref() {
+            if compound_receiver.is_none() && update.read_position() == position {
+                crate::ir_lower::stmt::guard_property_expression_update(ctx, update, expr.span);
+            }
+        }
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
             continue;

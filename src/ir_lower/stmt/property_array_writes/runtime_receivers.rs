@@ -11,10 +11,47 @@
 
 use super::*;
 
+/// Distinguishes a write fetch from a read that precedes a compound or increment operation.
+#[derive(Clone, Copy, PartialEq)]
+enum FetchMode { Write, ReadWrite }
+
 /// Dispatches an erased receiver to an accessible ordinary declared container slot.
 pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
     index: LoweredValue, value: LoweredValue, span: Span, diagnosed: bool,
+) -> bool {
+    dispatch(ctx, object, property, span, FetchMode::Write, false, |ctx, receiver| {
+        lower_property_array_assign_value_direct(ctx, receiver, property, index, value, span, diagnosed);
+    })
+}
+
+/// Refuses invalid null slots before a compound read can warn or mutate a readonly property.
+pub(super) fn guard_readwrite(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
+) {
+    dispatch(ctx, object, property, span, FetchMode::ReadWrite, true, |_, _| {});
+}
+
+/// Refuses invalid null initialization before append or nested write traversal selects storage.
+pub(super) fn guard_write(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
+) {
+    dispatch(ctx, object, property, span, FetchMode::Write, true, |_, _| {});
+}
+
+/// Conservatively recognizes programs where a deferred increment may need a declared-slot guard.
+pub(super) fn may_need_null_guard(ctx: &LoweringContext<'_, '_>, property: &str) -> bool {
+    ctx.classes.iter().any(|(name, info)| info.declared_properties.contains(property)
+        && matches!(object_type_property_type(ctx, &PhpType::Object(name.clone()), property),
+            Some(PhpType::Mixed | PhpType::TaggedScalar))
+        && info.visible_property(property).is_some_and(|(_, (_, ty))| !admits_array(ty)))
+}
+
+/// Shares exact-class selection between final stores and guards that precede element reads.
+fn dispatch(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str, span: Span,
+    mode: FetchMode, guard_only: bool,
+    mut apply: impl FnMut(&mut LoweringContext<'_, '_>, LoweredValue),
 ) -> bool {
     let ty = ctx.builder.value_php_type(object.value);
     if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
@@ -32,19 +69,19 @@ pub(super) fn lower(
         let supported = property_ty.is_php_array() || property_ty == PhpType::Mixed
             || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
                 | PhpType::Buffer(_)) || object_container;
-        if !supported || (!object_container && info.readonly_properties.contains(property)) {
-            return None;
-        }
+        let mut writable = supported && (object_container || !info.readonly_properties.contains(property));
         // Mutating an ArrayAccess object's contents only reads the owning property.
         if let Some(visibility) = info.property_set_visibilities.get(property).filter(|_| !object_container) {
             let declaring = info.property_declaring_classes.get(property).map(String::as_str)
                 .unwrap_or(name);
-            if !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility) { return None; }
+            if !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility) { writable = false; }
         }
-        let null_error = (property_ty == PhpType::Mixed
+        let null_error = (matches!(property_ty, PhpType::Mixed | PhpType::TaggedScalar)
             && info.declared_properties.contains(property) && !admits_array(declared))
             .then(|| null_write_error(ctx, name, info, property, declared));
-        Some((name.clone(), null_error))
+        if !writable && null_error.is_none() { return None; }
+        if guard_only && null_error.is_none() { return None; }
+        Some((name.clone(), null_error, writable))
     }).collect();
     classes.sort_by(|a, b| a.0.cmp(&b.0));
     if classes.is_empty() { return false; }
@@ -68,7 +105,7 @@ pub(super) fn lower(
         PhpType::Str, target.effects(), Some(span));
     crate::ir_lower::expr::store_value_into_temp(ctx, &name, PhpType::Str, class, span);
     let mut merged = initial.clone();
-    for (class, null_error) in classes {
+    for (class, null_error, writable) in classes {
         let matched = ctx.builder.create_named_block("property.array.declared", vec![]);
         let next = ctx.builder.create_named_block("property.array.next_class", vec![]);
         let current = ctx.load_local(&name, Some(span));
@@ -92,9 +129,9 @@ pub(super) fn lower(
         };
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
         if let Some((exception, message)) = null_error {
-            guard_null_write(ctx, receiver, property, exception, &message, span);
+            guard_null_write(ctx, receiver, property, exception, &message, span, mode);
         }
-        lower_property_array_assign_value(ctx, receiver, property, index, value, span, diagnosed);
+        apply(ctx, if writable { receiver } else { object });
         if !ctx.builder.insertion_block_is_terminated() {
             merged = merged.intersection(&ctx.initialized_slots_snapshot()).copied().collect();
             ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
@@ -105,7 +142,7 @@ pub(super) fn lower(
     ctx.builder.terminate(Terminator::Br { target: missing, args: vec![] });
     ctx.builder.position_at_end(missing);
     ctx.restore_initialized_slots(initial);
-    fallback(ctx, object, property, index, value, span);
+    apply(ctx, object);
     merged = merged.intersection(&ctx.initialized_slots_snapshot()).copied().collect();
     ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
     ctx.builder.position_at_end(done);
@@ -153,23 +190,31 @@ fn null_write_error(
 /// Tests an independent property-read lease and retires it before either successor executes.
 fn guard_null_write(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str,
-    exception: &str, message: &str, span: Span,
+    exception: &str, message: &str, span: Span, mode: FetchMode,
 ) {
     let data = ctx.intern_string(property);
+    let reject = ctx.builder.create_named_block("property.array.null_reject", vec![]);
+    let write = ctx.builder.create_named_block("property.array.nonnull_write", vec![]);
+    let initialized_slots = ctx.initialized_slots_snapshot();
+    if mode == FetchMode::Write {
+        let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
+            Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
+        let read = ctx.builder.create_named_block("property.array.initialized_read", vec![]);
+        ctx.builder.terminate(Terminator::CondBr { cond: initialized.value,
+            then_target: read, then_args: vec![], else_target: reject, else_args: vec![] });
+        ctx.builder.position_at_end(read);
+    }
     let current = ctx.emit_owned_value(Op::PropGet, vec![receiver.value], Some(Immediate::Data(data)),
         PhpType::Mixed, Op::PropGet.default_effects(), Some(span));
     let null = ctx.emit_value(Op::IsNull, vec![current.value], None, PhpType::Bool,
         Op::IsNull.default_effects(), Some(span));
     crate::ir_lower::ownership::release_if_owned(ctx, current, Some(span));
-    let reject = ctx.builder.create_named_block("property.array.null_reject", vec![]);
-    let write = ctx.builder.create_named_block("property.array.nonnull_write", vec![]);
-    let initialized = ctx.initialized_slots_snapshot();
     ctx.builder.terminate(Terminator::CondBr { cond: null.value,
         then_target: reject, then_args: vec![], else_target: write, else_args: vec![] });
     ctx.builder.position_at_end(reject);
     lower_throw_access_exception(ctx, exception, message, span);
     ctx.builder.position_at_end(write);
-    ctx.restore_initialized_slots(initialized);
+    ctx.restore_initialized_slots(initialized_slots);
 }
 
 /// Keeps the existing runtime property writer for receivers without an ordinary declared slot.

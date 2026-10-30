@@ -32,6 +32,7 @@ pub(super) fn write_ordinary_compound(
         lower_property_array_assign_value(ctx, object, property, index, value, span, diagnosed);
         return;
     };
+    runtime_receivers::guard_readwrite(ctx, object, property, span);
     let ty = ctx.builder.value_php_type(object.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
         Op::Borrow.default_effects(), Some(span));

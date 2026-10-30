@@ -21,6 +21,7 @@ fn test_erased_nullable_property_dimension_guards_bundle() {
 class ErasedNullableObject { public ?ArrayObject $items = null; }
 class ErasedNullableText { public ?string $items = null; }
 class ErasedNullableFloat { public ?float $items = null; }
+class ErasedNullableInt { public ?int $items = null; }
 class ErasedNullableOther {}
 class ErasedNullablePlain { public ?ErasedNullableOther $items = null; }
 class ErasedNullableArray { public ?array $items = null; }
@@ -36,11 +37,12 @@ class ErasedNullablePrivate {
 function ErasedNullableWrite(mixed $box): void { $box->items[0] = 'x'; }
 function ErasedNullableReject(mixed $box): void {
     try { ErasedNullableWrite($box); }
-    catch (Throwable $error) { echo get_class($error), ':', $box->items === null ? 'null' : 'changed', '|'; }
+    catch (Throwable $error) { echo get_class($error), ':', $error->getMessage(), ':', $box->items === null ? 'null' : 'changed', '|'; }
 }
 ErasedNullableReject(new ErasedNullableObject());
 ErasedNullableReject(new ErasedNullableText());
 ErasedNullableReject(new ErasedNullableFloat());
+ErasedNullableReject(new ErasedNullableInt());
 ErasedNullableReject(new ErasedNullablePlain());
 ErasedNullableReject(new ErasedNullableReadonly(null));
 ErasedNullableReject(new ErasedNullablePrivate(null));
@@ -57,13 +59,25 @@ ErasedNullableWrite($array); ErasedNullableWrite($union);
 echo json_encode($array->items), ':', json_encode($union->items);
 unset($object, $text, $readonly, $private, $array, $union);
 "#;
-    let renamed = source.replace("ErasedNullable", "EvalErasedNullable");
+    let renamed = source.replace("ErasedNullable", "EvalErasedNullable")
+        + "\n$native = new ErasedNullableObject(); EvalErasedNullableReject($native); unset($native);";
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = "TypeError:null|TypeError:null|TypeError:null|TypeError:null|Error:null|Error:null|x|xbc|x:x|[\"x\"]:[\"x\"]";
+    let expected = concat!(
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableObject::$items of type ?ArrayObject:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableText::$items of type ?string:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableFloat::$items of type ?float:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullableInt::$items of type ?int:null|",
+        "TypeError:Cannot auto-initialize an array inside property ErasedNullablePlain::$items of type ?ErasedNullableOther:null|",
+        "Error:Cannot indirectly modify readonly property ErasedNullableReadonly::$items:null|",
+        "Error:Cannot indirectly modify private(set) property ErasedNullablePrivate::$items from global scope:null|",
+        "x|xbc|x:x|[\"x\"]:[\"x\"]",
+    );
+    let eval_expected = expected.replace("ErasedNullable", "EvalErasedNullable")
+        + "TypeError:Cannot auto-initialize an array inside property ErasedNullableObject::$items of type ?ArrayObject:null|";
     assert_bundle_with(&[
         BundleCase { name: "nullable_property_aot", source, expected },
-        BundleCase { name: "nullable_property_eval", source: &eval, expected },
+        BundleCase { name: "nullable_property_eval", source: &eval, expected: &eval_expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

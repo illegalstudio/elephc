@@ -198,6 +198,9 @@ fn lower_property_write_source(
     mixed_root: bool,
 ) -> ByRefForeachPropertySource {
     let object_value = lower_expr(ctx, object);
+    if mixed_root {
+        crate::ir_lower::stmt::guard_property_dimension_write(ctx, object_value, property, expr.span);
+    }
     let object_type = ctx.builder.value_php_type(object_value.value);
     let native = native_property_method_for_value(ctx, object_value.value, property,
         elephc_builtin_contract::ObjectProperty::WriteFetch).is_some();

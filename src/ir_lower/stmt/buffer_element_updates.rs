@@ -361,6 +361,15 @@ impl<'a> BufferExpressionUpdate<'a> {
     }
 }
 
+/// Checks a property increment after stabilization and before the generic prelude reads it.
+pub(crate) fn guard_property_expression_update(
+    ctx: &mut LoweringContext<'_, '_>, update: &BufferExpressionUpdate<'_>, span: Span,
+) {
+    if let ExpressionRoot::Property { object, property } = update.root {
+        guard_property_dimension_readwrite(ctx, object, property, span);
+    }
+}
+
 /// Lowers a recognized expression update once its stabilizing prelude statements have run.
 ///
 /// Returns `None`, having emitted nothing, when the receiver is not a scalar buffer; the caller
