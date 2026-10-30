@@ -45,6 +45,8 @@ GuardFetchTry(new GuardFetchReadonly(true), 1);
 GuardFetchTry(new GuardFetchPrivate(true), 1);
 GuardFetchTry(new GuardFetchReadonly(false), 0);
 GuardFetchTry(new GuardFetchPrivate(false), 0);
+GuardFetchTry(new GuardFetchReadonly(false), 1);
+GuardFetchTry(new GuardFetchPrivate(false), 1);
 GuardFetchTry(new GuardFetchInt(), 1);
 restore_error_handler();
 "#;
@@ -56,7 +58,10 @@ restore_error_handler();
         auto("GuardFetchUninitialized", "?ArrayObject"),
         "Error:Typed property GuardFetchUninitialized::$items must not be accessed before initialization|empty;".into(),
         auto("GuardFetchUnion", "string|int"),
-        readonly.into(), private.into(), readonly.into(), private.into(), auto("GuardFetchInt", "?int"),
+        readonly.into(), private.into(), readonly.into(), private.into(),
+        "Error:Typed property GuardFetchReadonly::$items must not be accessed before initialization|empty;".into(),
+        "Error:Typed property GuardFetchPrivate::$items must not be accessed before initialization|empty;".into(),
+        auto("GuardFetchInt", "?int"),
     ].concat();
     let renamed = source.replace("GuardFetch", "EvalGuardFetch");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
