@@ -37,7 +37,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_fopen_result(
     };
     let object = eval_dynamic_class_new_object(&class, Vec::new(), context, scope, values)?;
     let open_args = eval_user_wrapper_stream_open_args(filename, mode, values)?;
-    let open_result = eval_dynamic_method_with_values(
+    let open_result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         class.name(),
         &stream_open,
@@ -45,9 +45,17 @@ pub(in crate::interpreter) fn eval_user_wrapper_fopen_result(
         open_args,
         context,
         values,
-    )?;
-    let opened = values.truthy(open_result)?;
-    values.release(open_result)?;
+    );
+    let open_result = match open_result {
+        Ok(value) => value,
+        Err(status) => { let _ = release_expr_result(object, context, values); return Err(status); }
+    };
+    let opened = values.truthy(open_result);
+    let released = release_expr_result(open_result, context, values);
+    let opened = match opened.and_then(|opened| released.map(|()| opened)) {
+        Ok(opened) => opened,
+        Err(status) => { let _ = release_expr_result(object, context, values); return Err(status); }
+    };
     if !opened {
         values.release(object)?;
         return values.bool_value(false).map(Some);
@@ -71,7 +79,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_fclose_result(
     if let Some((declaring_class, stream_close)) =
         eval_user_wrapper_method(&info.class_name, "stream_close", context)
     {
-        let result = eval_dynamic_method_with_values(
+        let result = eval_dynamic_method_with_owned_values(
             &declaring_class,
             &info.class_name,
             &stream_close,
@@ -246,7 +254,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_url_stat_result(
     let object = eval_dynamic_class_new_object(&class, Vec::new(), context, &mut scope, values)?;
     let path = values.string(path)?;
     let flags = values.int(flags)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         class.name(),
         &url_stat,
@@ -254,8 +262,8 @@ pub(in crate::interpreter) fn eval_user_wrapper_url_stat_result(
         positional_args(vec![path, flags]),
         context,
         values,
-    )?;
-    values.release(object)?;
+    );
+    let result = finish_synthesized_method_arguments(result, vec![object], context, values)?;
     Ok(Some(result))
 }
 
@@ -275,7 +283,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_read_bytes(
         return Ok(None);
     };
     let length = values.int(i64::try_from(length).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_read,
@@ -308,7 +316,7 @@ fn eval_user_wrapper_write_bytes(
         return Ok(None);
     };
     let data = values.string_bytes_value(data)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_write,
@@ -377,7 +385,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_eof_bool(
     else {
         return Ok(info.eof);
     };
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_eof,
@@ -410,7 +418,7 @@ fn eval_user_wrapper_seek_bool(
     };
     let offset = values.int(offset)?;
     let whence = values.int(whence)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_seek,

@@ -102,6 +102,26 @@ pub(in crate::interpreter) fn release_expr_result(
     if value.is_borrowed() { Ok(()) } else { eval_release_value(context, values, value) }
 }
 
+/// Retires synthesized caller operands after a borrowing method binder has finished.
+pub(in crate::interpreter) fn finish_synthesized_method_arguments(
+    result: Result<RuntimeCellHandle, EvalStatus>, owners: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        let released = release_expr_result(owner, context, values);
+        if cleanup.is_ok() { cleanup = released; }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
+}
+
 /// Compares borrowed values and releases the comparison cell after reading its truthiness.
 pub(in crate::interpreter) fn eval_comparison_condition(
     op: EvalBinOp,

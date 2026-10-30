@@ -119,7 +119,7 @@ where
     let mut args = Vec::with_capacity(extra_args.len() + 1);
     args.push(path);
     args.extend(extra_args);
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         class.name(),
         &method,
@@ -127,8 +127,8 @@ where
         positional_args(args),
         context,
         values,
-    )?;
-    values.release(object)?;
+    );
+    let result = finish_synthesized_method_arguments(result, vec![object], context, values)?;
     let ok = values.truthy(result)?;
     values.release(result)?;
     values.bool_value(ok).map(Some)

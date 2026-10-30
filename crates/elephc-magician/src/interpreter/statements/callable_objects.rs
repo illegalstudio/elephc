@@ -164,7 +164,7 @@ pub(in crate::interpreter) fn eval_magic_instance_method_call(
         return Ok(None);
     }
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
-    eval_dynamic_method_with_values(
+    eval_dynamic_method_with_owned_values(
         &declaring_class,
         called_class_name,
         &method,
@@ -192,15 +192,16 @@ pub(in crate::interpreter) fn eval_magic_static_method_call(
         return Ok(None);
     }
     let magic_args = eval_magic_call_args(method_name, evaluated_args, values)?;
-    eval_dynamic_static_method_with_values(
+    let owners = magic_args.iter().map(|argument| argument.value).collect();
+    let result = eval_dynamic_static_method_with_values(
         &declaring_class,
         called_class_name,
         &method,
         magic_args,
         context,
         values,
-    )
-    .map(Some)
+    );
+    finish_synthesized_method_arguments(result, owners, context, values).map(Some)
 }
 
 /// Builds the two synthetic arguments passed to `__call()` and `__callStatic()`.
@@ -210,7 +211,10 @@ pub(super) fn eval_magic_call_args(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvaluatedCallArg>, EvalStatus> {
     let method = values.string(method_name)?;
-    let args = eval_magic_call_arg_array(evaluated_args, values)?;
+    let args = match eval_magic_call_arg_array(evaluated_args, values) {
+        Ok(args) => args,
+        Err(status) => { let _ = values.release(method); return Err(status); }
+    };
     Ok(positional_args(vec![method, args]))
 }
 
@@ -226,17 +230,22 @@ pub(super) fn eval_magic_call_arg_array(
         values.array_new(evaluated_args.len())?
     };
     let mut next_positional = 0_i64;
-    for arg in evaluated_args {
-        let key = if let Some(name) = arg.name {
-            values.string(&name)?
-        } else {
-            let key = values.int(next_positional)?;
-            next_positional = next_positional
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        };
-        args = values.array_set(args, key, arg.value)?;
-    }
+    let result = (|| {
+        for arg in evaluated_args {
+            let key = if let Some(name) = arg.name {
+                values.string(&name)?
+            } else {
+                let current = next_positional;
+                next_positional = next_positional.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
+                values.int(current)?
+            };
+            let inserted = values.array_set(args, key, arg.value);
+            let released = values.release(key);
+            args = inserted?;
+            released?;
+        }
+        Ok(())
+    })();
+    if let Err(status) = result { let _ = values.release(args); return Err(status); }
     Ok(args)
 }

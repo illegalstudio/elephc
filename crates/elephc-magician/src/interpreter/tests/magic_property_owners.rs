@@ -44,3 +44,59 @@ fn magic_property_name_owners_cover_success_and_failure() {
         }
     }
 }
+
+/// Magic instance and static method names and argument arrays keep no caller leases after dispatch.
+#[test]
+fn synthesized_magic_call_arguments_are_retired() {
+    for (modifier, method, call) in [
+        ("", "__call", "$object->missingOwnerMethod(7)"),
+        ("static", "__callStatic", "MagicCallOwner::missingOwnerMethod(7)"),
+    ] {
+        let source = format!("class MagicCallOwner {{ public {modifier} function {method}($name, $args) \
+            {{ return $name; }} }} $object = new MagicCallOwner(); {call}; unset($object);");
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        for (id, value) in &values.values {
+            if matches!(value, FakeValue::String(name) if name == "missingOwnerMethod")
+                || matches!(value, FakeValue::Array(_) | FakeValue::Int(0)) {
+                assert_eq!(values.cell_owners[id], 0, "{method}: {value:?}");
+            }
+        }
+    }
+}
+
+/// Stream hooks consume synthesized path, mode and length arguments after normal calls.
+#[test]
+fn synthesized_user_stream_arguments_are_retired() {
+    let template = r#"
+class OwnerStreamWrapper {
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_read($length): string { return ''; }
+    public function stream_eof(): bool { return true; }
+    public function stream_close(): void {}
+}
+stream_wrapper_register('ownerstream', 'OwnerStreamWrapper');
+$handle = fopen('ownerstream://value', 'r');
+fread($handle, 3); fclose($handle); unset($handle);
+"#;
+    for fail in [false, true] {
+        let source = if fail { template.replace("return '';", "missingStreamOwnerBody();") }
+            else { template.to_string() };
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        let outcome = execute_program_outcome_with_context(
+            &mut context, &program, &mut scope, &mut values,
+        ).unwrap();
+        assert_eq!(matches!(outcome, EvalOutcome::Throwable(_)), fail);
+        for (id, value) in &values.values {
+            if matches!(value, FakeValue::String(name) if name == "ownerstream://value" || name == "r") {
+                assert_eq!(values.cell_owners[id], 0, "{value:?}");
+            }
+        }
+    }
+}

@@ -68,7 +68,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_ftruncate_result(
         return values.bool_value(false).map(Some);
     };
     let size = values.int(i64::try_from(size).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_truncate,
@@ -98,7 +98,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_flock_result(
         return Ok(Some(false));
     };
     let operation = values.int(operation)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_lock,
@@ -127,7 +127,7 @@ fn eval_user_wrapper_call_no_arg_method(
     else {
         return Ok(None);
     };
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &method,

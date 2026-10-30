@@ -35,7 +35,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_set_option_result(
     let option = values.int(option)?;
     let arg1 = values.int(arg1)?;
     let arg2 = values.int(arg2)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_set_option,

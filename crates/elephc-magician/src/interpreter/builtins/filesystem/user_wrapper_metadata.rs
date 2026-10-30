@@ -45,16 +45,16 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_metadata_result(
     let object = eval_dynamic_class_new_object(&class, Vec::new(), context, &mut scope, values)?;
     let path = values.string(path)?;
     let option = values.int(option)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         class.name(),
         &stream_metadata,
         object,
-        positional_args(vec![path, option, value]),
+        positional_args(vec![path, option, value.borrowed()]),
         context,
         values,
-    )?;
-    values.release(object)?;
+    );
+    let result = finish_synthesized_method_arguments(result, vec![object], context, values)?;
     let ok = values.truthy(result)?;
     values.release(result)?;
     values.bool_value(ok).map(Some)
