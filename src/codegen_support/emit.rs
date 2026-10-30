@@ -215,8 +215,14 @@ impl Emitter {
     /// "tail filed under another function" mistake this whole mechanism exists to avoid.
     pub fn end_out_of_line(&mut self, scope: OutOfLine) {
         let body = std::mem::replace(&mut self.buf, scope.caller);
+        self.push_out_of_line(&body);
+    }
+
+    /// Files a body taken with [`Self::end_detached`] after all other text, as
+    /// [`Self::end_out_of_line`] would have.
+    pub fn push_out_of_line(&mut self, body: &str) {
         self.out_of_line.push_str(".text\n");
-        self.out_of_line.push_str(&body);
+        self.out_of_line.push_str(body);
     }
 
     /// Finishes a detached scope opened by [`Self::begin_out_of_line`] and returns its text.
