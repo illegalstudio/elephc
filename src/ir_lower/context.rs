@@ -2355,12 +2355,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return false;
         }
         let tracked = Ownership::php_type_needs_lifetime_tracking(&storage_type);
-        // A later boxed store also boxes an inline nullable slot's entry value and
-        // earlier stores. Retire that owner even before lowering reaches the widening.
-        let inline_nullable = storage_type.codegen_repr() == PhpType::TaggedScalar;
+        // A later branch join can box a scalar after this overwrite was lowered.
+        // Retire its previous owner at the final storage type, even on a forward edge.
+        let scalar_may_be_boxed = matches!(storage_type.codegen_repr(), PhpType::TaggedScalar
+            | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void);
         let eval_may_have_reloaded_slot = self.eval_barrier_active
             && self.builder.local_kind(slot) == LocalKind::PhpLocal;
-        if !tracked && !inline_nullable && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
+        if !tracked && !scalar_may_be_boxed && self.loop_stack.is_empty() && !eval_may_have_reloaded_slot {
             // Outside loops no back-edge can execute a later widening store before
             // this one, and no eval reload can have populated it, so the untracked
             // storage type is final for this path.

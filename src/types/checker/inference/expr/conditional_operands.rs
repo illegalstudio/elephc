@@ -39,7 +39,7 @@ impl Checker {
             checker.infer_type(expr, env)
         };
         let result = if can_skip {
-            let mut flow = self.snapshot_conditional_flow(env);
+            let mut flow = self.snapshot_all_locals_flow(env);
             let mut branch = env.clone();
             let result = self.with_conditional_flow_arm(&mut flow, &mut branch, evaluate)?;
             Self::merge_short_circuit_storage_effects(env, &branch);

@@ -290,6 +290,8 @@ function fallback(?string $raw, ?int $default = null): int {
 
 Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type.
 
+Existing locals assigned inside nullsafe arguments or dynamic member names keep the skipped and evaluated alternatives in following reads. The assignment runs only when the receiver is non-null.
+
 An `instanceof` check against a second interface grants that interface inside the guarded branch. After the branch, the receiver keeps its original interface contract unless an assignment changes it.
 
 More precise compound guards can expose an existing parameter-coercion limitation. Inside `if (is_float($value) || is_bool($value))`, a `mixed` value reads as `float|bool`; passing it to an `int` parameter requires an explicit `(int)` cast because converting a runtime float can lose precision. A call that compiled while the value stayed opaque `mixed` can therefore produce a diagnostic after narrowing. See [Parameter type coercion](#parameter-type-coercion).

@@ -107,7 +107,16 @@ impl Checker {
         if !frame.backedge_can_exit {
             for edge in &frame.breaks { self.observe_flow_snapshot(&mut frame.flow, edge, true); }
         }
-        self.forget_conditional_bindings(&mut frame.flow, &frame.rebound);
+        let read_edges: Vec<_> = frame.breaks.iter().chain(
+            frame.normal.iter().chain(&frame.continues).filter(|_| frame.backedge_can_exit),
+        ).collect();
+        let bound_reads = frame.rebound.iter().filter(|name| !read_edges.is_empty()
+            && read_edges.iter().all(|edge| edge.views.contains_key(*name))).map(|name| {
+                let read = read_edges.iter().map(|edge| edge.views[name].clone())
+                    .reduce(|left, right| self.join_flow_views(&left, &right)).expect("reaching binding");
+                (name.clone(), read)
+            }).collect();
+        self.forget_conditional_bindings(&mut frame.flow, &frame.rebound, &bound_reads);
         self.finish_target_flow(frame.flow, env, frame.is_loop);
     }
 

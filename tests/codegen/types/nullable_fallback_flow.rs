@@ -9,6 +9,86 @@
 
 use super::*;
 
+/// A nullsafe write retains the existing nullable pointer ABI and its skipped null value.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_pointer_storage_runtime() {
+    let source = r#"<?php
+packed class NullsafeFlowRow { public int $value; }
+class NullsafePointerSink { public function take(?ptr<NullsafeFlowRow> $value): void {} }
+function choosePointer(?NullsafePointerSink $receiver, buffer<NullsafeFlowRow> $rows): ?ptr<NullsafeFlowRow> {
+    $value = null;
+    $receiver?->take($value = $rows[0]);
+    return $value;
+}
+$rows = buffer_new<NullsafeFlowRow>(1);
+$rows[0]->value = 9;
+$present = choosePointer(new NullsafePointerSink(), $rows);
+$missing = choosePointer(null, $rows);
+var_dump($present === null, $missing === null);
+if ($present !== null) { echo $present->value, "\n"; }
+buffer_free($rows);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source, "bool(false)\nbool(true)\n9\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Nullsafe arguments and dynamic names join evaluated writes with the skipped receiver path.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_raw_writes_runtime() {
+    let source = r#"<?php
+class RawNullsafeFlow {
+    public string $property = 'ok';
+    public ?RawNullsafeFlow $next = null;
+    public function take(mixed $value): void {}
+    public function step(mixed $value): ?RawNullsafeFlow { return $this->next; }
+}
+function nullsafeFloat(?RawNullsafeFlow $receiver) {
+    $value = 1;
+    $receiver?->take($value = 2.5);
+    return $value;
+}
+function nullsafeInteger(?RawNullsafeFlow $receiver) {
+    $value = null;
+    $receiver?->take($value = 5);
+    return $value;
+}
+function nullsafePropertyName(?RawNullsafeFlow $receiver) {
+    $value = 1;
+    $ignored = $receiver?->{($value = 2.5) ? 'property' : 'property'};
+    return $value;
+}
+function nullsafeIntermediate(?RawNullsafeFlow $receiver) {
+    $value = 1;
+    $receiver?->step($value = 2.5)?->take($value = 7);
+    return $value;
+}
+$receiver = new RawNullsafeFlow();
+var_dump(nullsafeFloat($receiver), nullsafeFloat(null));
+var_dump(nullsafeInteger($receiver), nullsafeInteger(null));
+var_dump(nullsafePropertyName($receiver), nullsafePropertyName(null));
+var_dump(nullsafeIntermediate($receiver), nullsafeIntermediate(null));
+$receiver->next = new RawNullsafeFlow();
+var_dump(nullsafeIntermediate($receiver));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "float(2.5)\nint(1)\nint(5)\nNULL\nfloat(2.5)\nint(1)\nfloat(2.5)\nint(1)\nint(7)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Dynamic method-name effects survive the same nullsafe skip join.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_method_name_runtime() {
+    let source = "<?php class RawMethodNameFlow { function take(mixed $value): void {} } function run(?RawMethodNameFlow $receiver) { $value = 1; $receiver?->{($value = 2.5) ? 'take' : 'take'}(0); return $value; } var_dump(run(new RawMethodNameFlow()), run(null));";
+    for optimized in [true, false] {
+        let run = || assert_eq!(compile_and_run(source), "float(2.5)\nint(1)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Raw writes on nested jumps survive restored try, catch and switch entry snapshots.
 #[test]
 fn test_nullable_fallback_flow_review_raw_loop_exits_runtime() {
@@ -68,11 +148,41 @@ function rawDoBreak(int $n) {
     } while (false);
     return $value;
 }
+function unpackTryBreak() {
+    $value = 1;
+    foreach ([1] as $_) {
+        try { [$value] = [2.5]; break; } catch (Exception $error) {}
+    }
+    return $value;
+}
+function unpackSwitchBreak(int $key) {
+    $value = 1;
+    foreach ([1] as $_) {
+        switch ($key) { case 1: [$value] = [2.5]; break 2; default: break; }
+    }
+    return $value;
+}
+function unpackCatchBreak() {
+    $value = 1;
+    while (true) {
+        try { throw new Exception('stop'); }
+        catch (Exception $error) { [$value] = [2.5]; break; }
+    }
+    return $value;
+}
+function unpackPairBreak() {
+    $value = 1;
+    foreach ([1] as $_) {
+        try { [$value, $other] = [2.5, 3]; break; } catch (Exception $error) {}
+    }
+    return $value;
+}
 var_dump(rawTryBreak(1), rawCatchBreak(1), rawForeachCatch([1, 5]), rawSwitchBreak(1));
 var_dump(rawWhileContinue(2), rawSwitchContinue([1, 5]), rawDoBreak(1));
+var_dump(unpackTryBreak(), unpackSwitchBreak(1), unpackCatchBreak(), unpackPairBreak());
 "#;
     for optimized in [true, false] {
-        let run = || assert_nullable_flow_heap_output(source, &"float(2.5)\n".repeat(7));
+        let run = || assert_nullable_flow_heap_output(source, &"float(2.5)\n".repeat(11));
         if optimized { run(); } else { without_ir_opt(run); }
     }
 }
@@ -1162,10 +1272,15 @@ function caught(?int $value): void {
         echo get_class($value), "\n";
     }
 }
-destructured(null); caught(null);
+function absentAfterLoop(): void {
+    $value = 1;
+    foreach ([1] as $_) { unset($value); break; }
+    var_dump(isset($value), $value ?? null);
+}
+destructured(null); caught(null); absentAfterLoop();
 "#;
     for optimized in [true, false] {
-        let run = || assert_eq!(compile_and_run(source), "string(3) \"str\"\nint(7)\nException\n");
+        let run = || assert_eq!(compile_and_run(source), "string(3) \"str\"\nint(7)\nException\nbool(false)\nNULL\n");
         if optimized { run(); } else { without_ir_opt(run); }
     }
 }

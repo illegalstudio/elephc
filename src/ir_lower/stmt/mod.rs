@@ -77,6 +77,7 @@ use local_assignments::*;
 pub(super) use local_assignments::lower_ref_assign;
 pub(super) use local_assignments::retype_value_for_pointer_local;
 pub(super) use local_assignments::union_local_storage_type;
+pub(in crate::ir_lower) use conditionals::join_pointer_arm_types;
 use conditionals::*;
 use loops::*;
 use array_write_core::*;

@@ -13,11 +13,29 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+packed class RawNullsafeRowTarget { public int $value; }
+class RawPointerSinkTarget { public function take(?ptr<RawNullsafeRowTarget> $value): void {} }
+function rawNullsafePointerTarget(?RawPointerSinkTarget $receiver, buffer<RawNullsafeRowTarget> $rows): ?ptr<RawNullsafeRowTarget> {
+    $value = null;
+    $receiver?->take($value = $rows[0]);
+    return $value;
+}
+class RawNullsafeTarget { public function take(mixed $value): void {} }
+function rawNullsafeTarget(?RawNullsafeTarget $receiver) {
+    $value = null;
+    $receiver?->take($value = 5);
+    return $value;
+}
+function rawNullsafeFloatTarget(?RawNullsafeTarget $receiver) {
+    $value = 1;
+    $receiver?->take($value = 2.5);
+    return $value;
+}
 function rawLoopExitTarget(int $key) {
     $value = 1;
     foreach ([1] as $_) {
         try {
-            switch ($key) { case 1: $value = 2.5; break 2; default: break; }
+            switch ($key) { case 1: [$value] = [2.5]; break 2; default: break; }
         } catch (Exception $error) { $value = 3.5; continue; }
     }
     return $value;

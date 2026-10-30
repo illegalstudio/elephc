@@ -40,8 +40,8 @@ impl Checker {
         self.snapshot_conditional_flow_inputs(env, false)
     }
 
-    /// Tracks every switch binding, including raw locals written by an earlier arm.
-    pub(in crate::types::checker) fn snapshot_switch_flow(&self, env: &TypeEnv) -> ConditionalFlow {
+    /// Tracks every visible local when alternatives replace a complete environment.
+    pub(in crate::types::checker) fn snapshot_all_locals_flow(&self, env: &TypeEnv) -> ConditionalFlow {
         self.snapshot_conditional_flow_inputs(env, true)
     }
 
@@ -435,13 +435,18 @@ impl Checker {
         if is_loop { Self::purge_property_narrowings(env); }
     }
 
-    /// Leaves the new binding's lifecycle policy authoritative after explicit rebinding.
-    pub(in crate::types::checker) fn forget_conditional_bindings(&self, flow: &mut ConditionalFlow, names: &HashSet<String>) {
+    /// Drops old binding provenance while retaining reads defined on every reaching exit.
+    pub(in crate::types::checker) fn forget_conditional_bindings(
+        &self, flow: &mut ConditionalFlow, names: &HashSet<String>, bound_reads: &TypeEnv,
+    ) {
         for name in names {
             flow.views.remove(name);
-            flow.joined.remove(name);
+            if let Some(read) = bound_reads.get(name) { flow.joined.insert(name.clone(), read.clone()); }
+            else { flow.joined.remove(name); }
             flow.physical.remove(name);
             flow.changed.remove(name);
+            flow.storage.remove(name);
+            flow.origins.remove(name);
         }
     }
 

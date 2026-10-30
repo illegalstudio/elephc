@@ -518,7 +518,7 @@ impl Checker {
                     }
                 }
                 let entry = self.snapshot_flow_exit(env);
-                let flow = self.snapshot_switch_flow(env);
+                let flow = self.snapshot_all_locals_flow(env);
                 self.begin_switch_flow(flow, default.is_none());
                 let mut arms: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
                 if let Some(body) = default {

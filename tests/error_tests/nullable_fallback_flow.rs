@@ -9,11 +9,23 @@
 
 use super::*;
 
+/// Nullsafe writes retain both value alternatives in the inferred return contract.
+#[test]
+fn test_nullable_fallback_flow_review_nullsafe_raw_write_contracts() {
+    let source = "<?php class RawFlow { function take(mixed $value): void {} } function floating(?RawFlow $receiver) { $value = 1; $receiver?->take($value = 2.5); return $value; } function nullable(?RawFlow $receiver) { $value = null; $receiver?->take($value = 5); return $value; }";
+    let checked = check_source_full(source).unwrap();
+    assert_eq!(checked.functions["floating"].return_type, types::PhpType::Mixed);
+    assert!(matches!(&checked.functions["nullable"].return_type, types::PhpType::Union(members)
+        if members.contains(&types::PhpType::Void) && members.contains(&types::PhpType::Int)));
+}
+
 /// A raw container write on a catch break remains in the following return contract.
 #[test]
 fn test_nullable_fallback_flow_review_raw_loop_exit_contract() {
-    expect_error("<?php function rows(array $input): array<int> { $rows = []; foreach ($input as $key) { try { throw new RuntimeException('stop'); } catch (Exception $error) { $rows = ['x']; break; } } return $rows; }",
-        "returns array<string>");
+    for assignment in ["$rows = ['x'];", "[$rows] = [['x']];"] {
+        expect_error(&format!("<?php function rows(array $input): array<int> {{ $rows = []; foreach ($input as $key) {{ try {{ throw new RuntimeException('stop'); }} catch (Exception $error) {{ {assignment} break; }} }} return $rows; }}"),
+            "returns array<string>");
+    }
 }
 
 /// A preceding switch arm's array layout remains part of the following return contract.
