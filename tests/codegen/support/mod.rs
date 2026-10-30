@@ -39,6 +39,7 @@ mod runner;
 mod bundle;
 mod c_fixture;
 mod compiler;
+mod diagnostics;
 mod assembly;
 mod phase;
 mod curl_native;

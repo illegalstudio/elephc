@@ -896,6 +896,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
         &[],
     );
 
+    super::diagnostics::preserve_heap_failure(source, &user_asm, &output);
     let _ = fs::remove_dir_all(&dir);
     (output, user_asm)
 }

@@ -217,13 +217,17 @@ pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     cmd.arg("-o").arg(obj_path).arg("-");
     cmd.stdin(Stdio::piped());
     let mut child = cmd.spawn().expect("failed to spawn assembler");
-    child
+    let written = child
         .stdin
         .as_mut()
         .expect("assembler stdin missing")
-        .write_all(asm.as_bytes())
-        .expect("failed to feed assembler");
+        .write_all(asm.as_bytes());
+    if let Err(error) = written {
+        super::diagnostics::preserve_assembler_failure(asm);
+        panic!("failed to feed assembler: {error}");
+    }
     let status = child.wait().expect("failed to wait for assembler");
+    if !status.success() { super::diagnostics::preserve_assembler_failure(asm); }
     assert!(status.success(), "assembler failed");
 }
 

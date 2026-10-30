@@ -1280,6 +1280,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   codegen-tests-linux-x86_64:
     name: Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-x86_64]
@@ -1373,6 +1382,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-aarch64]
@@ -1463,6 +1481,15 @@ jobs:
         with:
           name: junit-codegen-tests-linux-aarch64-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -2401,6 +2428,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-eval-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-x86_64]
@@ -2462,6 +2498,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-eval-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-aarch64]
@@ -2520,6 +2565,15 @@ jobs:
         with:
           name: junit-eval-codegen-tests-linux-aarch64-${{ matrix.shard }}
           path: target/nextest/ci/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-eval-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
