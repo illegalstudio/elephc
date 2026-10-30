@@ -13,6 +13,25 @@ use std::fmt::Write;
 
 use super::platform::{Arch, Platform, Target};
 
+/// Returns how many stack-passed argument words a Rust-called x86_64 export takes, or `None`
+/// when the label is not called from Rust and keeps the emitter's own register convention.
+///
+/// Every `__elephc_eval_*` global is declared in the eval bridge's `extern "C"` blocks
+/// (`crates/elephc-magician/src/runtime_hooks/externs.rs`). The callable invokers already save
+/// every callee-saved register they use (`codegen::runtime_callable_invoker`). The stack word
+/// counts are the integer parameters past the sixth; a test checks them against the externs.
+fn rust_called_export_stack_words(name: &str) -> Option<usize> {
+    if !name.starts_with("__elephc_eval_") || name.starts_with("__elephc_eval_callable_invoker_") {
+        return None;
+    }
+    Some(match name {
+        "__elephc_eval_value_method_call" | "__elephc_eval_value_static_property_set" => 1,
+        "__elephc_eval_value_static_method_call" => 2,
+        "__elephc_eval_reflection_owner_new" => 11,
+        _ => 0,
+    })
+}
+
 /// Assembly emitter.
 pub struct Emitter {
     buf: String,
@@ -180,6 +199,67 @@ impl Emitter {
             let _ = writeln!(self.buf, ".globl {}", name);
             let _ = writeln!(self.buf, "{}:", name);
         }
+        if self.target.arch == Arch::X86_64 {
+            if let Some(stack_words) = rust_called_export_stack_words(name) {
+                self.emit_sysv_callee_saved_shim(name, stack_words);
+            }
+        }
+    }
+
+    /// Makes a Rust-called export preserve rbx and r12-r15, which SysV requires of it.
+    ///
+    /// The x86_64 runtime and lowering use r12-r15 as scratch without saving them, and the
+    /// register allocator only parks values in rbx (`ir_passes::regalloc::callee_int_pool`).
+    /// That convention holds between emitted functions, but the eval bridge calls these
+    /// exports from Rust, which keeps its own values in those registers across the call once
+    /// optimized: `new SplFixedArray()` in eval came back with the bridge's r12 overwritten
+    /// by `__rt_spl_fixed_new`'s loop counter. The shim saves the registers, copies the
+    /// stack-passed arguments so the body sees the standard layout, and calls the body,
+    /// which follows the export label.
+    fn emit_sysv_callee_saved_shim(&mut self, name: &str, stack_words: usize) {
+        let body = format!("{}_sysv_body", name);
+        self.emit_sysv_callee_saved_call(&body, stack_words);
+        let _ = writeln!(self.buf, "{}:", body);
+    }
+
+    /// Emits the global `entry`, which Rust calls through a function pointer, running the
+    /// argument-less `target` with rbx and r12-r15 preserved for it.
+    ///
+    /// The `--web` bridge calls the request handler and the application callbacks this way,
+    /// and those bodies follow the emitter's convention, not SysV's: once the bridge is
+    /// optimized, its worker loop keeps values in r12-r14 across the handler call, and the
+    /// worker died after its first request. Only meaningful on x86_64.
+    pub fn sysv_callee_saved_entry(&mut self, entry: &str, target: &str) {
+        debug_assert_eq!(self.target.arch, Arch::X86_64);
+        self.label_global(entry);
+        self.emit_sysv_callee_saved_call(target, 0);
+    }
+
+    /// Saves rbx and r12-r15, calls `target` with `stack_words` copied stack arguments,
+    /// restores the registers and returns `target`'s result.
+    fn emit_sysv_callee_saved_call(&mut self, target: &str, stack_words: usize) {
+        for reg in ["rbx", "r12", "r13", "r14", "r15"] {
+            self.instruction(&format!("push {}", reg));                     // save a register Rust may keep a value in across this call
+        }
+        // The return address and five saves leave rsp 16-byte aligned; pad an odd copy count.
+        let padding = if stack_words % 2 == 1 { 8 } else { 0 };
+        if padding != 0 {
+            self.instruction("sub rsp, 8");                                     // keep rsp 16-byte aligned at the body call
+        }
+        // Copying the last argument first keeps every source at the same offset from rsp.
+        let source = 48 + padding + 8 * stack_words.saturating_sub(1);
+        for _ in 0..stack_words {
+            self.instruction(&format!("push QWORD PTR [rsp + {}]", source));   // copy a stack-passed argument below the saved registers
+        }
+        self.instruction(&format!("call {}", target));                          // run the body with the caller's registers saved
+        let pushed = 8 * stack_words + padding;
+        if pushed != 0 {
+            self.instruction(&format!("add rsp, {}", pushed));                  // drop the copied arguments and the padding
+        }
+        for reg in ["r15", "r14", "r13", "r12", "rbx"] {
+            self.instruction(&format!("pop {}", reg));                          // restore the caller's register
+        }
+        self.instruction("ret");                                                // return the body's rax/rdx/xmm0 result untouched
     }
 
     /// Starts writing a whole function that is needed WHILE another one is being written.
@@ -614,5 +694,99 @@ mod tests {
         e.label_global("_php_outer");
         e.instruction("ret");
         assert_eq!(e.output(), ".globl _php_outer\n_php_outer:\n    ret\n");
+    }
+
+    /// An x86_64 eval export saves rbx and r12-r15 for its Rust caller and hands the body its
+    /// stack arguments where SysV puts them; other labels and AArch64 exports are left alone.
+    #[test]
+    fn test_x86_rust_called_exports_preserve_callee_saved_registers() {
+        let shim = |name: &str| {
+            let mut e = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+            e.label_global(name);
+            e.output()
+        };
+        let saves = "    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n";
+        let restores = "    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    ret\n";
+
+        let plain = shim("__elephc_eval_value_add");
+        assert!(plain.contains(&format!("__elephc_eval_value_add:\n{saves}    call __elephc_eval_value_add_sysv_body\n{restores}")), "{plain}");
+        assert!(plain.ends_with("__elephc_eval_value_add_sysv_body:\n"), "{plain}");
+
+        // One stack word: pad to keep alignment, then copy the caller's [rsp + 8] from above the
+        // return address, five saves and the padding.
+        let one = shim("__elephc_eval_value_method_call");
+        assert!(one.contains(&format!("{saves}    sub rsp, 8\n    push QWORD PTR [rsp + 56]\n    call ")), "{one}");
+        assert!(one.contains(&format!("    add rsp, 16\n{restores}")), "{one}");
+
+        // Two words: no padding, and each copy reads the same offset as rsp moves down.
+        let two = shim("__elephc_eval_value_static_method_call");
+        let copy = "    push QWORD PTR [rsp + 56]\n";
+        assert!(two.contains(&format!("{saves}{copy}{copy}    call ")), "{two}");
+        assert!(two.contains(&format!("    add rsp, 16\n{restores}")), "{two}");
+
+        for name in ["__elephc_eval_callable_invoker_7", "__rt_spl_fixed_new", "_php_main"] {
+            assert!(!shim(name).contains("push rbx"), "{name} must keep the internal convention");
+        }
+        let mut arm = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        arm.label_global("__elephc_eval_value_add");
+        let arm = arm.output();
+        assert!(!arm.contains("sysv_body"), "{arm}");
+    }
+
+    /// The shim's stack word counts match the eval bridge's `extern "C"` declarations: an
+    /// export taking more than six integer arguments that the table missed would hand its body
+    /// the shim's saved registers as arguments.
+    #[test]
+    fn test_rust_called_export_stack_words_match_the_eval_bridge_externs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/elephc-magician/src");
+        let mut files = vec![root];
+        let mut checked = 0;
+        while let Some(path) = files.pop() {
+            if path.is_dir() {
+                files.extend(std::fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().path()));
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            let mut link_name = None;
+            for (index, line) in source.lines().enumerate() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("#[link_name = \"") {
+                    link_name = rest.split('"').next().map(str::to_string);
+                    continue;
+                }
+                let Some(declared) = line.split("fn ").nth(1).filter(|_| line.contains("fn __elephc_eval_")) else {
+                    continue;
+                };
+                let name = declared.split('(').next().unwrap().trim();
+                let symbol = link_name.take().unwrap_or_else(|| name.to_string());
+                let signature = source.lines().skip(index).take(40).collect::<Vec<_>>().join(" ");
+                let (_, declared) = signature.split_once(&format!("fn {name}")).unwrap();
+                let (_, rest) = declared.split_once('(').unwrap();
+                let (params, tail) = rest.split_once(')').unwrap();
+                // Rust definitions under the same prefix are called by the assembly, not from Rust.
+                if tail.find('{').is_some_and(|brace| tail.find(';').is_none_or(|semi| brace < semi)) {
+                    continue;
+                }
+                let integers = params
+                    .split(',')
+                    .filter(|param| param.contains(':'))
+                    .filter(|param| {
+                        let ty = param.split(':').nth(1).unwrap().trim();
+                        ty != "f64" && ty != "f32"
+                    })
+                    .count();
+                assert_eq!(
+                    rust_called_export_stack_words(&symbol),
+                    Some(integers.saturating_sub(6)),
+                    "{symbol} in {} takes {integers} integer arguments",
+                    path.display()
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "only {checked} eval bridge externs found");
     }
 }

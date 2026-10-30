@@ -504,3 +504,126 @@ use super::*;
         assert!(competing.path.exists(), "competing active runtime object was pruned");
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// Spawns this test binary filtered to `test_name` with `probe_var` set, so the probe body
+    /// can point the cache at its own root, and asserts the child passed.
+    fn run_isolated_cache_probe(test_name: &str, probe_var: &str) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([test_name, "--nocapture", "--test-threads=1"])
+            .env(probe_var, test_name)
+            .output()
+            .expect("spawn isolated runtime-cache probe");
+        assert!(
+            output.status.success(),
+            "isolated runtime-cache probe failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Creates an empty cache root unique to this process and points `XDG_CACHE_HOME` at it.
+    fn isolated_cache_root(label: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "elephc-runtime-cache-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create isolated cache root");
+        std::env::set_var("XDG_CACHE_HOME", &root);
+        root
+    }
+
+    /// Verifies a new build identity whose runtime assembly is unchanged reuses the object
+    /// already assembled for the old one (a hit, one object on disk), and that the alias it
+    /// records serves the next request for the new identity directly.
+    #[test]
+    fn unchanged_runtime_assembly_is_reused_across_build_identities() {
+        const TEST_NAME: &str = "unchanged_runtime_assembly_is_reused_across_build_identities";
+        const PROBE: &str = "ELEPHC_RUNTIME_CACHE_CONTENT_PROBE";
+        if std::env::var(PROBE).as_deref() != Ok(TEST_NAME) {
+            run_isolated_cache_probe(TEST_NAME, PROBE);
+            return;
+        }
+
+        let root = isolated_cache_root("content");
+        let prepare = |identity: &[u8]| {
+            prepare_runtime_object_with_identity(
+                8 * 1024 * 1024,
+                Target::detect_host(),
+                RuntimeFeatures::none(),
+                false,
+                false,
+                identity,
+            )
+            .expect("prepare runtime object")
+        };
+
+        let first = prepare(b"build-a");
+        assert_eq!(first.status, RuntimeCacheStatus::Miss, "an empty cache must assemble");
+        let first_bytes = fs::read(&first.path).expect("read first runtime object");
+        drop(first);
+
+        let second = prepare(b"build-b");
+        assert_eq!(
+            second.status,
+            RuntimeCacheStatus::Hit,
+            "an unchanged runtime assembly must not be assembled again"
+        );
+        assert_eq!(fs::read(&second.path).expect("read second object"), first_bytes);
+        drop(second);
+
+        let third = prepare(b"build-b");
+        assert_eq!(third.status, RuntimeCacheStatus::Hit);
+        drop(third);
+
+        let cache = root.join("elephc");
+        let names: Vec<String> = fs::read_dir(&cache)
+            .expect("read cache")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        let objects = names.iter().filter(|name| name.ends_with(".o")).count();
+        let aliases = names.iter().filter(|name| name.ends_with(".alias")).count();
+        assert_eq!(objects, 1, "one assembly must give one object: {names:?}");
+        assert_eq!(aliases, 2, "each build identity records its alias: {names:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Verifies an alias that names no live object, or tries to name a file outside the cache
+    /// directory, is ignored by lookups and removed by pruning, and the request is still served.
+    #[test]
+    fn dangling_or_escaping_runtime_alias_is_ignored_and_pruned() {
+        const TEST_NAME: &str = "dangling_or_escaping_runtime_alias_is_ignored_and_pruned";
+        const PROBE: &str = "ELEPHC_RUNTIME_CACHE_ALIAS_PROBE";
+        if std::env::var(PROBE).as_deref() != Ok(TEST_NAME) {
+            run_isolated_cache_probe(TEST_NAME, PROBE);
+            return;
+        }
+
+        let root = isolated_cache_root("alias");
+        let cache = root.join("elephc");
+        fs::create_dir_all(&cache).expect("create cache dir");
+        let dangling = cache.join(format!("runtime-v0-test-rt{:016x}-heap1.alias", 1));
+        fs::write(&dangling, format!("runtime-v0-test-rt{:016x}-heap1.o\n", 2))
+            .expect("write dangling alias");
+        let escaping = cache.join(format!("runtime-v0-test-rt{:016x}-heap1.alias", 3));
+        fs::write(&escaping, "../runtime-v0-test-rt0000000000000004-heap1.o\n")
+            .expect("write escaping alias");
+        assert_eq!(storage::read_runtime_cache_alias(&dangling).map(|p| p.exists()), Some(false));
+        assert_eq!(storage::read_runtime_cache_alias(&escaping), None);
+
+        let prepared = prepare_runtime_object(
+            8 * 1024 * 1024,
+            Target::detect_host(),
+            RuntimeFeatures::none(),
+            false,
+        )
+        .expect("prepare runtime object beside stale aliases");
+        assert!(prepared.path.exists());
+        assert!(!dangling.exists(), "a dangling alias must be pruned");
+        assert!(!escaping.exists(), "an escaping alias must be pruned");
+        drop(prepared);
+        let _ = fs::remove_dir_all(&root);
+    }

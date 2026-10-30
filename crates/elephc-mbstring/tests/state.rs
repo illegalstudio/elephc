@@ -2,7 +2,7 @@
 //! Checks shared settings, language defaults, encoding-list parsing, and lookup diagnostics.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test state`.
+//! - `cargo test -p elephc-mbstring --test engine state::`.
 //!
 //! Key details:
 //! - The PHP oracle records ordered mutations and exact state after errors.

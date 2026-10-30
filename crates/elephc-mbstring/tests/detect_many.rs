@@ -2,7 +2,7 @@
 //! Compares multi-string encoding detection with independent PHP conversion oracles.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test detect_many`.
+//! - `cargo test -p elephc-mbstring --test engine detect_many::`.
 //!
 //! Key details:
 //! - Inputs retain source boundaries, order, malformed units, and stateful shift sequences.

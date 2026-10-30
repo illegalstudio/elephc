@@ -2,7 +2,7 @@
 //! Verifies every EUC-TW plane suffix and every Unicode-range reverse encoding input.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test euctw`.
+//! - `cargo test -p elephc-mbstring --test engine euctw::`.
 //!
 //! Key details:
 //! - PHP hashes include malformed row/cell consumption and the older plane-14 mappings.

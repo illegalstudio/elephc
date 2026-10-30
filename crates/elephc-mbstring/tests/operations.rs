@@ -2,7 +2,7 @@
 //! Compares complete string-operation results and exceptions to a cross-encoding PHP oracle.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test operations`.
+//! - `cargo test -p elephc-mbstring --test engine operations::`.
 //!
 //! Key details:
 //! - The compressed JSONL fixture retains every argument and complete expected result.

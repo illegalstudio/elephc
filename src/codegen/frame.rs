@@ -1227,18 +1227,29 @@ pub(super) fn emit_web_entry_stub(
     let handler_reg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    // The bridge calls these bodies from Rust. On x86_64 it goes through an entry that keeps
+    // the registers Rust expects preserved (`Emitter::sysv_callee_saved_entry`).
+    let mut rust_entries = Vec::new();
+    let mut rust_called = |symbol: String| {
+        if target.arch != Arch::X86_64 {
+            return symbol;
+        }
+        let entry = format!("{}_rust_entry", symbol);
+        rust_entries.push((entry.clone(), symbol));
+        entry
+    };
     let bridge_symbol = if ctx.module.web_application {
         use crate::codegen::data_section::DataWord;
         let callbacks = ctx.data.add_words(vec![
-            DataWord::Symbol(WEB_HANDLER_SYMBOL.to_string()),
-            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::READY)),
-            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::REQUEST)),
-            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::SHUTDOWN)),
+            DataWord::Symbol(rust_called(WEB_HANDLER_SYMBOL.to_string())),
+            DataWord::Symbol(rust_called(crate::names::function_symbol(crate::web_prelude::application::READY))),
+            DataWord::Symbol(rust_called(crate::names::function_symbol(crate::web_prelude::application::REQUEST))),
+            DataWord::Symbol(rust_called(crate::names::function_symbol(crate::web_prelude::application::SHUTDOWN))),
         ]);
         abi::emit_symbol_address(ctx.emitter, handler_reg, &callbacks);
         "elephc_web_run_application"
     } else {
-        abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+        abi::emit_symbol_address(ctx.emitter, handler_reg, &rust_called(WEB_HANDLER_SYMBOL.to_string()));
         isolation.bridge_symbol()
     };
     // The selected entry is a `#[no_mangle] extern "C"` Rust symbol in the bridge
@@ -1247,6 +1258,9 @@ pub(super) fn emit_web_entry_stub(
     let bridge_entry = target.extern_symbol(bridge_symbol);
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+    for (entry, body) in rust_entries {
+        ctx.emitter.sysv_callee_saved_entry(&entry, &body);
+    }
     if ctx.module.web_application {
         crate::codegen::lower_inst::builtins::io::emit_application_stream_closer(ctx);
     }

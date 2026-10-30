@@ -1,5 +1,6 @@
 //! Purpose:
-//! Owns runtime-cache hardlink leases, bounded pruning, and crash-litter cleanup.
+//! Owns runtime-cache hardlink leases, request aliases, bounded pruning, and crash-litter
+//! cleanup.
 //!
 //! Called from:
 //! - `super::prepare_runtime_object()` after validating or publishing a canonical entry.
@@ -9,6 +10,8 @@
 //! - Linker-visible snapshots are hardlinks protected by shared advisory-lock markers.
 //! - Cleanup is best-effort and removes only canonical compiler-owned names whose holder is
 //!   absent or no longer owns the marker lock.
+//! - An alias names one content-addressed object by file name only; a dangling or malformed
+//!   alias is ignored by lookups and removed by pruning.
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -23,6 +26,8 @@ use super::{PreparedRuntimeObject, RuntimeCacheStatus};
 
 /// Maximum number of complete runtime object entries retained in the shared cache.
 const MAX_RUNTIME_CACHE_OBJECTS: usize = 8;
+/// Maximum number of request aliases retained; each new build identity adds one per request.
+const MAX_RUNTIME_CACHE_ALIASES: usize = 64;
 /// Monotonic process-local discriminator for lease names created in one clock tick.
 static RUNTIME_CACHE_LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -146,6 +151,42 @@ pub(super) fn lease_runtime_object(
     ))
 }
 
+/// Resolves a request alias to the content-named object it records, if it names one.
+///
+/// The alias holds a bare canonical object file name, joined to the alias's own directory, so a
+/// tampered alias can neither leave the cache directory nor name a temporary or lease.
+pub(super) fn read_runtime_cache_alias(alias_path: &Path) -> Option<PathBuf> {
+    let recorded = fs::read_to_string(alias_path).ok()?;
+    let name = recorded.trim();
+    if name.contains('/') || name.contains('\\') || !runtime_cache_object_name_is_canonical(Path::new(name)) {
+        return None;
+    }
+    Some(alias_path.parent()?.join(name))
+}
+
+/// Atomically records which content-named object serves a request alias.
+pub(super) fn write_runtime_cache_alias(alias_path: &Path, object_path: &Path) -> io::Result<()> {
+    let Some(object_name) = object_path.file_name().and_then(|name| name.to_str()) else {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "runtime object has no file name"));
+    };
+    let alias_name = alias_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("runtime.alias");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = alias_path.with_file_name(format!(
+        "{alias_name}.{}_{nonce}.tmp",
+        std::process::id()
+    ));
+    fs::write(&temporary, format!("{object_name}\n"))?;
+    fs::rename(&temporary, alias_path).inspect_err(|_| {
+        let _ = fs::remove_file(&temporary);
+    })
+}
+
 /// Removes the oldest superseded runtime object/sidecar pairs beyond the cache bound.
 ///
 /// Housekeeping is best-effort so an unreadable stale entry cannot fail compilation.
@@ -154,6 +195,12 @@ pub(super) fn lease_runtime_object(
 pub(super) fn prune_runtime_cache_objects(cache_dir: &Path, active_object: &Path) {
     cleanup_stale_runtime_cache_leases(cache_dir);
     cleanup_stale_runtime_cache_temporaries(cache_dir);
+    prune_objects_beyond_bound(cache_dir, active_object);
+    prune_runtime_cache_aliases(cache_dir);
+}
+
+/// Removes the oldest canonical objects beyond `MAX_RUNTIME_CACHE_OBJECTS`, never the active one.
+fn prune_objects_beyond_bound(cache_dir: &Path, active_object: &Path) {
     let Ok(entries) = fs::read_dir(cache_dir) else {
         return;
     };
@@ -191,6 +238,38 @@ pub(super) fn prune_runtime_cache_objects(cache_dir: &Path, active_object: &Path
     }
 }
 
+/// Removes aliases whose object is gone or that are malformed, then the oldest aliases beyond
+/// `MAX_RUNTIME_CACHE_ALIASES`. A removed alias only costs its next request a regeneration.
+fn prune_runtime_cache_aliases(cache_dir: &Path) {
+    let Ok(entries) = fs::read_dir(cache_dir) else {
+        return;
+    };
+    let mut live: Vec<(PathBuf, SystemTime)> = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !runtime_cache_alias_name_is_canonical(&path) {
+            continue;
+        }
+        if !read_runtime_cache_alias(&path).is_some_and(|object| object.exists()) {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        live.push((path, modified));
+    }
+    if live.len() <= MAX_RUNTIME_CACHE_ALIASES {
+        return;
+    }
+    live.sort_by_key(|(_, modified)| *modified);
+    let remove_count = live.len() - MAX_RUNTIME_CACHE_ALIASES;
+    for (alias, _) in live.into_iter().take(remove_count) {
+        let _ = fs::remove_file(alias);
+    }
+}
+
 /// Removes compiler-owned runtime-cache temporaries after their owner process has exited.
 fn cleanup_stale_runtime_cache_temporaries(cache_dir: &Path) {
     let Ok(entries) = fs::read_dir(cache_dir) else {
@@ -215,6 +294,16 @@ fn cleanup_stale_runtime_cache_temporaries(cache_dir: &Path) {
 fn runtime_cache_temporary_owner_pid(path: &Path) -> Option<u32> {
     let name = path.file_name()?.to_str()?;
     if let Some(without_tmp) = name.strip_suffix(".tmp") {
+        if let Some((alias_name, owner_identity)) = without_tmp.rsplit_once(".alias.") {
+            let (owner, nonce) = owner_identity.split_once('_')?;
+            if nonce.is_empty()
+                || !nonce.bytes().all(|byte| byte.is_ascii_digit())
+                || !runtime_cache_alias_name_is_canonical(Path::new(&format!("{alias_name}.alias")))
+            {
+                return None;
+            }
+            return owner.parse::<u32>().ok();
+        }
         let (object_name, owner) = without_tmp.rsplit_once(".integrity.")?;
         let canonical_name = if object_name.ends_with(".o") {
             object_name.to_string()
@@ -332,13 +421,23 @@ fn runtime_cache_lease_holder_pid(path: &Path) -> Option<u32> {
 
 /// Returns whether a path names a published runtime-cache object rather than a temp file.
 fn runtime_cache_object_name_is_canonical(path: &Path) -> bool {
+    runtime_cache_name_has_shape(path, ".o")
+}
+
+/// Returns whether a path names a request alias written by `write_runtime_cache_alias`.
+fn runtime_cache_alias_name_is_canonical(path: &Path) -> bool {
+    runtime_cache_name_has_shape(path, ".alias")
+}
+
+/// Returns whether a file name is `runtime-v<version>-<target>-rt<16 hex>-heap<digits><extension>`.
+fn runtime_cache_name_has_shape(path: &Path, extension: &str) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
     let Some((identity, heap_suffix)) = name.rsplit_once("-heap") else {
         return false;
     };
-    let Some(heap_size) = heap_suffix.strip_suffix(".o") else {
+    let Some(heap_size) = heap_suffix.strip_suffix(extension) else {
         return false;
     };
     let Some((prefix, runtime_hash)) = identity.rsplit_once("-rt") else {

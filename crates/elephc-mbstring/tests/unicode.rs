@@ -2,7 +2,7 @@
 //! Cross-checks the shared Unicode engine against independently captured PHP results.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test unicode`.
+//! - `cargo test -p elephc-mbstring --test engine unicode::`.
 //!
 //! Key details:
 //! - Oracle hashes cover every Unicode scalar, including unassigned codepoints.

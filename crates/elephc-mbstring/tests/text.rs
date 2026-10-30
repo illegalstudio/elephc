@@ -2,7 +2,7 @@
 //! Cross-checks contextual text operations across the implemented encoding families.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test text`.
+//! - `cargo test -p elephc-mbstring --test engine text::`.
 //!
 //! Key details:
 //! - Fixtures retain original encoded bytes, including embedded NUL and emoji escapes.
