@@ -3,7 +3,7 @@
   "suite": "hot-path",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 16,
+  "points": 17,
   "series": [
     {
       "date": "2026-10-13",
@@ -937,12 +937,12 @@
     },
     {
       "date": "2026-10-28",
-      "timestamp": "2026-10-28T20:43:56Z",
-      "measurement_timestamp": "2026-10-28T20:40:29Z",
-      "commit": "f27ea01e4ad8c1bf4fea98ca0e388529e0cd706a",
-      "run_id": 40762720153,
+      "timestamp": "2026-10-28T23:14:31Z",
+      "measurement_timestamp": "2026-10-28T23:10:58Z",
+      "commit": "c51420b6c2e850ad0ee6b05125e089bd763b530f",
+      "run_id": 40782871291,
       "run_attempt": 1,
-      "artifact_id": 12849043658,
+      "artifact_id": 12858469527,
       "environment": {
         "runner": "macos-15",
         "os": "Darwin",
@@ -964,31 +964,93 @@
           },
           "variants": {
             "buffer": {
-              "median_ms": 3.557792000037807,
+              "median_ms": 4.7680830000444985,
               "samples_ms": [
-                3.557792000037807,
-                3.2597500000974833,
-                3.6373329999150883
+                4.802124999969237,
+                4.7680830000444985,
+                4.195250000066153
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "indexed": {
-              "median_ms": 39.350416999923254,
+              "median_ms": 45.31804200018996,
               "samples_ms": [
-                39.350416999923254,
-                38.24812500010921,
-                40.715792000128204
+                42.20758300016314,
+                45.31804200018996,
+                56.902707999825
               ],
               "skipped": false,
               "detail": "3 runs"
             },
             "assoc": {
-              "median_ms": 28.242833000149403,
+              "median_ms": 36.457582999901206,
               "samples_ms": [
-                28.242833000149403,
-                27.41929200010418,
-                28.916250000065702
+                36.19854199996553,
+                36.457582999901206,
+                49.20020800000202
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "date": "2026-10-29",
+      "timestamp": "2026-10-29T20:25:09Z",
+      "measurement_timestamp": "2026-10-29T20:21:17Z",
+      "commit": "00350105ba330730239325bbc41bb65aafa22283",
+      "run_id": 40945465276,
+      "run_attempt": 1,
+      "artifact_id": 12929753863,
+      "environment": {
+        "runner": "macos-15",
+        "os": "Darwin",
+        "architecture": "arm64",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "php_mode": "CLI; OPcache/JIT disabled",
+        "measurement": "process-wall",
+        "iterations": 3,
+        "warmup": 1
+      },
+      "cases": [
+        {
+          "case": "buffer-vs-arrays",
+          "fixture_sha256": "6408d8d3b03fa555fe859c2f17e7c687b196104ca8843f9308eca6eff4946dc8",
+          "metadata": {
+            "description": "Equivalent position updates with three storage representations"
+          },
+          "variants": {
+            "buffer": {
+              "median_ms": 5.356500000061715,
+              "samples_ms": [
+                4.881000000068525,
+                5.356500000061715,
+                7.883624999976746
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "indexed": {
+              "median_ms": 60.16629200007628,
+              "samples_ms": [
+                40.48329199986256,
+                60.83075000015015,
+                60.16629200007628
+              ],
+              "skipped": false,
+              "detail": "3 runs"
+            },
+            "assoc": {
+              "median_ms": 55.25679200013656,
+              "samples_ms": [
+                55.25679200013656,
+                53.429833000109284,
+                57.55762500007222
               ],
               "skipped": false,
               "detail": "3 runs"

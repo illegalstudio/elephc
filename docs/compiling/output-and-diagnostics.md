@@ -1,6 +1,6 @@
 ---
 title: "Output formats and diagnostics"
-description: "Choosing what the compiler produces (executable, cdylib, assembly, IR) and the flags that inspect or instrument a compile."
+description: "Choosing what the compiler produces (executable, PHP module, C library, assembly, IR) and the flags that inspect or instrument a compile."
 sidebar:
   order: 6
 ---
@@ -17,6 +17,7 @@ Selects the kind of artifact to produce.
 
 ```bash
 elephc --emit executable app.php   # default: a native binary
+elephc --emit phpext module.php    # a module loaded by real PHP 8.5
 elephc --emit cdylib lib.php       # a C-ABI shared library
 elephc --emit staticlib lib.php    # a C-ABI static archive
 ```
@@ -26,13 +27,17 @@ Accepted values and aliases:
 | Value | Aliases | Produces |
 |---|---|---|
 | `executable` | `exe`, `bin` | A standalone native binary. |
+| `phpext` | - | A PHP 8.5 module (`.so`) loaded with `extension=...`. |
 | `cdylib` | `dylib`, `shared` | A C-ABI shared library (`.dylib`/`.so`). |
 | `staticlib` | `static`, `lib` | A C-ABI static archive (`.a`). |
 
 The inline forms such as `--emit=cdylib` also work. `--emit lib` is an alias of
-`staticlib`, not `cdylib`. Both library kinds emit the same C-ABI exports and
-generated header; see [Shared Libraries (cdylib)](../beyond-php/cdylib.md) for
-the boundary contract and the static-linking distinction.
+`staticlib`, not `cdylib`. The `cdylib` and `staticlib` forms emit the same
+C-ABI exports and generated header; see
+[Shared Libraries (cdylib)](../beyond-php/cdylib.md) for the boundary contract
+and the static-linking distinction. `phpext` instead emits Zend handlers and no
+header; see [PHP extensions](../beyond-php/phpext.md) for its host SDK and type
+contract.
 
 ### `--emit-asm`
 

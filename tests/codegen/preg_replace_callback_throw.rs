@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - Expected stdout was measured on PHP 8.5.9. PHP 8.2–8.4 share this behavior:
-//!   a throw abandons the replacement, and an invalid pattern or `/e` yields null.
+//!   a throw abandons the replacement, and an invalid pattern, an unknown
+//!   modifier, a missing delimiter, or `/e` yields null.
 //! - Repeated catches must not accumulate helper-owned blocks. The 65536-byte heap
 //!   is the size that previously died after a handful of caught throws.
 //! - `--heap-debug` counts elephc heap blocks only. PCRE2's compiled pattern and
@@ -66,7 +67,8 @@ fn live_blocks(stderr: &str) -> usize {
 
 /// Builds the fixture. Subjects and callback names depend on `$argc` so the calls
 /// survive constant folding. `iterations` repeats both the first-match throw and
-/// the grow-then-throw call.
+/// the grow-then-throw call. The trailing calls return null for a compile failure,
+/// `/e`, an unknown modifier, and a missing ending delimiter.
 fn fixture(iterations: usize) -> String {
     format!(
         r#"<?php
@@ -122,6 +124,8 @@ for ($i = 0; $i < {iterations}; $i++) {{
 echo $marks, "\n";
 echo (preg_replace_callback("/(/", $keep, "subject") ?? "null"), "\n";
 echo (preg_replace_callback("/a/e", $keep, $one) ?? "bad"), "\n";
+echo (preg_replace_callback("/a/z", $keep, $one) ?? "null"), "\n";
+echo (preg_replace_callback("/abc", $keep, "abc") ?? "null"), "\n";
 $kept = null;
 try {{
     preg_replace_callback("/(a)/", function($m) use (&$kept) {{
@@ -147,7 +151,7 @@ try {{
 /// Stdout measured on PHP 8.5.9 for the same fixture.
 fn expected(iterations: usize) -> String {
     format!(
-        "Z\n5000\nxQ\n{}\n{}\n{}\nnull\nbad\na\na\n",
+        "Z\n5000\nxQ\n{}\n{}\n{}\nnull\nbad\nnull\nnull\na\na\n",
         ".".repeat(iterations),
         "W".repeat(iterations),
         "g".repeat(iterations),
@@ -427,7 +431,12 @@ fn assert_throw_cleanup_does_not_scale(check_small_heap: bool) {
     assert_eq!(many.stdout, expected(20), "stderr:\n{}", many.stderr);
     let (once_blocks, many_blocks) = (live_blocks(&once.stderr), live_blocks(&many.stderr));
     assert_eq!(
-        once_blocks, many_blocks,
+        once_blocks, 0,
+        "one iteration left an elephc block alive after throw and null paths:\n{}",
+        once.stderr
+    );
+    assert_eq!(
+        many_blocks, 0,
         "live blocks scale with caught throws, so a helper buffer is leaking:\n\
          1 iteration -> {once_blocks}\n20 iterations -> {many_blocks}\n\n{}",
         many.stderr

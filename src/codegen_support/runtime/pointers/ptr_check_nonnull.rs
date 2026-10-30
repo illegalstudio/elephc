@@ -33,6 +33,7 @@ pub(crate) fn emit_ptr_check_nonnull(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_ptr_check_nonnull_ok");                      // continue when pointer is non-null
 
     // -- fatal error: null pointer dereference --
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov x0, #2");                                          // fd = stderr
     abi::emit_symbol_address(emitter, "x1", "_ptr_null_err_msg");               // load page of null dereference message
     emitter.instruction("mov x2, #38");                                         // message length: "Fatal error: null pointer dereference\n"
@@ -62,6 +63,7 @@ fn emit_ptr_check_nonnull_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jnz __rt_ptr_check_nonnull_ok");                       // return immediately when the pointer is non-null
 
     // -- fatal error: null pointer dereference --
+    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
     emitter.instruction("mov edi, 2");                                          // target the Linux stderr file descriptor for the fatal error message
     abi::emit_symbol_address(emitter, "rsi", "_ptr_null_err_msg");
     emitter.instruction("mov edx, 38");                                         // describe the full fatal null-dereference message byte length to write(2)

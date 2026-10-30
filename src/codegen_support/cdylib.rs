@@ -23,20 +23,47 @@ use crate::exports::{is_string_return_signature, ExportedFunction, ELEPHC_ABI_VE
 mod boundary;
 mod owned_string;
 mod lifecycle;
+mod phpext;
+
+pub(crate) use phpext::emit_phpext_exports;
 
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
 pub(crate) const STATUS_PHP_EXCEPTION: i32 = 2;
 pub(crate) const STATUS_ALLOCATION_FAILURE: i32 = 3;
 pub(crate) const STATUS_RUNTIME_FAILURE: i32 = 4;
+pub(crate) const STATUS_REPLACEMENT_LIMIT: i32 = 6;
 
 pub(crate) const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
 pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
+pub(crate) const PHPEXT_REPLACEMENT_OWNER_COUNT: &str =
+    "_elephc_phpext_replacement_owner_count";
+pub(crate) const PHPEXT_REPLACEMENT_OWNER_BASE: &str =
+    "_elephc_phpext_replacement_owner_base";
+pub(crate) const PHPEXT_REPLACEMENT_OWNERS: &str = "_elephc_phpext_replacement_owners";
+pub(crate) const PHPEXT_REPLACEMENT_OWNER_LIMIT: usize = 64;
+
+/// Converts a guarded host callback failure into a contained native cleanup unwind.
+pub(crate) fn emit_host_callback_check(emitter: &mut Emitter, done: &str) {
+    let status_ready = format!("{done}_host_status_ready");
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!("cbz w0, {done}")),       // inspect the C int result at its declared width
+        Arch::X86_64 => {
+            emitter.instruction("test eax, eax");                               // inspect the guarded host callback status
+            emitter.instruction(&format!("jz {done}"));                         // resume normal native execution only after a successful host callback
+        }
+    }
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), BOUNDARY_STATUS, 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, &status_ready);
+    abi::emit_store_imm_to_symbol(emitter, BOUNDARY_STATUS, 0, STATUS_PHP_EXCEPTION as i64);
+    emitter.label(&status_ready);
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_jump(emitter, "__rt_throw_current");
+}
 const LAST_ERROR_BUFFER: &str = "_elephc_last_error_buffer";
 const LAST_ERROR_LENGTH: &str = "_elephc_last_error_length";
 const LAST_ERROR_PRESENT: &str = "_elephc_last_error_present";
 const LAST_ERROR_CAPACITY: usize = 4096;
-const CONCAT_SCRATCH_CAPACITY: i64 = 65_536;
 
 /// Reserves the fixed, allocation-free state shared by every library export.
 fn reserve_boundary_data(data: &mut DataSection) {
@@ -269,6 +296,121 @@ mod tests {
     use crate::span::Span;
     use crate::types::{FunctionSig, PhpType};
 
+    /// AArch64 host callbacks inspect C int results through w0 on every native host target.
+    #[test]
+    fn phpext_c_int_status_checks_use_w0_on_aarch64_hosts() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ] {
+            let mut callback = Emitter::new_cdylib(target);
+            emit_host_callback_check(&mut callback, "L_callback_done");
+            let callback_asm = callback.output();
+            assert!(callback_asm.contains("cbz w0, L_callback_done"), "{target:?}: {callback_asm}");
+            assert!(!callback_asm.contains("cbz x0, L_callback_done"), "{target:?}: {callback_asm}");
+
+            let mut thunk = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_phpext_exports(&mut thunk, &mut data, target, &[&export], false, None);
+            let thunk_asm = thunk.output();
+            assert!(thunk_asm.contains("cbnz w0, L_roundtrip_rollback"), "{target:?}: {thunk_asm}");
+            assert!(!thunk_asm.contains("cbnz x0, L_roundtrip_rollback"), "{target:?}: {thunk_asm}");
+        }
+    }
+
+    /// Guarded host callbacks publish the distinct PHP-exception status on every host target.
+    #[test]
+    fn phpext_host_callback_escapes_keep_their_boundary_status() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            emit_host_callback_check(&mut emitter, "L_callback_done");
+            let asm = emitter.output();
+            let expected = if target.arch == Arch::AArch64 {
+                "mov x10, #2"
+            } else {
+                "mov QWORD PTR [r11], 2"
+            };
+            assert!(asm.contains(expected), "{target:?}: {asm}");
+        }
+    }
+
+    /// Hosted exception thunks copy each native previous link before releasing its owner.
+    #[test]
+    fn phpext_exception_thunks_copy_native_previous_chains_on_every_host_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = string_export();
+            emit_phpext_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            let asm = emitter.output();
+            let continuation = target.extern_symbol("elephc_php_exception_previous");
+            assert!(asm.contains(&continuation), "{target:?}: {asm}");
+            let walk = asm.find("__rt_throwable_previous").unwrap();
+            let copy = asm.find(&continuation).unwrap();
+            let release = asm[copy..].find("__rt_decref_any").map(|offset| copy + offset).unwrap();
+            assert!(walk < copy && copy < release, "{target:?}: {asm}");
+            assert!(asm.contains("_elephc_phpext_replacement_owner_count"), "{target:?}: {asm}");
+            assert!(asm.contains("_elephc_phpext_replacement_owner_base"), "{target:?}: {asm}");
+            assert!(asm.contains("_elephc_phpext_replacement_owners"), "{target:?}: {asm}");
+            assert!(asm.contains("L_roundtrip_release_replacement_owner"), "{target:?}: {asm}");
+        }
+    }
+
+    /// Wide AArch64 exports load the frame base before the global count reuses x9.
+    #[test]
+    fn phpext_wide_aarch64_thunks_preserve_replacement_release_count() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            let mut data = DataSection::new();
+            let export = wide_integer_export();
+            emit_phpext_exports(&mut emitter, &mut data, target, &[&export], false, None);
+            let asm = emitter.output();
+            let release = asm.find("L_wide_release_replacement_owner:").unwrap();
+            let compare = asm[release..].find("cmp x9, x10").unwrap() + release;
+            let setup = &asm[release..compare];
+            let base = setup.find("sub x9, x29, #256").unwrap();
+            let count = setup.find(PHPEXT_REPLACEMENT_OWNER_COUNT).unwrap();
+            assert!(base < count, "{target:?}: {asm}");
+        }
+    }
+
+    /// Nested entries read their linked runtime's actual arena bound on every library target.
+    #[test]
+    fn nested_boundary_reads_linked_concat_capacity_on_all_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new_cdylib(target);
+            boundary::emit_enter_boundary(&mut emitter, 8, "arena_test");
+            let asm = emitter.output();
+            assert!(asm.contains("_concat_capacity"), "{target:?}: {asm}");
+            assert!(!asm.contains("65536"), "nested entry must not bake in the old bound: {asm}");
+            for (heap, capacity) in [(16_384, 65_536), (524_288, 524_288), (1usize << 31, 1usize << 30)] {
+                let data = crate::codegen_support::runtime::emit_runtime_data_fixed(
+                    heap, target, crate::codegen::compile_php_version(),
+                );
+                assert!(data.contains(&format!("_concat_capacity:\n    .quad {capacity}\n")),
+                    "{target:?}: heap size {heap} must publish capacity {capacity}");
+            }
+        }
+    }
+
     /// Builds one single-string-input owned-result export fixture.
     fn string_export() -> ExportedFunction {
         let source_sig = FunctionSig {
@@ -291,6 +433,36 @@ mod tests {
             source_sig: source_sig.clone(),
             internal_sig: source_sig,
             span: Span::dummy(),
+            php_void_return: false,
+        }
+    }
+
+    /// Builds an export whose replacement-owner base lies beyond AArch64's unscaled range.
+    fn wide_integer_export() -> ExportedFunction {
+        let params = (0..25)
+            .map(|index| (format!("value{index}"), PhpType::Int))
+            .collect::<Vec<_>>();
+        let source_sig = FunctionSig {
+            params,
+            param_type_exprs: vec![None; 25],
+            param_attributes: vec![Vec::new(); 25],
+            defaults: vec![None; 25],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false; 25],
+            declared_params: vec![true; 25],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        };
+        ExportedFunction {
+            name: "wide".to_string(),
+            c_name: "wide".to_string(),
+            source_sig: source_sig.clone(),
+            internal_sig: source_sig,
+            span: Span::dummy(),
+            php_void_return: false,
         }
     }
 

@@ -190,7 +190,7 @@ That tradeoff is intentional:
 - **No hidden external PHP runtime dependency**: the generated binary does not need PHP, the Zend Engine, or a loader extension. A program that needs dynamic `eval()` embeds its optional interpreter bridge directly in the standalone binary.
 - **Native-oriented extensions**: `extern`, `ptr`, `buffer<T>`, and `packed class` let PHP-shaped code cross into systems, FFI, game, and performance-sensitive workloads.
 
-That does not mean elephc has to live outside the existing PHP ecosystem. The current CLI path produces standalone executables, shared libraries (`--emit cdylib`), and static libraries (`--emit staticlib`; `--emit lib` is an alias), while the roadmap includes an experimental PHP extension bridge. That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
+That does not mean elephc has to live outside the existing PHP ecosystem. The CLI produces standalone executables, shared libraries (`--emit cdylib`), static libraries (`--emit staticlib`; `--emit lib` is an alias), and PHP 8.5 extensions (`--emit phpext`). That opens a practical middle path: keep a framework such as WordPress, Laravel, or Symfony running on PHP, then compile static, performance-sensitive modules into native libraries or PHP extensions.
 
 So elephc is not a drop-in replacement for an entire dynamic framework today. The longer-term goal is more useful: make it possible to move the parts of PHP code that are static enough to compile into inspectable native code, while the rest of the application can stay in ordinary PHP.
 
@@ -367,6 +367,10 @@ elephc app.php --with-eval
 
 # Build a shared library exporting #[Export] functions instead of an executable
 elephc --emit cdylib module.php
+
+# Build a module loaded by real PHP 8.5, using its matching development SDK
+ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc --emit phpext --heap-size=1048576 module.php
+php -n -d extension=./module.so app.php
 
 # Pin the PHP compatibility profile and silence non-error output
 elephc --php-version 8.3 --quiet app.php

@@ -3612,3 +3612,17 @@ fn test_error_strict_types_later_zero_does_not_disable_one() {
     expect_error("<?php declare(strict_types=1); declare(strict_types=0); function number(int $v): int { return $v; } echo number(true);",
         "`declare(strict_types=1)` is active in this file");
 }
+
+/// Null-only returns require an explicit null value; genuine void still rejects every value.
+#[test]
+fn test_standalone_null_return_requirements() {
+    for source in [
+        "<?php function invalid(): null {}",
+        "<?php function invalid(): null { return; }",
+        "<?php function invalid(): null { return 1; }",
+        "<?php function invalid(): void { return null; }",
+        "<?php function invalid(void $value): void {}",
+    ] {
+        assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
+    }
+}

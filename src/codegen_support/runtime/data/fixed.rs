@@ -73,6 +73,9 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
+    // User boundary code reads this value from its linked runtime, including cached objects.
+    out.push_str(&format!(".globl _concat_capacity\n_concat_capacity:\n    .quad {}\n",
+        super::super::concat_scratch_capacity(heap_size)));
     out.push_str(&comm_directive(
         "_itoa_spill_ring",
         32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,

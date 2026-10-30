@@ -703,13 +703,12 @@ fn test_parse_multi_member_null_union_keeps_sentinel() {
 }
 
 #[test]
-/// Verifies that a standalone `null` return type parses as the null sentinel
-/// (`TypeExpr::Void`), which the checker treats as null-accepting.
+/// Keeps a standalone null return declaration distinct from source void.
 fn test_parse_standalone_null_type() {
     let stmts = parse_source("<?php function f(): null { return null; }");
     match &stmts[0].kind {
         StmtKind::FunctionDecl { return_type, .. } => {
-            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Void));
+            assert_eq!(return_type.as_ref(), Some(&TypeExpr::Named(Name::unqualified("null"))));
         }
         other => panic!("Expected FunctionDecl, got {:?}", other),
     }

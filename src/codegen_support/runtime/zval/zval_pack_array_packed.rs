@@ -207,6 +207,9 @@ pub fn emit_zval_pack_array_packed(emitter: &mut Emitter) {
     emitter.instruction("mov x9, #-1");                                         // HT_INVALID_IDX for the internal pointer
     emitter.instruction("str w9, [x0, #32]");                                   // store nInternalPointer at offset 32 (32-bit)
     emitter.instruction("ldr x9, [sp, #8]");                                    // reload the length for nNextFreeElement
+    emitter.instruction("cbnz x9, __rt_zval_pack_array_packed_next_ready");     // nonempty packed arrays append after their final integer key
+    emitter.instruction("movz x9, #0x8000, lsl #48");                           // an empty table has no integer key yet: ZEND_LONG_MIN
+    emitter.label("__rt_zval_pack_array_packed_next_ready");
     emitter.instruction("str x9, [x0, #40]");                                   // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("str xzr, [x0, #48]");                                  // store pDestructor = NULL at offset 48
     emitter.instruction("ldr x0, [sp, #72]");                                   // return the HashTable pointer
@@ -392,10 +395,37 @@ fn emit_zval_pack_array_packed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov DWORD PTR [rax + 28], ecx");                       // store nNumOfElements at offset 28 (32-bit)
     emitter.instruction("mov DWORD PTR [rax + 32], -1");                        // nInternalPointer = HT_INVALID_IDX (32-bit)
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the length for nNextFreeElement
+    emitter.instruction("test rcx, rcx");                                       // distinguish an empty table from one ending at key length - 1
+    emitter.instruction("jnz __rt_zval_pack_array_packed_next_ready");          // nonempty packed arrays append at their element count
+    emitter.instruction("mov rcx, 1");                                          // materialize ZEND_LONG_MIN without an out-of-range immediate
+    emitter.instruction("shl rcx, 63");                                         // an empty table has no integer key yet
+    emitter.label("__rt_zval_pack_array_packed_next_ready");
     emitter.instruction("mov QWORD PTR [rax + 40], rcx");                       // store nNextFreeElement at offset 40 (64-bit)
     emitter.instruction("mov QWORD PTR [rax + 48], 0");                         // pDestructor = NULL
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // return the HashTable pointer
     emitter.instruction("add rsp, 96");                                         // release the local slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the zend_array pointer in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Empty packed arrays publish Zend's sentinel before crossing any supported target boundary.
+    #[test]
+    fn empty_packed_arrays_keep_zend_negative_append_semantics_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_zval_pack_array_packed(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_zval_pack_array_packed_next_ready:"), "{name}: {asm}");
+            if name == "linux-x86_64" {
+                assert!(asm.contains("shl rcx, 63"), "{name}: {asm}");
+            } else {
+                assert!(asm.contains("movz x9, #0x8000, lsl #48"), "{name}: {asm}");
+            }
+        }
+    }
 }

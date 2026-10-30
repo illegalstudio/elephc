@@ -8,7 +8,7 @@
 //! - Fragments are joined before dispatch, and detached before a reentrant warning.
 //! - Producers explicitly finish a diagnostic; newlines inside data never delimit it.
 //! - Volatile registers are preserved because legacy producers used a leaf writer.
-//! - An unwind activation releases owned message and argument storage on throws.
+//! - Every completed diagnostic publishes cleanup before native or host callbacks can throw.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch,
     emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
@@ -131,6 +131,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
         abi::emit_load_int_immediate(e, result, 0);
         save(e, offset);
     }
+    emit_activation(e);
     abi::emit_load_int_immediate(e, result, 2);
     save(e, LEVEL);
     // Match complete prefixes before stripping them from the handler's message.
@@ -162,7 +163,6 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_default");
     emit_arguments(e);
-    emit_activation(e);
     abi::emit_load_symbol_to_reg(e, a0, "_php_error_handler_callable", 0);
     arg(e, 1, ARGS);
     abi::emit_call_label(e, "__rt_error_handler_invoke");
@@ -172,14 +172,13 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     ins(e, "cmp x10, #3", "cmp r10, 3");
     ins(e, "b.ne __rt_warning_handled", "jne __rt_warning_handled");
     ins(e, "ldr x10, [x0, #8]", "mov r10, QWORD PTR [rax + 8]");
-    ins(e, "cbz x10, __rt_warning_unpublish", "test r10, r10");
-    if !arm { e.instruction("jz __rt_warning_unpublish"); } // boolean false falls through to default output
+    ins(e, "cbz x10, __rt_warning_default", "test r10, r10");
+    if !arm {
+        e.instruction("jz __rt_warning_default");                              // boolean false selects default output with its cleanup still published
+    }
     e.label("__rt_warning_handled");
     abi::emit_load_int_immediate(e, result, 1);
     save(e, HANDLED);
-    e.label("__rt_warning_unpublish");
-    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
-    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     e.label("__rt_warning_default");
     abi::emit_load_temporary_stack_slot(e, result, HANDLED);
     abi::emit_branch_if_int_result_nonzero(e, "__rt_warning_release");
@@ -196,6 +195,8 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     }
     abi::emit_call_label(e, "__rt_diag_write");
     e.label("__rt_warning_release");
+    abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
+    abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     abi::emit_temporary_stack_address(e, a0, 0);
     abi::emit_call_label(e, "__rt_warning_cleanup");
     e.label("__rt_warning_done");

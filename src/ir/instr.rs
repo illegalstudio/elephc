@@ -1604,8 +1604,11 @@ impl Op {
             ExternCall | ExternGlobalLoad | ExternGlobalStore => {
                 E::READS_HEAP | E::WRITES_HEAP | E::READS_PROCESS | E::WRITES_PROCESS | E::MAY_THROW
             }
-            EchoValue | WriteStrStdout | WriteStdout | Warn => E::OUTPUT,
-            PrintValue => E::OUTPUT,
+            // A hosted PHP output or error handler can throw. These opcodes stay conservative
+            // for every target so EIR passes never move them across a protected region.
+            EchoValue | PrintValue | WriteStrStdout | WriteStdout | Warn => {
+                E::OUTPUT | E::MAY_THROW
+            }
             ErrorSuppressBegin | ErrorSuppressEnd => E::READS_GLOBAL | E::WRITES_GLOBAL,
             ThrowException => E::MAY_THROW | E::WRITES_GLOBAL,
             // Reads the key out of its boxed cell, allocates the composed message and the

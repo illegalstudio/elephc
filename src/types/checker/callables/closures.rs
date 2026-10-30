@@ -216,7 +216,8 @@ impl Checker {
             if let Some(type_ann) = return_type {
                 let declared_ret =
                     self.resolve_declared_return_type_hint(type_ann, span, "Closure")?;
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &generator_ty,
                     true,
@@ -242,13 +243,14 @@ impl Checker {
                     "Closure declared never must not return",
                 ));
             }
-            self.require_declared_return_coverage(&declared_ret, body, span, "Closure")?;
+            self.require_return_hint_coverage(type_ann, &declared_ret, body, span, "Closure")?;
             if all_return_infos.is_empty() {
                 return Ok((declared_ret, true));
             }
 
             for return_info in &all_return_infos {
-                self.require_compatible_return_type(
+                self.require_compatible_return_hint(
+                    type_ann,
                     &declared_ret,
                     &return_info.ty,
                     return_info.has_value,

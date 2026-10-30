@@ -138,7 +138,7 @@ Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
-  --emit KIND             Output kind: executable (default) | cdylib | staticlib
+  --emit KIND             Output kind: executable (default) | cdylib | staticlib | phpext
                           Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
 
 Target:
@@ -621,7 +621,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     // --web restructures the process entry point, which a library artifact does
     // not have: both library kinds are incompatible with it for the same reason.
     if web && emit.is_library() {
-        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib)");
+        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib, phpext)");
     }
     // A library has no `main`, and `main` is where the profiling runtimes are
     // initialized. Accepting this produced a library carrying an enter/exit hook
@@ -819,7 +819,7 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib, phpext)")
     }
 }
 
@@ -829,8 +829,9 @@ fn parse_emit(value: &str) -> Emit {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
         "staticlib" | "static" | "lib" => Emit::Staticlib,
+        "phpext" => Emit::Phpext,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib, phpext",
             other
         )),
     }
@@ -921,6 +922,9 @@ fn validate_target_output(
     check_only: bool,
     emit_ir: bool,
 ) -> Result<(), &'static str> {
+    if emit == Emit::Phpext && target.is_ios() {
+        return Err("PHP extension output is unsupported for iOS targets");
+    }
     if target.is_ios() && emit == Emit::Executable && !check_only && !emit_ir {
         return Err(
             "iOS targets do not emit standalone executables; use --emit staticlib (or --emit \
@@ -1079,6 +1083,7 @@ mod tests {
         assert_eq!(parse_emit("executable"), Emit::Executable);
         assert_eq!(parse_emit("cdylib"), Emit::Cdylib);
         assert_eq!(parse_emit("staticlib"), Emit::Staticlib);
+        assert_eq!(parse_emit("phpext"), Emit::Phpext);
     }
 
     /// Verifies the accepted aliases map to their canonical variants so users coming
@@ -1111,6 +1116,7 @@ mod tests {
             assert!(validate_target_output(target, Emit::Executable, false, false).is_err());
             assert!(validate_target_output(target, Emit::Staticlib, false, false).is_ok());
             assert!(validate_target_output(target, Emit::Cdylib, false, false).is_ok());
+            assert!(validate_target_output(target, Emit::Phpext, false, false).is_err());
             assert!(validate_target_output(target, Emit::Executable, true, false).is_ok());
             assert!(validate_target_output(target, Emit::Executable, false, true).is_ok());
         }

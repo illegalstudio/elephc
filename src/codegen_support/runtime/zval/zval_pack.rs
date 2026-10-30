@@ -17,7 +17,8 @@
 //! - Refcounted children (strings, arrays) are freshly allocated so the returned
 //!   `zval` owns independent PHP-shaped storage.
 //! - A raw `?ptr` word (tag 13, from a hash entry of pointers) packs as PHP null
-//!   when it is the null pointer and as an integer address otherwise.
+//!   when it is the null pointer and as an integer address otherwise in ordinary output.
+//! - The PHP extension profile rejects unsupported tags before that normalization.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -51,7 +52,9 @@ fn emit_zval_pack_element_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: zval_pack_element ---");
     emitter.label_global("__rt_zval_pack_element");
+    super::phpext_depth::emit_guard(emitter);
     emit_normalize_pointer_word_tag(emitter, "x0", "x1", "x9", "__rt_zval_pack_element_tag_ready");
+
     emitter.instruction("cmp x0, #4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("b.lt __rt_zval_pack_element_input_ready");             // scalar payloads preserve their original bits
     emitter.instruction("cmp x0, #6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6
@@ -220,7 +223,9 @@ fn emit_zval_pack_element_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: zval_pack_element ---");
     emitter.label_global("__rt_zval_pack_element");
+    super::phpext_depth::emit_guard(emitter);
     emit_normalize_pointer_word_tag(emitter, "rax", "rdi", "r10", "__rt_zval_pack_element_x86_tag_ready");
+
     emitter.instruction("cmp rax, 4");                                          // only container-shaped tags can carry the null sentinel
     emitter.instruction("jl __rt_zval_pack_element_input_ready");               // scalar payloads preserve their original bits
     emitter.instruction("cmp rax, 6");                                          // indexed arrays, hashes, and objects occupy tags 4 through 6

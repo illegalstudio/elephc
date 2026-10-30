@@ -55,6 +55,12 @@ env:
     -p elephc-zend
 
 jobs:
+  # The required gate waits for real PHP on the queue's actual integration commit.
+  phpext-host-sdk:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && github.event_name != 'pull_request'
+    uses: ./.github/workflows/phpext-host-sdk.yml
+
   # Chooses the tiers this run executes (scripts/ci/plan_tiers.sh, CONTRIBUTING.md § "CI
   # tiers and the merge queue"). Pull requests run every Linux job plus the macOS compile,
   # doctests and managed-native smoke; the macOS test matrix and the iOS links run in the
@@ -3225,6 +3231,7 @@ jobs:
       - action-pins
       - frame-assertions-release
       - benchmark-tooling
+      - phpext-host-sdk
     if: always()
     steps:
       - name: Merge JUnit reports
@@ -3247,6 +3254,7 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           RUN_TIER: ${{ needs.plan.outputs.run }}
           EXTENDED_TIER: ${{ needs.plan.outputs.extended }}
+          SDK_TIER: ${{ needs.plan.outputs.run == 'true' && github.event_name != 'pull_request' }}
         run: |
           always="plan build-archive-macos-aarch64 build-archive-linux-x86_64
             build-archive-linux-aarch64 image-api-sync builtins-docs-sync tokenizer-tests tokenizer-native-smoke differential-tests
@@ -3274,6 +3282,8 @@ jobs:
               if [ "$RUN_TIER" = true ]; then want=success; else want=skipped; fi
             elif in_list "$job" "$extended_tier"; then
               if [ "$EXTENDED_TIER" = true ]; then want=success; else want=skipped; fi
+            elif [ "$job" = phpext-host-sdk ]; then
+              if [ "$SDK_TIER" = true ]; then want=success; else want=skipped; fi
             else
               echo "::error::$job is in needs but in none of this gate's tier lists"
               status=1

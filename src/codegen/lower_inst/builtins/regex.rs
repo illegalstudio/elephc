@@ -471,16 +471,16 @@ fn reserve_callable_array_descriptor_callback_env(
     Ok(16)
 }
 
-/// Releases an owned descriptor env while preserving the regex replacement string result.
+/// Releases an owned descriptor env while preserving the boxed Mixed result.
 fn release_descriptor_callback_env_preserving_result(
     ctx: &mut FunctionContext<'_>,
     env_bytes: usize,
 ) {
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
     callable_descriptor::emit_release_current_descriptor(ctx.emitter);
-    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
 }
 

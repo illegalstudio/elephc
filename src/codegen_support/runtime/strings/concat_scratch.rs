@@ -37,6 +37,12 @@ pub(crate) const FLOAT_WINDOW_BYTES: usize = 64;
 /// with a mask.
 pub(crate) const FLOAT_SPILL_SLOTS: usize = 4;
 
+/// Keeps runtime helper bounds and the capacity read by nested host boundaries identical.
+pub(crate) fn scratch_capacity(heap_size: usize) -> usize {
+    // x86_64 helper comparisons need a signed 32-bit immediate; larger results use the heap.
+    heap_size.clamp(65_536, 1 << 30)
+}
+
 /// Emits `__rt_concat_reserve`, `__rt_concat_publish`, `__rt_concat_grow`, and
 /// `__rt_alloc_overflow`.
 ///

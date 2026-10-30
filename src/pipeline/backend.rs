@@ -190,6 +190,11 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         }
     }
 
+    if emit == Emit::Phpext && (hosted_php_ext.is_some() || !planned_link_libraries.is_empty()) {
+        eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
+        process::exit(1);
+    }
+
     let requires_elephc_tls = planned_link_libraries
         .iter()
         .any(|library| library == "elephc_tls");
@@ -247,6 +252,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     } else {
         generated_user_asm.asm
     };
+    let user_asm = if emit == Emit::Phpext {
+        match crate::phpext::build::assembly(&user_asm, heap_size, target, runtime_features) {
+            Ok(asm) => asm,
+            Err(error) => { eprintln!("PHP extension error: {error}"); process::exit(1); }
+        }
+    } else { user_asm };
     timings.record_since("codegen", phase_started);
 
     crate::progress::phase("write-asm");
@@ -287,6 +298,21 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             ),
             timings.elapsed(),
         );
+        return;
+    }
+
+    if emit == Emit::Phpext {
+        crate::progress::phase("php-extension-link");
+        let phase_started = Instant::now();
+        if let Err(error) = crate::phpext::build::link(&user_asm, exported_functions, target, &output_paths.bin) {
+            crate::progress::clear();
+            eprintln!("PHP extension error: {error}");
+            process::exit(1);
+        }
+        timings.record_since("php-extension-link", phase_started);
+        crate::progress::clear();
+        timings.report();
+        crate::progress::finish_ok(&format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()), timings.elapsed());
         return;
     }
 

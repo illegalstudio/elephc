@@ -9,6 +9,14 @@ elephc manages memory without calling `malloc`/`free` for PHP values directly. S
 
 This page explains where every value lives in memory at runtime.
 
+For `--emit phpext`, each PHP request owns a snapshot of these native writable
+regions. The adapter restores snapshots at stable addresses under a module-local
+mutex, preserving internal pointers while isolating request heaps and statics.
+Native strings and arrays are copied through private transport storage, then
+converted using real Zend APIs. Zend allocations and native allocations never
+share ownership. Snapshot buffers and partial transport allocations are freed
+at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
+
 ## Runtime memory regions
 
 ```

@@ -24,6 +24,8 @@ const REG_DOTALL: c_int = 0x0010;
 const REG_STARTEND: c_int = 0x0080;
 const ELEPHC_PCRE2_GLOBAL_NEXT: u32 = 1 << 16;
 const REG_UNGREEDY: c_int = 0x0200;
+/// Private compile flag. The PCRE2 shim compiles with `PCRE2_EXTENDED` and clears this bit.
+const ELEPHC_PCRE2_EXTENDED: c_int = 0x2000;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
 const REG_NOMATCH: c_int = 17;
@@ -36,6 +38,7 @@ pub(in crate::interpreter) struct EvalPregModifiers {
     pub(in crate::interpreter) dot_matches_new_line: bool,
     pub(in crate::interpreter) swap_greed: bool,
     pub(in crate::interpreter) unicode: bool,
+    pub(in crate::interpreter) extended: bool,
 }
 
 /// A compiled regex plus its registered opaque provider.
@@ -178,6 +181,9 @@ impl EvalPregModifiers {
         }
         if self.unicode {
             flags |= REG_UTF | REG_UCP;
+        }
+        if self.extended {
+            flags |= ELEPHC_PCRE2_EXTENDED;
         }
         flags
     }

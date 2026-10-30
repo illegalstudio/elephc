@@ -98,6 +98,8 @@ pub mod mysqli_prelude;
 
 /// Hosting support for real PHP extensions (surface derivation from stubs).
 pub mod php_ext;
+/// Producer-side SDK validation and registration for real PHP hosts.
+pub mod phpext;
 /// PHP language-profile selection and profile-dependence analysis.
 pub mod php_profile;
 /// Reachability pruning of injected prelude declarations.

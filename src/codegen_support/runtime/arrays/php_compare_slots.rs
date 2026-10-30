@@ -65,6 +65,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
 
             // -- report an unsupported runtime value before terminating --
             emitter.label("__rt_mixed_sort_non_scalar");
+            if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
             emitter.instruction("mov x0, #2");                                  // select stderr for the explicit Mixed-sort diagnostic
             abi::emit_symbol_address(emitter, "x1", "_mixed_sort_non_scalar_msg");
             emitter.instruction(&format!("mov x2, #{}", MIXED_SORT_NON_SCALAR_MSG.len())); // pass the diagnostic byte length to write()
@@ -96,6 +97,7 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
 
             // -- report an unsupported runtime value before terminating --
             emitter.label("__rt_mixed_sort_non_scalar_x86");
+            if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
             emitter.instruction("mov edi, 2");                                  // select stderr for the explicit Mixed-sort diagnostic
             abi::emit_symbol_address(emitter, "rsi", "_mixed_sort_non_scalar_msg");
             emitter.instruction(&format!("mov edx, {}", MIXED_SORT_NON_SCALAR_MSG.len())); // pass the diagnostic byte length to write()

@@ -239,7 +239,7 @@ fn emit_runtime_callable_invoker_impl(
     catch_native_throws: bool,
 ) {
     let call_reg = abi::nested_call_reg(emitter);
-    let escape_label = format!("{}_eval_escape", invoker.label);
+    let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, emitter.target));
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
     let mut ctx = InvokerEmitContext::new(
@@ -3651,7 +3651,9 @@ mod tests {
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, eval_boundary);
                 let asm = emitter.output();
                 assert!(asm.contains(&target.extern_symbol("_setjmp")), "{name}: {eval_boundary}");
-                let escape = asm.split_once("owned_invoker_eval_escape:").unwrap().1;
+                let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, target));
+                assert!(escape_label.starts_with(target.platform.local_label_prefix()), "{name}");
+                let escape = asm.split_once(&format!("{escape_label}:")).unwrap().1;
                 assert_eq!(escape.matches("__rt_cleanup_invoke").count(), 2, "{name}: {eval_boundary}");
                 assert_eq!(escape.contains("__rt_throw_current"), !eval_boundary, "{name}: {eval_boundary}");
             }

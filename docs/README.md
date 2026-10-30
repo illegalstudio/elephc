@@ -87,6 +87,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [FFI & Extern](beyond-php/extern.md) — calling C libraries, extern functions/globals/classes, callbacks
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
+- [PHP extensions](beyond-php/phpext.md): real PHP 8.5 modules, copied values and NTS/ZTS request isolation
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [Persistent Web Applications](beyond-php/web-application.md): bootstrap a typed application once per worker and prepare fresh HTTP requests
 - [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias

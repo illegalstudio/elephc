@@ -81,6 +81,15 @@ pub enum RuntimeCallTarget {
     /// (operand 1); an overlap between the two chains drops the pending owner instead of
     /// creating a cycle.
     ExceptionChain,
+    /// Chains exceptions emitted by a `finally` escape and notifies hosted runtimes that the
+    /// current escape crossed one older parked host-exception level.
+    ExceptionFinallyChain,
+    /// Notifies a hosted runtime that a `finally` jump discarded its pending exception.
+    /// Standalone outputs have no host exception to retire, so their backend emits no code.
+    ExceptionDiscard,
+    /// Marks a native exception consumed by a user catch while it replaces a pending host escape.
+    /// The hosted adapter keeps that host exception only when the caught native chain is rethrown.
+    ExceptionCatchHostReplacement,
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
@@ -177,8 +186,16 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str, IrType::I64, IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Void,
             }),
-            RuntimeCallTarget::ExceptionChain => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::ExceptionChain | RuntimeCallTarget::ExceptionFinallyChain => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionDiscard => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
+                result: IrType::Void,
+            }),
+            RuntimeCallTarget::ExceptionCatchHostReplacement => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
             RuntimeCallTarget::ArrayFetchForWrite
@@ -269,6 +286,11 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::ExecutablePath => "process.executable_path",
             RuntimeCallTarget::ThrowableInitialize => "object.throwable_initialize",
             RuntimeCallTarget::ExceptionChain => "object.exception_chain",
+            RuntimeCallTarget::ExceptionFinallyChain => "object.exception_finally_chain",
+            RuntimeCallTarget::ExceptionDiscard => "object.exception_discard",
+            RuntimeCallTarget::ExceptionCatchHostReplacement => {
+                "object.exception_catch_host_replacement"
+            }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",

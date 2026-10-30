@@ -109,6 +109,7 @@ mod static_receiver_writes;
 mod synthetic_arrays;
 mod throwable_constructors;
 mod mixed_throw_errors;
+mod hosted_exception_discard;
 mod xml_parser_arguments;
 mod simplexml_targets;
 

@@ -283,7 +283,8 @@ pub(crate) use property_fetch_for_write::{
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
     lower_nested_assignment_property_source,
 };
-pub(crate) use string_concat::string_op_uses_scratch_storage;
+pub(crate) use string_concat::string_value_needs_persistence;
+pub(crate) use string_concat::persist_pending_string;
 pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
     property_access_expr_type_for_ir,
