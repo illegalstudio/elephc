@@ -34,6 +34,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.infer_short_circuit_type(expr, &mut env.clone(), false);
+        }
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
         if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
@@ -482,6 +485,19 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        // Reference captures carry the enclosing cell's storage, even when the current
+        // read view is non-null. Value captures keep their precise read type.
+        let capture_env = (!capture_refs.is_empty()).then(|| {
+            let mut captured = env.clone();
+            for name in capture_refs {
+                let variable = Expr::new(ExprKind::Variable(name.clone()), expr.span);
+                if let Some(storage) = self.guarded_local_storage_type(&variable, env) {
+                    captured.insert(name.clone(), storage.clone());
+                }
+            }
+            captured
+        });
+        let env = capture_env.as_ref().unwrap_or(env);
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
@@ -511,7 +527,9 @@ impl Checker {
         // on. Recorded before entering the closure scope, which saves and restores the
         // enclosing set.
         for capture in capture_refs {
+            self.pending_ref_capture_invalidations.insert(capture.clone());
             self.ref_aliased_locals.insert(capture.clone());
+            self.by_ref_captured_locals.insert(capture.clone());
             self.non_builtin_ref_aliased_locals.insert(capture.clone());
             if expr.span.identifies_a_node() {
                 self.array_push_capture_sites.entry(capture.clone())
@@ -554,7 +572,9 @@ impl Checker {
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
-        let body_result = self.with_local_storage_context(
+        let return_facts = crate::optimize::ReturnBoundaryFacts::new(return_type.as_ref(),
+            params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
+        let body_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
             pre_bound_own_storage,
@@ -569,7 +589,7 @@ impl Checker {
                 }
                 Ok(())
             },
-        );
+        ));
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;

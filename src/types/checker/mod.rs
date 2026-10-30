@@ -36,6 +36,10 @@ mod generic_new;
 mod generic_variance;
 mod inference;
 mod loop_storage;
+mod loop_flow;
+mod finally_flow;
+mod function_names;
+mod loop_backedges;
 mod method_pass;
 mod member_receivers;
 mod mixed_storage_scan;
@@ -63,7 +67,6 @@ use crate::types::{
 };
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
-pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
 pub(crate) use schema::normalize_signature_default_receivers;
@@ -92,6 +95,7 @@ pub(crate) struct Checker {
     pub completed_function_signatures: HashSet<String>,
     /// Canonical function signatures indexed by fully-qualified name.
     pub functions: HashMap<String, FunctionSig>,
+    function_name_indices: function_names::FunctionNameIndices,
     /// Functions whose body is currently being checked.
     ///
     /// Recursive calls may use their provisional signature, but must not re-specialize the same
@@ -403,6 +407,14 @@ pub(crate) struct Checker {
     pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
+    /// Control-flow exits owned by the current function-like frame's active loops.
+    loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
+    /// Shared callable exception summaries for source-order try/catch flow.
+    exception_analysis: Option<crate::optimize::CheckerExceptionAnalysis>,
+    /// Function exits waiting for the active try statements' finally blocks.
+    finally_flow_frames: Vec<finally_flow::FinallyFlowFrame>,
+    /// Actual RHS types observed while validating finally, keyed by body scope and source node.
+    finally_assigned_value_types: HashMap<(String, usize), (Span, PhpType)>,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
     /// used to restore correct depth when branching through `finally`.
     pub finally_break_continue_bases: Vec<usize>,
@@ -536,6 +548,8 @@ pub(crate) struct Checker {
     /// Unlike captures and by-reference parameters, these can retain native packed-array
     /// storage through multiple local names, so a write must not widen only one view.
     pub ref_assign_aliased_locals: HashSet<String>,
+    /// Locals already captured by reference at this point in the current body.
+    pub by_ref_captured_locals: HashSet<String>,
     /// Earlier by-reference captures whose native element layout a later push must preserve.
     pub array_push_capture_sites: HashMap<String, HashSet<Span>>,
     /// Current local bindings that alias a managed container entry whose physical cell payload
@@ -631,7 +645,9 @@ pub(crate) struct Checker {
     /// [`SavedLocalBindingScope`].
     pub mixed_storage_locals: HashSet<String>,
     /// Union storage contracts retained while guards narrow reads of a local in the current body.
-    pub guarded_union_types: HashMap<String, PhpType>,
+    pub guarded_union_types: HashMap<String, GuardedLocalStorage>,
+    /// Reference captures discovered during immutable inference and awaiting the caller's effects walk.
+    pub pending_ref_capture_invalidations: HashSet<String>,
     /// Every statement-form assignment to a mixed-storage local, as span -> the SET of local names
     /// boxed at that position, so EIR lowering can declare the slot boxed BEFORE the first store
     /// instead of inferring it from the first stored value. Cumulative across bodies, and keyed
@@ -696,9 +712,12 @@ pub(crate) struct SavedLocalBindingScope {
     conditional_depth: u32,
     binding_depth: HashMap<String, u32>,
     narrowed_origins: HashMap<String, NarrowedLocalOrigin>,
+    loop_flow_frames: Vec<loop_flow::LoopFlowFrame>,
+    finally_flow_frames: Vec<finally_flow::FinallyFlowFrame>,
     ref_aliased: HashSet<String>,
     non_builtin_ref_aliased: HashSet<String>,
     ref_assign_aliased: HashSet<String>,
+    by_ref_captured: HashSet<String>,
     array_push_capture_sites: HashMap<String, HashSet<Span>>,
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
@@ -707,7 +726,8 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
     mixed_storage: HashSet<String>,
-    guarded_unions: HashMap<String, PhpType>,
+    guarded_unions: HashMap<String, GuardedLocalStorage>,
+    pending_ref_captures: HashSet<String>,
     contains_eval: bool,
     numeric_regions: HashMap<Span, HashSet<String>>,
     numeric_region_retypes: HashSet<(Span, String)>,
@@ -743,6 +763,15 @@ pub struct NarrowedLocalOrigin {
     /// `$a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; }` compiled while
     /// the same two stores written flat did not (raised in review on #509).
     pub stored_in_region: bool,
+}
+
+/// A storage contract retained independently of a local's current read type.
+#[derive(Clone)]
+pub struct GuardedLocalStorage {
+    /// The binding representation that a reference still addresses.
+    pub ty: PhpType,
+    /// Coalescing needs the original assignment contract; a guard keeps ordinary flow merges.
+    pub coalesced: bool,
 }
 
 /// One entry of [`Checker::narrowed_local_origins`] as it stood before a guard region opened it.
@@ -898,11 +927,14 @@ impl Checker {
             // checked inside that branch binds its own name in its own frame, so inheriting the
             // origin would measure the closure's store against a binding it does not own.
             narrowed_origins: std::mem::take(&mut self.narrowed_local_origins),
+            loop_flow_frames: std::mem::take(&mut self.loop_flow_frames),
+            finally_flow_frames: std::mem::take(&mut self.finally_flow_frames),
             ref_aliased: std::mem::take(&mut self.ref_aliased_locals),
             non_builtin_ref_aliased: std::mem::take(
                 &mut self.non_builtin_ref_aliased_locals,
             ),
             ref_assign_aliased: std::mem::take(&mut self.ref_assign_aliased_locals),
+            by_ref_captured: std::mem::take(&mut self.by_ref_captured_locals),
             array_push_capture_sites: std::mem::take(&mut self.array_push_capture_sites),
             boxed_ref_aliased: std::mem::take(&mut self.boxed_ref_aliased_locals),
             boxed_ref_invalidations: std::mem::take(
@@ -917,6 +949,7 @@ impl Checker {
             // box a callee local the pre-scan never marked.
             mixed_storage: std::mem::take(&mut self.mixed_storage_locals),
             guarded_unions: std::mem::take(&mut self.guarded_union_types),
+            pending_ref_captures: std::mem::take(&mut self.pending_ref_capture_invalidations),
             contains_eval: self.body_contains_eval,
             numeric_regions: std::mem::take(&mut self.numeric_region_sites),
             numeric_region_retypes: std::mem::take(&mut self.numeric_region_retypes),
@@ -940,9 +973,12 @@ impl Checker {
         self.local_conditional_depth = saved.conditional_depth;
         self.local_binding_depth = saved.binding_depth;
         self.narrowed_local_origins = saved.narrowed_origins;
+        self.loop_flow_frames = saved.loop_flow_frames;
+        self.finally_flow_frames = saved.finally_flow_frames;
         self.ref_aliased_locals = saved.ref_aliased;
         self.non_builtin_ref_aliased_locals = saved.non_builtin_ref_aliased;
         self.ref_assign_aliased_locals = saved.ref_assign_aliased;
+        self.by_ref_captured_locals = saved.by_ref_captured;
         self.array_push_capture_sites = saved.array_push_capture_sites;
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
@@ -952,6 +988,7 @@ impl Checker {
         self.typed_local_names = saved.typed;
         self.mixed_storage_locals = saved.mixed_storage;
         self.guarded_union_types = saved.guarded_unions;
+        self.pending_ref_capture_invalidations = saved.pending_ref_captures;
         self.body_contains_eval = saved.contains_eval;
         self.numeric_region_sites = saved.numeric_regions;
         self.numeric_region_retypes = saved.numeric_region_retypes;
@@ -981,6 +1018,13 @@ impl Checker {
             .or_else(|| pre_guard.cloned())
         {
             Some(origin) => {
+                if !name.starts_with('\u{1}')
+                    && matches!(origin.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+                {
+                    self.guarded_union_types.entry(name.to_string()).or_insert_with(|| {
+                        GuardedLocalStorage { ty: origin.clone(), coalesced: false }
+                    });
+                }
                 self.narrowed_local_origins.insert(
                     name.to_string(),
                     NarrowedLocalOrigin {
@@ -1068,8 +1112,12 @@ impl Checker {
     /// captures, or reflected class of the binding that is gone — that is how a stale
     /// `$f()` signature would survive an `unset($f)`.
     pub(crate) fn clear_local_binding_metadata(&mut self, name: &str) {
+        self.record_loop_binding_end(name);
+        self.guarded_union_types.remove(name);
+        self.pending_ref_capture_invalidations.remove(name);
         self.boxed_parameter_locals.remove(name);
         self.array_push_capture_sites.remove(name);
+        self.by_ref_captured_locals.remove(name);
         self.invalidate_boxed_ref_alias_binding(name);
         self.closure_return_types.remove(name);
         self.callable_sigs.remove(name);
@@ -1079,6 +1127,40 @@ impl Checker {
         self.first_class_callable_targets.remove(name);
         self.reflection_class_targets.remove(name);
         self.foreach_key_locals.remove(name);
+    }
+
+    /// Ends a retained local read view before a store or rebinding chooses its new contract.
+    pub(crate) fn invalidate_local_flow_narrowing(&mut self, name: &str, env: &mut TypeEnv) {
+        let origin = self.guarded_union_types.remove(name).map(|origin| origin.ty).or_else(|| {
+            self.narrowed_local_origins.get(name)
+                .filter(|origin| origin.view.is_some()).map(|origin| origin.origin.clone())
+        });
+        if let Some(origin) = origin {
+            env.insert(name.to_string(), origin);
+        }
+        self.record_store_over_flow_narrowing(name);
+    }
+
+    /// Ends a read guard and drops retained storage when an effect installs a wider layout.
+    pub(crate) fn record_local_storage_effect(&mut self, name: &str, ty: &PhpType) {
+        let retain = self.guarded_union_types.get(name).is_some_and(|storage| {
+            self.merged_assignment_type(&storage.ty, ty).as_ref() == Some(&storage.ty)
+        });
+        if !retain {
+            self.guarded_union_types.remove(name);
+        }
+        self.record_store_over_flow_narrowing(name);
+    }
+
+    /// Restores read-fact provenance after a conditional region when its storage did not change.
+    pub(crate) fn restore_guarded_storage_provenance(&mut self, saved: &HashMap<String, GuardedLocalStorage>) {
+        for (name, previous) in saved {
+            if let Some(current) = self.guarded_union_types.get_mut(name) {
+                if current.ty == previous.ty {
+                    current.coalesced = previous.coalesced;
+                }
+            }
+        }
     }
 
     /// Ends the current binding's managed-cell provenance and records conditional uncertainty.

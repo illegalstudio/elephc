@@ -324,7 +324,7 @@ fn switch_guarantees_function_exit(
 
 /// Returns true if the expression is a truthy literal constant.
 /// Recognizes bool, int, float, and non-empty non-"0" string literals.
-fn expr_is_truthy_literal(expr: &Expr) -> bool {
+pub(crate) fn expr_is_truthy_literal(expr: &Expr) -> bool {
     match &expr.kind {
         crate::parser::ast::ExprKind::BoolLiteral(value) => *value,
         crate::parser::ast::ExprKind::IntLiteral(value) => *value != 0,

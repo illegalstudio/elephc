@@ -11,13 +11,15 @@
 
 mod assignments;
 mod control_flow;
+mod loop_entry;
 mod narrowing;
+pub(super) use narrowing::type_is_definitely_non_null;
 
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
-use crate::types::TypeEnv;
+use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
@@ -38,11 +40,28 @@ impl Checker {
         // and the checker only ever sees the merged program, so the file's answer travels on the
         // statement. Save/restore rather than assign: a strict file's `include` of a coercive one
         // must not leave the includer's setting behind, and vice versa.
+        let retirement = match &stmt.kind {
+            StmtKind::Assign { name, .. } | StmtKind::TypedAssign { name, .. }
+            | StmtKind::RefAssign { target: name, .. } if !self.finally_flow_frames.is_empty() =>
+                Some(if self.local_flow_read_is_stable(name) {
+                    env.get(name).cloned().unwrap_or(PhpType::Void)
+                } else { PhpType::Mixed }),
+            _ => None,
+        };
+        let before_write = (!self.finally_flow_frames.is_empty() && matches!(stmt.kind,
+            StmtKind::ArrayAssign { .. } | StmtKind::NestedArrayAssign { .. }
+            | StmtKind::ArrayPush { .. } | StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. }
+            | StmtKind::StaticPropertyAssign { .. } | StmtKind::StaticPropertyArrayPush { .. }
+            | StmtKind::StaticPropertyArrayAssign { .. })).then(|| self.snapshot_flow_exit(env));
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
         let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
+        if result.is_ok() && !matches!(stmt.kind, StmtKind::Foreach { .. }) {
+            self.record_statement_exception_flow(stmt, env, retirement.as_ref(), before_write);
+        }
         self.strict_types = outer_strict_types;
         result
     }
@@ -125,13 +144,22 @@ impl Checker {
             // may leave a `finally` as the `return` could. Its depth still has to hold.
             StmtKind::Break(levels) if stmt.is_include_return_break() => {
                 if *levels <= self.break_continue_depth {
+                    self.record_loop_control_exit(*levels, false, env);
                     Ok(())
                 } else {
                     self.check_loop_exit(stmt.span, "break", *levels)
                 }
             }
-            StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
-            StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
+            StmtKind::Break(levels) => {
+                self.check_loop_exit(stmt.span, "break", *levels)?;
+                self.record_loop_control_exit(*levels, false, env);
+                Ok(())
+            }
+            StmtKind::Continue(levels) => {
+                self.check_loop_exit(stmt.span, "continue", *levels)?;
+                self.record_loop_control_exit(*levels, true, env);
+                Ok(())
+            }
             StmtKind::ExprStmt(expr) => {
                 // The one position an `unset(...)` may end a local binding from. elephc's parser
                 // accepts `unset` as an expression (PHP's grammar does not), so the kill has to
@@ -152,6 +180,7 @@ impl Checker {
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
                     let returned = self.infer_type_with_assignment_effects(e, env)?;
+                    self.record_return_boundary_exception_flow(&returned, env);
                     // Record the type as observed HERE, in flow order, so the later
                     // flow-insensitive return-coverage pass does not apply a narrowing that
                     // only holds further down the body to this return. See
@@ -202,6 +231,7 @@ impl Checker {
                         }
                     }
                 }
+                self.record_finally_return(env);
                 Ok(())
             }
             StmtKind::ClassDecl { .. }

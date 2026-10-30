@@ -39,6 +39,8 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
 
+mod conditions;
+
 /// A detected type-guard narrowing: the guarded binding's env key and the types it takes in the
 /// then-branch (guard true) and else-branch (guard false).
 pub(crate) struct GuardNarrowing {
@@ -70,6 +72,29 @@ impl GuardTarget {
 }
 
 impl Checker {
+    /// Checks a branch under its guarded read views while retaining the original storage types.
+    pub(crate) fn with_flow_narrowings<T>(
+        &mut self,
+        guards: &[GuardNarrowing],
+        then_branch: bool,
+        env: &mut TypeEnv,
+        body: impl FnOnce(&mut Self, &mut TypeEnv) -> Result<T, CompileError>,
+    ) -> Result<T, CompileError> {
+        let storage_entry = self.guarded_union_types.clone();
+        let mut saved = Vec::with_capacity(guards.len());
+        for guard in guards {
+            let view = if then_branch { &guard.then_ty } else { &guard.else_ty };
+            saved.push(self.enter_flow_narrowing(&guard.var, env.get(&guard.var), view));
+            env.insert(guard.var.clone(), view.clone());
+        }
+        let result = body(self, env);
+        for origin in saved.into_iter().rev() {
+            self.exit_flow_narrowing(origin);
+        }
+        self.restore_guarded_storage_provenance(&storage_entry);
+        result
+    }
+
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
@@ -490,9 +515,9 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
 ///
 /// `Mixed` and `Never` are treated as possibly-null because neither carries enough information
 /// to prove otherwise; a union is non-null only when every member is.
-fn type_is_definitely_non_null(ty: &PhpType) -> bool {
+pub(in crate::types::checker) fn type_is_definitely_non_null(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Void | PhpType::Never | PhpType::Mixed => false,
+        PhpType::Void | PhpType::Never | PhpType::Mixed | PhpType::TaggedScalar => false,
         PhpType::Union(members) => members.iter().all(type_is_definitely_non_null),
         _ => true,
     }

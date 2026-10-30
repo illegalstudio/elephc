@@ -243,11 +243,25 @@ impl Checker {
                 // the callee the very same by-reference parameter, so `$args` is aliased just as
                 // surely; only the LVALUE-SHAPE diagnostic underneath has nothing to say about a
                 // spread, which is what that bail-out is for.
+                let can_widen_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
+                    || self.boxed_reference_promotion_pending(arg, span);
                 self.record_builtin_reference_alias_root(arg);
                 if matches!(arg.kind, ExprKind::Spread(_)) {
                     continue;
                 }
                 if self.is_builtin_by_ref_argument_lvalue(arg) {
+                    // A mixed reference can replace a guarded value and require a wider cell.
+                    // Publish the same storage transition as an ordinary mixed-reference call.
+                    if def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
+                        && self.guarded_local_storage_type(arg, env).is_some()
+                    {
+                        let actual = self.infer_type(arg, env)?;
+                        self.require_boxed_by_ref_storage(
+                            &PhpType::Mixed, &actual, arg, env, can_widen_local,
+                            &format!("Builtin '{}'", name),
+                        )?;
+                        self.record_boxed_reference_output(arg, &PhpType::Mixed, &actual, span, env);
+                    }
                     continue;
                 }
                 let param_name = def

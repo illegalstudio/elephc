@@ -214,6 +214,11 @@ pub(super) fn contextualize_local_assignment(
     if let Some(retyped) = retype_value_for_pointer_local(ctx, name, lowered, span) {
         return retyped;
     }
+    // Coalescing refines the value but keeps the nullable slot. Later reference calls
+    // must still load its tag and payload using the same representation as the parameter.
+    if let Some(storage) = union_local_storage_type(ctx, name, value, &source_ty) {
+        return (lowered, storage);
+    }
     if contextual_ty.is_php_array() {
         let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
         return (converted, contextual_ty);
@@ -298,6 +303,25 @@ pub(super) fn contextualize_local_assignment(
     // local's recorded type feeds `is_resource`/`gettype` and nullable-union lowering, so the
     // collapsed form must stay confined to the storage-contract comparisons above.
     (lowered, source_ty)
+}
+
+/// Keeps compatible union stores in their binding's existing tag or boxed representation.
+pub(in crate::ir_lower) fn union_local_storage_type(
+    ctx: &LoweringContext<'_, '_>, name: &str, value: &Expr, source: &PhpType,
+) -> Option<PhpType> {
+    let storage = ctx.local_type(name);
+    let PhpType::Union(members) = &storage else { return None; };
+    if storage.codegen_repr() == PhpType::TaggedScalar
+        && !matches!(source.codegen_repr(), PhpType::Int | PhpType::Void | PhpType::TaggedScalar)
+    {
+        return None;
+    }
+    let self_coalesce = members.contains(&PhpType::Void)
+        && matches!(&value.kind, ExprKind::NullCoalesce { value, .. }
+            if matches!(&value.kind, ExprKind::Variable(current) if current == name));
+    let tagged = storage.codegen_repr() == PhpType::TaggedScalar
+        && matches!(source.codegen_repr(), PhpType::Int | PhpType::Void | PhpType::TaggedScalar);
+    (self_coalesce || tagged || members.contains(source) || *source == storage).then_some(storage)
 }
 
 /// Retypes a value stored into a local whose type is a pointer word, or returns `None`.

@@ -23,6 +23,7 @@ use std::rc::Rc;
 mod binding_decisions;
 mod control;
 mod effect_analysis;
+mod return_boundaries;
 mod effects;
 mod exception_flow;
 mod fold;
@@ -37,6 +38,7 @@ use binding_decisions::{with_local_binding_decision_spans, with_mixed_storage_lo
 use control::*;
 use effect_analysis::{
     collect_instance_dispatch_metadata, compute_program_callable_effects, method_effect_key,
+    FunctionEffectLookup,
 };
 use effects::*;
 use exception_flow::{with_exception_flow_analysis, ExceptionFlowAnalysis};
@@ -44,12 +46,14 @@ use fold::*;
 use propagate::*;
 
 pub use reachability::prune_unreachable_declarations;
+pub(crate) use exception_flow::{CheckerExceptionAnalysis, CheckerThrownTypes};
+pub(crate) use return_boundaries::{ReturnBoundaryFacts, with_return_boundary_facts, active_return_boundary_checks_source};
 
 #[cfg(test)]
 mod tests;
 
 thread_local! {
-    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
+    static ACTIVE_FUNCTION_EFFECTS: RefCell<Option<FunctionEffectLookup>> = const { RefCell::new(None) };
     static ACTIVE_STATIC_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
     static ACTIVE_INSTANCE_METHOD_EFFECTS: RefCell<Option<Rc<HashMap<String, Effect>>>> = const { RefCell::new(None) };
     static ACTIVE_INSTANCE_DISPATCH_METADATA: RefCell<Option<Rc<InstanceDispatchMetadata>>> = const { RefCell::new(None) };
@@ -62,9 +66,9 @@ thread_local! {
 
 /// Borrows the active function-effect summary without cloning its whole map.
 pub(in crate::optimize) fn with_active_function_effects<R>(
-    f: impl FnOnce(Option<&HashMap<String, Effect>>) -> R,
+    f: impl FnOnce(Option<&FunctionEffectLookup>) -> R,
 ) -> R {
-    ACTIVE_FUNCTION_EFFECTS.with(|slot| f(slot.borrow().as_deref()))
+    ACTIVE_FUNCTION_EFFECTS.with(|slot| f(slot.borrow().as_ref()))
 }
 
 /// Borrows the active static-method summary without cloning its whole map.
@@ -630,6 +634,7 @@ struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    return_boundary: Rc<ReturnBoundaryFacts>,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
@@ -639,12 +644,13 @@ struct StaticMethodBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    return_boundary: Rc<ReturnBoundaryFacts>,
 }
 
 /// Holds callable summaries and dispatch metadata shared by optimizer passes.
 #[derive(Clone)]
 struct CallableEffectAnalysis {
-    function_effects: Rc<HashMap<String, Effect>>,
+    function_effects: FunctionEffectLookup,
     static_method_effects: Rc<HashMap<String, Effect>>,
     instance_method_effects: Rc<HashMap<String, Effect>>,
     instance_dispatch_metadata: Rc<InstanceDispatchMetadata>,
@@ -656,7 +662,9 @@ impl CallableEffectAnalysis {
         let (function_effects, static_method_effects, instance_method_effects) =
             compute_program_callable_effects(program);
         Self {
-            function_effects,
+            function_effects: FunctionEffectLookup::new(function_effects, Rc::new(
+                return_boundaries::collect_return_boundaries(program).into_iter()
+                    .map(|(name, facts)| (name, facts.declared_result())).collect())),
             static_method_effects,
             instance_method_effects,
             instance_dispatch_metadata: Rc::new(collect_instance_dispatch_metadata(program)),
@@ -675,7 +683,7 @@ fn with_callable_effect_analysis<R>(
             ACTIVE_INSTANCE_METHOD_EFFECTS.with(|instance_slot| {
                 ACTIVE_INSTANCE_DISPATCH_METADATA.with(|metadata_slot| {
                     let previous_functions =
-                        function_slot.replace(Some(Rc::clone(&analysis.function_effects)));
+                        function_slot.replace(Some(analysis.function_effects.clone()));
                     let previous_static_methods =
                         static_slot.replace(Some(Rc::clone(&analysis.static_method_effects)));
                     let previous_instance_methods =
@@ -704,7 +712,7 @@ fn with_callable_effects<R>(
     f: impl FnOnce() -> R,
 ) -> R {
     let analysis = CallableEffectAnalysis {
-        function_effects: Rc::new(function_effects),
+        function_effects: FunctionEffectLookup::new(Rc::new(function_effects), Rc::new(HashMap::new())),
         static_method_effects: Rc::new(static_method_effects),
         instance_method_effects: Rc::new(instance_method_effects),
         instance_dispatch_metadata: Rc::new(instance_dispatch_metadata),

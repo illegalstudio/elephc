@@ -129,7 +129,9 @@ pub(super) fn lower_assignment_expr(
         );
         let is_ref_bound = ctx.is_ref_bound_local(name);
         let existing_type = ctx.local_types.get(name).cloned();
-        let php_type = if is_static || is_ref_bound {
+        let php_type = if let Some(storage) = crate::ir_lower::stmt::union_local_storage_type(ctx, name, value, &value_php_type) {
+            storage
+        } else if is_static || is_ref_bound {
             existing_type.unwrap_or(value_php_type)
         } else {
             value_php_type
@@ -655,15 +657,26 @@ pub(super) fn lower_inc_dec(
     }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
-    let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int);
-    let iop = match (increment, checked_int_local) {
-        (true, true) => Op::ICheckedAdd,
-        (false, true) => Op::ICheckedSub,
-        (true, false) => Op::IAdd,
-        (false, false) => Op::ISub,
+    // Guards and coalescing can prove an int read while its slot stays nullable.
+    // Accepted updates still need checked arithmetic and a boxed result at overflow.
+    let nullable_int = matches!(&existing_type, PhpType::Union(members)
+        if members.iter().any(|ty| *ty == PhpType::Int)
+            && members.iter().all(|ty| matches!(ty, PhpType::Int | PhpType::Void)));
+    let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int) || nullable_int;
+    // An incoming typed reference addresses the caller's tagged cell, which cannot hold a
+    // float. Use the existing checked scalar-storage diagnostic instead of writing float bits.
+    let fixed_tagged_reference = nullable_int && ctx.is_ref_bound_local(name);
+    let iop = match (increment, checked_int_local, fixed_tagged_reference) {
+        (true, _, true) => Op::ICheckedAddToInt,
+        (false, _, true) => Op::ICheckedSubToInt,
+        (true, true, false) => Op::ICheckedAdd,
+        (false, true, false) => Op::ICheckedSub,
+        (true, false, false) => Op::IAdd,
+        (false, false, false) => Op::ISub,
     };
-    let result_php_type = if checked_int_local { PhpType::Mixed } else { PhpType::Int };
-    let result_ir_type = if checked_int_local {
+    let boxed_result = checked_int_local && !fixed_tagged_reference;
+    let result_php_type = if boxed_result { PhpType::Mixed } else { PhpType::Int };
+    let result_ir_type = if boxed_result {
         IrType::Heap(IrHeapKind::Mixed)
     } else {
         IrType::I64

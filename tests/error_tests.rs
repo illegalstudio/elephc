@@ -351,6 +351,8 @@ mod spl_builtins;
 mod misc;
 #[path = "error_tests/narrowing.rs"]
 mod narrowing;
+#[path = "error_tests/nullable_fallback_flow.rs"]
+mod nullable_fallback_flow;
 #[path = "error_tests/image.rs"]
 mod image;
 #[path = "error_tests/mysqli.rs"]

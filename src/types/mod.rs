@@ -42,6 +42,8 @@ mod model;
 pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
+mod return_boundary;
+pub(crate) use return_boundary::declared_int_return_requires_validation;
 /// Type checker result types and the `check` entry point.
 mod result;
 /// Shared builtin Reflection ancestry for public metadata property write handlers.

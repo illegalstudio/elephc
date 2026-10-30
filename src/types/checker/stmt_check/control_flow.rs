@@ -25,6 +25,7 @@ use crate::parser::ast::{
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::{Checker, SavedNarrowingOrigin};
+use super::loop_entry::stabilize_loop_storage;
 
 const FS_CURRENT_AS_SELF: i64 = 16;
 const FS_CURRENT_AS_PATHNAME: i64 = 32;
@@ -39,83 +40,6 @@ impl Checker {
                 self.loop_storage_types.remove(&(scope.to_string(), span));
             }
         }
-    }
-}
-
-/// Computes and records fixed-point array storage contracts before checking a loop body.
-///
-/// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
-/// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
-/// header/body read is checked. EIR lowering later consumes the recorded contract for the same
-/// loop span rather than repeating expression inference.
-fn stabilize_loop_storage(
-    checker: &mut Checker,
-    loop_span: crate::span::Span,
-    body: &[Stmt],
-    update: Option<&Stmt>,
-    env: &mut TypeEnv,
-    packed_counter: Option<&str>,
-) {
-    let key = (checker.current_loop_storage_scope.clone(), loop_span);
-    if let Some(recorded) = checker.loop_storage_types.get(&key).cloned() {
-        for (name, storage_type) in recorded {
-            env.insert(name, storage_type);
-        }
-        return;
-    }
-    let snapshot = env.clone();
-    let mut call_types: std::collections::HashMap<crate::span::Span, PhpType> =
-        std::collections::HashMap::new();
-    let contracts = crate::types::checker::loop_carried_storage_types(
-        body,
-        update,
-        &snapshot,
-        packed_counter,
-        &mut |expr, analysis_env| {
-            let is_call = matches!(
-                expr.kind,
-                ExprKind::FunctionCall { .. }
-                    | ExprKind::MethodCall { .. }
-                    | ExprKind::StaticMethodCall { .. }
-                    | ExprKind::ClosureCall { .. }
-                    | ExprKind::ExprCall { .. }
-            );
-            // The memo is keyed by span, so it may only answer for a span that names one call.
-            // Under `Span::dummy()` every method / static / closure call in a prelude loop body
-            // shared a single entry and the FIRST call's inferred type was handed to all of
-            // them — 42 times while checking one `new PDO("sqlite::memory:")` program.
-            let memoizable = is_call && expr.span.identifies_a_node();
-            if memoizable {
-                if let Some(cached) = call_types.get(&expr.span) {
-                    return Some(cached.clone());
-                }
-            }
-            // This body and its lexical closures see an unguarded environment. Independently
-            // checked callees still need their facts, including a user function named `main`.
-            checker.member_receiver_analysis_scopes.push((
-                checker.current_function.clone(), checker.current_loop_storage_scope.clone(),
-            ));
-            let inferred = checker.infer_type(expr, analysis_env);
-            let _ = checker.member_receiver_analysis_scopes.pop();
-            let inferred = inferred.ok()?;
-            if memoizable {
-                call_types.insert(expr.span, inferred.clone());
-            }
-            Some(inferred)
-        },
-    );
-    let (scope, span) = key;
-    if !checker.loop_storage_types.contains_key(&(scope.clone(), span)) {
-        checker
-            .loop_storage_scope_spans
-            .entry(scope.clone())
-            .or_default()
-            .push(span);
-    }
-    let recorded = checker.loop_storage_types.entry((scope, span)).or_default();
-    for (name, storage_type) in contracts {
-        recorded.insert(name.clone(), storage_type.clone());
-        env.insert(name, storage_type);
     }
 }
 
@@ -390,6 +314,10 @@ impl Checker {
                 // one. Require the body to establish any affirmative managed-cell provenance it
                 // consumes within the loop itself.
                 self.boxed_ref_aliased_locals.clear();
+                self.invalidate_local_flow_narrowing(value_var, env);
+                if let Some(key) = key_var {
+                    self.invalidate_local_flow_narrowing(key, env);
+                }
                 // `foreach ($arr as &$v)` takes a reference into each element, so BOTH names it
                 // touches are reference-aliased for the rest of the body and neither binding can
                 // be killed or re-bound — releasing or abandoning that storage would strand the
@@ -418,6 +346,7 @@ impl Checker {
                 }
                 let value_was_bound = env.contains_key(value_var);
                 let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
+                self.record_statement_exception_flow(stmt, env, None, None);
                 if *value_by_ref {
                     widen_by_ref_foreach_source_storage(self, array, env)?;
                 }
@@ -565,8 +494,8 @@ impl Checker {
                 }
                 // Widen after the key/value bindings are in the environment so a push of
                 // the foreach value variable joins with its real element type.
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
-                let errors = self.check_break_continue_target_body(body, env);
+                stabilize_loop_storage(self, stmt.span, body, None, None, env, None);
+                let errors = self.check_break_continue_target_body(stmt, body, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -588,33 +517,31 @@ impl Checker {
                         self.infer_type_with_assignment_effects(v, env)?;
                     }
                 }
-                self.break_continue_depth += 1;
-                for (_, body) in cases {
-                    let invalidated = self
-                        .conditional_boxed_ref_invalidations
-                        .last()
-                        .cloned()
-                        .unwrap_or_default();
-                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
-                        .iter()
-                        .filter(|name| !invalidated.contains(*name))
-                        .cloned()
-                        .collect();
-                    errors.extend(self.check_body(body, env));
-                }
+                let entry = self.snapshot_flow_exit(env);
+                let flow = self.snapshot_conditional_flow(env);
+                self.begin_switch_flow(flow, default.is_none());
+                let mut arms: Vec<&[Stmt]> = cases.iter().map(|(_, body)| body.as_slice()).collect();
                 if let Some(body) = default {
-                    let invalidated = self
-                        .conditional_boxed_ref_invalidations
-                        .last()
-                        .cloned()
-                        .unwrap_or_default();
-                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs
-                        .into_iter()
-                        .filter(|name| !invalidated.contains(name))
-                        .collect();
-                    errors.extend(self.check_body(body, env));
+                    arms.insert(crate::termination::switch_default_position(cases, body), body);
                 }
-                self.break_continue_depth -= 1;
+                let last_arm = arms.len().saturating_sub(1);
+                let mut fallthrough = None;
+                for (index, body) in arms.into_iter().enumerate() {
+                    let mut inputs = vec![entry.clone()];
+                    inputs.extend(fallthrough.take());
+                    let joined = self.join_flow_snapshots(&inputs).expect("switch entry");
+                    self.restore_flow_snapshot(&joined, env);
+                    let invalidated = self.conditional_boxed_ref_invalidations.last()
+                        .cloned().unwrap_or_default();
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.iter()
+                        .filter(|name| !invalidated.contains(*name)).cloned().collect();
+                    let (arm_errors, falls_through) = self.check_body_flow(body, env);
+                    errors.extend(arm_errors);
+                    fallthrough = falls_through.then(|| self.snapshot_flow_exit(env));
+                    self.record_switch_case_end(env, index == last_arm && falls_through);
+                }
+                let frame = self.pop_loop_flow();
+                self.publish_loop_flow(frame, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -629,6 +556,8 @@ impl Checker {
                 elseif_clauses,
                 else_body,
             } => {
+                let storage_entry = self.guarded_union_types.clone();
+                let mut flow = self.snapshot_conditional_flow(env);
                 let mut errors = Vec::new();
 
                 // Flow-sensitive type narrowing across the if / elseif* / else chain.
@@ -672,70 +601,63 @@ impl Checker {
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
                     let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                    let branch_entry_storage = self.guarded_union_types.clone();
+                    let branch_entry_reads = self.snapshot_conditional_flow(env);
 
-                    if let Some(guard) = self.guard_narrowing(cond, env)? {
-                        applied_any_guard = true;
-                        // Remember the variable's pre-`if` type the first time we narrow it.
+                    let guards = self.guard_narrowings(cond, env)?;
+                    applied_any_guard |= !guards.is_empty();
+                    let saved: Vec<_> = guards.iter().map(|guard| {
+                        (guard.var.clone(), env.get(&guard.var).cloned())
+                    }).collect();
+                    for guard in &guards {
                         if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
                             saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
                         }
                         saved_origins.push(self.enter_flow_narrowing(
-                            &guard.var,
-                            env.get(&guard.var),
-                            &guard.then_ty,
+                            &guard.var, env.get(&guard.var), &guard.then_ty,
                         ));
-
-                        // Check the guarded body with the "then" type.
-                        let saved = env.get(&guard.var).cloned();
                         env.insert(guard.var.clone(), guard.then_ty.clone());
-                        for s in *body {
-                            if let Err(error) = self.check_stmt(s, env) {
-                                errors.extend(error.flatten());
-                            }
+                    }
+                    errors.extend(self.check_body(body, env));
+                    if !crate::termination::block_guarantees_function_exit_with_divergence(
+                        body, &|expr| self.expr_is_declared_never_call(expr),
+                    ) {
+                        if self.body_cannot_fall_through(body) {
+                            self.observe_terminal_flow_storage(&mut flow, env);
+                        } else {
+                            self.observe_conditional_flow_exit(&mut flow, env);
                         }
-                        // Join only when the then-branch WROTE the guarded place, i.e. when the
-                        // fact at branch exit is no longer the guard's own `then` type. That is
-                        // exactly the lazy-initialization shape; joining unconditionally would
-                        // instead publish a guard's narrowing (e.g. `instanceof`) to the code
-                        // after the `if`, where it does not hold.
+                    }
+                    // Preserve the existing lazy-property initialization join for one guard.
+                    if single_clause && guards.len() == 1 {
+                        let guard = &guards[0];
                         let branch_exit = env.get(&guard.var);
-                        if single_clause
-                            && Self::narrowed_place_key_is_property(&guard.var)
+                        if Self::narrowed_place_key_is_property(&guard.var)
                             && !self.body_cannot_fall_through(body)
                             && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
                         {
                             join_key = Some(guard.var.clone());
                             then_exit_ty = branch_exit.cloned();
                         }
-                        if !self.body_cannot_fall_through(body) {
-                            callable_target_exits.push(self.callable_array_targets.clone());
-                            callable_target_version_exits
-                                .push(self.callable_array_target_versions.clone());
-                        }
-                        self.callable_array_targets = branch_entry_targets;
-                        self.callable_array_target_versions = branch_entry_target_versions;
-                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
-                        restore_narrowed_var(env, &guard.var, &saved);
-
-                        // The fallthrough env for the rest of the chain (next elseif or else)
-                        // sees the complement.
+                    }
+                    if !self.body_cannot_fall_through(body) {
+                        callable_target_exits.push(self.callable_array_targets.clone());
+                        callable_target_version_exits
+                            .push(self.callable_array_target_versions.clone());
+                    }
+                    self.callable_array_targets = branch_entry_targets;
+                    self.callable_array_target_versions = branch_entry_target_versions;
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
+                    self.restore_guarded_storage_provenance(&branch_entry_storage);
+                    self.restore_statement_flow_storage(&flow);
+                    self.restore_conditional_read_inputs(&branch_entry_reads, env);
+                    for (var, previous) in &saved {
+                        restore_narrowed_var(env, var, previous);
+                    }
+                    // Reaching a later clause means this entire compound condition was false.
+                    for guard in &guards {
                         env.insert(guard.var.clone(), guard.else_ty.clone());
                         self.republish_flow_narrowing(&guard.var, &guard.else_ty);
-                    } else {
-                        // No narrowing for this clause — check the body with the current env.
-                        for s in *body {
-                            if let Err(error) = self.check_stmt(s, env) {
-                                errors.extend(error.flatten());
-                            }
-                        }
-                        if !self.body_cannot_fall_through(body) {
-                            callable_target_exits.push(self.callable_array_targets.clone());
-                            callable_target_version_exits
-                                .push(self.callable_array_target_versions.clone());
-                        }
-                        self.callable_array_targets = branch_entry_targets;
-                        self.callable_array_target_versions = branch_entry_target_versions;
-                        self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
                     }
                 }
 
@@ -746,12 +668,17 @@ impl Checker {
                 let mut else_exit_ty: Option<Option<PhpType>> = None;
                 let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
+                    errors.extend(self.check_body(body, env));
+                    else_falls_through = !self.body_cannot_fall_through(body);
+                    if !crate::termination::block_guarantees_function_exit_with_divergence(
+                        body, &|expr| self.expr_is_declared_never_call(expr),
+                    ) {
+                        if self.body_cannot_fall_through(body) {
+                            self.observe_terminal_flow_storage(&mut flow, env);
+                        } else {
+                            self.observe_conditional_flow_exit(&mut flow, env);
                         }
                     }
-                    else_falls_through = !self.body_cannot_fall_through(body);
                 }
                 if else_falls_through {
                     callable_target_exits.push(self.callable_array_targets.clone());
@@ -795,11 +722,22 @@ impl Checker {
                     Some((key.clone(), joined))
                 });
                 if !keep_complement_after_if {
+                    self.restore_guarded_storage_provenance(&storage_entry);
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
                     }
                     if let Some((key, joined)) = joined {
                         env.insert(key, joined);
+                    }
+                } else {
+                    for (var, original) in &saved_vars {
+                        if let Some(original) = original {
+                            if !Self::narrowed_place_key_is_property(var) {
+                                self.guarded_union_types.entry(var.clone())
+                                    .and_modify(|entry| entry.coalesced = false)
+                                    .or_insert(super::super::GuardedLocalStorage { ty: original.clone(), coalesced: false });
+                            }
+                        }
                     }
                 }
                 // Closed for the construct even when the complement is KEPT for the code after
@@ -810,6 +748,10 @@ impl Checker {
                 for saved_origin in saved_origins.into_iter().rev() {
                     self.exit_flow_narrowing(saved_origin);
                 }
+                if keep_complement_after_if {
+                    self.keep_conditional_views(&mut flow, env, saved_vars.into_iter().map(|(name, _)| name));
+                }
+                self.finish_statement_conditional_flow(flow, env);
 
                 if errors.is_empty() {
                     Ok(())
@@ -819,9 +761,19 @@ impl Checker {
             }
             StmtKind::DoWhile { body, condition } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
-                let errors = self.check_break_continue_target_body(body, env);
-                self.infer_type_with_assignment_effects(condition, env)?;
+                stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
+                let flow = self.snapshot_loop_flow(env);
+                self.begin_loop_flow(flow, false, !crate::termination::expr_is_truthy_literal(condition));
+                let mut errors = self.check_loop_body(body, env);
+                let backedge = self.loop_backedge_env();
+                let mut tail_env = backedge.clone().unwrap_or_else(|| env.clone());
+                if let Err(error) = self.infer_type_with_assignment_effects(condition, &mut tail_env) {
+                    errors.extend(error.flatten());
+                }
+                self.record_loop_tail_end(&tail_env, backedge.is_some());
+                if backedge.is_some() { *env = tail_env; }
+                let frame = self.pop_loop_flow();
+                self.publish_loop_flow(frame, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -832,36 +784,35 @@ impl Checker {
             }
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
-                stabilize_loop_storage(self, stmt.span, body, None, env, None);
+                stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                let flow = self.snapshot_loop_flow(env);
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
                 // leaves `$row` an array inside the body. The narrowing is dropped again
                 // afterwards, because the loop exits precisely when the guard is false.
-                let guard = self.guard_narrowing(condition, env)?;
-                let saved = guard
-                    .as_ref()
-                    .map(|g| (g.var.clone(), env.get(&g.var).cloned()));
-                let saved_origin = guard
-                    .as_ref()
-                    .map(|g| self.enter_flow_narrowing(&g.var, env.get(&g.var), &g.then_ty));
-                if let Some(g) = &guard {
-                    env.insert(g.var.clone(), g.then_ty.clone());
+                let guards = self.guard_narrowings(condition, env)?;
+                let saved: Vec<_> = guards.iter().map(|guard| {
+                    (guard.var.clone(), env.get(&guard.var).cloned())
+                }).collect();
+                let mut saved_origins = Vec::new();
+                for guard in &guards {
+                    saved_origins.push(self.enter_flow_narrowing(
+                        &guard.var, env.get(&guard.var), &guard.then_ty,
+                    ));
+                    env.insert(guard.var.clone(), guard.then_ty.clone());
                 }
-                let errors = self.check_break_continue_target_body(body, env);
-                if let Some(saved_origin) = saved_origin {
+                let can_exit = !crate::termination::expr_is_truthy_literal(condition);
+                self.begin_loop_flow(flow, can_exit, can_exit);
+                let errors = self.check_loop_body(body, env);
+                let frame = self.pop_loop_flow();
+                for saved_origin in saved_origins.into_iter().rev() {
                     self.exit_flow_narrowing(saved_origin);
                 }
-                if let Some((var, previous)) = saved {
-                    match previous {
-                        Some(ty) => {
-                            env.insert(var, ty);
-                        }
-                        None => {
-                            env.remove(&var);
-                        }
-                    }
+                for (var, previous) in &saved {
+                    restore_narrowed_var(env, var, previous);
                 }
+                self.publish_loop_flow(frame, env);
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
                 if errors.is_empty() {
@@ -922,6 +873,7 @@ impl Checker {
                     stmt.span,
                     body,
                     update.as_deref(),
+                    condition.as_ref(),
                     env,
                     packed_counter_name.as_deref(),
                 );
@@ -936,38 +888,17 @@ impl Checker {
             }
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(())
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(()),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        stmt.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        stmt.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.validate_finally_throw_type(&thrown_ty, stmt.span)?;
+                self.record_finally_throw(&thrown_ty, expr, env);
+                Ok(())
             }
             StmtKind::Try {
                 try_body,
                 catches,
                 finally_body,
             } => {
-                let mut errors = Vec::new();
-                let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
-                for s in try_body {
-                    if let Err(error) = self.check_stmt(s, env) {
-                        errors.extend(error.flatten());
-                    }
-                }
+                let mut resolved_catches = Vec::new();
                 for catch_clause in catches {
-                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     let mut resolved_types = Vec::new();
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
@@ -991,19 +922,53 @@ impl Checker {
                         }
                         resolved_types.push(exception_type);
                     }
+                    resolved_catches.push(resolved_types);
+                }
+                let mut errors = Vec::new();
+                let pending_exits = self.pending_loop_exit_counts();
+                let pending_function_exits = self.pending_finally_exit_counts();
+                let try_entry = self.snapshot_flow_exit(env);
+                self.begin_finally_region(resolved_catches.clone(), finally_body.is_some());
+                let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
+                let (try_errors, try_falls_through) = self.check_body_flow(try_body, env);
+                errors.extend(try_errors);
+                let try_tail = self.snapshot_flow_exit(env);
+                let mut normal_exits = Vec::new();
+                if try_falls_through {
+                    normal_exits.push(self.snapshot_flow_exit(env));
+                }
+                self.enter_finally_catches();
+                for (index, (catch_clause, resolved_types)) in catches.iter().zip(resolved_catches).enumerate() {
+                    let reachable = self.enter_catch_flow(index, &try_tail, env);
+                    self.boxed_ref_aliased_locals = branch_entry_boxed_refs.clone();
                     if let Some(variable) = &catch_clause.variable {
+                        self.record_loop_binding_end(variable);
+                        self.invalidate_local_flow_narrowing(variable, env);
                         env.insert(
                             variable.clone(),
                             PhpType::Object(self.common_catch_type_name(&resolved_types)),
                         );
                     }
-                    for s in &catch_clause.body {
-                        if let Err(error) = self.check_stmt(s, env) {
-                            errors.extend(error.flatten());
-                        }
+                    let catch_exit_counts = self.pending_finally_exit_counts();
+                    let catch_loop_counts = self.pending_loop_exit_counts();
+                    let (catch_errors, catch_falls_through) = self.check_body_flow(&catch_clause.body, env);
+                    errors.extend(catch_errors);
+                    if reachable && catch_falls_through {
+                        normal_exits.push(self.snapshot_flow_exit(env));
+                    } else if !reachable {
+                        self.discard_finally_exits_after(&catch_exit_counts);
+                        self.apply_finally_to_loop_exits(&catch_loop_counts, env, true);
                     }
                 }
+                let falls_through = !normal_exits.is_empty();
+                if let Some(joined) = self.join_flow_snapshots(&normal_exits) {
+                    self.restore_flow_snapshot(&joined, env);
+                } else { self.restore_flow_snapshot(&try_entry, env); }
+                let function_exits = self.end_finally_region();
                 if let Some(body) = finally_body {
+                    let continuation = falls_through.then(|| self.snapshot_flow_exit(env));
+                    self.join_pending_finally_inputs(&pending_exits, &function_exits, falls_through, env);
+                    let before_finally_exits = self.pending_finally_exit_counts();
                     let invalidated = self
                         .conditional_boxed_ref_invalidations
                         .last()
@@ -1017,6 +982,15 @@ impl Checker {
                         .push(self.break_continue_depth);
                     errors.extend(self.check_body(body, env));
                     self.finally_break_continue_bases.pop();
+                    let diverges = crate::termination::block_guarantees_function_exit_with_divergence(
+                        body, &|expr| self.expr_is_declared_never_call(expr));
+                    self.apply_finally_to_loop_exits(&pending_exits, env, diverges);
+                    self.apply_finally_to_function_exits(&pending_function_exits, &before_finally_exits, env, diverges);
+                    if !diverges {
+                        if let Some(continuation) = continuation {
+                            self.restore_finally_continuation_reads(&continuation, body, env);
+                        }
+                    }
                 }
                 self.callable_array_targets.clear();
                 self.callable_array_target_versions.clear();
@@ -1165,46 +1139,48 @@ impl Checker {
             .unwrap_or(PhpType::Mixed)
     }
 
-    /// Checks a loop body with `break`/`continue` target tracking.
-    ///
-    /// Increments `break_continue_depth` before checking the body and decrements it after,
-    /// so that `break`/`continue` validation knows the correct nesting level. Returns all
-    /// errors accumulated while checking the body; the caller decides whether to propagate them.
-    /// Checks a `for` loop's condition, update, and body re-walk, after its storage has settled.
+    /// Checks the condition, body, and update in PHP execution order.
     fn check_for_tail(
-        &mut self,
-        condition: Option<&Expr>,
-        update: Option<&Stmt>,
-        body: &[Stmt],
-        env: &mut TypeEnv,
+        &mut self, condition: Option<&Expr>, update: Option<&Stmt>,
+        body: &[Stmt], env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
-        if let Some(c) = condition {
-            self.infer_type_with_assignment_effects(c, env)?;
+        if let Some(condition) = condition {
+            self.infer_type_with_assignment_effects(condition, env)?;
         }
-        if let Some(s) = update {
-            self.check_stmt(s, env)?;
+        let flow = self.snapshot_loop_flow(env);
+        let can_exit = condition.is_some_and(|condition| !crate::termination::expr_is_truthy_literal(condition));
+        self.begin_loop_flow(flow, can_exit, can_exit);
+        let mut errors = self.check_loop_body(body, env);
+        let backedge = self.loop_backedge_env();
+        let mut tail_env = backedge.clone().unwrap_or_else(|| env.clone());
+        if let Some(update) = update {
+            if let Err(error) = self.check_stmt(update, &mut tail_env) {
+                errors.extend(error.flatten());
+            }
         }
-        let errors = self.check_break_continue_target_body(body, env);
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(CompileError::from_many(errors))
-        }
+        self.record_loop_tail_end(&tail_env, backedge.is_some());
+        if backedge.is_some() { *env = tail_env; }
+        let frame = self.pop_loop_flow();
+        self.publish_loop_flow(frame, env);
+        if errors.is_empty() { Ok(()) } else { Err(CompileError::from_many(errors)) }
     }
 
-    /// Checks a loop body with its control-flow depth and conservative property narrowings.
-    fn check_break_continue_target_body(
-        &mut self,
-        body: &[Stmt],
-        env: &mut TypeEnv,
-    ) -> Vec<CompileError> {
-        // A loop body may observe a property write made by an earlier iteration (the write site
-        // is *after* the read site in source order), so property narrowings from outside the
-        // loop cannot be trusted inside it.
+    /// Checks a foreach body while collecting its distinct loop exits.
+    fn check_break_continue_target_body(&mut self, stmt: &Stmt, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
+        let flow = self.snapshot_loop_flow(env);
+        self.begin_loop_flow(flow, true, true);
+        let errors = self.check_loop_body(body, env);
+        self.record_iteration_exception_flow(stmt);
+        let frame = self.pop_loop_flow();
+        self.publish_loop_flow(frame, env);
+        errors
+    }
+
+    /// Saves the normal back edge separately from break and continue snapshots.
+    fn check_loop_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
         Self::purge_property_narrowings(env);
-        self.break_continue_depth += 1;
         let errors = self.check_body(body, env);
-        self.break_continue_depth -= 1;
+        self.record_loop_body_end(env, !self.body_cannot_fall_through(body));
         errors
     }
 
@@ -1284,12 +1260,43 @@ impl Checker {
     /// Used for `switch` cases, `if` branches, `try` blocks, and other bodies where the
     /// break/continue level is managed at a higher level.
     fn check_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
+        self.check_body_flow(body, env).0
+    }
+
+    /// Retains semantic fallthrough separately from the environment of unreachable suffixes.
+    fn check_body_flow(&mut self, body: &[Stmt], env: &mut TypeEnv) -> (Vec<CompileError>, bool) {
         let mut errors = Vec::new();
+        let mut reachable = true;
         for stmt in body {
+            let selected_body = self.statement_selected_body_at_entry(stmt, env);
+            let pending = self.pending_loop_exit_counts();
+            let function_exits = self.pending_finally_exit_counts();
             if let Err(error) = self.check_stmt(stmt, env) {
                 errors.extend(error.flatten());
             }
+            if !reachable {
+                self.apply_finally_to_loop_exits(&pending, env, true);
+                self.discard_finally_exits_after(&function_exits);
+            }
+            // A call can resolve its declared `never` signature while the statement is checked.
+            let terminal_body = selected_body.unwrap_or_else(|| std::slice::from_ref(stmt));
+            reachable &= !self.body_cannot_fall_through(terminal_body);
         }
-        errors
+        (errors, reachable)
+    }
+
+    /// Selects a known guard arm before writes change the entry environment.
+    fn statement_selected_body_at_entry<'a>(&self, stmt: &'a Stmt, env: &TypeEnv) -> Option<&'a [Stmt]> {
+        if let StmtKind::If { condition, then_body, elseif_clauses, else_body } = &stmt.kind {
+            for (condition, body) in std::iter::once((condition, then_body)).chain(elseif_clauses.iter().map(|(c, b)| (c, b))) {
+                match self.known_null_guard_truth(condition, env) {
+                    Some(true) => return Some(body),
+                    Some(false) => {},
+                    None => return None,
+                }
+            }
+            return Some(else_body.as_deref().unwrap_or(&[]));
+        }
+        None
     }
 }

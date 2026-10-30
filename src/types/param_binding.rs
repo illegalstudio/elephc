@@ -84,6 +84,16 @@ pub(crate) fn classify_param_binding(
     if *expected == PhpType::Callable {
         return classify_callable_string_binding(actual, arg);
     }
+    // Compound guards can expose several scalar alternatives instead of an opaque Mixed.
+    // A float member still needs the same explicit conversion as a standalone float.
+    if expected.codegen_repr() == PhpType::Int
+        && matches!(actual, PhpType::Union(members)
+            if members.contains(&PhpType::Float)
+                && members.iter().all(|member| matches!(member,
+                    PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False)))
+    {
+        return classify_numeric_binding(expected, arg);
+    }
     match (expected.codegen_repr(), actual.codegen_repr()) {
         // `string $s` accepts every other scalar. `(string)` is total for int, float and
         // bool, produces no PHP notice, and elephc's cast already matches PHP byte for byte

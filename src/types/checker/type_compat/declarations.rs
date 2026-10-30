@@ -267,12 +267,15 @@ impl Checker {
         can_widen_local: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        // Guards refine the current value, while a reference still addresses the original
+        // slot. Coalescing assignments likewise keep nullable parameter storage alive.
+        let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
         let boxed_object_reference = matches!(expected_ty, PhpType::Object(_))
-            && actual_ty.codegen_repr() == PhpType::Mixed
+            && storage_ty.codegen_repr() == PhpType::Mixed
             && matches!(arg.kind, ExprKind::Variable(_));
         if expected_ty.codegen_repr() != PhpType::Mixed
             && !boxed_object_reference
-            && self.by_ref_argument_uses_mixed_or_hash_storage(actual_ty, arg, env)?
+            && self.by_ref_argument_uses_mixed_or_hash_storage(&storage_ty, arg, env)?
         {
             return Err(CompileError::new(
                 arg.span,
@@ -285,12 +288,12 @@ impl Checker {
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
         if expected_ty.is_php_array()
-            && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && matches!(storage_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             return Ok(());
         }
         if requires_by_ref_boxed_storage(expected_ty)
-            && !supports_by_ref_boxed_storage(actual_ty)
+            && !supports_by_ref_boxed_storage(&storage_ty)
         {
             if matches!(expected_ty, PhpType::Mixed)
                 && matches!(
@@ -338,7 +341,7 @@ impl Checker {
         if matches!(
             expected_ty.codegen_repr(),
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-        ) && supports_by_ref_boxed_storage(actual_ty)
+        ) && supports_by_ref_boxed_storage(&storage_ty)
         {
             return Err(CompileError::new(
                 arg.span,
@@ -347,7 +350,7 @@ impl Checker {
                      caller's variable, and a boxed variable cannot receive a raw {} write. \
                      Pass a variable that already holds {} (an incremented counter is \
                      `int|float`, which is boxed), or declare the parameter `mixed &$p`",
-                    context, expected_ty, actual_ty, expected_ty, expected_ty
+                    context, expected_ty, storage_ty, expected_ty, expected_ty
                 ),
             ));
         }
@@ -386,6 +389,34 @@ impl Checker {
             ));
         }
         Ok(())
+    }
+
+    /// Returns the storage contract hidden by a local's current guard or coalescing view.
+    pub(crate) fn guarded_local_storage_type(&self, arg: &Expr, env: &TypeEnv) -> Option<&PhpType> {
+        let ExprKind::Variable(name) = &by_ref_storage_place(arg).kind else {
+            return None;
+        };
+        self.guarded_union_types.get(name)
+            .filter(|origin| env.get(name).is_some_and(|view|
+                self.merged_assignment_type(&origin.ty, view).as_ref() == Some(&origin.ty)))
+            .map(|origin| &origin.ty)
+            .or_else(|| self.narrowed_local_origins.get(name)
+                .filter(|origin| origin.view.as_ref().is_some_and(|view| env.get(name) == Some(view)))
+                .map(|origin| &origin.origin))
+    }
+
+    /// Returns whether checked updates must preserve an externally shared tagged integer cell.
+    pub(crate) fn has_fixed_tagged_reference_storage(&self, name: &str, env: &TypeEnv) -> bool {
+        let fixed = self.active_ref_params.contains(name)
+            || self.active_external_ref_bindings.contains(name)
+            || self.ref_assign_aliased_locals.contains(name)
+            || self.by_ref_captured_locals.contains(name);
+        if !fixed {
+            return false;
+        }
+        let Some(current) = env.get(name) else { return false; };
+        self.guarded_local_storage_type(&Expr::var(name), env).unwrap_or(current)
+            .codegen_repr() == PhpType::TaggedScalar
     }
 
     /// Returns whether a by-reference call may give one ordinary local canonical Mixed storage.

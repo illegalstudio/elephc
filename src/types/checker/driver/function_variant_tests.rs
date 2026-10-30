@@ -158,3 +158,26 @@ fn variant_signature_unknown_return_annotation_is_not_duplicated() {
         assert_eq!(declarations.len(), 1, "{errors:?}");
     }
 }
+
+/// Indexed spelling survives lazy signature changes and removal without caching divergence.
+#[test]
+fn test_function_name_index_tracks_lazy_signatures_and_variants() {
+    let tokens = crate::lexer::tokenize("<?php function CamelCase(): int { return 1; } CAMELCASE();").unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let signature = crate::types::check(&program).unwrap().functions["CamelCase"].clone();
+    let mut checker = super::Checker::new(Target::parse("linux-x86_64").unwrap());
+    let mut errors = Vec::new();
+    checker.collect_function_decls(&program, &mut errors);
+    assert!(errors.is_empty());
+    assert_eq!(checker.canonical_function_name_folded("camelcase").as_deref(), Some("CamelCase"));
+    let StmtKind::ExprStmt(call) = &program[1].kind else { panic!("missing call"); };
+    checker.publish_function_signature("CamelCase".into(), signature);
+    assert!(!checker.expr_is_declared_never_call(call));
+    checker.functions.get_mut("CamelCase").unwrap().return_type = crate::types::PhpType::Never;
+    assert!(checker.expr_is_declared_never_call(call));
+    checker.remove_function_signature("CamelCase");
+    assert!(!checker.expr_is_declared_never_call(call));
+    assert_eq!(checker.canonical_function_name_folded("CAMELCASE").as_deref(), Some("CamelCase"));
+    checker.publish_function_variants("SelectedCase".into(), vec!["CamelCase".into()]);
+    assert_eq!(checker.canonical_function_name_folded("SELECTEDCASE").as_deref(), Some("SelectedCase"));
+}

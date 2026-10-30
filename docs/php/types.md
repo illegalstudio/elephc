@@ -279,7 +279,24 @@ function describe($x): string {        // $x may be int or a Point across call s
 }
 ```
 
-Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type — the one it had before the guard, not the narrowed one — so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
+Compound `&&` and `||` guards combine facts according to short-circuit evaluation. An `&&` body sees both operands as true; after a throwing `||` guard, both operands must have been false. The right operand also sees the facts established by the left operand on the path that evaluates it:
+
+```php
+function fallback(?string $raw, ?int $default = null): int {
+    if ($raw === null && $default !== null) { return $default; }
+    return 0;
+}
+```
+
+Straight-line assignments such as `$options = $options ?? new Options()` and `$options ??= new Options()` establish a non-null local receiver when the default excludes null. A nullable default keeps the nullable type.
+
+More precise compound guards can expose an existing parameter-coercion limitation. Inside `if (is_float($value) || is_bool($value))`, a `mixed` value reads as `float|bool`; passing it to an `int` parameter requires an explicit `(int)` cast because converting a runtime float can lose precision. A call that compiled while the value stayed opaque `mixed` can therefore produce a diagnostic after narrowing. See [Parameter type coercion](#parameter-type-coercion).
+
+A narrowed read keeps the variable's original storage representation. A nullable or union scalar cannot be passed to a concrete scalar parameter by reference when that parameter requires raw scalar storage. Declare the reference parameter nullable or `mixed` to match the variable's storage. Coalescing does not establish a persistent non-null fact for reference-aliased, global or static bindings. Inside a loop, a retained non-null fact must also hold on later iterations: a nullable write on a continuing path restores the nullable view at loop entry. Writes followed by `break` or `return` affect their exit path without changing a reachable guard complement in the loop body.
+
+An incoming `?int &$value` reference keeps the caller's tagged integer/null storage. A guarded `++` or `--` works while its result fits in an integer; overflow raises an explicit runtime storage error. PHP would promote that result to float, which this reference representation cannot hold. Use `mixed &$value` when an update must support float promotion.
+
+Narrowing is not tracked across a reassignment of the variable inside the branch. The assignment itself is checked against the variable's own type, the one it had before the guard, so the standard fallback idiom compiles even though the narrowed view and the assigned value have nothing in common:
 
 ```php
 $files = glob($dir . "/*.meta");   // string[]|false

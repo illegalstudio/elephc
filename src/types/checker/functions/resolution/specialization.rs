@@ -115,7 +115,7 @@ impl Checker {
                 ));
             }
         }
-        self.functions.insert(name.to_string(), first_sig);
+        self.publish_function_signature(name.to_string(), first_sig);
         Ok(true)
     }
 

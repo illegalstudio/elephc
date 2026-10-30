@@ -113,7 +113,7 @@ impl Checker {
         }
 
         let provisional_sig = self.provisional_function_sig(decl, param_types.clone());
-        self.functions.insert(name.to_string(), provisional_sig);
+        self.publish_function_signature(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
         let mut all_return_infos = Vec::new();
@@ -151,7 +151,9 @@ impl Checker {
         // frame's own storage and are excluded from marking outright, so they are left out.
         let pre_bound_own_storage: std::collections::HashMap<String, PhpType> =
             param_types.iter().cloned().collect();
-        let body_check_result = self.with_local_storage_context(
+        let return_facts = crate::optimize::ReturnBoundaryFacts::new(decl.return_type.as_ref(),
+            decl.params.iter().zip(&decl.param_types).map(|(name, hint)| (name.as_str(), hint.as_ref())), &decl.body);
+        let body_check_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
             ref_param_names,
             param_names,
             pre_bound_own_storage,
@@ -178,7 +180,7 @@ impl Checker {
                 }
                 Ok(())
             },
-        );
+        ));
         self.current_function = previous_function;
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;
@@ -301,7 +303,7 @@ impl Checker {
             // is PHP's rule, and the thing lowering must not try to re-derive later.
             is_generator: contains_yield,
         };
-        self.functions.insert(name.to_string(), sig);
+        self.publish_function_signature(name.to_string(), sig);
         if return_type == PhpType::Callable {
             if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {
                 self.callable_return_sigs
