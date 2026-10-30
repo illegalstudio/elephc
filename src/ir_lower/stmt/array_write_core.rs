@@ -29,6 +29,16 @@ pub(super) fn release_persisted_string_operand(
     }
 }
 
+/// Retires a hash key whose bytes or boxed payload were only borrowed by normalization.
+pub(super) fn release_hash_key_operand(
+    ctx: &mut LoweringContext<'_, '_>, key: LoweredValue, span: Span,
+) {
+    release_persisted_string_operand(ctx, key, span);
+    if matches!(ctx.builder.value_php_type(key.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
+    }
+}
+
 /// Releases an indexed-array write operand when the backend retained or copied it.
 pub(in crate::ir_lower) fn release_indexed_array_write_operand(
     ctx: &mut LoweringContext<'_, '_>,
@@ -269,6 +279,13 @@ fn lower_array_assign_from_value(
         lower_write_key_and_value(ctx, index, value);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
+    // A hash whose stamped value type cannot hold the assigned value widens its storage first,
+    // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
+    let (array_value, hash_storeback) = if op == Op::HashSet {
+        super::array_write_storage::prepare_hash_local_write(ctx, array, array_value, value_value, span)
+    } else {
+        (array_value, None)
+    };
     // Concrete string keys normally select associative storage. Ref-bound Mixed-slot
     // arrays instead use the shared writer, preserving invoker markers and keeping numeric
     // strings indexed. A boxed Mixed/Union index may hold either
@@ -414,6 +431,9 @@ fn lower_array_assign_from_value(
         span,
         key_already_diagnosed,
     );
+    super::array_write_storage::finish_hash_local_write(
+        ctx, array, array_value, hash_storeback, span,
+    );
 }
 
 /// Stores evaluated operands after concrete storage promotion and scalar coercion are complete.
@@ -432,13 +452,8 @@ pub(super) fn lower_concrete_array_set_values(
         Some(span),
     );
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, index_pins, span);
-    release_persisted_string_operand(ctx, index, span);
-    if op == Op::HashSet && matches!(ctx.builder.value_php_type(index.value).codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_))
-    {
-        // Hash key normalization borrows the box; inserted string bytes are persisted separately.
-        crate::ir_lower::ownership::release_if_owned(ctx, index, Some(span));
-    }
+    if op == Op::HashSet { release_hash_key_operand(ctx, index, span); }
+    else { release_persisted_string_operand(ctx, index, span); }
     release_persisted_string_operand(ctx, value, span);
 }
 

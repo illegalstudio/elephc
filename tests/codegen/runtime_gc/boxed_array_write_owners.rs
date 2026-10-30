@@ -10,6 +10,23 @@
 
 use crate::support::*;
 
+/// The concrete static hash path shares key cleanup with ordinary local hash stores.
+#[test]
+fn test_static_hash_writes_retire_owned_mixed_keys() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class StaticHashKeyOwners { public static $items = ['seed' => 0, 'text' => 'x']; }
+function staticHashOwnedKey(): mixed { return str_repeat('static', 2); }
+function storeStaticHashOwnedKey(): void { StaticHashKeyOwners::$items[staticHashOwnedKey()] = 7; }
+for ($i = 0; $i < 3; $i++) {
+    storeStaticHashOwnedKey(); echo json_encode(StaticHashKeyOwners::$items), '|';
+    StaticHashKeyOwners::$items = ['seed' => 0, 'text' => 'x'];
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"seed\":0,\"text\":\"x\",\"staticstatic\":7}|".repeat(3));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Concrete hash stores retire fresh boxed keys while preserving borrowed keys and moved values.
 #[test]
 fn test_concrete_hash_writes_retire_owned_mixed_keys() {
