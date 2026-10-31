@@ -17,31 +17,31 @@ pub(super) fn store_mixed_scope_cell_to_local(
     pending_throw: Option<usize>,
 ) -> Result<()> {
     let payload_ty = ctx.ref_cell_payload_type(local.slot)?.codegen_repr();
-    if let Some(state) = ctx.ref_cell_state_offset(local.slot)
-        && ctx.local_slot_ever_stores_ref_cell_pointer(local.slot)
-    {
-        let attached = ctx.next_label("eval_local_reload_attached_ref_cell");
-        let done = ctx.next_label("eval_local_reload_representation_done");
-        let result = abi::int_result_reg(ctx.emitter);
-        abi::emit_push_reg(ctx.emitter, result);
-        abi::load_at_offset(ctx.emitter, result, state);
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbnz {result}, {attached}")); // attached aliases retain their physical cell payload ABI
+    if ctx.local_slot_ever_stores_ref_cell_pointer(local.slot) {
+        if let Some(state) = ctx.ref_cell_state_offset(local.slot) {
+            let attached = ctx.next_label("eval_local_reload_attached_ref_cell");
+            let done = ctx.next_label("eval_local_reload_representation_done");
+            let result = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, result);
+            abi::load_at_offset(ctx.emitter, result, state);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbnz {result}, {attached}")); // attached aliases retain their physical cell payload ABI
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!("test {result}, {result}")); // distinguish a raw widened local from an attached reference cell
+                    ctx.emitter.instruction(&format!("jne {attached}")); // attached aliases use their physical cell payload ABI
+                }
             }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {result}, {result}"));   // distinguish a raw widened local from an attached reference cell
-                ctx.emitter.instruction(&format!("jne {attached}"));           // attached aliases use their physical cell payload ABI
-            }
+            abi::emit_pop_reg(ctx.emitter, result);
+            store_mixed_scope_cell_to_logical_local(ctx, local, pending_throw)?;
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&attached);
+            abi::emit_pop_reg(ctx.emitter, result);
+            store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw)?;
+            ctx.emitter.label(&done);
+            return Ok(());
         }
-        abi::emit_pop_reg(ctx.emitter, result);
-        store_mixed_scope_cell_to_logical_local(ctx, local, pending_throw)?;
-        abi::emit_jump(ctx.emitter, &done);
-        ctx.emitter.label(&attached);
-        abi::emit_pop_reg(ctx.emitter, result);
-        store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw)?;
-        ctx.emitter.label(&done);
-        return Ok(());
     }
     if ctx.local_slot_ever_stores_ref_cell_pointer(local.slot) {
         return store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw);
