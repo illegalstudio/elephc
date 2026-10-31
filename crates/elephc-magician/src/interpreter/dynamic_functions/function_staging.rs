@@ -16,7 +16,7 @@
 use super::*;
 
 /// Transfers value arguments or prepares reference markers, rolling back partial staging on errors.
-pub(super) fn stage_native_function_invoker_args(
+pub(in crate::interpreter) fn stage_native_function_invoker_args(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     bound_args: &mut [BoundMethodArg],

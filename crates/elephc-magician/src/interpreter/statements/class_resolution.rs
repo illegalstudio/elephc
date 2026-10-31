@@ -691,7 +691,7 @@ pub(super) fn eval_runtime_object_class_name(
 }
 
 /// Creates a backing object for an eval-declared class without running its constructor.
-pub(super) fn eval_dynamic_class_allocate_object(
+pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
     class: &EvalClass,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,
