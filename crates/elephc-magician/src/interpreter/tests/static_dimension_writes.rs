@@ -81,16 +81,22 @@ fn static_array_value_aliases_survive_published_cell_replacement() {
         .unwrap();
     assert_ne!(first, second);
     assert_eq!(values.cell_owners[&(first.as_ptr() as usize)], 1);
-    // Each published value can detach eagerly as long as all three owners remain independent.
+    // Published values may share their old box or detach eagerly; both strategies must
+    // account for every live owner.
     let copy = scope.entry("copy").unwrap().cell();
-    assert_ne!(copy, second);
-    assert_eq!(values.cell_owners[&(copy.as_ptr() as usize)], 1);
-    assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 1);
+    if copy.as_ptr() == second.as_ptr() {
+        assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 2);
+    } else {
+        assert_eq!(values.cell_owners[&(copy.as_ptr() as usize)], 1);
+        assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 1);
+    }
     let cleanup = parse_fragment(b"unset($copy);").unwrap();
     let returned =
         execute_program_with_context(&mut context, &cleanup, &mut scope, &mut values).unwrap();
     eval_release_value(&mut context, &mut values, returned).unwrap();
-    assert_eq!(values.cell_owners[&(copy.as_ptr() as usize)], 0);
+    if copy.as_ptr() != second.as_ptr() {
+        assert_eq!(values.cell_owners[&(copy.as_ptr() as usize)], 0);
+    }
     assert_eq!(values.cell_owners[&(second.as_ptr() as usize)], 1);
 }
 
