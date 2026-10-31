@@ -25,6 +25,10 @@ pub(super) fn store_mixed_scope_cell_to_local(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
             ctx.store_current_result_to_local(local.slot)?;
         }
+        PhpType::TaggedScalar => {
+            crate::codegen::lower_inst::coerce_loaded_value_to_tagged_scalar(ctx, &PhpType::Mixed)?;
+            ctx.store_current_result_to_local(local.slot)?;
+        }
         PhpType::Bool => {
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
             ctx.store_current_result_to_local(local.slot)?;
@@ -217,6 +221,10 @@ pub(super) fn store_missing_scope_entry_to_local(
         }
         PhpType::Int | PhpType::Bool => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            ctx.store_current_result_to_local(local.slot)?;
+        }
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
             ctx.store_current_result_to_local(local.slot)?;
         }
         PhpType::Float => {

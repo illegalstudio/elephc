@@ -15,24 +15,28 @@ class EvalReferenceLayout {
     public string $text = 'before';
     public int $number = 1;
     public float $weight = 1.5;
+    public ?int $maybe = null;
     public function &textRef(): string { return $this->text; }
     public function &numberRef(): int { return $this->number; }
     public function &weightRef(): float { return $this->weight; }
+    public function &maybeRef(): ?int { return $this->maybe; }
 }
 $box = new EvalReferenceLayout();
 $text =& $box->textRef();
 $number =& $box->numberRef();
 $weight =& $box->weightRef();
-$source = $argc > 0 ? '$box->text = "after"; $number = 2; $weight = 2.5;' : '';
+$maybe =& $box->maybeRef();
+$source = $argc > 0 ? '$box->text = "after"; $number = 2; $weight = 2.5; $maybe = 3;' : '';
 eval($source);
-echo $text, $number, $weight;
+echo $text, $number, $weight, $maybe;
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         let main = module.functions.iter().find(|function| function.name == "main").unwrap();
         for (name, ty) in [("text", crate::types::PhpType::Str),
-            ("number", crate::types::PhpType::Int), ("weight", crate::types::PhpType::Float)] {
+            ("number", crate::types::PhpType::Int), ("weight", crate::types::PhpType::Float),
+            ("maybe", crate::types::PhpType::Union(vec![crate::types::PhpType::Int, crate::types::PhpType::Void]).codegen_repr())] {
             let local = main.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
             assert_eq!(local.php_type.codegen_repr(), ty, "{target}: {name} lost its shared cell layout");
         }

@@ -233,6 +233,7 @@ pub(super) fn eval_sync_type_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
         PhpType::Int
+            | PhpType::TaggedScalar
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
