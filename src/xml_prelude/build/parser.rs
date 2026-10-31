@@ -52,7 +52,6 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
         .prop("__elephc_extref_installed", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_start_ns_installed", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_skip_tagstart", TypeExpr::Int, Some(e_int(0)))
-        .prop("__elephc_skip_white", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_parsing", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_level", TypeExpr::Int, Some(e_int(0)))
         .prop("__elephc_collecting", TypeExpr::Bool, Some(e_bool(false)))
@@ -466,7 +465,6 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         e_binop(e_var("option"), BinOp::StrictEq, e_int(4)),
                         vec![
                             s_expr(e_call("elephc_xml_parser_set_option", vec![e_var("raw"), e_int(4), e_ternary(e_var("value"), e_int(1), e_int(0))])),
-                            s_prop_assign(e_this(), "__elephc_skip_white", e_ternary(e_var("value"), e_bool(true), e_bool(false))),
                             s_return(e_bool(true)),
                         ],
                         vec![],
@@ -552,7 +550,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                     s_if(
                         e_binop(e_var("option"), BinOp::StrictEq, e_int(4)),
                         vec![
-                            s_return(e_this_prop("__elephc_skip_white")),
+                            s_return(e_binop(e_call("elephc_xml_parser_get_option", vec![e_var("raw"), e_int(4)]), BinOp::StrictEq, e_int(1))),
                         ],
                         vec![],
                         None,
@@ -788,7 +786,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                                 s_expr(e_method_call(e_this(), "__elephc_on_end", vec![e_var("raw")])),
                             ]),
                             (e_binop(e_var("kind"), BinOp::StrictEq, e_int(3)), vec![
-                                s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(0)])])),
+                                s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_var("raw"), e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(0)])])),
                             ]),
                             (e_binop(e_var("kind"), BinOp::StrictEq, e_int(4)), vec![
                                 s_expr(e_method_call(e_this(), "__elephc_on_pi", vec![e_var("raw")])),
@@ -1001,6 +999,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
         .method(
             method("__elephc_on_characters")
                 .private()
+                .param("raw", TypeExpr::Int)
                 .param("data", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
@@ -1037,27 +1036,25 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("skipWhite", e_this_prop("__elephc_skip_white")),
-                    s_assign("doprint", e_bool(false)),
-                    s_if(
-                        e_var("skipWhite"),
-                        vec![
-                            s_assign("length", e_call("strlen", vec![e_var("data")])),
-                            s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("length"))), Some(s_expr(e_post_inc("i"))), vec![
-                                s_assign("byte", e_index(e_var("data"), e_var("i"))),
-                                s_if(
-                                    e_binop(e_binop(e_binop(e_var("byte"), BinOp::StrictNotEq, e_str(" ")), BinOp::And, e_binop(e_var("byte"), BinOp::StrictNotEq, e_str("\t"))), BinOp::And, e_binop(e_var("byte"), BinOp::StrictNotEq, e_str("\n"))),
-                                    vec![
-                                        s_assign("doprint", e_bool(true)),
-                                        s_break(1),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ]),
-                        ],
-                        vec![],
-                        None,
+                    s_assign(
+                        "skipWhite",
+                        e_binop(
+                            e_call("elephc_xml_parser_get_option", vec![e_var("raw"), e_int(4)]),
+                            BinOp::StrictEq,
+                            e_int(1),
+                        ),
+                    ),
+                    s_assign(
+                        "doprint",
+                        e_binop(
+                            e_var("skipWhite"),
+                            BinOp::And,
+                            e_binop(
+                                e_call("trim", vec![e_var("data"), e_str(" \t\n")]),
+                                BinOp::StrictNotEq,
+                                e_str(""),
+                            ),
+                        ),
                     ),
                     s_assign(
                         "keep",
@@ -1245,7 +1242,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         ],
                         vec![
                         (e_binop(e_this_prop("__elephc_cdata_installed"), BinOp::And, e_var("expandable")), vec![
-                            s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(1)])])),
+                            s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_var("raw"), e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(1)])])),
                         ]),
                     ],
                         None,

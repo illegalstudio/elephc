@@ -139,7 +139,6 @@ final class XMLParser {
     public bool $__elephc_extref_installed = false;
     public bool $__elephc_start_ns_installed = false;
     public int $__elephc_skip_tagstart = 0;
-    public bool $__elephc_skip_white = false;
     public bool $__elephc_parsing = false;
     public int $__elephc_level = 0;
     // xml_parse_into_struct() state (php-src: parser->data / info / ltags / lastwasopen /
@@ -386,7 +385,6 @@ final class XMLParser {
         }
         if ($option === 4) {
             elephc_xml_parser_set_option($raw, 4, $value ? 1 : 0);
-            $this->__elephc_skip_white = $value ? true : false;
             return true;
         }
         if ($option === 5) {
@@ -423,7 +421,7 @@ final class XMLParser {
             return $this->__elephc_skip_tagstart;
         }
         if ($option === 4) {
-            return $this->__elephc_skip_white;
+            return elephc_xml_parser_get_option($raw, 4) === 1;
         }
         if ($option === 5) {
             return elephc_xml_parser_get_option($raw, 5) === 1;
@@ -493,8 +491,8 @@ final class XMLParser {
         if ($this->__elephc_parsing) {
             throw new Error("Parser must not be called recursively");
         }
-        // The parser object mirrors the prelude-owned option state across procedural wrapper
-        // calls. Character-data dispatch reads it live because a handler may change it.
+        // The bridge owns option state across procedural wrapper calls. Character-data
+        // dispatch reads the live option because a handler may change it during parsing.
         $this->__elephc_collecting = true;
         $this->__elephc_collect_index = $with_index;
         $this->__elephc_struct_values = [];
@@ -575,7 +573,7 @@ final class XMLParser {
             } elseif ($kind === 2) {
                 $this->__elephc_on_end($raw);
             } elseif ($kind === 3) {
-                $this->__elephc_on_characters(elephc_xml_parser_event_string($raw, 0));
+                $this->__elephc_on_characters($raw, elephc_xml_parser_event_string($raw, 0));
             } elseif ($kind === 4) {
                 $this->__elephc_on_pi($raw);
             } elseif ($kind === 5) {
@@ -684,7 +682,7 @@ final class XMLParser {
         $this->__elephc_level--;
     }
 
-    private function __elephc_on_characters(string $data): void {
+    private function __elephc_on_characters(int $raw, string $data): void {
         if (!$this->__elephc_cdata_installed) {
             if ($this->__elephc_default_installed) {
                 $this->__elephc_call_default($data);
@@ -698,18 +696,8 @@ final class XMLParser {
         if (!$this->__elephc_collecting) {
             return;
         }
-        $skipWhite = $this->__elephc_skip_white;
-        $doprint = false;
-        if ($skipWhite) {
-            $length = strlen($data);
-            for ($i = 0; $i < $length; $i++) {
-                $byte = $data[$i];
-                if ($byte !== " " && $byte !== "\t" && $byte !== "\n") {
-                    $doprint = true;
-                    break;
-                }
-            }
-        }
+        $skipWhite = elephc_xml_parser_get_option($raw, 4) === 1;
+        $doprint = $skipWhite && trim($data, " \t\n") !== "";
         $keep = $doprint || !$skipWhite;
         if ($this->__elephc_lastwasopen) {
             $index = $this->__elephc_ctag_index;
@@ -805,7 +793,7 @@ final class XMLParser {
         if ($this->__elephc_default_installed && !($predefined && $this->__elephc_cdata_installed)) {
             $this->__elephc_call_default("&" . $name . ";");
         } elseif ($this->__elephc_cdata_installed && $expandable) {
-            $this->__elephc_on_characters(elephc_xml_parser_event_string($raw, 1));
+            $this->__elephc_on_characters($raw, elephc_xml_parser_event_string($raw, 1));
         }
         return true;
     }
