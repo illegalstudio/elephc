@@ -128,7 +128,9 @@ echo "[" . $s[99] . "]";  // []
 ```
 
 Negative indices count from end. An out-of-bounds read warns `Uninitialized string offset N`
-and returns an empty string.
+and returns an empty string. The same reads work through a `mixed` receiver, including a
+`mixed` parameter or global that currently holds a string; `isset()` stays quiet and false for
+a missing offset.
 
 ### Writing to a string offset
 

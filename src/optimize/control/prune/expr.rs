@@ -19,6 +19,7 @@ use super::statements::prune_stmt;
 pub(crate) fn prune_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
+        ExprKind::Reference(inner) => ExprKind::Reference(Box::new(prune_expr(*inner))),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

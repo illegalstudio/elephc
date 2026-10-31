@@ -131,7 +131,7 @@ pub(super) fn lower_enum_interface_call(
             let arguments = lower_descriptor_invoker_arg_container_for_call_user_func(
                 ctx, args, signature.as_ref(), expr.span,
             );
-            emit_callable_descriptor_invoke(ctx, callable, arguments, expr.span)
+            emit_callable_descriptor_invoke(ctx, callable, arguments, false, expr.span)
         } else {
             super::nullable_method_calls::lower_selected_enum_method_call(
                 ctx, concrete, method, args, op, expr,

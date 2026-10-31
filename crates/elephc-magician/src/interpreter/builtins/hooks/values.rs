@@ -277,6 +277,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     /// Dispatches by-value `settype(...)` callable calls.
     Settype,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
+    Addcslashes,
     Slashes,
     /// Dispatches `strip_tags(...)`.
     StripTags,
@@ -618,6 +619,7 @@ impl EvalValuesHook {
             Self::Settype => eval_settype_values_result(evaluated_args, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
             Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),
+            Self::Addcslashes => two_args(evaluated_args, values, eval_addcslashes_result),
             Self::Slashes => one_arg(evaluated_args, values, |value, values| match name {
                 "addslashes" => eval_addslashes_result(value, values),
                 "stripslashes" => eval_stripslashes_result(value, values),

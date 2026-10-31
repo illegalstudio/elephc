@@ -393,6 +393,7 @@ fn count_expr(expr: &Expr, tally: &mut Tally) {
         }
     }
     match &expr.kind {
+        ExprKind::Reference(inner) => count_expr(inner, tally),
         ExprKind::Assignment { target, value, result_target, prelude, conditional_value_temp: _ } => {
             count_expr(target, tally);
             count_expr(value, tally);

@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(aot_registry, 824);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 424 + curl_surface);
+        assert_eq!(aot_external, 426 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.

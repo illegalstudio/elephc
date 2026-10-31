@@ -9,6 +9,7 @@
 //! - Leaf files register metadata through `eval_builtin!` and own the matching
 //!   eval implementation or delegate to the closest builtin owner for shared code.
 
+mod addcslashes;
 mod addslashes;
 mod base64_decode;
 mod base64_encode;
@@ -173,6 +174,7 @@ mod urldecode;
 mod urlencode;
 mod wordwrap;
 
+pub(in crate::interpreter) use addcslashes::*;
 pub(in crate::interpreter) use addslashes::*;
 pub(in crate::interpreter) use base64_decode::*;
 pub(in crate::interpreter) use base64_encode::*;

@@ -1,0 +1,1177 @@
+[
+  {
+    "name": "001.phpt",
+    "source": "<?php\n$_GET = ['a' => '1'];\n$_REQUEST = ['a' => '1'];\n echo $_GET['a']; ",
+    "expected": "1",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "002.phpt",
+    "source": "<?php\n$_GET = ['a' => '1', 'b' => '', 'c' => '3'];\n$_REQUEST = ['a' => '1', 'b' => '', 'c' => '3'];\n echo $_GET['a'];\necho $_GET['b'];\necho $_GET['c'];\n",
+    "expected": "13",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "003.phpt",
+    "source": "<?php\n$_GET = ['a' => '1', 'b' => '', 'c' => '3'];\n$_POST = ['d' => '4', 'e' => '5'];\n$_REQUEST = ['a' => '1', 'b' => '', 'c' => '3', 'd' => '4', 'e' => '5'];\n echo $_GET['a'];\necho $_GET['b'];\necho $_GET['c'];\necho $_POST['d'];\necho $_POST['e'];\necho \"\\n\";\necho $_REQUEST['a'];\necho $_REQUEST['b'];\necho $_REQUEST['c'];\necho $_REQUEST['d'];\necho $_REQUEST['e'];\n",
+    "expected": "1345\n1345",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "004.phpt",
+    "source": "<?php\nerror_reporting(E_ALL&~E_DEPRECATED);\n__elephc_filter_seed_request(INPUT_GET, ['a' => 'O\\'Henry', 'b' => '', 'c' => '<b>Bold</b>'], 'special_chars', 0, false);\n__elephc_filter_seed_request(INPUT_POST, ['d' => '\"quotes\"', 'e' => '\\\\slash'], 'special_chars', 0, false);\n echo $_GET['a'];\necho $_GET['b'];\necho $_GET['c'];\necho $_POST['d'];\necho $_POST['e'];\necho \"\\n\";\necho $_REQUEST['a'];\necho $_REQUEST['b'];\necho $_REQUEST['c'];\necho $_REQUEST['d'];\necho $_REQUEST['e'];\n",
+    "expected": "O&#39;Henry&#60;b&#62;Bold&#60;/b&#62;&#34;quotes&#34;\\slash\nO&#39;Henry&#60;b&#62;Bold&#60;/b&#62;&#34;quotes&#34;\\slash",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "filter.default",
+        "special_chars"
+      ],
+      [
+        "error_reporting",
+        "E_ALL&~E_DEPRECATED"
+      ]
+    ]
+  },
+  {
+    "name": "005.phpt",
+    "source": "<?php\nerror_reporting(E_ALL&~E_DEPRECATED);\n__elephc_filter_seed_request(INPUT_GET, ['id' => 'f03_photos', 'pgurl' => 'http://fifaworldcup.yahoo.com/03/en/photozone/index.html'], 'stripped', 0, false);\n\necho $_GET['id'];\necho \"\\n\";\necho $_GET['pgurl'];\necho \"\\n\";\necho $_REQUEST['id'];\necho \"\\n\";\necho $_REQUEST['pgurl'];\n",
+    "expected": "f03_photos\nhttp://fifaworldcup.yahoo.com/03/en/photozone/index.html\nf03_photos\nhttp://fifaworldcup.yahoo.com/03/en/photozone/index.html",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "filter.default",
+        "stripped"
+      ],
+      [
+        "error_reporting",
+        "E_ALL&~E_DEPRECATED"
+      ]
+    ]
+  },
+  {
+    "name": "006.phpt",
+    "source": "<?php\n$_POST = ['foo' => '<b>abc</b>'];\n$_REQUEST = ['foo' => '<b>abc</b>'];\n\necho filter_input(INPUT_POST, 'foo', FILTER_SANITIZE_SPECIAL_CHARS);\n",
+    "expected": "&#60;b&#62;abc&#60;/b&#62;",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "007.phpt",
+    "source": "<?php\n$_GET = ['a' => 'qwe', 'abc' => '<a>href</a>'];\n$_POST = ['b' => 'qwe', 'bbc' => '<a>href</a>'];\n$_REQUEST = ['a' => 'qwe', 'abc' => '<a>href</a>', 'b' => 'qwe', 'bbc' => '<a>href</a>'];\n\n\nvar_dump(filter_has_var(INPUT_GET, \"a\"));\nvar_dump(filter_has_var(INPUT_GET, \"abc\"));\nvar_dump(filter_has_var(INPUT_GET, \"nonex\"));\nvar_dump(filter_has_var(INPUT_GET, \" \"));\nvar_dump(filter_has_var(INPUT_GET, \"\"));\n\nvar_dump(filter_has_var(INPUT_POST, \"b\"));\nvar_dump(filter_has_var(INPUT_POST, \"bbc\"));\nvar_dump(filter_has_var(INPUT_POST, \"nonex\"));\nvar_dump(filter_has_var(INPUT_POST, \" \"));\nvar_dump(filter_has_var(INPUT_POST, \"\"));\n\necho \"Done\\n\";\n",
+    "expected": "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "008.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_list());\n\necho \"Done\\n\";\n",
+    "expected": "array(21) {\n  [0]=>\n  string(3) \"int\"\n  [1]=>\n  string(7) \"boolean\"\n  [2]=>\n  string(5) \"float\"\n  [3]=>\n  string(15) \"validate_regexp\"\n  [4]=>\n  string(15) \"validate_domain\"\n  [5]=>\n  string(12) \"validate_url\"\n  [6]=>\n  string(14) \"validate_email\"\n  [7]=>\n  string(11) \"validate_ip\"\n  [8]=>\n  string(12) \"validate_mac\"\n  [9]=>\n  string(6) \"string\"\n  [10]=>\n  string(8) \"stripped\"\n  [11]=>\n  string(7) \"encoded\"\n  [12]=>\n  string(13) \"special_chars\"\n  [13]=>\n  string(18) \"full_special_chars\"\n  [14]=>\n  string(10) \"unsafe_raw\"\n  [15]=>\n  string(5) \"email\"\n  [16]=>\n  string(3) \"url\"\n  [17]=>\n  string(10) \"number_int\"\n  [18]=>\n  string(12) \"number_float\"\n  [19]=>\n  string(11) \"add_slashes\"\n  [20]=>\n  string(8) \"callback\"\n}\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "009.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_id(\"stripped\"));\nvar_dump(filter_id(\"string\"));\nvar_dump(filter_id(\"url\"));\nvar_dump(filter_id(\"int\"));\nvar_dump(filter_id(\"none\"));\nvar_dump(filter_id(-1));\n\necho \"Done\\n\";\n",
+    "expected": "int(513)\nint(513)\nint(518)\nint(257)\nbool(false)\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "010.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(array(1,\"1\",\"\", \"-23234\", \"text\", \"asdf234asdfgs\", array()), FILTER_VALIDATE_INT, FILTER_REQUIRE_ARRAY));\nvar_dump(filter_var(array(1.2,\"1.7\",\"\", \"-23234.123\", \"text\", \"asdf234.2asdfgs\", array()), FILTER_VALIDATE_FLOAT, FILTER_REQUIRE_ARRAY));\nvar_dump(filter_var(1, FILTER_SANITIZE_SPECIAL_CHARS, 1));\nvar_dump(filter_var(1, FILTER_SANITIZE_SPECIAL_CHARS, 0));\nvar_dump(filter_var(1, FILTER_SANITIZE_SPECIAL_CHARS, array()));\nvar_dump(filter_var(1, -1, array(123)));\nvar_dump(filter_var(1, 0, array()));\n\necho \"Done\\n\";\n",
+    "expected": "array(7) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(1)\n  [2]=>\n  bool(false)\n  [3]=>\n  int(-23234)\n  [4]=>\n  bool(false)\n  [5]=>\n  bool(false)\n  [6]=>\n  array(0) {\n  }\n}\narray(7) {\n  [0]=>\n  float(1.2)\n  [1]=>\n  float(1.7)\n  [2]=>\n  bool(false)\n  [3]=>\n  float(-23234.123)\n  [4]=>\n  bool(false)\n  [5]=>\n  bool(false)\n  [6]=>\n  array(0) {\n  }\n}\nstring(1) \"1\"\nstring(1) \"1\"\nstring(1) \"1\"\n\nWarning: filter_var(): Unknown filter with ID -1 in %s on line %d\nbool(false)\n\nWarning: filter_var(): Unknown filter with ID 0 in %s on line %d\nbool(false)\nDone",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "011.phpt",
+    "source": "<?php\n$_GET = ['a' => '<b>test</b>', 'b' => 'http://example.com'];\n$_POST = ['c' => '<p>string</p>', 'd' => '12345.7'];\n$_REQUEST = ['a' => '<b>test</b>', 'b' => 'http://example.com', 'c' => '<p>string</p>', 'd' => '12345.7'];\n\nvar_dump(filter_input(INPUT_GET, \"b\", FILTER_SANITIZE_URL));\nvar_dump(filter_input(INPUT_GET, \"a\", FILTER_SANITIZE_SPECIAL_CHARS, array(1,2,3,4,5)));\ntry {\n    filter_input(INPUT_GET, \"b\", FILTER_VALIDATE_FLOAT, new stdClass);\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\nvar_dump(filter_input(INPUT_POST, \"d\", FILTER_VALIDATE_FLOAT));\nvar_dump(filter_input(INPUT_POST, \"c\", FILTER_SANITIZE_SPECIAL_CHARS));\nvar_dump(filter_input(INPUT_POST, \"d\", FILTER_VALIDATE_INT));\n\necho \"Done\\n\";\n",
+    "expected": "string(18) \"http://example.com\"\nstring(27) \"&#60;b&#62;test&#60;/b&#62;\"\nfilter_input(): Argument #4 ($options) must be of type array|int, stdClass given\nfloat(12345.7)\nstring(29) \"&#60;p&#62;string&#60;/p&#62;\"\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "012.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_input(INPUT_GET, \"test\"));\nvar_dump(filter_input(INPUT_POST, \"test\"));\nvar_dump(filter_input(INPUT_COOKIE, \"\"));\n\nvar_dump(filter_input(INPUT_GET, \"test\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_input(INPUT_POST, \"test\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_input(INPUT_COOKIE, \"\", FILTER_DEFAULT, FILTER_NULL_ON_FAILURE));\n\necho \"Done\\n\";\n",
+    "expected": "NULL\nNULL\nNULL\nbool(false)\nbool(false)\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "013.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"  234\", FILTER_VALIDATE_INT));\nvar_dump(filter_var(\"234    \", FILTER_VALIDATE_INT));\nvar_dump(filter_var(\"  234  \", FILTER_VALIDATE_INT));\nvar_dump(filter_var(\"0xff\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"0Xff\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"0xFF\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"0XFF\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"07\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"0xff0000\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"0666\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"08\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"00\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"000\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\n\nvar_dump(filter_var(\"-0xff\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"-0Xff\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"-0xFF\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"-0XFF\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"-07\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"-0xff0000\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\nvar_dump(filter_var(\"-0666\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\n\nvar_dump(filter_var(\"6\", FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>1, \"max_range\"=>7))));\nvar_dump(filter_var(\"6\", FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>0, \"max_range\"=>5))));\nvar_dump(filter_var(-1, FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>1, \"max_range\"=>7))));\nvar_dump(filter_var(-1, FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>-4, \"max_range\"=>7))));\n\nvar_dump(filter_var(\"\", FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>-4, \"max_range\"=>7))));\nvar_dump(filter_var(\"\", FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>2, \"max_range\"=>7))));\nvar_dump(filter_var(\"\", FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>-5, \"max_range\"=>-3))));\nvar_dump(filter_var(345, FILTER_VALIDATE_INT, array(\"options\" => array(\"min_range\"=>500, \"max_range\"=>100))));\nvar_dump(filter_var(\"0ff\", FILTER_VALIDATE_INT));\nvar_dump(filter_var(\"010\", FILTER_VALIDATE_INT));\n\n// Explicit octal prefix\nvar_dump(filter_var(\"0o16\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"0O16\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\nvar_dump(filter_var(\"0o016\", FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\n\necho \"Done\\n\";\n",
+    "expected": "int(234)\nint(234)\nint(234)\nint(255)\nint(255)\nint(255)\nint(255)\nint(7)\nint(16711680)\nint(438)\nbool(false)\nint(0)\nint(0)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nint(6)\nbool(false)\nbool(false)\nint(-1)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nint(14)\nint(14)\nint(14)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "014.phpt",
+    "source": "<?php\n\n\nclass test {\n\n    function __toString() {\n        return \"blah\";\n    }\n}\n\n$t = new test;\n\nvar_dump(filter_var(\"no\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(NULL, FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var($t, FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(array(1,2,3,0,array(\"\", \"123\")), FILTER_VALIDATE_BOOLEAN, FILTER_REQUIRE_ARRAY));\nvar_dump(filter_var(\"yes\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"true\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"false\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"off\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"on\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"0\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"1\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"NONE\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(-1, FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"000000\", FILTER_VALIDATE_BOOLEAN));\nvar_dump(filter_var(\"111111\", FILTER_VALIDATE_BOOLEAN));\n\n\necho \"Done\\n\";\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)\narray(5) {\n  [0]=>\n  bool(true)\n  [1]=>\n  bool(false)\n  [2]=>\n  bool(false)\n  [3]=>\n  bool(false)\n  [4]=>\n  array(2) {\n    [0]=>\n    bool(false)\n    [1]=>\n    bool(false)\n  }\n}\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "015.phpt",
+    "source": "<?php\n\n\n$values = Array(\n'http://example.com/index.html',\n'http://www.example.com/index.php',\n'http://www.example/img/test.png',\n'http://www.example/img/dir/',\n'http://www.example/img/dir',\n'http://www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com/',\n'http://toolongtoolongtoolongtoolongtoolongtoolongtoolongtoolongtoolongtoolong.com',\n'http://eauBcFReEmjLcoZwI0RuONNnwU4H9r151juCaqTI5VeIP5jcYIqhx1lh5vV00l2rTs6y7hOp7rYw42QZiq6VIzjcYrRm8gFRMk9U9Wi1grL8Mr5kLVloYLthHgyA94QK3SaXCATklxgo6XvcbXIqAGG7U0KxTr8hJJU1p2ZQ2mXHmp4DhYP8N9SRuEKzaCPcSIcW7uj21jZqBigsLsNAXEzU8SPXZjmVQVtwQATPWeWyGW4GuJhjP4Q8o0.com',\n'http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.',\n'http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58R.example.com',\n'http://[2001:0db8:0000:85a3:0000:0000:ac1f:8001]',\n'http://[2001:db8:0:85a3:0:0:ac1f:8001]:123/me.html',\n'http://[2001:db8:0:85a3::ac1f:8001]/',\n'http://[::1]',\n'http://cont-ains.h-yph-en-s.com',\n'http://..com',\n'http://a.-bc.com',\n'http://ab.cd-.com',\n'http://-.abc.com',\n'http://abc.-.abc.com',\n'http://underscore_.example.com',\n'http//www.example/wrong/url/',\n'http:/www.example',\n'file:///tmp/test.c',\n'ftp://ftp.example.com/tmp/',\n'/tmp/test.c',\n'/',\n'http://',\n'http:/',\n'http:',\n'http',\n'',\n-1,\narray(),\n'mailto:foo@bar.com',\n'news:news.php.net',\n'file://foo/bar',\n\"http://\\r\\n/bar\",\n\"http://example.com:qq\",\n\"http://example.com:-2\",\n\"http://example.com:65536\",\n\"http://example.com:65537\",\n);\nforeach ($values as $value) {\n    var_dump(filter_var($value, FILTER_VALIDATE_URL));\n}\n\n\nvar_dump(filter_var(\"qwe\", FILTER_VALIDATE_URL));\nvar_dump(filter_var(\"http://qwe\", FILTER_VALIDATE_URL));\nvar_dump(filter_var(\"http://\", FILTER_VALIDATE_URL));\nvar_dump(filter_var(\"/tmp/test\", FILTER_VALIDATE_URL));\nvar_dump(filter_var(\"http://www.example.com\", FILTER_VALIDATE_URL));\nvar_dump(filter_var(\"http://www.example.com\", FILTER_VALIDATE_URL, FILTER_FLAG_PATH_REQUIRED));\nvar_dump(filter_var(\"http://www.example.com/path/at/the/server/\", FILTER_VALIDATE_URL, FILTER_FLAG_PATH_REQUIRED));\nvar_dump(filter_var(\"http://www.example.com/index.html\", FILTER_VALIDATE_URL, FILTER_FLAG_QUERY_REQUIRED));\nvar_dump(filter_var(\"http://www.example.com/index.php?a=b&c=d\", FILTER_VALIDATE_URL, FILTER_FLAG_QUERY_REQUIRED));\n\necho \"Done\\n\";\n",
+    "expected": "string(29) \"http://example.com/index.html\"\nstring(32) \"http://www.example.com/index.php\"\nstring(31) \"http://www.example/img/test.png\"\nstring(27) \"http://www.example/img/dir/\"\nstring(26) \"http://www.example/img/dir\"\nstring(79) \"http://www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com/\"\nbool(false)\nbool(false)\nstring(261) \"http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.\"\nbool(false)\nstring(48) \"http://[2001:0db8:0000:85a3:0000:0000:ac1f:8001]\"\nstring(50) \"http://[2001:db8:0:85a3:0:0:ac1f:8001]:123/me.html\"\nstring(36) \"http://[2001:db8:0:85a3::ac1f:8001]/\"\nstring(12) \"http://[::1]\"\nstring(31) \"http://cont-ains.h-yph-en-s.com\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(18) \"file:///tmp/test.c\"\nstring(26) \"ftp://ftp.example.com/tmp/\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(18) \"mailto:foo@bar.com\"\nstring(17) \"news:news.php.net\"\nstring(14) \"file://foo/bar\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(10) \"http://qwe\"\nbool(false)\nbool(false)\nstring(22) \"http://www.example.com\"\nbool(false)\nstring(42) \"http://www.example.com/path/at/the/server/\"\nbool(false)\nstring(40) \"http://www.example.com/index.php?a=b&c=d\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "016.phpt",
+    "source": "<?php\n\n$values = Array(\n'a@b.c',\n'abuse@example.com',\n'test!.!@#$%^&*@example.com',\n'test@@#$%^&*())).com',\n'test@.com',\n'test@com',\n'@',\n'[]()/@example.com',\n'QWERTYUIOPASDFGHJKLZXCVBNM@QWERTYUIOPASDFGHJKLZXCVBNM.NET',\n'e.x.a.m.p.l.e.@example.com',\n'firstname.lastname@employee.2something.com',\n'-@foo.com',\n'foo@-.com',\n'foo@bar.123',\n'foo@bar.-'\n);\nforeach ($values as $value) {\n    var_dump(filter_var($value, FILTER_VALIDATE_EMAIL));\n}\n\necho \"Done\\n\";\n",
+    "expected": "string(5) \"a@b.c\"\nstring(17) \"abuse@example.com\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(57) \"QWERTYUIOPASDFGHJKLZXCVBNM@QWERTYUIOPASDFGHJKLZXCVBNM.NET\"\nbool(false)\nstring(42) \"firstname.lastname@employee.2something.com\"\nstring(9) \"-@foo.com\"\nbool(false)\nbool(false)\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "017.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"data\", FILTER_VALIDATE_REGEXP, array(\"options\"=>array(\"regexp\"=>'/.*/'))));\nvar_dump(filter_var(\"data\", FILTER_VALIDATE_REGEXP, array(\"options\"=>array(\"regexp\"=>'/^b(.*)/'))));\nvar_dump(filter_var(\"data\", FILTER_VALIDATE_REGEXP, array(\"options\"=>array(\"regexp\"=>'/^d(.*)/'))));\nvar_dump(filter_var(\"data\", FILTER_VALIDATE_REGEXP, array(\"options\"=>array(\"regexp\"=>'/blah/'))));\nvar_dump(filter_var(\"data\", FILTER_VALIDATE_REGEXP, array(\"options\"=>array(\"regexp\"=>'/\\[/'))));\ntry {\n    filter_var(\"data\", FILTER_VALIDATE_REGEXP);\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\necho \"Done\\n\";\n",
+    "expected": "string(4) \"data\"\nbool(false)\nstring(4) \"data\"\nbool(false)\nbool(false)\nfilter_var(): \"regexp\" option is missing\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "018.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"192.168.0.1\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"192.168.0.1.1\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"fe00::0\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"::123456\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"::1::b\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"127.0.0.1\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"192.168.0.1\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE));\nvar_dump(filter_var(\"192.0.34.166\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE));\nvar_dump(filter_var(\"127.0.0.1\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"192.0.0.1\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"100.64.0.0\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"100.127.255.255\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"192.0.34.166\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"256.1237.123.1\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"255.255.255.255\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"255.255.255.255\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(-1, FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4));\nvar_dump(filter_var(\"127.0.0.1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"127.0.0.1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV4));\necho \"Done\\n\";\n",
+    "expected": "string(11) \"192.168.0.1\"\nbool(false)\nstring(3) \"::1\"\nstring(7) \"fe00::0\"\nbool(false)\nbool(false)\nstring(9) \"127.0.0.1\"\nbool(false)\nstring(12) \"192.0.34.166\"\nbool(false)\nstring(9) \"192.0.0.1\"\nstring(10) \"100.64.0.0\"\nstring(15) \"100.127.255.255\"\nstring(12) \"192.0.34.166\"\nbool(false)\nstring(15) \"255.255.255.255\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(3) \"::1\"\nbool(false)\nstring(9) \"127.0.0.1\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "019.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"....\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"...\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"..\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\".\", FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"1.1.1.1\", FILTER_VALIDATE_IP));\n\necho \"Done\\n\";\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(7) \"1.1.1.1\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "021.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"qwertyu123456dfghj\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"asd123123.asd123.23\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"123,23\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"0\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"asd123.2asd\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"qwertyuiop\", FILTER_SANITIZE_NUMBER_INT));\nvar_dump(filter_var(\"123.4\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION));\nvar_dump(filter_var(\"123,4\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION));\nvar_dump(filter_var(\"123.4\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_THOUSAND));\nvar_dump(filter_var(\"123,4\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_THOUSAND));\nvar_dump(filter_var(\"123.4e\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_SCIENTIFIC));\nvar_dump(filter_var(\"123,4E\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_SCIENTIFIC));\nvar_dump(filter_var(\"qwe123,4qwe\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION));\nvar_dump(filter_var(\"werty65456.34\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION));\nvar_dump(filter_var(\"234.56fsfd\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION));\n\necho \"Done\\n\";\n",
+    "expected": "string(6) \"123456\"\nstring(11) \"12312312323\"\nstring(5) \"12323\"\nstring(0) \"\"\nstring(1) \"0\"\nstring(4) \"1232\"\nstring(0) \"\"\nstring(5) \"123.4\"\nstring(4) \"1234\"\nstring(4) \"1234\"\nstring(5) \"123,4\"\nstring(5) \"1234e\"\nstring(5) \"1234E\"\nstring(4) \"1234\"\nstring(8) \"65456.34\"\nstring(6) \"234.56\"\nstring(0) \"\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "022.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"a@b.c\", FILTER_SANITIZE_EMAIL));\nvar_dump(filter_var(\"a[!@#$%^&*()@a@#$%^&*(.com@#$%^&*(\", FILTER_SANITIZE_EMAIL));\nvar_dump(filter_var(\"white space here \\ \\ \\\" some more\", FILTER_SANITIZE_EMAIL));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_EMAIL));\nvar_dump(filter_var(\"123456789000000\", FILTER_SANITIZE_EMAIL));\n\necho \"Done\\n\";\n",
+    "expected": "string(5) \"a@b.c\"\nstring(30) \"a[!@#$%^&*@a@#$%^&*.com@#$%^&*\"\nstring(22) \"whitespaceheresomemore\"\nstring(0) \"\"\nstring(15) \"123456789000000\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "023.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"}\\\"<p>test para</p>\", FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_AMP));\nvar_dump(filter_var(\"a[!@#<b>$%^&*()@a@#$%^&*(.<br>com@#$%^&*(\", FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_AMP));\nvar_dump(filter_var(\"white space here \\ \\ \\\" some more\", FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_AMP));\nvar_dump(filter_var(\"\", FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_AMP));\nvar_dump(filter_var(\"             123456789000000       <qwertyuiop> \", FILTER_UNSAFE_RAW, FILTER_FLAG_ENCODE_AMP));\n\necho \"Done\\n\";\n",
+    "expected": "string(18) \"}\"<p>test para</p>\"\nstring(53) \"a[!@#<b>$%^&#38;*()@a@#$%^&#38;*(.<br>com@#$%^&#38;*(\"\nstring(32) \"white space here \\ \\ \" some more\"\nstring(0) \"\"\nstring(48) \"             123456789000000       <qwertyuiop> \"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "024.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"\\\"<br>blah</ph>\", FILTER_SANITIZE_ENCODED));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_ENCODED));\nvar_dump(filter_var(\"  text here  \", FILTER_SANITIZE_ENCODED));\nvar_dump(filter_var(\"!@#$%^&*()QWERTYUIOP{ASDFGHJKL:\\\"ZXCVBNM<>?\", FILTER_SANITIZE_ENCODED));\n\necho \"Done\\n\";\n",
+    "expected": "string(26) \"%22%3Cbr%3Eblah%3C%2Fph%3E\"\nstring(0) \"\"\nstring(23) \"%20%20text%20here%20%20\"\nstring(74) \"%21%40%23%24%25%5E%26%2A%28%29QWERTYUIOP%7BASDFGHJKL%3A%22ZXCVBNM%3C%3E%3F\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "025.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"\", FILTER_SANITIZE_STRING));\nvar_dump(filter_var(\"<>\", FILTER_SANITIZE_STRING));\nvar_dump(filter_var(\"<>!@#$%^&*()'\\\"\", FILTER_SANITIZE_STRING, FILTER_FLAG_NO_ENCODE_QUOTES));\nvar_dump(filter_var(\"<>!@#$%^&*()'\\\"\", FILTER_SANITIZE_STRING, FILTER_FLAG_ENCODE_AMP));\nvar_dump(filter_var(\"<>`1234567890\", FILTER_SANITIZE_STRING));\nvar_dump(filter_var(\"`123`\", FILTER_SANITIZE_STRING));\nvar_dump(filter_var(\".\", FILTER_SANITIZE_STRING));\n\necho \"Done\\n\";\n",
+    "expected": "Deprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(0) \"\"\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(0) \"\"\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(12) \"!@#$%^&*()'\"\"\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(24) \"!@#$%^&#38;*()&#39;&#34;\"\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(11) \"`1234567890\"\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(5) \"`123`\"\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(1) \".\"\nDone",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "026.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"<p>Let me <font color=\\\"#000000\\\">see</font> you <br /><b>Stripped</b> down to the bone</p>\", FILTER_SANITIZE_STRIPPED));\nvar_dump(filter_var(\"!@#$%^&*()><<>+_\\\"'<br><p /><li />\", FILTER_SANITIZE_STRIPPED));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_STRIPPED));\n\nvar_dump(filter_var(\"<p>Let me <font color=\\\"#000000\\\">see</font> you <br /><b>Stripped</b> down to the bone</p>\", FILTER_SANITIZE_STRIPPED, FILTER_FLAG_STRIP_LOW));\nvar_dump(filter_var(\"!@#$%^&*()><<>+_\\\"'<br><p /><li />\", FILTER_SANITIZE_STRIPPED, FILTER_FLAG_STRIP_LOW));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_STRIPPED, FILTER_FLAG_STRIP_LOW));\n\nvar_dump(filter_var(\"<p>Let me <font color=\\\"#000000\\\">see</font> you <br /><b>Stripped</b> down to the bone</p>\", FILTER_SANITIZE_STRIPPED, FILTER_FLAG_STRIP_HIGH));\nvar_dump(filter_var(\"!@#$%^&*()><<>+_\\\"'<br><p /><li />\", FILTER_SANITIZE_STRIPPED, FILTER_FLAG_STRIP_HIGH));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_STRIPPED, FILTER_FLAG_STRIP_HIGH));\n\necho \"Done\\n\";\n",
+    "expected": "Deprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(40) \"Let me see you Stripped down to the bone\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(11) \"!@#$%^&*()>\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(0) \"\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(40) \"Let me see you Stripped down to the bone\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(11) \"!@#$%^&*()>\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(0) \"\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(40) \"Let me see you Stripped down to the bone\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(11) \"!@#$%^&*()>\"\n\nDeprecated: Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(0) \"\"\nDone",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "027.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\", FILTER_SANITIZE_ENCODED));\nvar_dump(filter_var(\"<data&sons>\", FILTER_SANITIZE_ENCODED));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_ENCODED));\n\nvar_dump(filter_var(\"?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_LOW));\nvar_dump(filter_var(\"<data&sons>\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_LOW));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_LOW));\n\nvar_dump(filter_var(\"?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_HIGH));\nvar_dump(filter_var(\"<data&sons>\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_HIGH));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_ENCODE_HIGH));\n\necho \"Done\\n\";\n",
+    "expected": "string(75) \"%3F%3E%3C%21%40%23%24%25%5E%26%2A%28%29%7D%7B%7EQwertyuilfdsasdfgmnbvcxcvbn\"\nstring(17) \"%3Cdata%26sons%3E\"\nstring(0) \"\"\nstring(75) \"%3F%3E%3C%21%40%23%24%25%5E%26%2A%28%29%7D%7B%7EQwertyuilfdsasdfgmnbvcxcvbn\"\nstring(17) \"%3Cdata%26sons%3E\"\nstring(0) \"\"\nstring(75) \"%3F%3E%3C%21%40%23%24%25%5E%26%2A%28%29%7D%7B%7EQwertyuilfdsasdfgmnbvcxcvbn\"\nstring(17) \"%3Cdata%26sons%3E\"\nstring(0) \"\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "028.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\", FILTER_SANITIZE_SPECIAL_CHARS));\nvar_dump(filter_var(\"<data&sons>\", FILTER_SANITIZE_SPECIAL_CHARS));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_SPECIAL_CHARS));\n\nvar_dump(filter_var(\"?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_LOW));\nvar_dump(filter_var(\"<data&sons>\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_LOW));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_LOW));\n\nvar_dump(filter_var(\"?><!@#$%^&*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_HIGH));\nvar_dump(filter_var(\"<data&sons>\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_HIGH));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_HIGH));\n\nvar_dump(filter_var(\"кириллица\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_HIGH));\nvar_dump(filter_var(\"кириллица\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_ENCODE_LOW));\n\necho \"Done\\n\";\n",
+    "expected": "string(55) \"?&#62;&#60;!@#$%^&#38;*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\"\nstring(23) \"&#60;data&#38;sons&#62;\"\nstring(0) \"\"\nstring(55) \"?&#62;&#60;!@#$%^&#38;*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\"\nstring(23) \"&#60;data&#38;sons&#62;\"\nstring(0) \"\"\nstring(55) \"?&#62;&#60;!@#$%^&#38;*()}{~Qwertyuilfdsasdfgmnbvcxcvbn\"\nstring(23) \"&#60;data&#38;sons&#62;\"\nstring(0) \"\"\nstring(108) \"&#208;&#186;&#208;&#184;&#209;&#128;&#208;&#184;&#208;&#187;&#208;&#187;&#208;&#184;&#209;&#134;&#208;&#176;\"\nstring(18) \"кириллица\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "029.phpt",
+    "source": "<?php\n\n\n/* Simple callback function */\nfunction test($var) {\n    return strtoupper($var);\n}\n\nvar_dump(filter_var(\"data\", FILTER_CALLBACK, array(\"options\"=>\"test\")));\nvar_dump(filter_var(\"~!@#$%^&*()_QWERTYUIOPASDFGHJKLZXCVBNM<>>?\\\"}{:\", FILTER_CALLBACK, array(\"options\"=>\"test\")));\nvar_dump(filter_var(\"\", FILTER_CALLBACK, array(\"options\"=>\"test\")));\n\ntry {\n    filter_var(\"qwe\", FILTER_CALLBACK, array(\"options\"=>\"no such func\"));\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\ntry {\n    filter_var(\"qwe\", FILTER_CALLBACK, array(\"options\"=>\"\"));\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\ntry {\n    filter_var(\"qwe\", FILTER_CALLBACK);\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\n/* Simple class method callback */\nclass test_class {\n    static function test ($var) {\n        return strtolower($var);\n    }\n}\n\nvar_dump(filter_var(\"dAtA\", FILTER_CALLBACK, array(\"options\"=>array(\"test_class\", \"test\"))));\nvar_dump(filter_var(\"~!@#$%^&*()_QWERTYUIOPASDFGHJKLZXCVBNM<>>?\\\"}{:\", FILTER_CALLBACK, array(\"options\"=>array(\"test_class\",\"test\"))));\nvar_dump(filter_var(\"\", FILTER_CALLBACK, array(\"options\"=>array(\"test_class\",\"test\"))));\n\n/* empty function without return value */\nfunction test1($var) {\n}\n\nvar_dump(filter_var(\"data\", FILTER_CALLBACK, array(\"options\"=>\"test1\")));\nvar_dump(filter_var(\"~!@#$%^&*()_QWERTYUIOPASDFGHJKLZXCVBNM<>>?\\\"}{:\", FILTER_CALLBACK, array(\"options\"=>\"test1\")));\nvar_dump(filter_var(\"\", FILTER_CALLBACK, array(\"options\"=>\"test1\")));\n\n/* attempting to change data by reference */\nfunction test2(&$var) {\n    $var = 1;\n}\n\nvar_dump(filter_var(\"data\", FILTER_CALLBACK, array(\"options\"=>\"test2\")));\nvar_dump(filter_var(\"~!@#$%^&*()_QWERTYUIOPASDFGHJKLZXCVBNM<>>?\\\"}{:\", FILTER_CALLBACK, array(\"options\"=>\"test2\")));\nvar_dump(filter_var(\"\", FILTER_CALLBACK, array(\"options\"=>\"test2\")));\n\n/* thrown exception in the callback */\nfunction test3($var) {\n    throw new Exception(\"test\");\n}\n\ntry {\n    var_dump(filter_var(\"data\", FILTER_CALLBACK, array(\"options\"=>\"test3\")));\n} catch (Exception $e) {\n    var_dump($e->getMessage());\n}\n\necho \"Done\\n\";\n",
+    "expected": "string(4) \"DATA\"\nstring(46) \"~!@#$%^&*()_QWERTYUIOPASDFGHJKLZXCVBNM<>>?\"}{:\"\nstring(0) \"\"\nfilter_var(): Option must be a valid callback\nfilter_var(): Option must be a valid callback\nfilter_var(): Option must be a valid callback\nstring(4) \"data\"\nstring(46) \"~!@#$%^&*()_qwertyuiopasdfghjklzxcvbnm<>>?\"}{:\"\nstring(0) \"\"\nNULL\nNULL\nNULL\n\nWarning: test2(): Argument #1 ($var) must be passed by reference, value given in %s on line %d\nNULL\n\nWarning: test2(): Argument #1 ($var) must be passed by reference, value given in %s on line %d\nNULL\n\nWarning: test2(): Argument #1 ($var) must be passed by reference, value given in %s on line %d\nNULL\nstring(4) \"test\"\nDone",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "030.phpt",
+    "source": "<?php\n\n$ipv6_test = array(\n    \"::127.0.0.1\"\t\t\t\t\t=> true,\n    \"FF01::101:127.0.1\" \t\t\t=> false,\n    \"FF01:0:0:0:101:127.0.1.1\"\t\t=> false,\n    \"FF01:0:0:0:237:101:127.0.1.1\"\t=> true,\n    \"FF01::101\"\t\t\t\t\t\t=> true,\n    \"A1080::8:800:200C:417A\"\t\t=> false,\n    \"1080::8:Z00:200C:417A\"\t\t\t=> false,\n    \"FF01::101::1\"\t\t\t\t\t=> false,\n    \"1080::8:800:200C:417A\"\t\t\t=> true,\n    \"1080:0:0:0:8:800:200C:417A\"\t=> true,\n    \"2001:ec8:1:1:1:1:1:1\"\t\t\t=> true,\n    \"ffff::FFFF:129.144.52.38\"\t\t=> true,\n    \"::ffff:1.2.3.4\"\t\t\t\t=> true,\n    \"0:0:0:0:0:FFFF:129.144.52.38\"\t=> true,\n    \"0:0:0:0:0:0:13.1.68.3\"\t\t\t=> true,\n    \"0:0:0:0:0:0:0:13.1.68.3\"\t\t=> false,\n    \"::13.1.68.3\"\t\t\t\t\t=> true,\n    \"::FFFF:129.144.52.38\"\t\t\t=> true,\n\n    \"1:2:3:4:5:6::129.144.52.38\"\t=> false,\n    \"::1:2:3:4:5:6:129.144.52.38\"\t=> false,\n    \"1:2:3::4:5:6:129.144.52.38\"\t=> false,\n\n    \"1:2:3:4::5:6:7:8\"\t\t\t\t=> false,\n    \"::1:2:3:4:5:6:7\"\t\t\t\t=> true,\n    \"::1:2:3:4:5:6:7:8\"\t\t\t\t=> false,\n    \"1:2:3:4:5:6:7::\"\t\t\t\t=> true,\n    \"1:2:3:4:5:6:7:8::\"\t\t\t\t=> false,\n    \"1:2:3:4:5:6:7::8\"\t\t\t\t=> false,\n\n    \"1:2:3:4:5:6:7:8g\"\t\t\t\t=> false,\n    \"1:2:3:4:5:6:7:g\"\t\t\t\t=> false,\n    \"1:2:3:4:5g:6:7:8\"\t\t\t\t=> false,\n\n    'a:b:c:d:e::1.2.3.4'\t\t\t=> true,\n    '::0:a:b:c:d:e:f'\t\t\t\t=> true,\n    '0:a:b:c:d:e:f::'\t\t\t\t=> true,\n    ':::1.2.3.4'\t\t\t\t\t=> false,\n    '8:::1.2.3.4'\t\t\t\t\t=> false,\n    '::01.02.03.04'\t\t\t\t\t=> false,\n    '::1.00.3.4'\t\t\t\t\t=> false,\n    '0:0:0:255.255.255.255'\t\t\t=> false,\n    '0:0:0::255.255.255.255'\t\t=> true,\n);\nforeach ($ipv6_test as $ip => $exp) {\n    $out = filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);\n    $out = $out !== false;\n    if ($exp != $out) {\n        echo \"$ip failed (expected \", $exp?\"true\":\"false\", \", got \",\n            $out?\"true\":\"false\", \")\\n\";\n    }\n}\n\necho \"Ok\\n\";\n",
+    "expected": "Ok",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "031.phpt",
+    "source": "<?php\n\n\n$floats = array(\n'1.234   ',\n'   1.234',\n'1.234'\t,\n'1.2e3',\n'7E3',\n'7E3     ',\n'  7E3     ',\n'  7E-3     '\n);\n\nforeach ($floats as $float) {\n    $out = filter_var($float, FILTER_VALIDATE_FLOAT);\n    var_dump($out);\n}\n\n$floats = array(\n'1.234   '\t=> ',',\n'1,234'\t\t=> ',',\n'   1.234'\t=> '.',\n'1.234'\t\t=> '..',\n'1.2e3'\t\t=> ','\n);\n\necho \"\\ncustom decimal:\\n\";\nforeach ($floats as $float => $dec) {\n    try {\n        var_dump(filter_var($float, FILTER_VALIDATE_FLOAT, array(\"options\"=>array('decimal' => $dec))));\n    } catch (ValueError $exception) {\n        echo $exception->getMessage() . \"\\n\";\n    }\n}\n\n",
+    "expected": "float(1.234)\nfloat(1.234)\nfloat(1.234)\nfloat(1200)\nfloat(7000)\nfloat(7000)\nfloat(7000)\nfloat(0.007)\n\ncustom decimal:\nbool(false)\nfloat(1.234)\nfloat(1.234)\nfilter_var(): \"decimal\" option must be one character long\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "032.phpt",
+    "source": "<?php\n\n$data = array(\n    'product_id'    => 'libgd<script>',\n    'component'     => '10dhsajkkdhk <do>',\n    'versions'      => '2.0.33',\n    'testscalar'    => array('2','23','10','12'),\n    'testarray'     => '2',\n);\n\n$args = array(\n    'product_id'    => FILTER_SANITIZE_ENCODED,\n    'component'     => array(//'filter' => FILTER_VALIDATE_INT,\n                             'flags'    => FILTER_FORCE_ARRAY,\n                             'options'  => array(\"min_range\"=>1, \"max_range\"=>10)\n                        ),\n    'versions'      => array(\n                            'filter' => FILTER_SANITIZE_ENCODED,\n                            'flags'  => FILTER_REQUIRE_SCALAR,\n                            ),\n    'doesnotexist'  => FILTER_VALIDATE_INT,\n    'testscalar'    => FILTER_VALIDATE_INT,\n    'testarray' => array(\n                            'filter' => FILTER_VALIDATE_INT,\n                            'flags'  => FILTER_FORCE_ARRAY,\n                        )\n\n);\n\n$myinputs = filter_var_array($data, $args);\nvar_dump($myinputs);\n",
+    "expected": "array(6) {\n  [\"product_id\"]=>\n  string(17) \"libgd%3Cscript%3E\"\n  [\"component\"]=>\n  array(1) {\n    [0]=>\n    string(17) \"10dhsajkkdhk <do>\"\n  }\n  [\"versions\"]=>\n  string(6) \"2.0.33\"\n  [\"doesnotexist\"]=>\n  NULL\n  [\"testscalar\"]=>\n  bool(false)\n  [\"testarray\"]=>\n  array(1) {\n    [0]=>\n    int(2)\n  }\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "033.phpt",
+    "source": "<?php\n\n\nsetlocale(LC_ALL, 'C');\n\nfunction test($data) {\n  return strtoupper($data);\n}\n\n$data = array(\n    \"PHP\",\n    \"1\",\n    \"foo@bar.com\",\n    \"http://a.b.c\",\n    \"1.2.3.4\",\n    \"123\",\n    \"123abc<>()\",\n    \"O'Henry\",\n    \"하퍼\",\n    \"aa:bb:cc:dd:ee:ff\",\n);\n\n\nforeach(filter_list() as $filter) {\n    if($filter==\"validate_regexp\") {\n        foreach($data as $k=>$d) $result[$k] = filter_var($d,filter_id($filter),array(\"options\"=>array(\"regexp\"=>'/^O.*/')));\n    } else {\n        foreach($data as $k=>$d) $result[$k] = filter_var($d,filter_id($filter),array(\"options\"=>\"test\"));\n    }\n    printf(\"%-20s\",$filter);\n    printf(\"%-5s\",$result[0]);\n    printf(\"%-3s\",$result[1]);\n    printf(\"%-15s\",$result[2]);\n    printf(\"%-20s\",$result[3]);\n    printf(\"%-10s\",$result[4]);\n    printf(\"%-5s\",$result[5]);\n    printf(\"%-20s\",$result[6]);\n    printf(\"%-15s\",$result[7]);\n    printf(\"%-10s\",$result[8]);\n    printf(\"%-10s\\n\",$result[9]);\n}\n\n",
+    "expected": "int                      1                                               123                                                         \nboolean                  1                                                                                                           \nfloat                    1                                               123                                                         \nvalidate_regexp                                                                                   O'Henry                            \nvalidate_domain     PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc<>()          O'Henry        하퍼    aa:bb:cc:dd:ee:ff\nvalidate_url                               http://a.b.c                                                                              \nvalidate_email              foo@bar.com                                                                                              \nvalidate_ip                                                    1.2.3.4                                                               \nvalidate_mac                                                                                                               aa:bb:cc:dd:ee:ff\nstring              PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc()            O&#39;Henry    하퍼    aa:bb:cc:dd:ee:ff\nstripped            PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc()            O&#39;Henry    하퍼    aa:bb:cc:dd:ee:ff\nencoded             PHP  1  foo%40bar.com  http%3A%2F%2Fa.b.c  1.2.3.4   123  123abc%3C%3E%28%29  O%27Henry      %ED%95%98%ED%8D%BCaa%3Abb%3Acc%3Add%3Aee%3Aff\nspecial_chars       PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc&#60;&#62;()  O&#39;Henry    하퍼    aa:bb:cc:dd:ee:ff\nfull_special_chars  PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc&lt;&gt;()    O&#039;Henry   하퍼    aa:bb:cc:dd:ee:ff\nunsafe_raw          PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc<>()          O'Henry        하퍼    aa:bb:cc:dd:ee:ff\nemail               PHP  1  foo@bar.com    httpa.b.c           1.2.3.4   123  123abc              O'Henry                  aabbccddeeff\nurl                 PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc<>()          O'Henry                  aa:bb:cc:dd:ee:ff\nnumber_int               1                                     1234      123  123                                                    \nnumber_float             1                                     1234      123  123                                                    \nadd_slashes         PHP  1  foo@bar.com    http://a.b.c        1.2.3.4   123  123abc<>()          O\\'Henry       하퍼    aa:bb:cc:dd:ee:ff\ncallback            PHP  1  FOO@BAR.COM    HTTP://A.B.C        1.2.3.4   123  123ABC<>()          O'HENRY        하퍼    AA:BB:CC:DD:EE:FF",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ],
+      [
+        "default_charset",
+        "UTF-8"
+      ]
+    ]
+  },
+  {
+    "name": "034.phpt",
+    "source": "<?php\n\n$booleans = array(\n'1' => true,\n'On' => true,\n'Off' => true,\n'True' => true,\n'TrUe' => true,\n'oN' => true,\n\n'0' => false,\n'Off' => false,\n'False' => false,\n'faLsE' => false,\n'oFf' => false,\n\n'' => false\n);\n\nforeach($booleans as $val=>$exp) {\n    $res =filter_var($val, FILTER_VALIDATE_BOOLEAN);\n        if ($res !== $exp) {\n        echo \"$val failed,'$exp' expect, '$res' received.\\n\";\n    }\n}\necho \"Ok.\";\n",
+    "expected": "Ok.",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "035.phpt",
+    "source": "<?php\n$_GET = ['ar' => ['elm1' => '1234', 'elm2' => '0660'], 'a' => '0234'];\n$_POST = ['d' => '379'];\n$_REQUEST = ['ar' => ['elm1' => '1234', 'elm2' => '0660'], 'a' => '0234', 'd' => '379'];\n\n$ret = filter_input(INPUT_GET, 'a', FILTER_VALIDATE_INT);\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'a', FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL));\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'ar', FILTER_VALIDATE_INT, array('flags'=>FILTER_REQUIRE_ARRAY));\nvar_dump($ret);\n\n$ret = filter_input(INPUT_GET, 'ar', FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_REQUIRE_ARRAY));\nvar_dump($ret);\n\n",
+    "expected": "bool(false)\nint(156)\narray(2) {\n  [\"elm1\"]=>\n  int(1234)\n  [\"elm2\"]=>\n  bool(false)\n}\narray(2) {\n  [\"elm1\"]=>\n  int(1234)\n  [\"elm2\"]=>\n  int(432)\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "036.phpt",
+    "source": "<?php\n\n\n$var = \"1\";\n\n$data = array();\n$data[\"test1\"] = 1;\n$data[\"test2\"] =& $var;\n\n$args = array();\n$args[\"test1\"] = FILTER_VALIDATE_INT;\n$args[\"test2\"] = FILTER_VALIDATE_INT;\n\n$ret = filter_var_array($data, $args);\nvar_dump($ret);\nvar_dump($data); //should be separated, i.e. not reference anymore. looks like we can't change this, or it'd change the original zval instead..\nvar_dump($var); //should be still string(1) \"1\"\n\necho \"Done\\n\";\n",
+    "expected": "array(2) {\n  [\"test1\"]=>\n  int(1)\n  [\"test2\"]=>\n  int(1)\n}\narray(2) {\n  [\"test1\"]=>\n  int(1)\n  [\"test2\"]=>\n  &string(1) \"1\"\n}\nstring(1) \"1\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "037.phpt",
+    "source": "<?php\n$_GET = ['a' => '1', 'b' => '2'];\n$_REQUEST = ['a' => '1', 'b' => '2'];\n\nfunction myfunc($val) {\n    return $val . '_callback';\n}\necho filter_input(INPUT_GET, 'a', FILTER_CALLBACK, array(\"options\"=>'myfunc'));\necho \"\\n\";\necho filter_input(INPUT_GET, 'b', FILTER_VALIDATE_INT);\necho \"\\n\";\n$data = \"data\";\n\necho filter_var($data, FILTER_CALLBACK, array(\"options\"=>'myfunc'));\necho \"\\n\";\n\n$res = filter_input_array(INPUT_GET, array(\n                'a' => array(\n                    'filter' => FILTER_CALLBACK,\n                    'options' => 'myfunc'\n                    ),\n                'b' => FILTER_VALIDATE_INT\n        )\n    );\n\nvar_dump($res);\n",
+    "expected": "1_callback\n2\ndata_callback\narray(2) {\n  [\"a\"]=>\n  string(10) \"1_callback\"\n  [\"b\"]=>\n  int(2)\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "038.phpt",
+    "source": "<?php\n\n\n$var = 12;\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL));\nvar_dump($res);\n\n$var = array(12);\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL));\nvar_dump($res);\n\n$var = 12;\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_FORCE_ARRAY));\nvar_dump($res);\n\n\n\n$var = 12;\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_REQUIRE_ARRAY));\nvar_dump($res);\n\n$var = array(12);\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_REQUIRE_ARRAY));\nvar_dump($res);\n\n$var = array(12);\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_FORCE_ARRAY|FILTER_REQUIRE_ARRAY));\nvar_dump($res);\n\n$var = array(12);\n$res = filter_var($var, FILTER_VALIDATE_INT, array('flags'=>FILTER_FLAG_ALLOW_OCTAL|FILTER_FORCE_ARRAY));\nvar_dump($res);\n\n",
+    "expected": "int(12)\nbool(false)\narray(1) {\n  [0]=>\n  int(12)\n}\nbool(false)\narray(1) {\n  [0]=>\n  int(12)\n}\narray(1) {\n  [0]=>\n  int(12)\n}\narray(1) {\n  [0]=>\n  int(12)\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "039.phpt",
+    "source": "<?php\n\n\necho \"-- (1)\\n\";\nvar_dump(filter_var_array(array()));\nvar_dump(filter_var_array(array(1,\"blah\"=>\"hoho\")));\nvar_dump(filter_var_array(array(), -1));\nvar_dump(filter_var_array(array(), 1000000));\n\ntry {\n    filter_var_array(array(), \"\");\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\necho \"-- (2)\\n\";\nvar_dump(filter_var_array(array(\"\"=>\"\"), -1));\nvar_dump(filter_var_array(array(\"\"=>\"\"), 1000000));\n\ntry {\n    filter_var_array(array(\"\"=>\"\"), \"\");\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\necho \"-- (3)\\n\";\nvar_dump(filter_var_array(array(\"aaa\"=>\"bbb\"), -1));\nvar_dump(filter_var_array(array(\"aaa\"=>\"bbb\"), 1000000));\n\ntry {\n    filter_var_array(array(\"aaa\"=>\"bbb\"), \"\");\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\necho \"-- (4)\\n\";\n\ntry {\n    filter_var_array(array(), new stdclass);\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\nvar_dump(filter_var_array(array(), array()));\nvar_dump(filter_var_array(array(), array(\"var_name\"=>1)));\nvar_dump(filter_var_array(array(), array(\"var_name\"=>-1)));\nvar_dump(filter_var_array(array(\"var_name\"=>\"\"), array(\"var_name\"=>-1)));\n\necho \"-- (5)\\n\";\ntry {\n    filter_var_array(array(\"var_name\"=>\"\"), array(\"var_name\"=>-1, \"asdas\"=>\"asdasd\", \"qwe\"=>\"rty\", \"\"=>\"\"));\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\ntry {\n    filter_var_array(array(\"asdas\"=>\"text\"), array(\"var_name\"=>-1, \"asdas\"=>\"asdasd\", \"qwe\"=>\"rty\", \"\"=>\"\"));\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\n$a = array(\"\"=>\"\"); $b = -1;\nvar_dump(filter_var_array($a, $b));\nvar_dump($a, $b);\n\n$a = array(\"\"=>\"\"); $b = 100000;\nvar_dump(filter_var_array($a, $b));\nvar_dump($a, $b);\n\n$a = array(\"\"=>\"\"); $b = \"\";\ntry {\n    filter_var_array($a, $b);\n} catch (TypeError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\nvar_dump($a, $b);\n\necho \"Done\\n\";\n",
+    "expected": "-- (1)\narray(0) {\n}\narray(2) {\n  [0]=>\n  string(1) \"1\"\n  [\"blah\"]=>\n  string(4) \"hoho\"\n}\n\nWarning: filter_var_array(): Unknown filter with ID -1 in %s on line %d\nbool(false)\n\nWarning: filter_var_array(): Unknown filter with ID 1000000 in %s on line %d\nbool(false)\nfilter_var_array(): Argument #2 ($options) must be of type array|int, string given\n-- (2)\n\nWarning: filter_var_array(): Unknown filter with ID -1 in %s on line %d\nbool(false)\n\nWarning: filter_var_array(): Unknown filter with ID 1000000 in %s on line %d\nbool(false)\nfilter_var_array(): Argument #2 ($options) must be of type array|int, string given\n-- (3)\n\nWarning: filter_var_array(): Unknown filter with ID -1 in %s on line %d\nbool(false)\n\nWarning: filter_var_array(): Unknown filter with ID 1000000 in %s on line %d\nbool(false)\nfilter_var_array(): Argument #2 ($options) must be of type array|int, string given\n-- (4)\nfilter_var_array(): Argument #2 ($options) must be of type array|int, stdClass given\narray(0) {\n}\narray(1) {\n  [\"var_name\"]=>\n  NULL\n}\narray(1) {\n  [\"var_name\"]=>\n  NULL\n}\n\nWarning: filter_var_array(): Unknown filter with ID -1 in %s on line %d\narray(1) {\n  [\"var_name\"]=>\n  string(0) \"\"\n}\n-- (5)\n\nWarning: filter_var_array(): Unknown filter with ID -1 in %s on line %d\nfilter_var_array(): Argument #2 ($options) cannot contain empty keys\n\nWarning: filter_var_array(): Unknown filter with ID 0 in %s on line %d\nfilter_var_array(): Argument #2 ($options) cannot contain empty keys\n\nWarning: filter_var_array(): Unknown filter with ID -1 in %s on line %d\nbool(false)\narray(1) {\n  [\"\"]=>\n  string(0) \"\"\n}\nint(-1)\n\nWarning: filter_var_array(): Unknown filter with ID 100000 in %s on line %d\nbool(false)\narray(1) {\n  [\"\"]=>\n  string(0) \"\"\n}\nint(100000)\nfilter_var_array(): Argument #2 ($options) must be of type array|int, string given\narray(1) {\n  [\"\"]=>\n  string(0) \"\"\n}\nstring(0) \"\"\nDone",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "040.phpt",
+    "source": "<?php\n$_GET = ['a' => '1', 'b' => '2', 'c' => '0'];\n$_POST = ['ap' => ['' => '1'], 'bp' => 'test', 'cp' => ''];\n$_REQUEST = ['a' => '1', 'b' => '2', 'c' => '0', 'ap' => ['' => '1'], 'bp' => 'test', 'cp' => ''];\n\n\nvar_dump(filter_has_var(INPUT_GET,\"\"));\nvar_dump(filter_has_var(INPUT_POST, \"ap\"));\nvar_dump(filter_has_var(INPUT_POST, \"cp\"));\nvar_dump(filter_has_var(INPUT_GET, \"a\"));\nvar_dump(filter_has_var(INPUT_GET, \"c\"));\nvar_dump(filter_has_var(INPUT_GET, \"abc\"));\nvar_dump(filter_has_var(INPUT_GET, \"cc\"));\ntry {\n    filter_has_var(-1, \"cc\");\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\nvar_dump(filter_has_var(0, \"cc\"));\n\necho \"Done\\n\";\n",
+    "expected": "bool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nfilter_has_var(): Argument #1 ($input_type) must be an INPUT_* constant\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "041.phpt",
+    "source": "<?php\nerror_reporting(E_ALL&~E_DEPRECATED);\n__elephc_filter_seed_request(INPUT_COOKIE, ['abc' => 'dir', 'def' => 'true', 'xyz' => '\"foo bar\"'], 'stripped', 0, false);\n\nvar_dump($_COOKIE);\nvar_dump(filter_has_var(INPUT_COOKIE, \"abc\"));\nvar_dump(filter_input(INPUT_COOKIE, \"abc\"));\nvar_dump(filter_input(INPUT_COOKIE, \"def\"));\nvar_dump(filter_input(INPUT_COOKIE, \"xyz\"));\nvar_dump(filter_has_var(INPUT_COOKIE, \"bogus\"));\nvar_dump(filter_input(INPUT_COOKIE, \"xyz\", FILTER_SANITIZE_SPECIAL_CHARS));\n",
+    "expected": "array(3) {\n  [\"abc\"]=>\n  string(3) \"dir\"\n  [\"def\"]=>\n  string(4) \"true\"\n  [\"xyz\"]=>\n  string(17) \"&#34;foo bar&#34;\"\n}\nbool(true)\nstring(3) \"dir\"\nstring(4) \"true\"\nstring(9) \"\"foo bar\"\"\nbool(false)\nstring(17) \"&#34;foo bar&#34;\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "filter.default",
+        "stripped"
+      ],
+      [
+        "filter.default_flags",
+        "0"
+      ],
+      [
+        "error_reporting",
+        "E_ALL&~E_DEPRECATED"
+      ]
+    ]
+  },
+  {
+    "name": "042.phpt",
+    "source": "<?php\n\n$var = 'XYZ< script>alert(/ext/filter+bypass/);< /script>ABC';\n$a = filter_var($var, FILTER_SANITIZE_STRING, array(\"flags\" => FILTER_FLAG_STRIP_LOW));\necho $a . \"\\n\";\n\n$var = 'XYZ<\nscript>alert(/ext/filter+bypass/);<\n/script>ABC';\n$a = filter_var($var, FILTER_SANITIZE_STRING, array(\"flags\" => FILTER_FLAG_STRIP_LOW));\necho $a . \"\\n\";\n",
+    "expected": "Deprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nXYZalert(/ext/filter+bypass/);ABC\n\nDeprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nXYZalert(/ext/filter+bypass/);ABC",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "043.phpt",
+    "source": "<?php\n\n$flags = FILTER_FLAG_ENCODE_AMP|FILTER_FLAG_ENCODE_LOW|FILTER_FLAG_ENCODE_HIGH;\n\nfor ($i = 0; $i < 256; $i++) {\n    var_dump(filter_var(chr($i), FILTER_UNSAFE_RAW, array(\"flags\" => $flags)));\n}\n",
+    "expected": "string(4) \"&#0;\"\nstring(4) \"&#1;\"\nstring(4) \"&#2;\"\nstring(4) \"&#3;\"\nstring(4) \"&#4;\"\nstring(4) \"&#5;\"\nstring(4) \"&#6;\"\nstring(4) \"&#7;\"\nstring(4) \"&#8;\"\nstring(4) \"&#9;\"\nstring(5) \"&#10;\"\nstring(5) \"&#11;\"\nstring(5) \"&#12;\"\nstring(5) \"&#13;\"\nstring(5) \"&#14;\"\nstring(5) \"&#15;\"\nstring(5) \"&#16;\"\nstring(5) \"&#17;\"\nstring(5) \"&#18;\"\nstring(5) \"&#19;\"\nstring(5) \"&#20;\"\nstring(5) \"&#21;\"\nstring(5) \"&#22;\"\nstring(5) \"&#23;\"\nstring(5) \"&#24;\"\nstring(5) \"&#25;\"\nstring(5) \"&#26;\"\nstring(5) \"&#27;\"\nstring(5) \"&#28;\"\nstring(5) \"&#29;\"\nstring(5) \"&#30;\"\nstring(5) \"&#31;\"\nstring(1) \" \"\nstring(1) \"!\"\nstring(1) \"\"\"\nstring(1) \"#\"\nstring(1) \"$\"\nstring(1) \"%\"\nstring(5) \"&#38;\"\nstring(1) \"'\"\nstring(1) \"(\"\nstring(1) \")\"\nstring(1) \"*\"\nstring(1) \"+\"\nstring(1) \",\"\nstring(1) \"-\"\nstring(1) \".\"\nstring(1) \"/\"\nstring(1) \"0\"\nstring(1) \"1\"\nstring(1) \"2\"\nstring(1) \"3\"\nstring(1) \"4\"\nstring(1) \"5\"\nstring(1) \"6\"\nstring(1) \"7\"\nstring(1) \"8\"\nstring(1) \"9\"\nstring(1) \":\"\nstring(1) \";\"\nstring(1) \"<\"\nstring(1) \"=\"\nstring(1) \">\"\nstring(1) \"?\"\nstring(1) \"@\"\nstring(1) \"A\"\nstring(1) \"B\"\nstring(1) \"C\"\nstring(1) \"D\"\nstring(1) \"E\"\nstring(1) \"F\"\nstring(1) \"G\"\nstring(1) \"H\"\nstring(1) \"I\"\nstring(1) \"J\"\nstring(1) \"K\"\nstring(1) \"L\"\nstring(1) \"M\"\nstring(1) \"N\"\nstring(1) \"O\"\nstring(1) \"P\"\nstring(1) \"Q\"\nstring(1) \"R\"\nstring(1) \"S\"\nstring(1) \"T\"\nstring(1) \"U\"\nstring(1) \"V\"\nstring(1) \"W\"\nstring(1) \"X\"\nstring(1) \"Y\"\nstring(1) \"Z\"\nstring(1) \"[\"\nstring(1) \"\\\"\nstring(1) \"]\"\nstring(1) \"^\"\nstring(1) \"_\"\nstring(1) \"`\"\nstring(1) \"a\"\nstring(1) \"b\"\nstring(1) \"c\"\nstring(1) \"d\"\nstring(1) \"e\"\nstring(1) \"f\"\nstring(1) \"g\"\nstring(1) \"h\"\nstring(1) \"i\"\nstring(1) \"j\"\nstring(1) \"k\"\nstring(1) \"l\"\nstring(1) \"m\"\nstring(1) \"n\"\nstring(1) \"o\"\nstring(1) \"p\"\nstring(1) \"q\"\nstring(1) \"r\"\nstring(1) \"s\"\nstring(1) \"t\"\nstring(1) \"u\"\nstring(1) \"v\"\nstring(1) \"w\"\nstring(1) \"x\"\nstring(1) \"y\"\nstring(1) \"z\"\nstring(1) \"{\"\nstring(1) \"|\"\nstring(1) \"}\"\nstring(1) \"~\"\nstring(6) \"&#127;\"\nstring(6) \"&#128;\"\nstring(6) \"&#129;\"\nstring(6) \"&#130;\"\nstring(6) \"&#131;\"\nstring(6) \"&#132;\"\nstring(6) \"&#133;\"\nstring(6) \"&#134;\"\nstring(6) \"&#135;\"\nstring(6) \"&#136;\"\nstring(6) \"&#137;\"\nstring(6) \"&#138;\"\nstring(6) \"&#139;\"\nstring(6) \"&#140;\"\nstring(6) \"&#141;\"\nstring(6) \"&#142;\"\nstring(6) \"&#143;\"\nstring(6) \"&#144;\"\nstring(6) \"&#145;\"\nstring(6) \"&#146;\"\nstring(6) \"&#147;\"\nstring(6) \"&#148;\"\nstring(6) \"&#149;\"\nstring(6) \"&#150;\"\nstring(6) \"&#151;\"\nstring(6) \"&#152;\"\nstring(6) \"&#153;\"\nstring(6) \"&#154;\"\nstring(6) \"&#155;\"\nstring(6) \"&#156;\"\nstring(6) \"&#157;\"\nstring(6) \"&#158;\"\nstring(6) \"&#159;\"\nstring(6) \"&#160;\"\nstring(6) \"&#161;\"\nstring(6) \"&#162;\"\nstring(6) \"&#163;\"\nstring(6) \"&#164;\"\nstring(6) \"&#165;\"\nstring(6) \"&#166;\"\nstring(6) \"&#167;\"\nstring(6) \"&#168;\"\nstring(6) \"&#169;\"\nstring(6) \"&#170;\"\nstring(6) \"&#171;\"\nstring(6) \"&#172;\"\nstring(6) \"&#173;\"\nstring(6) \"&#174;\"\nstring(6) \"&#175;\"\nstring(6) \"&#176;\"\nstring(6) \"&#177;\"\nstring(6) \"&#178;\"\nstring(6) \"&#179;\"\nstring(6) \"&#180;\"\nstring(6) \"&#181;\"\nstring(6) \"&#182;\"\nstring(6) \"&#183;\"\nstring(6) \"&#184;\"\nstring(6) \"&#185;\"\nstring(6) \"&#186;\"\nstring(6) \"&#187;\"\nstring(6) \"&#188;\"\nstring(6) \"&#189;\"\nstring(6) \"&#190;\"\nstring(6) \"&#191;\"\nstring(6) \"&#192;\"\nstring(6) \"&#193;\"\nstring(6) \"&#194;\"\nstring(6) \"&#195;\"\nstring(6) \"&#196;\"\nstring(6) \"&#197;\"\nstring(6) \"&#198;\"\nstring(6) \"&#199;\"\nstring(6) \"&#200;\"\nstring(6) \"&#201;\"\nstring(6) \"&#202;\"\nstring(6) \"&#203;\"\nstring(6) \"&#204;\"\nstring(6) \"&#205;\"\nstring(6) \"&#206;\"\nstring(6) \"&#207;\"\nstring(6) \"&#208;\"\nstring(6) \"&#209;\"\nstring(6) \"&#210;\"\nstring(6) \"&#211;\"\nstring(6) \"&#212;\"\nstring(6) \"&#213;\"\nstring(6) \"&#214;\"\nstring(6) \"&#215;\"\nstring(6) \"&#216;\"\nstring(6) \"&#217;\"\nstring(6) \"&#218;\"\nstring(6) \"&#219;\"\nstring(6) \"&#220;\"\nstring(6) \"&#221;\"\nstring(6) \"&#222;\"\nstring(6) \"&#223;\"\nstring(6) \"&#224;\"\nstring(6) \"&#225;\"\nstring(6) \"&#226;\"\nstring(6) \"&#227;\"\nstring(6) \"&#228;\"\nstring(6) \"&#229;\"\nstring(6) \"&#230;\"\nstring(6) \"&#231;\"\nstring(6) \"&#232;\"\nstring(6) \"&#233;\"\nstring(6) \"&#234;\"\nstring(6) \"&#235;\"\nstring(6) \"&#236;\"\nstring(6) \"&#237;\"\nstring(6) \"&#238;\"\nstring(6) \"&#239;\"\nstring(6) \"&#240;\"\nstring(6) \"&#241;\"\nstring(6) \"&#242;\"\nstring(6) \"&#243;\"\nstring(6) \"&#244;\"\nstring(6) \"&#245;\"\nstring(6) \"&#246;\"\nstring(6) \"&#247;\"\nstring(6) \"&#248;\"\nstring(6) \"&#249;\"\nstring(6) \"&#250;\"\nstring(6) \"&#251;\"\nstring(6) \"&#252;\"\nstring(6) \"&#253;\"\nstring(6) \"&#254;\"\nstring(6) \"&#255;\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "044.phpt",
+    "source": "<?php\n\n$vals = array(\n\"\n \",\n\" \",\n\" 123\",\n\" 123.01 \",\n);\n\nforeach ($vals as $var) {\n    var_dump(filter_var($var, FILTER_VALIDATE_FLOAT));\n}\n",
+    "expected": "bool(false)\nbool(false)\nfloat(123)\nfloat(123.01)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "045.phpt",
+    "source": "<?php\n\n$a = array(\"flags\"=>(string)FILTER_FLAG_ALLOW_HEX, \"options\" => array(\"min_range\"=>\"0\", \"max_range\"=>\"1024\"));\n$ret = filter_var(\"0xff\", FILTER_VALIDATE_INT, $a);\necho ($ret === 255 && $a[\"options\"][\"min_range\"] === \"0\")?\"ok\\n\":\"bug\\n\";\necho ($ret === 255 && $a[\"options\"][\"max_range\"] === \"1024\")?\"ok\\n\":\"bug\\n\";\necho ($ret === 255 && is_string($a[\"flags\"]) && $a[\"flags\"] == FILTER_FLAG_ALLOW_HEX)?\"ok\\n\":\"bug\\n\";\n$a = (string)FILTER_FLAG_ALLOW_HEX;\n$ret = filter_var(\"0xff\", FILTER_VALIDATE_INT, $a);\necho ($ret === 255 && is_string($a) && $a == FILTER_FLAG_ALLOW_HEX)?\"ok\\n\":\"bug\\n\";\n$a = array(\"test\"=>array(\"filter\"=>(string)FILTER_VALIDATE_INT, \"flags\"=>(string)FILTER_FLAG_ALLOW_HEX));\n$ret = filter_var_array(array(\"test\"=>\"0xff\"), $a);\necho ($ret[\"test\"] === 255 && is_string($a[\"test\"][\"filter\"]) && $a[\"test\"][\"filter\"] == FILTER_VALIDATE_INT)?\"ok\\n\":\"bug\\n\";\necho ($ret[\"test\"] === 255 && is_string($a[\"test\"][\"flags\"]) && $a[\"test\"][\"flags\"] == FILTER_FLAG_ALLOW_HEX)?\"ok\\n\":\"bug\\n\";\n$a = array(\"test\"=>(string)FILTER_VALIDATE_INT);\n$ret = filter_var_array(array(\"test\"=>\"255\"), $a);\necho ($ret[\"test\"] === 255 && is_string($a[\"test\"]) && $a[\"test\"] == FILTER_VALIDATE_INT)?\"ok\\n\":\"bug\\n\";\n",
+    "expected": "ok\nok\nok\nok\nok\nok\nok",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "046.phpt",
+    "source": "<?php\n\n$max = sprintf(\"%d\", PHP_INT_MAX);\nswitch($max) {\ncase \"2147483647\": /* 32-bit systems */\n    $min = \"-2147483648\";\n    $overflow = \"2147483648\";\n    $underflow = \"-2147483649\";\n    break;\ncase \"9223372036854775807\": /* 64-bit systems */\n    $min = \"-9223372036854775808\";\n    $overflow = \"9223372036854775808\";\n    $underflow = \"-9223372036854775809\";\n    break;\ndefault:\n    die(\"failed: unknown value for PHP_MAX_INT\");\n    break;\n}\n\nfunction test_validation($val, $msg) {\n    $f = filter_var($val, FILTER_VALIDATE_INT);\n    echo \"$msg filtered: \"; var_dump($f); // filtered value (or false)\n    echo \"$msg is_long: \"; var_dump(is_long($f)); // test validation\n    echo \"$msg equal: \"; var_dump($val == $f); // test equality of result\n}\n\n// PHP_INT_MAX\ntest_validation($max, \"max\");\ntest_validation($overflow, \"overflow\");\ntest_validation($min, \"min\");\ntest_validation($underflow, \"underflow\");\n",
+    "expected": "max filtered: int(%d)\nmax is_long: bool(true)\nmax equal: bool(true)\noverflow filtered: bool(false)\noverflow is_long: bool(false)\noverflow equal: bool(false)\nmin filtered: int(-%d)\nmin is_long: bool(true)\nmin equal: bool(true)\nunderflow filtered: bool(false)\nunderflow is_long: bool(false)\nunderflow equal: bool(false)",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "047.phpt",
+    "source": "<?php\n\nfunction octal_inc($s) {\n    $len = strlen($s);\n    while ($len > 0) {\n        $len--;\n        if ($s[$len] != '7') {\n            $s[$len] = $s[$len] + 1;\n            return $s;\n        }\n        $s[$len] = '0';\n    }\n    return '1'.$s;\n}\n\n\n$s = sprintf(\"%o\", PHP_INT_MAX);\nvar_dump(is_long(filter_var('0'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL))));\n\n$s = octal_inc($s);\nvar_dump(is_long(filter_var('0'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL))));\n\n$s = sprintf(\"%o\", ~0);\nvar_dump(is_long(filter_var('0'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL))));\n\n$s = octal_inc($s);\nvar_dump(filter_var('0'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_OCTAL)));\n",
+    "expected": "bool(true)\nbool(true)\nbool(true)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "048.phpt",
+    "source": "<?php\n\nfunction hex_inc($s) {\n    $len = strlen($s);\n    while ($len > 0) {\n        $len--;\n        if ($s[$len] != 'f') {\n            if ($s[$len] == '9') {\n                $s[$len] = 'a';\n            } else {\n                $s[$len] = $s[$len] + 1;\n            }\n            return $s;\n        }\n        $s[$len] = '0';\n    }\n    return '1'.$s;\n}\n\n\n$s = sprintf(\"%x\", PHP_INT_MAX);\nvar_dump(is_long(filter_var('0x'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX))));\n\n$s = hex_inc($s);\nvar_dump(is_long(filter_var('0x'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX))));\n\n$s = sprintf(\"%x\", ~0);\nvar_dump(is_long(filter_var('0x'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX))));\n\n$s = hex_inc($s);\nvar_dump(filter_var('0x'.$s, FILTER_VALIDATE_INT, array(\"flags\"=>FILTER_FLAG_ALLOW_HEX)));\n",
+    "expected": "bool(true)\nbool(true)\nbool(true)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "049.phpt",
+    "source": "<?php\n\n$test = array(\n    '0'\t\t\t\t\t\t\t=> 0.0,\n    '12345678900.1234567165'\t=> 12345678900.1234567165,\n    '1,234,567,890.1234567165'\t=> 1234567890.1234567165,\n    '-1,234,567,890.1234567165'\t=> -1234567890.1234567165,\n    '1234,567,890.1234567165'\t=> false,\n    '1,234,567,89.1234567165'\t=> false,\n    '1,234,567,8900.1234567165'\t=> false,\n    '1.234.567.890.1234567165'\t=> false,\n    '1,234,567,8900.123,456'\t=> false,\n);\nforeach ($test as $src => $dst) {\n    $out = filter_var($src, FILTER_VALIDATE_FLOAT, array(\"flags\"=>FILTER_FLAG_ALLOW_THOUSAND));\n    if ($dst !== $out) {\n        if ($out === false) {\n            echo \"$src -> false != $dst\\n\";\n        } elseif ($dst === false) {\n            echo \"$src -> $out != false\\n\";\n        } else {\n            echo \"$src -> $out != $dst\\n\";\n        }\n    }\n}\n\necho \"Ok\\n\";\n",
+    "expected": "Ok",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "050.phpt",
+    "source": "<?php\n\n$test = array(\n    '1e+308'\t\t\t\t\t=> 1e+308,\n    '1e+309'\t\t\t\t\t=> false,\n    '1e-323'\t\t\t\t\t=> 1e-323,\n    '1e-324'\t\t\t\t\t=> false,\n);\nforeach ($test as $src => $dst) {\n    $out = filter_var($src, FILTER_VALIDATE_FLOAT);\n    if ($dst !== $out) {\n        if ($out === false) {\n            echo \"$src -> false != $dst\\n\";\n        } elseif ($dst === false) {\n            echo \"$src -> $out != false\\n\";\n        } else {\n            echo \"$src -> $out != $dst\\n\";\n        }\n    }\n}\n\necho \"Ok\\n\";\n",
+    "expected": "Ok",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "051.phpt",
+    "source": "<?php\n\n$tmp = $default = 321;\nvar_dump(filter_var(\"123asd\", FILTER_VALIDATE_INT, array(\"options\"=>array(\"default\"=>$default))));\n",
+    "expected": "int(321)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "052.phpt",
+    "source": "<?php\n\nfunction filter_cb($var)\n{\n  return 1;\n}\n\n$data = array ('bar' => array ('fu<script>bar', 'bar<script>fu') );\nvar_dump(filter_var($data, FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FORCE_ARRAY));\nvar_dump($data);\nvar_dump(filter_var($data, FILTER_CALLBACK, array('options' => 'filter_cb')));\nvar_dump($data);\nvar_dump(filter_var_array($data, array('bar' => array('filter' => FILTER_CALLBACK, 'options' => 'filter_cb'))));\nvar_dump($data);\n",
+    "expected": "array(1) {\n  [\"bar\"]=>\n  array(2) {\n    [0]=>\n    string(21) \"fu&#60;script&#62;bar\"\n    [1]=>\n    string(21) \"bar&#60;script&#62;fu\"\n  }\n}\narray(1) {\n  [\"bar\"]=>\n  array(2) {\n    [0]=>\n    string(13) \"fu<script>bar\"\n    [1]=>\n    string(13) \"bar<script>fu\"\n  }\n}\narray(1) {\n  [\"bar\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(1)\n  }\n}\narray(1) {\n  [\"bar\"]=>\n  array(2) {\n    [0]=>\n    string(13) \"fu<script>bar\"\n    [1]=>\n    string(13) \"bar<script>fu\"\n  }\n}\narray(1) {\n  [\"bar\"]=>\n  array(2) {\n    [0]=>\n    int(1)\n    [1]=>\n    int(1)\n  }\n}\narray(1) {\n  [\"bar\"]=>\n  array(2) {\n    [0]=>\n    string(13) \"fu<script>bar\"\n    [1]=>\n    string(13) \"bar<script>fu\"\n  }\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "053.phpt",
+    "source": "<?php\n\n\nfunction filter_test($str) { return FALSE; }\nfilter_var('durty/boy', FILTER_CALLBACK, array(\n   'options'   => 'filter_test',\n));\n\nprint \"Done\\n\";\n\n",
+    "expected": "Done",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "054.phpt",
+    "source": "<?php\n\n\n$data = array('foo' => 123);\n\nvar_dump(\n    filter_var_array($data, array('foo' => array('filter' => FILTER_DEFAULT), 'bar' => array('filter' => FILTER_DEFAULT)), false),\n    filter_var_array($data, array('foo' => array('filter' => FILTER_DEFAULT), 'bar' => array('filter' => FILTER_DEFAULT)))\n);\n\n",
+    "expected": "array(1) {\n  [\"foo\"]=>\n  string(3) \"123\"\n}\narray(2) {\n  [\"foo\"]=>\n  string(3) \"123\"\n  [\"bar\"]=>\n  NULL\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "055.phpt",
+    "source": "<?php\n\n$values = Array(\n    array(\"01-23-45-67-89-ab\", 0),\n    array(\"01-23-45-67-89-ab\", array(\"options\" => array(\"separator\" => \"-\"))),\n    array(\"01-23-45-67-89-ab\", array(\"options\" => array(\"separator\" => \".\"))),\n    array(\"01-23-45-67-89-ab\", array(\"options\" => array(\"separator\" => \":\"))),\n    array(\"01-23-45-67-89-AB\", 0),\n    array(\"01-23-45-67-89-aB\", 0),\n    array(\"01:23:45:67:89:ab\", 0),\n    array(\"01:23:45:67:89:AB\", 0),\n    array(\"01:23:45:67:89:aB\", 0),\n    array(\"01:23:45-67:89:aB\", 0),\n    array(\"xx:23:45:67:89:aB\", 0),\n    array(\"0123.4567.89ab\", 0),\n    array(\"01-23-45-67-89-ab\", array(\"options\" => array(\"separator\" => \"--\"))),\n    array(\"01-23-45-67-89-ab\", array(\"options\" => array(\"separator\" => \"\"))),\n);\nforeach ($values as $value) {\n    try {\n        var_dump(filter_var($value[0], FILTER_VALIDATE_MAC, $value[1]));\n    } catch (ValueError $exception) {\n        echo $exception->getMessage() . \"\\n\";\n    }\n}\n\necho \"Done\\n\";\n",
+    "expected": "string(17) \"01-23-45-67-89-ab\"\nstring(17) \"01-23-45-67-89-ab\"\nbool(false)\nbool(false)\nstring(17) \"01-23-45-67-89-AB\"\nstring(17) \"01-23-45-67-89-aB\"\nstring(17) \"01:23:45:67:89:ab\"\nstring(17) \"01:23:45:67:89:AB\"\nstring(17) \"01:23:45:67:89:aB\"\nbool(false)\nbool(false)\nstring(14) \"0123.4567.89ab\"\nfilter_var(): \"separator\" option must be one character long\nfilter_var(): \"separator\" option must be one character long\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "056.phpt",
+    "source": "<?php\n\n\n$values = Array(\n'example.com',\n'www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com',\n'toolongtoolongtoolongtoolongtoolongtoolongtoolongtoolongtoolongtoolong.com',\n'eauBcFReEmjLcoZwI0RuONNnwU4H9r151juCaqTI5VeIP5jcYIqhx1lh5vV00l2rTs6y7hOp7rYw42QZiq6VIzjcYrRm8gFRMk9U9Wi1grL8Mr5kLVloYLthHgyA94QK3SaXCATklxgo6XvcbXIqAGG7U0KxTr8hJJU1p2ZQ2mXHmp4DhYP8N9SRuEKzaCPcSIcW7uj21jZqBigsLsNAXEzU8SPXZjmVQVtwQATPWeWyGW4GuJhjP4Q8o0.com',\n'kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.',\n'cont-ains.h-yph-en-s.com',\n'..com',\n'ab..cc.dd',\n'a.-bc.com',\n'ab.cd-.com',\n'-.abc.com',\n'abc.-.abc.com',\n'underscore_.example.com',\n'',\n-1,\narray(),\n'\\r\\n',\n);\nforeach ($values as $value) {\n    var_dump(filter_var($value, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME));\n}\n\nvar_dump(filter_var('_example.com', FILTER_VALIDATE_DOMAIN));\nvar_dump(filter_var('_example.com', FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME));\nvar_dump(filter_var('test_.example.com', FILTER_VALIDATE_DOMAIN));\nvar_dump(filter_var('test_.example.com', FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME));\nvar_dump(filter_var('te_st.example.com', FILTER_VALIDATE_DOMAIN));\nvar_dump(filter_var('te_st.example.com', FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME));\nvar_dump(filter_var('test._example.com', FILTER_VALIDATE_DOMAIN));\nvar_dump(filter_var('test._example.com', FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME));\n\necho \"Done\\n\";\n",
+    "expected": "string(11) \"example.com\"\nstring(71) \"www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com\"\nbool(false)\nbool(false)\nstring(254) \"kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.\"\nstring(24) \"cont-ains.h-yph-en-s.com\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(12) \"_example.com\"\nbool(false)\nstring(17) \"test_.example.com\"\nbool(false)\nstring(17) \"te_st.example.com\"\nbool(false)\nstring(17) \"test._example.com\"\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "058.phpt",
+    "source": "<?php\n\n$values = Array(\n'niceändsimple@example.com',\n'véry.çommon@example.com',\n'a.lîttle.lengthy.but.fiñe@dept.example.com',\n'dîsposable.style.émail.with+symbol@example.com',\n'other.émail-with-dash@example.com',\n'üser@[IPv6:2001:db8:1ff::a0b:dbd0]',\n'\"verî.uñusual.@.uñusual.com\"@example.com',\n'\"verî.(),:;<>[]\\\".VERÎ.\\\"verî@\\ \\\"verî\\\".unüsual\"@strange.example.com',\n'tést@example.com',\n'tést.child@example.com',\n'tést@xn--exmple-cua.com',\n'tést@xn----zfa.xe',\n'tést@subexample.wizard',\n'tést@[255.255.255.255]',\n'tést@[IPv6:2001:0db8:85a3:08d3:1319:8a2e:0370:7344]',\n'tést@[IPv6:2001::7344]',\n'tést@[IPv6:1111:2222:3333:4444:5555:6666:255.255.255.255]',\n'tést+reference@example.com',\n'üñîçøðé@example.com',\n'\"üñîçøðé\"@example.com',\n'ǅǼ੧ఘⅧ⒇৪@example.com',\n);\nforeach ($values as $value) {\n    var_dump(filter_var($value, FILTER_VALIDATE_EMAIL, FILTER_FLAG_EMAIL_UNICODE));\n}\necho \"Done\\n\";\n",
+    "expected": "string(26) \"niceändsimple@example.com\"\nstring(25) \"véry.çommon@example.com\"\nstring(44) \"a.lîttle.lengthy.but.fiñe@dept.example.com\"\nstring(48) \"dîsposable.style.émail.with+symbol@example.com\"\nstring(34) \"other.émail-with-dash@example.com\"\nstring(35) \"üser@[IPv6:2001:db8:1ff::a0b:dbd0]\"\nstring(43) \"\"verî.uñusual.@.uñusual.com\"@example.com\"\nstring(74) \"\"verî.(),:;<>[]\\\".VERÎ.\\\"verî@\\ \\\"verî\\\".unüsual\"@strange.example.com\"\nstring(17) \"tést@example.com\"\nstring(23) \"tést.child@example.com\"\nstring(24) \"tést@xn--exmple-cua.com\"\nstring(18) \"tést@xn----zfa.xe\"\nstring(23) \"tést@subexample.wizard\"\nstring(23) \"tést@[255.255.255.255]\"\nstring(52) \"tést@[IPv6:2001:0db8:85a3:08d3:1319:8a2e:0370:7344]\"\nstring(23) \"tést@[IPv6:2001::7344]\"\nstring(58) \"tést@[IPv6:1111:2222:3333:4444:5555:6666:255.255.255.255]\"\nstring(27) \"tést+reference@example.com\"\nstring(26) \"üñîçøðé@example.com\"\nstring(28) \"\"üñîçøðé\"@example.com\"\nstring(31) \"ǅǼ੧ఘⅧ⒇৪@example.com\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "059.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var(\"test'asd'asd'' asd\\'\\\"asdfasdf\", FILTER_SANITIZE_ADD_SLASHES));\nvar_dump(filter_var(\"'\", FILTER_SANITIZE_ADD_SLASHES));\nvar_dump(filter_var(\"\", FILTER_SANITIZE_ADD_SLASHES));\nvar_dump(filter_var(-1, FILTER_SANITIZE_ADD_SLASHES));\n\necho \"Done\\n\";\n",
+    "expected": "string(36) \"test\\'asd\\'asd\\'\\' asd\\\\\\'\\\"asdfasdf\"\nstring(2) \"\\'\"\nstring(0) \"\"\nstring(2) \"-1\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "060.phpt",
+    "source": "<?php\n\n\n$values = [\n    null,\n    false,\n    0,\n    -1,\n    '-5.4',\n    '-5.5',\n    '2,000.00',\n    '2,000.01',\n    '1,999.9999999'\n];\n\nvar_dump(filter_var(\n    $values,\n    FILTER_VALIDATE_FLOAT,\n    [\n        'options' => [\n            'min_range' => -5.4,\n            'max_range' => 2000,\n        ],\n        'flags' => FILTER_FLAG_ALLOW_THOUSAND | FILTER_REQUIRE_ARRAY\n    ]\n));\n\nvar_dump(filter_var(\n    '1000',\n    FILTER_VALIDATE_FLOAT,\n    [\n        'options' => [\n            'max_range' => 999.999,\n            'default' => 0\n        ]\n    ]\n));\n\nvar_dump(filter_var(\n    '-11',\n    FILTER_VALIDATE_FLOAT,\n    [\n        'options' => [\n            'min_range' => -10,\n            'default' => 0\n        ]\n    ]\n));\n",
+    "expected": "array(9) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [2]=>\n  float(0)\n  [3]=>\n  float(-1)\n  [4]=>\n  float(-5.4)\n  [5]=>\n  bool(false)\n  [6]=>\n  float(2000)\n  [7]=>\n  bool(false)\n  [8]=>\n  float(1999.9999999)\n}\nint(0)\nint(0)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "061.phpt",
+    "source": "<?php\n\n\nclass test {\n\n    function __toString() {\n        return \"blah\";\n    }\n}\n\n$t = new test;\n\nvar_dump(filter_var(\"no\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(NULL, FILTER_VALIDATE_BOOL));\nvar_dump(filter_var($t, FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(array(1,2,3,0,array(\"\", \"123\")), FILTER_VALIDATE_BOOL, FILTER_REQUIRE_ARRAY));\nvar_dump(filter_var(\"yes\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"true\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"false\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"off\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"on\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"0\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"1\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"NONE\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(-1, FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"000000\", FILTER_VALIDATE_BOOL));\nvar_dump(filter_var(\"111111\", FILTER_VALIDATE_BOOL));\n\n\necho \"Done\\n\";\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)\narray(5) {\n  [0]=>\n  bool(true)\n  [1]=>\n  bool(false)\n  [2]=>\n  bool(false)\n  [3]=>\n  bool(false)\n  [4]=>\n  array(2) {\n    [0]=>\n    bool(false)\n    [1]=>\n    bool(false)\n  }\n}\nbool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "062.phpt",
+    "source": "<?php\n\n\nfunction validateUrls(string $parserName)\n{\n    $values = [\n        'http://example.com/index.html',\n        'http://www.example.com/index.php',\n        'http://www.example/img/test.png',\n        'http://www.example/img/dir/',\n        'http://www.example/img/dir',\n        'http://www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com/',\n        'http://toolongtoolongtoolongtoolongtoolongtoolongtoolongtoolongtoolongtoolong.com',\n        'http://eauBcFReEmjLcoZwI0RuONNnwU4H9r151juCaqTI5VeIP5jcYIqhx1lh5vV00l2rTs6y7hOp7rYw42QZiq6VIzjcYrRm8gFRMk9U9Wi1grL8Mr5kLVloYLthHgyA94QK3SaXCATklxgo6XvcbXIqAGG7U0KxTr8hJJU1p2ZQ2mXHmp4DhYP8N9SRuEKzaCPcSIcW7uj21jZqBigsLsNAXEzU8SPXZjmVQVtwQATPWeWyGW4GuJhjP4Q8o0.com',\n        'http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.',\n        'http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58R.example.com',\n        'http://[2001:0db8:0000:85a3:0000:0000:ac1f:8001]',\n        'http://[2001:db8:0:85a3:0:0:ac1f:8001]:123/me.html',\n        'http://[2001:db8:0:85a3::ac1f:8001]/',\n        'http://[::1]',\n        'http://cont-ains.h-yph-en-s.com',\n        'http://..com',\n        'http://a.-bc.com',\n        'http://ab.cd-.com',\n        'http://-.abc.com',\n        'http://abc.-.abc.com',\n        'http://underscore_.example.com',\n        'http//www.example/wrong/url/',\n        'http:/www.example',\n        'file:///tmp/test.c',\n        'ftp://ftp.example.com/tmp/',\n        '/tmp/test.c',\n        '/',\n        'http://',\n        'http:/',\n        'http:',\n        'http',\n        '',\n        -1,\n        [],\n        'mailto:foo@bar.com',\n        'news:news.php.net',\n        'file://foo/bar',\n        \"http://\\r\\n/bar\",\n        \"http://example.com:qq\",\n        \"http://example.com:-2\",\n        \"http://example.com:65536\",\n        \"http://example.com:65537\",\n    ];\n\n    foreach ($values as $value) {\n        var_dump(filter_var($value, FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName]));\n    }\n\n    var_dump(filter_var(\"qwe\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName]));\n    var_dump(filter_var(\"http://qwe\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName]));\n    var_dump(filter_var(\"http://\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName]));\n    var_dump(filter_var(\"/tmp/test\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName]));\n    var_dump(filter_var(\"http://www.example.com\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName]));\n    var_dump(filter_var(\"http://www.example.com\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName, \"flags\" => FILTER_FLAG_PATH_REQUIRED]));\n    var_dump(filter_var(\"http://www.example.com/path/at/the/server/\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName, \"flags\" => FILTER_FLAG_PATH_REQUIRED]));\n    var_dump(filter_var(\"http://www.example.com/index.html\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName, \"flags\" => FILTER_FLAG_QUERY_REQUIRED]));\n    var_dump(filter_var(\"http://www.example.com/index.php?a=b&c=d\", FILTER_VALIDATE_URL, [\"uri_parser_class\" => $parserName, \"flags\" => FILTER_FLAG_QUERY_REQUIRED]));\n}\n\necho \"RFC3986:\\n\";\nvalidateUrls(Uri\\Rfc3986Uri::class);\n\necho \"\\nWHATWG:\\n\";\nvalidateUrls(Uri\\WhatWgUri::class);\n\necho \"Done\\n\";\n",
+    "expected": "RFC3986:\nstring(29) \"http://example.com/index.html\"\nstring(32) \"http://www.example.com/index.php\"\nstring(31) \"http://www.example/img/test.png\"\nstring(27) \"http://www.example/img/dir/\"\nstring(26) \"http://www.example/img/dir\"\nstring(79) \"http://www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com/\"\nbool(false)\nbool(false)\nstring(261) \"http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.\"\nbool(false)\nstring(48) \"http://[2001:0db8:0000:85a3:0000:0000:ac1f:8001]\"\nstring(50) \"http://[2001:db8:0:85a3:0:0:ac1f:8001]:123/me.html\"\nstring(36) \"http://[2001:db8:0:85a3::ac1f:8001]/\"\nstring(12) \"http://[::1]\"\nstring(31) \"http://cont-ains.h-yph-en-s.com\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(18) \"file:///tmp/test.c\"\nstring(26) \"ftp://ftp.example.com/tmp/\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(18) \"mailto:foo@bar.com\"\nstring(17) \"news:news.php.net\"\nstring(14) \"file://foo/bar\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(10) \"http://qwe\"\nbool(false)\nbool(false)\nstring(22) \"http://www.example.com\"\nbool(false)\nstring(42) \"http://www.example.com/path/at/the/server/\"\nbool(false)\nstring(40) \"http://www.example.com/index.php?a=b&c=d\"\n\nWHATWG:\nstring(29) \"http://example.com/index.html\"\nstring(32) \"http://www.example.com/index.php\"\nstring(31) \"http://www.example/img/test.png\"\nstring(27) \"http://www.example/img/dir/\"\nstring(26) \"http://www.example/img/dir\"\nstring(79) \"http://www.thelongestdomainnameintheworldandthensomeandthensomemoreandmore.com/\"\nbool(false)\nbool(false)\nstring(261) \"http://kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.kDTvHt1PPDgX5EiP2MwiXjcoWNOhhTuOVAUWJ3TmpBYCC9QoJV114LMYrV3Zl58.CQ1oT5Uq3jJt6Uhy3VH9u3Gi5YhfZCvZVKgLlaXNFhVKB1zJxvunR7SJa.com.\"\nbool(false)\nstring(48) \"http://[2001:0db8:0000:85a3:0000:0000:ac1f:8001]\"\nstring(50) \"http://[2001:db8:0:85a3:0:0:ac1f:8001]:123/me.html\"\nstring(36) \"http://[2001:db8:0:85a3::ac1f:8001]/\"\nstring(12) \"http://[::1]\"\nstring(31) \"http://cont-ains.h-yph-en-s.com\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(18) \"file:///tmp/test.c\"\nstring(26) \"ftp://ftp.example.com/tmp/\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(18) \"mailto:foo@bar.com\"\nstring(17) \"news:news.php.net\"\nstring(14) \"file://foo/bar\"\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nstring(10) \"http://qwe\"\nbool(false)\nbool(false)\nstring(22) \"http://www.example.com\"\nbool(false)\nstring(42) \"http://www.example.com/path/at/the/server/\"\nbool(false)\nstring(40) \"http://www.example.com/index.php?a=b&c=d\"\nDone",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "CVE-2007-1900.phpt",
+    "source": "<?php\n\n    $var = \"test@example.com\\n\";\n    var_dump(filter_var($var, FILTER_VALIDATE_EMAIL));\n",
+    "expected": "bool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug39846.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('192.168.1.100random-text-here', FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"192.168.1.155\\0foo\", FILTER_VALIDATE_IP));\n",
+    "expected": "bool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug42718-2.phpt",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['a' => '1\u0000'], 'unsafe_raw', 0, false);\n\necho ini_get('filter.default') . \"\\n\";\necho ini_get('filter.default_flags') . \"\\n\";\n",
+    "expected": "unsafe_raw",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "display_errors",
+        "0"
+      ],
+      [
+        "filter.default",
+        "unsafe_raw"
+      ],
+      [
+        "filter.default_flags",
+        ""
+      ]
+    ]
+  },
+  {
+    "name": "bug42718.phpt",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, ['a' => '1\u0000'], 'unsafe_raw', 4, false);\n\necho ini_get('filter.default') . \"\\n\";\necho ini_get('filter.default_flags') . \"\\n\";\nvar_dump(FILTER_FLAG_STRIP_LOW == 4);\necho addcslashes($_GET['a'],\"\\0\") . \"\\n\";\n",
+    "expected": "unsafe_raw\n4\nbool(true)\n1",
+    "expectf": false,
+    "xfail": true,
+    "xfail_output": "unsafe_raw\n4\nbool(true)\n1\\000",
+    "ini": [
+      [
+        "filter.default",
+        "unsafe_raw"
+      ],
+      [
+        "filter.default_flags",
+        "4"
+      ]
+    ]
+  },
+  {
+    "name": "bug44445.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"foo@-foo.com\",FILTER_VALIDATE_EMAIL));\nvar_dump(filter_var(\"foo@foo-.com\",FILTER_VALIDATE_EMAIL));\n",
+    "expected": "bool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug44779.phpt",
+    "source": "<?php\n\nvar_dump(filter_input(INPUT_SERVER, \"PHP_SELF\"));\n",
+    "expected": "string(%d) \"%s\"",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug46973.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var('1fff::a88:85a3::172.31.128.1', FILTER_VALIDATE_IP,FILTER_FLAG_IPV6));\nvar_dump(filter_var('3ffe:6a88:85a3:08d3:1319:8a2e:0370:7344', FILTER_VALIDATE_IP,FILTER_FLAG_IPV6));\nvar_dump(filter_var('1fff::a88:85a3::172.31.128.1', FILTER_VALIDATE_IP,FILTER_FLAG_IPV6));\n\n",
+    "expected": "bool(false)\nstring(39) \"3ffe:6a88:85a3:08d3:1319:8a2e:0370:7344\"\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug47435.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"FC00::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"FC00::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_PRIV_RANGE));\nvar_dump(filter_var(\"::\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"::\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"fe80:5:6::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"fe80:5:6::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"2001:0db8::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"2001:0db8::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"2001:0010::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"2001:0010::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var(\"240b:0010::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var(\"240b:0010::1\", FILTER_VALIDATE_IP, FILTER_FLAG_IPV6 | FILTER_FLAG_NO_RES_RANGE));\n",
+    "expected": "string(7) \"FC00::1\"\nbool(false)\nstring(2) \"::\"\nbool(false)\nstring(3) \"::1\"\nbool(false)\nstring(11) \"fe80:5:6::1\"\nbool(false)\nstring(12) \"2001:0db8::1\"\nstring(12) \"2001:0db8::1\"\nstring(12) \"2001:0010::1\"\nstring(12) \"2001:0010::1\"\nstring(12) \"240b:0010::1\"\nstring(12) \"240b:0010::1\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug47745.phpt",
+    "source": "<?php\n\n$s = (string)(-PHP_INT_MAX-1);\nvar_dump(intval($s));\nvar_dump(filter_var($s, FILTER_VALIDATE_INT));\n",
+    "expected": "int(-%d)\nint(-%d)",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug48762.phpt",
+    "source": "<?php\n\n\nvar_dump(filter_var('0b15:23::3:67.98.234.17', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\nvar_dump(filter_var('::67:78b:34.43.43.2', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\n\n",
+    "expected": "string(23) \"0b15:23::3:67.98.234.17\"\nstring(19) \"::67:78b:34.43.43.2\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug49184.phpt",
+    "source": "<?php\n$_ENV['HTTP_X_FORWARDED_FOR'] = 'example.com';\n$_SERVER['HTTP_X_FORWARDED_FOR'] = 'example.com';\nputenv('HTTP_X_FORWARDED_FOR=example.com');\n\n  var_dump(filter_input(INPUT_SERVER, \"HTTP_X_FORWARDED_FOR\", FILTER_UNSAFE_RAW));\n  var_dump($_SERVER[\"HTTP_X_FORWARDED_FOR\"]);\n  var_dump(getenv(\"HTTP_X_FORWARDED_FOR\"));\n  var_dump(\"done\");\n",
+    "expected": "string(11) \"example.com\"\nstring(11) \"example.com\"\nstring(11) \"example.com\"\nstring(4) \"done\"",
+    "expectf": false,
+    "xfail": true,
+    "xfail_output": "string(11) \"example.com\"\nstring(11) \"example.com\"\nstring(11) \"example.com\"\nstring(4) \"done\"",
+    "ini": []
+  },
+  {
+    "name": "bug49274.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(new stdClass, FILTER_VALIDATE_EMAIL));\n",
+    "expected": "bool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug49510.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(false, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(0, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"0\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"off\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"false\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"no\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\n\nvar_dump(filter_var(true, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(1, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"1\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"on\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"yes\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\n\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nNULL",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug50158.phpt",
+    "source": "<?php\n\n\n$email_address = \"test=mail@example.com\";\nvar_dump(filter_var($email_address, FILTER_VALIDATE_EMAIL));\n\n$email_address = \"test-mail@example.com\";\nvar_dump(filter_var($email_address, FILTER_VALIDATE_EMAIL));\n\n$email_address = \"test+mail@example.com\";\nvar_dump(filter_var($email_address, FILTER_VALIDATE_EMAIL));\n\n$email_address = \"test?mail@example.com\";\nvar_dump(filter_var($email_address, FILTER_VALIDATE_EMAIL));\n\n",
+    "expected": "string(21) \"test=mail@example.com\"\nstring(21) \"test-mail@example.com\"\nstring(21) \"test+mail@example.com\"\nstring(21) \"test?mail@example.com\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug50632.phpt",
+    "source": "<?php\n\n$foo = filter_input(INPUT_GET, 'foo', FILTER_VALIDATE_INT, array('flags' => FILTER_REQUIRE_SCALAR, 'options' => array('default' => 23)));\nvar_dump($foo);\n",
+    "expected": "int(23)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug51192.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('http://example.com/path', FILTER_VALIDATE_URL));\nvar_dump(filter_var('http://exa-mple.com/path', FILTER_VALIDATE_URL));\nvar_dump(filter_var('http://exa_mple.com/path', FILTER_VALIDATE_URL));\n",
+    "expected": "string(23) \"http://example.com/path\"\nstring(24) \"http://exa-mple.com/path\"\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug51368.phpt",
+    "source": "<?php\n\n$options = ['flags' => FILTER_FLAG_ALLOW_THOUSAND, 'options' => ['thousand' => ' ']];\nvar_dump(\n    filter_var('1 000', FILTER_VALIDATE_FLOAT, $options),\n    filter_var('1 234.567', FILTER_VALIDATE_FLOAT, $options)\n);\n$options = ['flags' => FILTER_FLAG_ALLOW_THOUSAND, 'options' => ['thousand' => '']];\n\ntry {\n    filter_var('12345', FILTER_VALIDATE_FLOAT, $options);\n} catch (ValueError $exception) {\n    echo $exception->getMessage() . \"\\n\";\n}\n\n",
+    "expected": "float(1000)\nfloat(1234.567)\nfilter_var(): \"thousand\" option must not be empty",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug52209.phpt",
+    "source": "<?php\n\n    var_dump(filter_input(INPUT_ENV, 'PWD'));\n",
+    "expected": "string(%d) \"%s\"",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "variables_order",
+        "GPCSE"
+      ]
+    ]
+  },
+  {
+    "name": "bug52929.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('valid@email.address', FILTER_VALIDATE_EMAIL));\n\n// Beyond the allowable limit for an e-mail address.\nvar_dump(filter_var('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx@yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy.zz', FILTER_VALIDATE_EMAIL));\n\n// An invalid address likely to crash PHP due to stack exhaustion if it goes to\n// the validation regex.\nvar_dump(filter_var(str_repeat('x', 8000), FILTER_VALIDATE_EMAIL));\n",
+    "expected": "string(19) \"valid@email.address\"\nbool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug53037.phpt",
+    "source": "<?php\n\nvar_dump(\n    filter_var(\"\", FILTER_DEFAULT),\n    filter_var(\"\", FILTER_DEFAULT, array('flags' => FILTER_FLAG_EMPTY_STRING_NULL))\n);\n",
+    "expected": "string(0) \"\"\nNULL",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug53150.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('127.0.0.1', FILTER_VALIDATE_IP));\nvar_dump(filter_var(\"::1\", FILTER_VALIDATE_IP));\n\nvar_dump(filter_var('127.0.0.1', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\nvar_dump(filter_var('::1', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\n\nvar_dump(filter_var('128.0.0.1', FILTER_VALIDATE_IP));\nvar_dump(filter_var('128.0.0.1', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\n\nvar_dump(filter_var('191.255.0.0', FILTER_VALIDATE_IP));\nvar_dump(filter_var('191.255.0.0', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\n\n",
+    "expected": "string(9) \"127.0.0.1\"\nstring(3) \"::1\"\nbool(false)\nbool(false)\nstring(9) \"128.0.0.1\"\nstring(9) \"128.0.0.1\"\nstring(11) \"191.255.0.0\"\nstring(11) \"191.255.0.0\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug55478.phpt",
+    "source": "<?php\n\n$email_address = \"test@xn--example--7za.de\"; // \"example-ä.de\"\nvar_dump(filter_var($email_address, FILTER_VALIDATE_EMAIL));\n",
+    "expected": "string(24) \"test@xn--example--7za.de\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug61700.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('::ffff:192.168.1.1', FILTER_VALIDATE_IP, FILTER_FLAG_IPV4));\nvar_dump(filter_var('::ffff:192.168.1.1', FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE));\nvar_dump(filter_var('0:0:0:0:0:0:0:1', FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\n",
+    "expected": "bool(false)\nstring(18) \"::ffff:192.168.1.1\"\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug64441.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('http://example.com./', FILTER_VALIDATE_URL));\nvar_dump(filter_var('http://example.com/', FILTER_VALIDATE_URL));\n",
+    "expected": "string(20) \"http://example.com./\"\nstring(19) \"http://example.com/\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug67167.01.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\n    new \\StdClass(),\n    FILTER_VALIDATE_BOOLEAN,\n    FILTER_NULL_ON_FAILURE\n));\n",
+    "expected": "NULL",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug67167.02.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\n    null,\n    FILTER_VALIDATE_BOOLEAN,\n    FILTER_NULL_ON_FAILURE\n));\n",
+    "expected": "NULL",
+    "expectf": false,
+    "xfail": true,
+    "xfail_output": "bool(false)",
+    "ini": []
+  },
+  {
+    "name": "bug69202.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"``a`b`c``\", FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_BACKTICK));\nvar_dump(filter_var(\"``a`b`c``\", FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_LOW | FILTER_FLAG_STRIP_BACKTICK));\nvar_dump(filter_var(\"``a`b`c``\", FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_HIGH | FILTER_FLAG_STRIP_BACKTICK));\nvar_dump(filter_var(\"``a`b`c``\", FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_LOW | FILTER_FLAG_STRIP_HIGH));\n",
+    "expected": "string(3) \"abc\"\nstring(3) \"abc\"\nstring(3) \"abc\"\nstring(9) \"``a`b`c``\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug69203.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"\\x7f\", FILTER_SANITIZE_STRING, FILTER_FLAG_STRIP_HIGH));\nvar_dump(filter_var(\"\\x7f\", FILTER_UNSAFE_RAW, FILTER_FLAG_STRIP_HIGH));\nvar_dump(filter_var(\"\\x7f\", FILTER_SANITIZE_ENCODED, FILTER_FLAG_STRIP_HIGH));\nvar_dump(filter_var(\"\\x7f\", FILTER_SANITIZE_SPECIAL_CHARS, FILTER_FLAG_STRIP_HIGH));\n",
+    "expected": "Deprecated: Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead in %s on line %d\nstring(0) \"\"\nstring(0) \"\"\nstring(0) \"\"\nstring(0) \"\"",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug71063.phpt",
+    "source": "<?php\n$_ENV['PATH'] = '/';\n$_SERVER['PATH'] = '/';\nputenv('PATH=/');\n\nvar_dump($_ENV['PATH']);\nvar_dump(filter_input(INPUT_ENV, 'PATH'));\n",
+    "expected": "string(1) \"/\"\nstring(1) \"/\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "variables_order",
+        "E"
+      ]
+    ]
+  },
+  {
+    "name": "bug73054.phpt",
+    "source": "<?php\n\nvar_dump(\n    filter_var(new stdClass, FILTER_VALIDATE_INT, [\n        'options' => ['default' => 2],\n    ]),\n    filter_var(new stdClass, FILTER_VALIDATE_INT, [\n        'options' => ['default' => 2],\n        'flags' => FILTER_NULL_ON_FAILURE\n    ])\n);\n",
+    "expected": "int(2)\nint(2)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug76366.phpt",
+    "source": "<?php\n\n\n#array to filter\n$data = ['foo' => 6];\n\n#filter args\n$args = [\n    'foo'=> [\n        'filter' => FILTER_VALIDATE_INT,\n        'flags' => FILTER_FORCE_ARRAY\n    ]\n];\n\n$args['foo']['options'] = [];\n\n#create reference\n$options =& $args['foo']['options'];\n\n#set options\n$options['min_range'] = 1;\n$options['max_range'] = 5;\n\n#show the filter result\nvar_dump(filter_var_array($data, $args));\n",
+    "expected": "array(1) {\n  [\"foo\"]=>\n  array(1) {\n    [0]=>\n    bool(false)\n  }\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug7715.phpt",
+    "source": "<?php\n\n$data = array(\n    '.23',\n    '-42',\n    '+42',\n    '.4',\n    '-.4',\n    '1000000000000',\n    '-1000000000000',\n    '02.324'\n);\nforeach ($data as $val) {\n    $res = filter_var($val, FILTER_VALIDATE_FLOAT);\n    var_dump($res);\n}\necho \"\\n\";\n",
+    "expected": "float(0.23)\nfloat(-42)\nfloat(42)\nfloat(0.4)\nfloat(-0.4)\nfloat(1000000000000)\nfloat(-1000000000000)\nfloat(2.324)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "bug77221.phpt",
+    "source": "<?php\n\n\n$non_global_ranges = [];\n$non_global_ranges['0.0.0.0/8'] = ['0.0.0.0', '0.255.255.255'];\n$non_global_ranges['10.0.0.0/8'] = ['10.0.0.0', '10.255.255.255'];\n$non_global_ranges['100.64.0.0/10'] = ['100.64.0.0', '100.127.255.255'];\n$non_global_ranges['127.0.0.0/8'] = ['127.0.0.0', '127.255.255.255'];\n$non_global_ranges['169.254.0.0/16'] = ['169.254.0.0', '169.254.255.255'];\n$non_global_ranges['172.16.0.0/12'] = ['172.16.0.0', '172.31.255.255'];\n$non_global_ranges['192.0.0.0/24'] = ['192.0.0.0', '192.0.0.255'];\n$non_global_ranges['192.0.2.0/24'] = ['192.0.2.0', '192.0.2.255'];\n$non_global_ranges['192.168.0.0/16'] = ['192.168.0.0', '192.168.255.255'];\n$non_global_ranges['198.18.0.0/15'] = ['198.18.0.0', '198.19.255.255'];\n$non_global_ranges['198.51.100.0/24'] = ['198.51.100.0', '198.51.100.255'];\n$non_global_ranges['203.0.113.0/24'] = ['203.0.113.0', '203.0.113.255'];\n$non_global_ranges['240.0.0.0/4'] = ['240.0.0.0', '255.255.255.255'];\n\n$non_global_ranges['::/128'] = ['::0', '::'];\n$non_global_ranges['::1/128'] = ['0000:0000:0000:0000:0000:0000:0000:1', '0:0:0:0:0:0:0:1'];\n$non_global_ranges['::ffff:0:0/96'] = ['::ffff:0:0', '::ffff:ffff:ffff'];\n$non_global_ranges['100::/64'] = ['0100::', '100::ffff:ffff:ffff:ffff'];\n$non_global_ranges['2001::/23'] = ['2001::', '2001:01ff:ffff:ffff:ffff:ffff:ffff:ffff'];\n$non_global_ranges['2001:2::/48'] = ['2001:2::', '2001:2:0:ffff:ffff:ffff:ffff:ffff'];\n$non_global_ranges['2001:db8::/32'] = ['2001:db8::', '2001:db8:ffff:ffff:ffff:ffff:ffff:ffff'];\n$non_global_ranges['2001:10::/28'] = ['2001:10::', '2001:1f:ffff:ffff:ffff:ffff:ffff:ffff'];\n$non_global_ranges['fc00::/7'] = ['fc00::', 'fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'];\n$non_global_ranges['fe80::/10'] = ['fe80::', 'febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff'];\n\n\nforeach ($non_global_ranges as $key => $range) {\n    list($min, $max) = $range;\n    var_dump($key);\n    var_dump(filter_var($min, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE));\n    var_dump(filter_var($max, FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE));\n}\n\nvar_dump(filter_var('185.85.0.29', FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE));\nvar_dump(filter_var('64:ff9b::', FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE));\nvar_dump(filter_var('64:ff9b::ffff', FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE));\n\n",
+    "expected": "string(9) \"0.0.0.0/8\"\nbool(false)\nbool(false)\nstring(10) \"10.0.0.0/8\"\nbool(false)\nbool(false)\nstring(13) \"100.64.0.0/10\"\nbool(false)\nbool(false)\nstring(11) \"127.0.0.0/8\"\nbool(false)\nbool(false)\nstring(14) \"169.254.0.0/16\"\nbool(false)\nbool(false)\nstring(13) \"172.16.0.0/12\"\nbool(false)\nbool(false)\nstring(12) \"192.0.0.0/24\"\nbool(false)\nbool(false)\nstring(12) \"192.0.2.0/24\"\nbool(false)\nbool(false)\nstring(14) \"192.168.0.0/16\"\nbool(false)\nbool(false)\nstring(13) \"198.18.0.0/15\"\nbool(false)\nbool(false)\nstring(15) \"198.51.100.0/24\"\nbool(false)\nbool(false)\nstring(14) \"203.0.113.0/24\"\nbool(false)\nbool(false)\nstring(11) \"240.0.0.0/4\"\nbool(false)\nbool(false)\nstring(6) \"::/128\"\nbool(false)\nbool(false)\nstring(7) \"::1/128\"\nbool(false)\nbool(false)\nstring(13) \"::ffff:0:0/96\"\nbool(false)\nbool(false)\nstring(8) \"100::/64\"\nbool(false)\nbool(false)\nstring(9) \"2001::/23\"\nbool(false)\nbool(false)\nstring(11) \"2001:2::/48\"\nbool(false)\nbool(false)\nstring(13) \"2001:db8::/32\"\nbool(false)\nbool(false)\nstring(12) \"2001:10::/28\"\nbool(false)\nbool(false)\nstring(8) \"fc00::/7\"\nbool(false)\nbool(false)\nstring(9) \"fe80::/10\"\nbool(false)\nbool(false)\nstring(11) \"185.85.0.29\"\nstring(9) \"64:ff9b::\"\nstring(13) \"64:ff9b::ffff\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug7733.phpt",
+    "source": "<?php\n\n$data = array(\n        'E2',\n        '10E',\n        '2E-',\n        'E-2',\n        '+E2'\n        );\n$out = filter_var($data, FILTER_VALIDATE_FLOAT, FILTER_REQUIRE_ARRAY);\nvar_dump($out);\n",
+    "expected": "array(5) {\n  [0]=>\n  bool(false)\n  [1]=>\n  bool(false)\n  [2]=>\n  bool(false)\n  [3]=>\n  bool(false)\n  [4]=>\n  bool(false)\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug77423.phpt",
+    "source": "<?php\n\n$urls = array(\n    \"http://php.net\\@aliyun.com/aaa.do\",\n    \"https://example.com\\uFF03@bing.com\",\n);\nforeach ($urls as $url) {\n    var_dump(filter_var($url, FILTER_VALIDATE_URL));\n}\n",
+    "expected": "bool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug80584.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('0x', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('0X', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('0', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)\nint(0)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug81122.phpt",
+    "source": "<?php\n\n$urls = [\n    \"https://example.com:\\\\@test.com/\",\n    \"https://user:\\\\epass@test.com\",\n    \"https://user:\\\\@test.com\",\n];\nforeach ($urls as $url) {\n    var_dump(filter_var($url, FILTER_VALIDATE_URL));\n}\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "bug81708.phpt",
+    "source": "<?php\n\n$input = \"+\" . str_repeat(\"1\", 2); // avoid string interning\nfilter_var(\n    $input,\n    FILTER_VALIDATE_FLOAT,\n    [\"options\" => ['min_range' => -1, 'max_range' => 1]]\n);\nvar_dump($input);\n",
+    "expected": "string(3) \"+11\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "opcache.enable_cli",
+        "0"
+      ]
+    ]
+  },
+  {
+    "name": "bug8315.phpt",
+    "source": "<?php\n\n\n$var=\"3\".chr(0).\"foo\";\nvar_dump(filter_var($var, FILTER_VALIDATE_INT));\n$var=\"3\".chr(0).\"foo\";\nvar_dump(filter_var($var, FILTER_VALIDATE_FLOAT));\n",
+    "expected": "bool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "callback_closure.phpt",
+    "source": "<?php\n\n$callback = function ($var) {\n    return $var;\n};\n$var = \"test\";\nvar_dump(filter_var($var, FILTER_CALLBACK, array('options'=> $callback)));\n",
+    "expected": "string(4) \"test\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "callback_non_modified_var.phpt",
+    "source": "<?php\n\nfunction callback($var) {\n    return $var;\n}\n$var = \"test\";\nvar_dump(filter_var($var, FILTER_CALLBACK, array('options'=>'callback')));\n",
+    "expected": "string(4) \"test\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_callback_require_scalar.phpt",
+    "source": "<?php\n\nfunction test($var) {\n    $callback = function ($var) {\n        return $var;\n    };\n    return filter_var($var, FILTER_CALLBACK, ['options' => $callback, 'flags' => FILTER_REQUIRE_SCALAR]);\n}\nvar_dump(test('test'));\nvar_dump(test(['test']));\n",
+    "expected": "string(4) \"test\"\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_data.phpt",
+    "source": "<?php\n\n\n/* Integer */\n$data = \"-123\";   var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = \"0\";      var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = \"-0\";     var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = \"+0\";     var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = \"123\";    var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = -123;     var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = 0;        var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = -0;        var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = +0;        var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = 123;      var_dump(filter_var($data, FILTER_VALIDATE_INT));\n$data = \"\";       var_dump(filter_var($data, FILTER_VALIDATE_INT));\necho \"\\n\";\n\n/* Float */\n$data = \"-0.123\"; var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\n$data = \"0.00\";   var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\n$data = \"1.23\";   var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\n$data = -1.23;    var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\n$data = 0.0;      var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\n$data = 1.23;     var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\n$data = \"\";       var_dump(filter_var($data, FILTER_VALIDATE_FLOAT));\necho \"\\n\";\n\n/* Boolean */\n$data = \"on\";     var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"off\";    var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"yes\";    var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"no\";     var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"true\";   var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"false\";  var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"1\";      var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"0\";      var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = 1;        var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = 0;        var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = true;     var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = false;    var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n$data = \"\";       var_dump(filter_var($data, FILTER_VALIDATE_BOOLEAN));\n\n",
+    "expected": "int(-123)\nint(0)\nint(0)\nint(0)\nint(123)\nint(-123)\nint(0)\nint(0)\nint(0)\nint(123)\nbool(false)\n\nfloat(-0.123)\nfloat(0)\nfloat(1.23)\nfloat(-1.23)\nfloat(0)\nfloat(1.23)\nbool(false)\n\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(true)\nbool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "precision",
+        "14"
+      ]
+    ]
+  },
+  {
+    "name": "filter_default_deprecation.phpt",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, [], 'special_chars', 0, true);\n\n\necho \"Done\\n\";\n\n",
+    "expected": "Deprecated: The filter.default ini setting is deprecated in %s on line %d\nDone",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "filter.default",
+        "special_chars"
+      ]
+    ]
+  },
+  {
+    "name": "filter_default_parse_str.phpt",
+    "source": "<?php\n__elephc_filter_seed_request(INPUT_GET, [], 'int', 0, true);\n\nparse_str('a=1&b=notint', $out);\nvar_dump($out);\n",
+    "expected": "Deprecated: The filter.default ini setting is deprecated in %s on line %d\narray(2) {\n  [\"a\"]=>\n  string(1) \"1\"\n  [\"b\"]=>\n  string(0) \"\"\n}",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": [
+      [
+        "filter.default",
+        "int"
+      ]
+    ]
+  },
+  {
+    "name": "filter_input_array_001.phpt",
+    "source": "<?php\n\n$args = [\n    \"c\" => [\n        \"flags\" => FILTER_NULL_ON_FAILURE,\n    ]\n];\n\nvar_dump(filter_input_array(INPUT_GET, $args, true));\n",
+    "expected": "NULL",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_ipv4_rfc6890.phpt",
+    "source": "<?php\n\n//https://tools.ietf.org/html/rfc6890#section-2.1\n\n$privateRanges = array();\n// 10.0.0.0/8\n$privateRanges['10.0.0.0/8'] = array('10.0.0.0', '10.255.255.255');\n\n// 169.254.0.0/16\n$privateRanges['168.254.0.0/16'] = array('169.254.0.0', '169.254.255.255');\n\n// 172.16.0.0/12\n$privateRanges['172.16.0.0/12'] = array('172.16.0.0', '172.31.0.0');\n\n// 192.168.0.0/16\n$privateRanges['192.168.0.0/16'] = array('192.168.0.0', '192.168.255.255');\n\nforeach ($privateRanges as $key => $range) {\n    list($min, $max) = $range;\n    var_dump($key);\n    var_dump(filter_var($min, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE));\n    var_dump(filter_var($max, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE));\n}\n\n$reservedRanges = array();\n\n// 0.0.0.0/8\n$reservedRanges['0.0.0.0/8'] = array('0.0.0.0', '0.255.255.255');\n\n// 10.0.0.0/8\n$reservedRanges['10.0.0.0/8'] = array('10.0.0.0', '10.255.255.255');\n\n// 100.64.0.0/10\n$reservedRanges['10.64.0.0/10'] = array('100.64.0.0', '100.127.255.255');\n\n// 127.0.0.0/8\n$reservedRanges['127.0.0.0/8'] = array('127.0.0.0', '127.255.255.255');\n\n// 169.254.0.0/16\n$reservedRanges['169.254.0.0/16'] = array('169.254.0.0', '169.254.255.255');\n\n// 172.16.0.0/12\n$reservedRanges['172.16.0.0/12'] = array('172.16.0.0', '172.31.0.0');\n\n// 192.0.0.0/24\n$reservedRanges['192.0.0.0/24'] = array('192.0.0.0', '192.0.0.255');\n\n// 192.0.0.0/29\n$reservedRanges['192.0.0.0/29'] = array('192.0.0.0', '192.0.0.7');\n\n// 192.0.2.0/24\n$reservedRanges['192.0.2.0/24'] = array('192.0.2.0', '192.0.2.255');\n\n// 198.18.0.0/15\n$reservedRanges['198.18.0.0/15'] = array('198.18.0.0', '198.19.255.255');\n\n// 198.51.100.0/24\n$reservedRanges['198.51.100.0/24'] = array('198.51.100.0', '198.51.100.255');\n\n// 192.88.99.0/24\n$reservedRanges['192.88.99.0/24'] = array('192.88.99.0', '192.88.99.255');\n\n// 192.168.0.0/16\n$reservedRanges['192.168.0.0/16'] = array('192.168.0.0', '192.168.255.255');\n\n// 203.0.113.0/24\n$reservedRanges['203.0.113.0/24'] = array('203.0.113.0', '203.0.113.255');\n\n// 240.0.0.0/4 + 255.255.255.255/32\n$reservedRanges['240.0.0.0/4'] = array('224.0.0.0', '255.255.255.255');\n\nforeach ($reservedRanges as $key => $range) {\n    list($min, $max) = $range;\n    var_dump($key);\n    var_dump(filter_var($min, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_RES_RANGE));\n    var_dump(filter_var($max, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 | FILTER_FLAG_NO_RES_RANGE));\n}\n\n",
+    "expected": "string(10) \"10.0.0.0/8\"\nbool(false)\nbool(false)\nstring(14) \"168.254.0.0/16\"\nstring(11) \"169.254.0.0\"\nstring(15) \"169.254.255.255\"\nstring(13) \"172.16.0.0/12\"\nbool(false)\nbool(false)\nstring(14) \"192.168.0.0/16\"\nbool(false)\nbool(false)\nstring(9) \"0.0.0.0/8\"\nbool(false)\nbool(false)\nstring(10) \"10.0.0.0/8\"\nstring(8) \"10.0.0.0\"\nstring(14) \"10.255.255.255\"\nstring(12) \"10.64.0.0/10\"\nstring(10) \"100.64.0.0\"\nstring(15) \"100.127.255.255\"\nstring(11) \"127.0.0.0/8\"\nbool(false)\nbool(false)\nstring(14) \"169.254.0.0/16\"\nbool(false)\nbool(false)\nstring(13) \"172.16.0.0/12\"\nstring(10) \"172.16.0.0\"\nstring(10) \"172.31.0.0\"\nstring(12) \"192.0.0.0/24\"\nstring(9) \"192.0.0.0\"\nstring(11) \"192.0.0.255\"\nstring(12) \"192.0.0.0/29\"\nstring(9) \"192.0.0.0\"\nstring(9) \"192.0.0.7\"\nstring(12) \"192.0.2.0/24\"\nstring(9) \"192.0.2.0\"\nstring(11) \"192.0.2.255\"\nstring(13) \"198.18.0.0/15\"\nstring(10) \"198.18.0.0\"\nstring(14) \"198.19.255.255\"\nstring(15) \"198.51.100.0/24\"\nstring(12) \"198.51.100.0\"\nstring(14) \"198.51.100.255\"\nstring(14) \"192.88.99.0/24\"\nstring(11) \"192.88.99.0\"\nstring(13) \"192.88.99.255\"\nstring(14) \"192.168.0.0/16\"\nstring(11) \"192.168.0.0\"\nstring(15) \"192.168.255.255\"\nstring(14) \"203.0.113.0/24\"\nstring(11) \"203.0.113.0\"\nstring(13) \"203.0.113.255\"\nstring(11) \"240.0.0.0/4\"\nstring(9) \"224.0.0.0\"\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_null_on_failure.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\".invalid\", FILTER_VALIDATE_DOMAIN, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_EMAIL, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_IP, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_MAC, FILTER_NULL_ON_FAILURE));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_REGEXP, [\n    'flags' => FILTER_NULL_ON_FAILURE,\n    'options' => [\n        'regexp' => '/^valid$/'\n    ]\n]));\nvar_dump(filter_var(\"invalid\", FILTER_VALIDATE_URL, FILTER_NULL_ON_FAILURE));\n",
+    "expected": "NULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL\nNULL",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_sanitize_encoded_0xff.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"\\xFF\", FILTER_SANITIZE_ENCODED));\nvar_dump(filter_var(\"\\xFE\\xFF\\x00A\", FILTER_SANITIZE_ENCODED));\n",
+    "expected": "string(3) \"%FF\"\nstring(10) \"%FE%FF%00A\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_throw_on_failure_leak.phpt",
+    "source": "<?php\n\n// php_zval_filter() copies the input string so it can be quoted in the\n// exception message. A non-string scalar input (here a float / a large int)\n// is turned into a fresh heap string by convert_to_string(), so the copy is\n// the sole extra owner. Releasing it with zend_string_delref() decremented\n// without freeing, leaking one string per call on both the failure and the\n// success path. Loop and assert memory stays flat.\nfunction leakcheck(callable $fn): bool {\n    $fn();\n    $before = memory_get_usage();\n    for ($i = 0; $i < 2000; $i++) {\n        $fn();\n    }\n    return memory_get_usage() - $before === 0;\n}\n\n// Validation fails -> exception thrown.\nvar_dump(leakcheck(function () {\n    try {\n        filter_var(1.5, FILTER_VALIDATE_INT, ['flags' => FILTER_THROW_ON_FAILURE]);\n    } catch (\\Filter\\FilterFailedException $e) {\n    }\n}));\n\n// Validation succeeds.\nvar_dump(leakcheck(function () {\n    filter_var(15, FILTER_VALIDATE_INT, ['flags' => FILTER_THROW_ON_FAILURE]);\n}));\n",
+    "expected": "bool(true)\nbool(true)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "filter_var_array_with_ref.phpt",
+    "source": "<?php\n\n\n$array = [\"123foo\"];\n$array2 = [&$array];\nvar_dump(filter_var_array($array2, FILTER_VALIDATE_INT));\nvar_dump($array);\n\n",
+    "expected": "array(1) {\n  [0]=>\n  &array(1) {\n    [0]=>\n    bool(false)\n  }\n}\narray(1) {\n  [0]=>\n  bool(false)\n}",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "gh16523.phpt",
+    "source": "<?php\n\n$domains = [\n    'a-.bc.com',\n    'a.bc-.com',\n    'a.bc.com-',\n];\n\nforeach ($domains as $domain) {\n    var_dump(filter_var($domain, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME));\n}\n",
+    "expected": "bool(false)\nbool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "gh16944.phpt",
+    "source": "<?php\n\nvar_dump(filter_var(\"::ffff:0:1\", FILTER_VALIDATE_IP, FILTER_FLAG_NO_RES_RANGE));\n",
+    "expected": "bool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "gh16993.phpt",
+    "source": "<?php\n\n$data = ['test' => '42'];\n\n$result = filter_var_array($data, ['test' => FILTER_VALIDATE_INT|FILTER_NULL_ON_FAILURE]);\nvar_dump($result);\n\n$result = filter_var_array($data, ['test' => ['filter' => FILTER_VALIDATE_INT, 'flags' => FILTER_NULL_ON_FAILURE]]);\nvar_dump($result);\n",
+    "expected": "Warning: filter_var_array(): Unknown filter with ID 134217985 in %s on line %d\narray(1) {\n  [\"test\"]=>\n  string(2) \"42\"\n}\narray(1) {\n  [\"test\"]=>\n  int(42)\n}",
+    "expectf": true,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "gh18309.phpt",
+    "source": "<?php\n\nvar_dump(filter_var('fffffffffffffffffffffffffffffffffffff::', FILTER_VALIDATE_IP, FILTER_FLAG_IPV6));\n",
+    "expected": "bool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "ghsa-w8qr-v226-r27w.phpt",
+    "source": "<?php\n\n\nfunction test(string $input) {\n    var_dump(filter_var($input, FILTER_VALIDATE_URL));\n}\n\necho \"--- These ones should fail ---\\n\";\ntest(\"http://t[est@127.0.0.1\");\ntest(\"http://t[est@[::1]\");\ntest(\"http://t[est@[::1\");\ntest(\"http://t[est@::1]\");\ntest(\"http://php.net\\\\@aliyun.com/aaa.do\");\ntest(\"http://test[@2001:db8:3333:4444:5555:6666:1.2.3.4]\");\ntest(\"http://te[st@2001:db8:3333:4444:5555:6666:1.2.3.4]\");\ntest(\"http://te[st@2001:db8:3333:4444:5555:6666:1.2.3.4\");\n\necho \"--- These ones should work ---\\n\";\ntest(\"http://test@127.0.0.1\");\ntest(\"http://test@[2001:db8:3333:4444:5555:6666:1.2.3.4]\");\ntest(\"http://test@[::1]\");\n\n",
+    "expected": "--- These ones should fail ---\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\n--- These ones should work ---\nstring(21) \"http://test@127.0.0.1\"\nstring(50) \"http://test@[2001:db8:3333:4444:5555:6666:1.2.3.4]\"\nstring(17) \"http://test@[::1]\"",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  },
+  {
+    "name": "surprising_integer_literals.phpt",
+    "source": "<?php\n\necho 'Hex', \\PHP_EOL;\nvar_dump(filter_var('0x', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('0xg', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('0X', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('0Xg', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\nvar_dump(filter_var('', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_HEX));\necho 'Octal', \\PHP_EOL;\nvar_dump(filter_var('0o', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\nvar_dump(filter_var('0og', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\nvar_dump(filter_var('0O', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\nvar_dump(filter_var('0Og', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\nvar_dump(filter_var('O', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\nvar_dump(filter_var('Og', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\nvar_dump(filter_var('', FILTER_VALIDATE_INT, FILTER_FLAG_ALLOW_OCTAL));\n",
+    "expected": "Hex\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nOctal\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)\nbool(false)",
+    "expectf": false,
+    "xfail": false,
+    "xfail_output": null,
+    "ini": []
+  }
+]

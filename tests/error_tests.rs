@@ -70,6 +70,8 @@ fn check_source_with_defines_and_options(
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::parse_str_prelude::inject_if_used(ast, &[], &mut prelude_inventory);
+    let ast = elephc::locale_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -329,6 +331,10 @@ mod random;
 mod bcmath_number;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
+#[path = "error_tests/parse_str.rs"]
+mod parse_str;
+#[path = "error_tests/reference_arrays.rs"]
+mod reference_arrays;
 #[path = "error_tests/mbstring.rs"]
 mod mbstring;
 #[path = "error_tests/io_builtins/mod.rs"]

@@ -731,8 +731,30 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
-    emit_dynamic_exit(ctx);
+    let status_ty = ctx.value_php_type(status)?.codegen_repr();
+    match status_ty {
+        PhpType::Str => {
+            ctx.load_value_to_result(status)?;
+            abi::emit_write_stdout(ctx.emitter, &PhpType::Str);
+            abi::emit_exit(ctx.emitter, 0);
+        }
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            ctx.load_value_to_result(status)?;
+            emit_dynamic_exit(ctx);
+        }
+        PhpType::Float => {
+            ctx.load_value_to_result(status)?;
+            abi::emit_float_result_to_int_result(ctx.emitter);
+            emit_dynamic_exit(ctx);
+        }
+        PhpType::Void => abi::emit_exit(ctx.emitter, 0),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "exit status for PHP type {:?}",
+                other
+            )));
+        }
+    }
     Ok(())
 }
 

@@ -11,6 +11,7 @@ mod allocation_guards;
 mod fill_boxed_integers;
 mod size_bounds;
 mod assoc;
+mod autovivification;
 mod assoc_push;
 mod append_history;
 mod append_writes;

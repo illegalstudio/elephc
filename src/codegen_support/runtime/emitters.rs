@@ -103,6 +103,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_split(emitter);
     strings::emit_str_split_count(emitter);
     strings::emit_addslashes(emitter);
+    strings::emit_addcslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);

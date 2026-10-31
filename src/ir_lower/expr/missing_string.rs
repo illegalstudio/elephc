@@ -396,6 +396,7 @@ fn collect_expr(
     found: &mut HashSet<String>,
 ) {
     match &expr.kind {
+        ExprKind::Reference(inner) => collect_expr(inner, carried, ctx, found),
         ExprKind::Assignment {
             target,
             value,
