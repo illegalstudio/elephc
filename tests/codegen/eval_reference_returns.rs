@@ -9,6 +9,36 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A cancelled inner reference return preserves the outer lease and releases superseded values.
+#[test]
+fn test_nested_pending_reference_returns_keep_independent_cell_leases() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class PendingReferenceLeaseNode {
+    public string $id;
+    public function __construct(string $id) { $this->id = $id; }
+    public function __destruct() { echo 'drop:', $this->id, '|'; }
+}
+function &caughtInnerReferenceLease(): PendingReferenceLeaseNode {
+    $outer = new PendingReferenceLeaseNode('outer'); $inner = new PendingReferenceLeaseNode('inner');
+    try { return $outer; }
+    finally {
+        try { try { return $inner; } finally { throw new Exception('cancel inner'); } }
+        catch (Exception $error) { echo 'caught|'; }
+    }
+}
+function &supersededReferenceLease(): PendingReferenceLeaseNode {
+    $outer = new PendingReferenceLeaseNode('old'); $inner = new PendingReferenceLeaseNode('new');
+    try { return $outer; }
+    finally { unset($outer); try { return $inner; } finally { echo 'inner-finally|'; } }
+}
+$first =& caughtInnerReferenceLease(); echo 'return:', $first->id, '|'; unset($first);
+$second =& supersededReferenceLease(); echo 'return:', $second->id, '|'; unset($second);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|drop:inner|return:outer|drop:outer|inner-finally|drop:old|return:new|drop:new|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Consuming reference-return conversions preserve unique, shared and empty source containers.
 #[test]
 fn test_reference_return_container_conversions_own_their_input() {

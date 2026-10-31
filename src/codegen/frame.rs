@@ -43,6 +43,7 @@ use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
 mod gc_owners;
+pub(super) mod reference_returns;
 pub(super) use destructor_cleanup::is_destructor;
 
 const FRAME_FOOTER_BYTES: usize = 16;
@@ -1370,7 +1371,7 @@ fn initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
 /// Releases hidden ref-cell owner slots that still hold fallback cells at exit.
 fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     let owners = ref_cell_owner_locals(ctx);
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners, None);
 }
 
 /// Releases live foreach-by-reference aliases recorded in local representation words.
@@ -1393,9 +1394,10 @@ fn emit_hash_entry_ref_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
 fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
+    transferred_owner: Option<LocalSlotId>,
 ) {
     for (name, slot, ty, offset) in owners {
-        if !ctx.unwinding_cleanup
+        if !ctx.unwinding_cleanup && Some(slot) == transferred_owner
             && ctx.function.locals[slot.as_raw() as usize].kind == LocalKind::ReturnRefCell
         {
             continue;
@@ -1680,7 +1682,7 @@ fn emit_function_local_epilogue_cleanup(
         push_return_value(ctx, &return_ty);
     }
     emit_hash_entry_ref_epilogue_cleanup(ctx);
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners, skip_return_slot);
     for (name, slot, ty, offset) in cleanup_locals {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         emit_owned_local_cleanup(ctx, slot, offset, &ty);

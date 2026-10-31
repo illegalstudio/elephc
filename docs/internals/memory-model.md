@@ -558,9 +558,10 @@ materializes the returned cell address ONCE and publishes it as a typed `Pointer
 SSA result; the return terminator transports that snapshot. Separately, when the
 address owns a managed cell, the retained owner goes into a `ReturnRefCell` lease
 slot: normal return transfers it, while an exception during epilogue cleanup
-releases it, and a second `return` inside a `finally` publishes its replacement
-before retiring the superseded lease, because that retirement can run a throwing
-payload destructor.
+releases it. Each return site has its own lease, so a caught exception from an inner
+return's `finally` can resume the outer return without losing its owner. Normal
+epilogue cleanup transfers only the lease named by the selected snapshot and retires
+the cancelled pending returns; exceptional cleanup retires every lease.
 
 Because the returned reference is the snapshot rather than a re-read of the
 variable, a `finally` that rebinds the returned variable and falls through cannot

@@ -105,3 +105,42 @@ function &emptyReferenceHashIr(): array<string, int> { $items = []; return $item
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Duplicated and nested reference returns name independent leases for every captured snapshot.
+#[test]
+fn pending_reference_return_sites_have_distinct_lease_slots_on_every_target() {
+    let source = r#"<?php
+class NestedPendingReferenceNode {}
+function &nestedPendingReference(): NestedPendingReferenceNode {
+    $outer = new NestedPendingReferenceNode(); $inner = new NestedPendingReferenceNode();
+    try { return $outer; }
+    finally {
+        try { try { return $inner; } finally { throw new Exception('cancel inner'); } }
+        catch (Exception $error) { echo 'caught'; }
+    }
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nestedPendingReference").unwrap();
+        let acquisitions = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::AcquireRefCell)
+            .collect::<Vec<_>>();
+        let owners = acquisitions.iter().map(|inst| {
+            let Some(crate::ir::Immediate::LocalSlot(owner)) = inst.immediate else { panic!("missing return lease"); };
+            assert_eq!(function.locals[owner.as_raw() as usize].kind, crate::ir::LocalKind::ReturnRefCell);
+            owner
+        }).collect::<std::collections::HashSet<_>>();
+        assert!(owners.len() >= 2, "{target}: exercise independent inner and outer returns");
+        assert_eq!(owners.len(), acquisitions.len(), "{target}: each emitted return site needs its own owner");
+        for block in &function.blocks {
+            if let Some(crate::ir::Terminator::Return { value: Some(value) }) = block.terminator {
+                let crate::ir::ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {
+                    panic!("return must transport an acquisition snapshot");
+                };
+                assert_eq!(function.instruction(inst).unwrap().op, crate::ir::Op::AcquireRefCell, "{target}");
+            }
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

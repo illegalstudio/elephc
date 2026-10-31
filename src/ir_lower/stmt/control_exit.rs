@@ -409,7 +409,7 @@ fn receiver_class_is_statically_decided(ctx: &LoweringContext<'_, '_>, object: &
 /// (PHP snapshots the same way, with `MAKE_REF` before the finally).
 ///
 /// The `ReturnRefCell` slot it also writes is only the optional managed LEASE: it holds the
-/// retained owner so cleanup can retire it, and a superseded lease left by an earlier return is
+/// retained owner so cleanup can retire it, and a lease left by an earlier execution of this site is
 /// retired after the replacement is published, because that retirement can run a throwing
 /// destructor. An accepted address that owns no managed cell, which is the active
 /// `array_walk()` element borrow the descriptor invoker copies out immediately, publishes a
@@ -419,8 +419,9 @@ fn acquire_reference_return_owner(
     cell_ptr: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    let owner_name = ctx.next_synthetic_place_local_name();
     let owner = ctx.declare_local_with_kind(
-        "__eir_reference_return_owner",
+        &owner_name,
         PhpType::Pointer(None),
         crate::ir::LocalKind::ReturnRefCell,
     );
@@ -434,7 +435,7 @@ fn acquire_reference_return_owner(
     )
 }
 
-/// Acquires the reference-return lease and terminates with the address it captured.
+/// Acquires this return site's independent lease and terminates with the address it captured.
 fn acquire_and_return_reference_cell(
     ctx: &mut LoweringContext<'_, '_>,
     cell_ptr: LoweredValue,

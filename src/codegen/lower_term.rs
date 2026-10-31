@@ -52,8 +52,9 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // is what keeps the acquisition and the returned reference identical when a
                 // fallthrough `finally` rebound that variable in between (PHP snapshots the
                 // same way, with `MAKE_REF` before the finally). The frame's lease slot is the
-                // separate managed OWNER, which a superseding return replaces and cleanup
-                // retires; a borrowed cell leaves it zero while still returning this snapshot.
+                // separate managed OWNER. Each return site keeps its own pending lease, and
+                // cleanup retires every lease except the one belonging to this snapshot.
+                // A borrowed cell leaves its lease zero while still returning this snapshot.
                 if !matches!(ctx.value_php_type(*value)?, PhpType::Pointer(_)) {
                     return Err(CodegenIrError::invalid_module(
                         "by-reference return requires a captured pointer value",
@@ -61,9 +62,12 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 }
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
+                let owner = frame::reference_returns::owner_slot(ctx.function, *value)
+                    .ok_or_else(|| CodegenIrError::invalid_module(
+                        "by-reference return snapshot has no matching reference-cell lease slot"))?;
                 frame::emit_function_return_epilogue(
                     ctx,
-                    None,
+                    Some(owner),
                     return_ownership::ReturnOwnershipStatus::Static(false),
                 );
                 return Ok(());

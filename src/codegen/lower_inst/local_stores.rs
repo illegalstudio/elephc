@@ -335,7 +335,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
     Ok(())
 }
 
-/// Snapshots the returned cell address, leases it when it is managed, and retires a superseded lease.
+/// Snapshots the returned cell address and replaces only this return site's previous managed lease.
 ///
 /// The instruction produces TWO distinct things, and keeping them apart is the whole point:
 ///
@@ -343,7 +343,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
 ///   that snapshot, so a `finally` that rebinds the returned variable and falls through cannot
 ///   make the validated address and the returned reference disagree.
 /// - Its `ReturnRefCell` slot is the optional MANAGED lease, used only for cleanup. The
-///   retained replacement is published into it before the superseded lease is retired, because
+///   retained replacement is published before any previous execution's lease is retired, because
 ///   that retirement can run a throwing payload destructor.
 ///
 /// `__rt_reference_cell_owner` answers zero for every address that is not an exact live managed

@@ -295,7 +295,7 @@ echo $alias;
             .iter()
             .filter(|local| local.kind == LocalKind::ReturnRefCell)
             .count();
-        assert_eq!(owner, 1, "{name}: exactly one reference-return lease slot per frame");
+        assert_eq!(owner, 1, "{name}: the single return site has one lease slot");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
@@ -359,8 +359,8 @@ echo $alias;
 /// A fallthrough `finally` that rebinds the returned variable keeps ONE leased cell.
 ///
 /// The lease slot is written once per return, before the finally body runs, and the return
-/// terminator reads that same slot. The structural proof is that the frame holds exactly one
-/// lease slot and every value-carrying return is preceded by its own acquisition.
+/// terminator transports its captured snapshot. This fixture has one return site, whose
+/// acquisition names one independent lease slot.
 #[test]
 fn fallthrough_finally_rebinding_keeps_one_reference_return_lease_on_every_target() {
     let source = r#"<?php
