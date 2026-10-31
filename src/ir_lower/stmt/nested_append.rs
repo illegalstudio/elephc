@@ -30,7 +30,7 @@
 
 use crate::ir::{IrHeapKind, IrType, Op};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
-use crate::ir_lower::expr::lower_expr;
+use crate::ir_lower::expr::{lower_expr, type_satisfies_array_access_for_ir};
 use crate::parser::ast::{
     Expr, ExprKind, StaticReceiver, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
 };
