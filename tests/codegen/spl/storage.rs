@@ -8,6 +8,63 @@
 //! Key details:
 //! - ArrayIterator and ArrayObject preserve insertion-order keys through Mixed keys/values storage.
 
+/// Destructors observe published nested replacements, even when throwing or retargeting the parent.
+#[test]
+fn test_spl_and_mixed_nested_overwrite_publication_survives_destructor_reentry() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class NestedPublicationNew { public string $label = 'new'; }
+class SplPublicationOld {
+    public bool $throwing = false; public bool $retarget = false;
+    public function __destruct() {
+        global $splPublication;
+        echo $splPublication['x'][0]->label, '|';
+        if ($this->retarget) { $splPublication['x'] = ['retargeted']; }
+        if ($this->throwing) { throw new Exception('retired'); }
+    }
+}
+class MixedPublicationOld {
+    public bool $throwing = false; public bool $retarget = false;
+    public function __destruct() {
+        global $mixedPublication;
+        echo $mixedPublication['x'][0]->label, '|';
+        if ($this->retarget) { $mixedPublication['x'] = ['retargeted']; }
+        if ($this->throwing) { throw new Exception('retired'); }
+    }
+}
+function makeSplPublication(bool $throwing, bool $retarget): ArrayObject {
+    $old = new SplPublicationOld(); $old->throwing = $throwing; $old->retarget = $retarget;
+    return new ArrayObject(['x' => [$old]]);
+}
+function makeMixedPublication(bool $throwing, bool $retarget): mixed {
+    $old = new MixedPublicationOld(); $old->throwing = $throwing; $old->retarget = $retarget;
+    return ['x' => [$old]];
+}
+$splPublication = makeSplPublication(false, false);
+$splPublication['x'][0] = new NestedPublicationNew(); echo $splPublication['x'][0]->label, '|';
+unset($splPublication);
+$splPublication = makeSplPublication(true, false);
+try { $splPublication['x'][0] = new NestedPublicationNew(); }
+catch (Exception $error) { echo $error->getMessage(), '|'; unset($error); }
+echo $splPublication['x'][0]->label, '|'; unset($splPublication);
+$splPublication = makeSplPublication(false, true);
+$splPublication['x'][0] = new NestedPublicationNew(); echo $splPublication['x'][0], '|';
+unset($splPublication);
+$mixedPublication = makeMixedPublication(false, false);
+$mixedPublication['x'][0] = new NestedPublicationNew(); echo $mixedPublication['x'][0]->label, '|';
+unset($mixedPublication);
+$mixedPublication = makeMixedPublication(true, false);
+try { $mixedPublication['x'][0] = new NestedPublicationNew(); }
+catch (Exception $error) { echo $error->getMessage(), '|'; unset($error); }
+echo $mixedPublication['x'][0]->label, '|'; unset($mixedPublication);
+$mixedPublication = makeMixedPublication(false, true);
+$mixedPublication['x'][0] = new NestedPublicationNew(); echo $mixedPublication['x'][0], '|';
+unset($mixedPublication);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "new|new|new|retired|new|new|retargeted|new|new|new|retired|new|new|retargeted|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Attached SPL writes detach snapshots and clones, including missing and runtime-boxed parents.
 #[test]
 fn test_spl_nested_writes_preserve_storage_snapshots_and_getter_overrides() {

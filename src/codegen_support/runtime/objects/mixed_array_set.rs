@@ -150,7 +150,14 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #1");                                          // recognize shared PHP reference storage
     emitter.instruction("b.eq __rt_mixed_array_set_reference");                 // write through the existing reference identity
     emitter.label("__rt_mixed_array_set_release_slot");
-    emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten Mixed cell
+    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the attached array before any destructor can reenter
+    emitter.instruction("ldr x9, [sp, #40]");                                   // recover the index after marker inspection
+    emitter.instruction("ldr x11, [sp, #24]");                                  // transfer the consumed replacement into the attached slot
+    emitter.instruction("add x12, x10, #24");                                   // locate the existing slot while its array remains valid
+    emitter.instruction("str x11, [x12, x9, lsl #3]");                          // publish before retiring the previous owner's final reference
+    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", "x0");
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
+    abi::emit_jump(emitter, "__rt_mixed_array_set_done");
     emitter.label("__rt_mixed_array_set_skip_release");
 
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the array pointer after the release helper
@@ -486,7 +493,13 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rax + 16], 1");                         // inspect the persistent reference marker
     emitter.instruction("je __rt_mixed_array_set_reference");                   // write through the existing reference identity
     emitter.label("__rt_mixed_array_set_release_slot");
-    emitter.instruction("call __rt_decref_mixed");                              // release the overwritten Mixed cell
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the attached array before any destructor can reenter
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // recover the index after marker inspection
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // transfer the consumed replacement into the attached slot
+    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], r11");              // publish before retiring the previous owner's final reference
+    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", "rax");
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
+    abi::emit_jump(emitter, "__rt_mixed_array_set_done");
     emitter.label("__rt_mixed_array_set_skip_release");
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the array pointer after the release helper
@@ -1005,4 +1018,30 @@ fn emit_string_write_unwind(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_set_string_unwind_done");
     emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame linkage
     emitter.instruction("ret");                                                 // resume the unwinder
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Reentrant retirement observes the replacement and cannot resume a stale slot store.
+    #[test]
+    fn mixed_indexed_overwrites_publish_before_protected_retirement_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_mixed_array_set(&mut emitter);
+            let assembly = emitter.output();
+            let overwrite = assembly.split_once("__rt_mixed_array_set_release_slot:").unwrap().1
+                .split_once("__rt_mixed_array_set_skip_release:").unwrap().0;
+            let store = if name == "linux-x86_64" { "mov QWORD PTR [r10 + 24 + r9 * 8], r11" }
+                else { "str x11, [x12, x9, lsl #3]" };
+            let cleanup = overwrite.find("__rt_cleanup_preserve_exception").unwrap();
+            assert!(overwrite.find(store).unwrap() < cleanup, "{name}: {overwrite}");
+            let after = &overwrite[cleanup..];
+            assert!(after.contains("__rt_throw_current") && after.contains("__rt_mixed_array_set_done"), "{name}");
+            assert!(!after.contains("[sp, #32]") && !after.contains("[rbp - 40]"),
+                "{name}: no saved destination pointer remains valid after a destructor");
+        }
+    }
 }
