@@ -335,6 +335,52 @@ echo "reflection ok\n";
     project.assert_clean();
 }
 
+/// Matches PHP's materialized values for nullable, union and mixed typed class constants.
+#[test]
+#[ignore = "requires a real PHP 8.5 development SDK"]
+fn phpext_classes_native_typed_float_constant_unions_match_php() {
+    let project = Project::new();
+    let sdk = project.sdk();
+    let source = r#"<?php
+#[Export] final class FloatConstants {
+    public const float EXACT = 2;
+    public const ?float NULLABLE = 2;
+    public const float|null UNION_NULL = 2;
+    public const float|string UNION_STRING = 2;
+    public const int|float UNION_INT = 2;
+    public const float|int REVERSED_INT = 2;
+    public const ?float NULL_VALUE = null;
+    public const mixed MIXED_VALUE = 2;
+    public const COPIED = self::EXACT;
+    public const array NESTED = [self::NULLABLE];
+    public mixed $copied = self::UNION_STRING;
+}
+const FLOAT_COPY = FloatConstants::NULLABLE;
+"#;
+    let module = project.compile_with_options("class_float_constants", source,
+        &["--heap-size=524288", "--export-constant=FLOAT_COPY"]);
+    let check = r#"
+$values = [];
+foreach ((new ReflectionClass(FloatConstants::class))->getReflectionConstants() as $constant) {
+    $values[] = [constant('FloatConstants::' . $constant->getName()), $constant->getValue(), (string)$constant->getType()];
+}
+$values[] = FLOAT_COPY;
+$values[] = (new FloatConstants())->copied;
+echo json_encode($values, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR), "\n";
+"#;
+    let reference = project.0.join("reference.php");
+    fs::write(&reference, format!("{source}\n{check}")).unwrap();
+    let expected = Command::new(sdk.php_binary()).arg("-n").arg(&reference).output().unwrap();
+    assert!(expected.status.success(), "{}", String::from_utf8_lossy(&expected.stderr));
+    assert!(expected.stderr.is_empty(), "{}", String::from_utf8_lossy(&expected.stderr));
+    let actual = Command::new(sdk.php_binary()).args(["-n", "-d"])
+        .arg(format!("extension={}", module.display())).args(["-r", check]).output().unwrap();
+    assert!(actual.status.success(), "{}", String::from_utf8_lossy(&actual.stderr));
+    assert!(actual.stderr.is_empty(), "{}", String::from_utf8_lossy(&actual.stderr));
+    assert_eq!(String::from_utf8_lossy(&actual.stdout), String::from_utf8_lossy(&expected.stdout));
+    project.assert_clean();
+}
+
 /// Leaves published Zend objects usable while refusing unsafe native reentry after a bridge failure.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]

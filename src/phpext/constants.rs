@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::{errors::CompileError, parser::ast::{Expr, ExprKind, Program, StmtKind},
+use crate::{errors::CompileError, parser::ast::{Expr, ExprKind, Program, StmtKind, TypeExpr},
     span::Span, types::PhpType, codegen_support::platform::Target};
 
 /// One explicitly selected global constant with a resolved host value.
@@ -47,6 +47,20 @@ pub fn collect(program: &Program, names: &[String], target: Target) -> Result<Ve
     Ok(exports)
 }
 
+/// Resolves the supported constant type atoms through the shared PHP value contract.
+pub(super) fn declared_type(ty: &TypeExpr) -> Result<PhpType, String> {
+    Ok(match ty {
+        TypeExpr::Int => PhpType::Int, TypeExpr::Float => PhpType::Float, TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::False => PhpType::False, TypeExpr::Str => PhpType::Str,
+        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed") => PhpType::Mixed,
+        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null") => PhpType::Void,
+        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("array") => PhpType::php_array(),
+        TypeExpr::Nullable(inner) => PhpType::Union(vec![declared_type(inner)?, PhpType::Void]),
+        TypeExpr::Union(members) => PhpType::Union(members.iter().map(declared_type).collect::<Result<Vec<_>, _>>()?),
+        _ => return Err("unsupported PHP extension class constant type".into()),
+    })
+}
+
 /// Combines checked source constants with lexical bindings for class constant references.
 pub(super) fn context(program: &Program, target: Target) -> HashMap<String, (ExprKind, PhpType)> {
     // Top-level statements never run when PHP loads the module, so define() is not a source.
@@ -63,8 +77,9 @@ pub(super) fn context(program: &Program, target: Target) -> HashMap<String, (Exp
             _ => continue,
         };
         for declaration in declarations {
+            let ty = declaration.type_expr.as_ref().and_then(|ty| declared_type(ty).ok()).unwrap_or(PhpType::Mixed);
             constants.insert(format!("{class}::{}", declaration.name),
-                (bind_scope(declaration.value.clone(), class).kind, PhpType::Mixed));
+                (bind_scope(declaration.value.clone(), class).kind, ty));
         }
     }
     constants
@@ -160,8 +175,14 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
                         (candidate_owner.eq_ignore_ascii_case(owner) && candidate_name == name).then_some(value)
                     })
                 });
-                if let Some((value, _)) = value {
-                    expr.kind = resolve(Expr { kind: value.clone(), span: expr.span }, constants, active, depth + 1)?.kind;
+                if let Some((value, ty)) = value {
+                    let mut resolved = resolve(Expr { kind: value.clone(), span: expr.span }, constants, active, depth + 1)?;
+                    if ty.coerces_integer_to_float() {
+                        if let ConstantValue::Int(value) = super::constant_values::from_expression(&resolved, 0)? {
+                            resolved.kind = ExprKind::FloatLiteral(value as f64);
+                        }
+                    }
+                    expr.kind = resolved.kind;
                 }
                 active.remove(&key);
             }

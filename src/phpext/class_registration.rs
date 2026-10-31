@@ -82,8 +82,7 @@ pub fn render(classes: &[ExportedClass]) -> Result<String, String> {
                 c_string(name.as_bytes()), name.len(), reflection_type_initializer(ty, Some(&class.property_types[property]), false, "0")?));
         }
         for constant in &class.constants {
-            let float = constant.declared_type.as_ref().is_some_and(|ty| matches!(ty, TypeExpr::Float));
-            let ty_for_value = if float { PhpType::Float } else { PhpType::Mixed };
+            let ty_for_value = constant.declared_type.as_ref().map(super::constants::declared_type).transpose()?.unwrap_or(PhpType::Mixed);
             let initial = persistent_typed_value(&constant.value, &ty_for_value, "&value");
             let ty = constant.declared_type.as_ref().map(source_type_initializer).transpose()?.unwrap_or_else(|| "ZEND_TYPE_INIT_NONE(0)".into());
             let final_flag = if constant.is_final { " | ZEND_ACC_FINAL" } else { "" };
@@ -112,25 +111,9 @@ fn type_initializer_with_flags(ty: &PhpType, arginfo: bool, flags: &str) -> Resu
     Ok(format!("ZEND_TYPE_INIT_MASK(({}) | ({flags}))", super::producer::mask(ty)?))
 }
 
-/// Uses exact source scalar syntax for typed class constants.
+/// Uses the same resolved constant contract for Reflection and persistent default coercion.
 fn source_type_initializer(ty: &TypeExpr) -> Result<String, String> {
-    let mask = match ty {
-        TypeExpr::Int => "MAY_BE_LONG", TypeExpr::Float => "MAY_BE_DOUBLE", TypeExpr::Bool => "MAY_BE_BOOL",
-        TypeExpr::False => "MAY_BE_FALSE", TypeExpr::Str => "MAY_BE_STRING",
-        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed") => "MAY_BE_ANY",
-        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null") => "MAY_BE_NULL",
-        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("array") => "MAY_BE_ARRAY",
-        TypeExpr::Nullable(inner) => return Ok(format!("ZEND_TYPE_INIT_MASK(({}) | MAY_BE_NULL)", source_mask(inner)?)),
-        TypeExpr::Union(members) => return Ok(format!("ZEND_TYPE_INIT_MASK({})", members.iter().map(source_mask).collect::<Result<Vec<_>, _>>()?.join(" | "))),
-        _ => return Err("unsupported PHP extension class constant type".into()),
-    };
-    Ok(format!("ZEND_TYPE_INIT_MASK({mask})"))
-}
-
-/// Extracts a primitive mask for nullable and union constant declarations.
-fn source_mask(ty: &TypeExpr) -> Result<String, String> {
-    let initializer = source_type_initializer(ty)?;
-    Ok(initializer.strip_prefix("ZEND_TYPE_INIT_MASK(").and_then(|value| value.strip_suffix(')')).unwrap().to_string())
+    type_initializer(&super::constants::declared_type(ty)?, false)
 }
 
 /// Preserves lexical self/static names while physical invocation uses the resolved class.
