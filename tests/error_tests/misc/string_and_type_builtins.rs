@@ -219,6 +219,13 @@ expect_builtin_arity_error!(
     "str_split() takes 1 or 2 arguments"
 );
 
+// Tests addcslashes() arity error when called without its character list.
+expect_builtin_arity_error!(
+    test_error_addcslashes_wrong_args,
+    "<?php addcslashes(\"abc\");",
+    "addcslashes() takes exactly 2 arguments"
+);
+
 // Tests addslashes() arity error when called with no arguments.
 expect_builtin_arity_error!(
     test_error_addslashes_wrong_args,

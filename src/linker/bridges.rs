@@ -79,6 +79,18 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_filter",
+        env_var: "ELEPHC_FILTER_LIB_DIR",
+        crate_name: "elephc-filter",
+        flag_name: "filter",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        php_extensions: &["filter"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_tls",
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",

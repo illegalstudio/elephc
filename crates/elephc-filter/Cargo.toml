@@ -1,0 +1,13 @@
+[package]
+name = "elephc-filter"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PHP filter extension semantics behind a stable C ABI for elephc"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+fancy-regex = "0.14"

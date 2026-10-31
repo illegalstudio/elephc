@@ -21,6 +21,18 @@ expect_builtin_arity_error!(
     "exit() takes 0 or 1 arguments"
 );
 
+/// Rejects an array status; PHP accepts only string|int with weak scalar coercions.
+#[test]
+fn test_error_exit_rejects_array_status() {
+    expect_error("<?php exit([]);", "exit() argument must be string or integer");
+}
+
+expect_builtin_arity_error!(
+    test_error_setlocale_wrong_args,
+    "<?php setlocale(LC_ALL);",
+    "expects at least 2 arguments"
+);
+
 expect_builtin_arity_error!(
     test_error_eval_wrong_args,
     "<?php eval();",

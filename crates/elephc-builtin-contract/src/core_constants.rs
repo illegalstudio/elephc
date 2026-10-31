@@ -26,6 +26,14 @@ pub fn core_environment_constant(name: &str, apple: bool) -> Option<ConstValue> 
         "PHP_FD_SETSIZE" => ConstValue::Int(1024),
         "PHP_MAXPATHLEN" => ConstValue::Int(if apple { 1024 } else { 4096 }),
         "PHP_SHLIB_SUFFIX" => ConstValue::Str(if apple { "dylib" } else { "so" }),
+        // locale.h category numbers differ between Apple's libc and glibc.
+        "LC_ALL" => ConstValue::Int(if apple { 0 } else { 6 }),
+        "LC_COLLATE" => ConstValue::Int(if apple { 1 } else { 3 }),
+        "LC_CTYPE" => ConstValue::Int(if apple { 2 } else { 0 }),
+        "LC_MONETARY" => ConstValue::Int(if apple { 3 } else { 4 }),
+        "LC_NUMERIC" => ConstValue::Int(if apple { 4 } else { 1 }),
+        "LC_TIME" => ConstValue::Int(if apple { 5 } else { 2 }),
+        "LC_MESSAGES" => ConstValue::Int(if apple { 6 } else { 5 }),
         "ZEND_VM_KIND" => ConstValue::Str("ZEND_VM_KIND_NONE"),
         _ => return None,
     })

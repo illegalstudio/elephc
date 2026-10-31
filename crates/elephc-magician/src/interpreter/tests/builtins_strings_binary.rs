@@ -234,7 +234,10 @@ echo bin2hex($escaped); echo ":";
 echo bin2hex(stripslashes($escaped)); echo ":";
 echo call_user_func("addslashes", "x\"y"); echo ":";
 echo call_user_func_array("stripslashes", [addslashes("o\"k")]); echo ":";
-return function_exists("addslashes") && function_exists("stripslashes");"#,
+echo addcslashes("abc", "a..c"); echo ":";
+echo call_user_func("addcslashes", "x\0", "\0"); echo ":";
+return function_exists("addslashes") && function_exists("stripslashes")
+    && function_exists("addcslashes");"#,
     )
     .expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
@@ -246,7 +249,7 @@ return function_exists("addslashes") && function_exists("stripslashes");"#,
 
     assert_eq!(
         values.output,
-        "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:"
+        "615c30625c5c635c22645c27:6100625c63226427:x\\\"y:o\"k:\\a\\b\\c:x\\000:"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

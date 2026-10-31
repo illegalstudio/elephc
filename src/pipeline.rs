@@ -36,7 +36,6 @@ pub(crate) use artifact_io::write_artifact;
 mod backend;
 mod eir_output;
 mod frontend;
-mod mbstring_configuration;
 mod output;
 
 use output::{dynamic_eval_capability_warning, output_paths, OutputPaths};
@@ -561,6 +560,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         autoloaded("weak_reference"),
         &mut prelude_inventory,
     );
+    let ast = crate::filter_prelude::inject_if_used_with_ini(ast, &ini_overrides, &mut prelude_inventory);
+    let ast = crate::parse_str_prelude::inject_if_used(ast, &ini_overrides, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(
         ast,
         with_crates.contains("bcmath") || autoloaded("bcmath"),
