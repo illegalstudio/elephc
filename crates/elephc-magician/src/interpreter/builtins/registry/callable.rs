@@ -14,6 +14,7 @@
 mod array_dispatch;
 mod call_user_func;
 mod execution;
+mod native_descriptor;
 mod object_dispatch;
 mod ownership;
 pub(in crate::interpreter) use ownership::*;
@@ -25,6 +26,7 @@ pub(in crate::interpreter) use array_dispatch::*;
 pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use execution::*;
 use object_dispatch::*;
+use native_descriptor::*;
 use static_dispatch::*;
 
 /// Distinguishes PHP's invokable-object callback form from an explicit method callback.
@@ -254,6 +256,15 @@ fn eval_callable_with_optional_scope_and_array_receiver(
     if values.type_tag(callback)? == EVAL_TAG_OBJECT {
         return eval_object_callable(callback, context, values).map(|callback| (callback, None));
     }
+    if values.type_tag(callback)? == EVAL_TAG_CALLABLE {
+        let signature = values
+            .native_callable_signature(callback)?
+            .ok_or(EvalStatus::UnsupportedConstruct)?;
+        return Ok((EvaluatedCallable::NativeDescriptor {
+            callback,
+            display_name: signature.display_name,
+        }, None));
+    }
     if values.is_array_like(callback)? {
         return eval_array_callable_with_receiver_owner(callback, context, lexical_scope, values);
     }
@@ -309,6 +320,12 @@ fn eval_closure_object_target_callable(target: &EvalClosureObjectTarget) -> Eval
             EvaluatedCallable::ForeignContext {
                 callback: Box::new(eval_closure_object_target_callable(target)),
                 owner: owner.clone(),
+            }
+        }
+        EvalClosureObjectTarget::NativeDescriptor { callback, display_name } => {
+            EvaluatedCallable::NativeDescriptor {
+                callback: *callback,
+                display_name: display_name.clone(),
             }
         }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {

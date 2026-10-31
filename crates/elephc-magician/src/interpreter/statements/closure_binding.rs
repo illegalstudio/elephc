@@ -88,6 +88,9 @@ pub(super) fn eval_closure_object_target_from_callable(
                 owner,
             }
         }
+        EvaluatedCallable::NativeDescriptor { callback, display_name } => {
+            EvalClosureObjectTarget::NativeDescriptor { callback, display_name }
+        }
         EvaluatedCallable::Named { name, .. } => EvalClosureObjectTarget::Named(name),
         EvaluatedCallable::BoundClosure {
             name,
@@ -366,6 +369,10 @@ pub(super) fn eval_closure_bind_target(
             )?;
             register_foreign_closure_result(object, owner, owner_context, context, values)
         }
+        EvalClosureObjectTarget::NativeDescriptor { .. } => eval_closure_call_warning_null(
+            "Cannot bind an instance to a closure created from a function",
+            values,
+        ),
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             let Some(closure) = context.closure(&name) else {
                 if eval_function_probe_exists(context, &name) {
@@ -479,6 +486,19 @@ pub(super) fn eval_closure_unbind_target(
                 values,
             )?;
             register_foreign_closure_result(object, owner, owner_context, context, values)
+        }
+        EvalClosureObjectTarget::NativeDescriptor { callback, display_name } => {
+            if rebinds_function_scope {
+                return eval_closure_call_warning_null(
+                    "Cannot rebind scope of closure created from function",
+                    values,
+                );
+            }
+            eval_closure_object_from_target(
+                EvalClosureObjectTarget::NativeDescriptor { callback, display_name },
+                context,
+                values,
+            )
         }
         EvalClosureObjectTarget::Named(name) | EvalClosureObjectTarget::BoundNamed { name, .. } => {
             if rebinds_function_scope

@@ -394,29 +394,43 @@ pub(crate) fn emit_load_runtime_capture_to_result(
 
 /// Builds the signature side record for runtime arity and argument planning.
 fn signature_record(data: &mut DataSection, sig: &FunctionSig) -> String {
-    let visible_param_count = sig.params.len();
-    let regular_param_count = if sig.variadic.is_some() {
-        visible_param_count.saturating_sub(1)
-    } else {
-        visible_param_count
-    };
-    let required_count = (0..regular_param_count)
-        .filter(|idx| sig.defaults.get(*idx).and_then(|default| default.as_ref()).is_none())
-        .map(|idx| idx + 1)
-        .max()
-        .unwrap_or(0);
-    let variadic_index = sig
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let source_variadic_index = sig
         .variadic
         .as_ref()
-        .and_then(|variadic| sig.params.iter().position(|(name, _)| name == variadic))
-        .map(|idx| idx as u64)
+        .filter(|_| !crate::func_args::sig_collects_surplus_args(sig))
+        .and_then(|variadic| sig.params.iter().position(|(name, _)| name == variadic));
+    let mut public_indices = (0..regular_param_count).collect::<Vec<_>>();
+    if let Some(index) = source_variadic_index {
+        public_indices.push(index);
+    }
+    let public_params = public_indices
+        .iter()
+        .filter_map(|index| sig.params.get(*index).cloned())
+        .collect::<Vec<_>>();
+    let public_defaults = public_indices
+        .iter()
+        .map(|index| sig.defaults.get(*index).cloned().unwrap_or(None))
+        .collect::<Vec<_>>();
+    let public_ref_flags = public_indices
+        .iter()
+        .map(|index| sig.ref_params.get(*index).copied().unwrap_or(false))
+        .collect::<Vec<_>>();
+    let public_declared_flags = public_indices
+        .iter()
+        .map(|index| sig.declared_params.get(*index).copied().unwrap_or(false))
+        .collect::<Vec<_>>();
+    let visible_param_count = public_params.len();
+    let required_count = crate::types::call_args::required_param_count(sig);
+    let variadic_index = source_variadic_index
+        .map(|_| regular_param_count as u64)
         .unwrap_or(CALLABLE_DESC_VARIADIC_NONE);
     let flags = u64::from(sig.declared_return);
-    let param_names = optional_symbol(param_name_table(data, &sig.params));
-    let param_types = optional_symbol(param_type_table(data, &sig.params));
-    let defaults = optional_symbol(default_table(data, &sig.defaults));
-    let ref_flags = optional_symbol(flag_table(data, &sig.ref_params));
-    let declared_flags = optional_symbol(flag_table(data, &sig.declared_params));
+    let param_names = optional_symbol(param_name_table(data, &public_params));
+    let param_types = optional_symbol(param_type_table(data, &public_params));
+    let defaults = optional_symbol(default_table(data, &public_defaults));
+    let ref_flags = optional_symbol(flag_table(data, &public_ref_flags));
+    let declared_flags = optional_symbol(flag_table(data, &public_declared_flags));
 
     data.add_words(vec![
         DataWord::U64(visible_param_count as u64),
@@ -734,5 +748,40 @@ mod tests {
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
         assert!(asm.contains("    .quad _call_entry\n"));
         assert!(asm.contains("    .quad _call_invoker\n"));
+    }
+
+    /// Public descriptor signatures omit compiler-generated argc and collector parameters.
+    #[test]
+    fn descriptor_signature_hides_introspection_parameters() {
+        let mut data = DataSection::new();
+        let sig = FunctionSig {
+            params: vec![
+                ("value".to_string(), PhpType::Int),
+                (
+                    "rest".to_string(),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                ),
+                (crate::func_args::HIDDEN_ARGC_PARAM.to_string(), PhpType::Int),
+            ],
+            param_type_exprs: vec![None, None, None],
+            param_attributes: Vec::new(),
+            defaults: vec![None, None, Some(Expr::new(ExprKind::IntLiteral(0), Span::dummy()))],
+            return_type: PhpType::Int,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![true, true, false],
+            declared_params: vec![true, true, false],
+            variadic: Some("rest".to_string()),
+            deprecation: None,
+            is_generator: false,
+        };
+
+        signature_record(&mut data, &sig);
+        let asm = data.emit(Target::new(Platform::MacOS, Arch::AArch64));
+
+        assert!(asm.contains(".ascii \"value\"\n"));
+        assert!(asm.contains(".ascii \"rest\"\n"));
+        assert!(!asm.contains(crate::func_args::HIDDEN_ARGC_PARAM));
+        assert!(!asm.contains(crate::func_args::HIDDEN_ARGS_PARAM));
     }
 }

@@ -332,6 +332,14 @@ fn lower_array_assign_from_value(
             || matches!(value_value.ir_type,
                 IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)))
     {
+        // A later eval barrier can widen a local string key to Mixed storage. Its earlier
+        // Str load then owns the detached copy produced by `__rt_mixed_cast_string`, even
+        // though the EIR load still looks borrowed. Remember that provisional owner before
+        // `box_value_as_mixed` persists its own key copy; owning temporaries are retired by
+        // the boxer itself and must not be released twice here.
+        let release_detached_string_key = index_value.ir_type == IrType::Str
+            && !ctx.value_is_owning_temporary(index_value)
+            && ctx.value_needs_release_after_use(index_value);
         let key = ctx.box_value_as_mixed(index_value, PhpType::Mixed, Some(index.span));
         crate::ir_lower::expr::unpin_in_flight_owners(
             ctx,
@@ -341,6 +349,9 @@ fn lower_array_assign_from_value(
         lower_mixed_key_array_set(
             ctx, array, array_value, key, value_value, span, key_already_diagnosed,
         );
+        if release_detached_string_key {
+            crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+        }
         crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index.span));
         return;
     }

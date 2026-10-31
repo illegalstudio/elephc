@@ -192,13 +192,25 @@ pub(super) fn write_value(
         operands, context, values)
 }
 
-/// Distinguishes a getter snapshot from an independent cell already published in a static slot.
+/// Mutates an attached cell in place so its parent observes payload promotion and replacement.
+pub(super) fn write_attached_value(
+    current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
+    assigned: RuntimeCellHandle, operands: &mut Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    write_value_in_storage(current, index, op, assigned, ArrayWriteStorage::Attached,
+        operands, context, values)
+}
+
+/// Distinguishes copied snapshots, published static cells, and attached internal SPL cells.
+#[derive(Clone, Copy)]
 enum ArrayWriteStorage {
     Snapshot,
     Published,
+    Attached,
 }
 
-/// Shares dimension semantics while allowing a published static cell to use runtime payload COW.
+/// Shares dimension semantics while preserving published or attached runtime storage identity.
 fn write_value_in_storage(
     current: RuntimeCellHandle, index: Option<RuntimeCellHandle>, op: Option<EvalBinOp>,
     assigned: RuntimeCellHandle, storage: ArrayWriteStorage, operands: &mut Vec<RuntimeCellHandle>,
@@ -228,14 +240,31 @@ fn write_value_in_storage(
         operands.push(returned);
         return Ok(None);
     }
+    let attached = matches!(storage, ArrayWriteStorage::Attached);
     if values.type_tag(current)? == EVAL_TAG_STRING {
         if let Some(index) = index {
             if op.is_some() {
                 return eval_throw_error("Cannot use assign-op operators with string offsets", context, values);
             }
+            if matches!(storage, ArrayWriteStorage::Attached) {
+                values.spl_storage_array_set(current, index, assigned)?;
+                return Ok(None);
+            }
             let replacement = eval_string_offset_write(current, index, assigned, context, values)?;
             operands.push(replacement);
             return Ok(Some(replacement));
+        }
+    }
+    if attached {
+        match values.type_tag(current)? {
+            EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_NULL => {}
+            EVAL_TAG_BOOL if !values.truthy(current)? => {
+                values.warning("Deprecated: Automatic conversion of false to array is deprecated")?;
+            }
+            EVAL_TAG_STRING => {
+                return eval_throw_error("[] operator not supported for strings", context, values);
+            }
+            _ => return eval_throw_error("Cannot use a scalar value as an array", context, values),
         }
     }
     let index = match index {
@@ -253,7 +282,8 @@ fn write_value_in_storage(
             operands.push(key); key
         },
     };
-    let reuse = matches!(storage, ArrayWriteStorage::Published) && values.is_array_like(current)?;
+    let reuse = attached
+        || matches!(storage, ArrayWriteStorage::Published) && values.is_array_like(current)?;
     let array = if reuse { current }
         else if values.is_array_like(current)? { values.array_clone_shallow(current)? }
         else { eval_array_autovivification(Some(current), append, context, values)? };
@@ -264,7 +294,13 @@ fn write_value_in_storage(
         }
         context.clone_array_element_aliases(current, array, None);
     }
-    let promoted = eval_array_set_target_for_index(array, index, values)?;
+    let promoted = if attached {
+        // The runtime setter promotes the payload through this installed Mixed cell. Building
+        // an independent associative box here would detach the write from its SPL parent.
+        array
+    } else {
+        eval_array_set_target_for_index(array, index, values)?
+    };
     if promoted != array {
         operands.push(promoted);
         values.array_copy_index_history(array, promoted)?;
@@ -276,8 +312,12 @@ fn write_value_in_storage(
         validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
     }
     eval_array_element_reference_write(array, index, value, context, values)?;
-    values.array_set(array, index, value)?;
-    Ok(Some(array))
+    if attached {
+        values.spl_storage_array_set(array, index, value)?;
+    } else {
+        values.array_set(array, index, value)?;
+    }
+    Ok((!attached).then_some(array))
 }
 
 /// Delays direct static-property append until the RHS has selected the live static slot.

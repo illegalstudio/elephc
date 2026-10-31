@@ -16,7 +16,9 @@ use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
 use elephc_builtin_contract::output_abi::OutputAction;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
-use crate::interpreter::RuntimeValueOps;
+use crate::interpreter::{
+    NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
+};
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 mod collection_calls;

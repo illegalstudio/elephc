@@ -556,6 +556,7 @@ fn eval_reflection_closure_target_this_result(
         | EvalClosureObjectTarget::InvokableObject { object }
         | EvalClosureObjectTarget::ObjectMethod { object, .. } => values.retain(*object),
         EvalClosureObjectTarget::Named(_)
+        | EvalClosureObjectTarget::NativeDescriptor { .. }
         | EvalClosureObjectTarget::BoundNamed {
             bound_this: None, ..
         }
@@ -623,6 +624,7 @@ fn eval_reflection_closure_target_scope_class_name(
             eval_reflection_closure_target_scope_class_name(target, owner_context, values)
         }
         EvalClosureObjectTarget::Named(_) => Ok(None),
+        EvalClosureObjectTarget::NativeDescriptor { .. } => Ok(None),
         EvalClosureObjectTarget::BoundNamed {
             name,
             bound_this,
@@ -676,6 +678,7 @@ fn eval_reflection_closure_target_called_class_name(
             eval_reflection_closure_target_called_class_name(target, owner_context, values)
         }
         EvalClosureObjectTarget::Named(_) => Ok(None),
+        EvalClosureObjectTarget::NativeDescriptor { .. } => Ok(None),
         EvalClosureObjectTarget::BoundNamed {
             bound_this,
             bound_scope,

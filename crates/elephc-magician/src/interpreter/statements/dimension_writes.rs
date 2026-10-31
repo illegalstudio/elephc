@@ -10,18 +10,23 @@
 //! - Every intermediate is released in reverse order on success and failure.
 
 use super::*;
-use super::property_dimension_writes::{stage_operands, write_value};
+use super::property_dimension_writes::{stage_operands, write_attached_value, write_value};
 use super::property_dimension_guards::{DimensionFetchMode, selected_property};
 use super::property_write_receivers::{PreparedWriteReceiver, finish_index, finish_name};
 
-/// One attached parent which can receive a copied child after a nested array mutation.
+/// One traversal parent which can receive a copied child or terminate attached propagation.
 enum Parent {
     Variable(String),
     Discard,
     Static { class: String, property: String },
     Property { object: RuntimeCellHandle, property: String },
-    Index { array: RuntimeCellHandle, index: RuntimeCellHandle },
-    Spl { array: RuntimeCellHandle, index: RuntimeCellHandle, owner: String },
+    Index { array: RuntimeCellHandle, index: RuntimeCellHandle, published: bool },
+}
+
+/// One selected traversal value and whether its box is already installed in persistent storage.
+struct ResolvedValue {
+    value: RuntimeCellHandle,
+    published: bool,
 }
 
 /// Prepares source operands once and commits array replacements from the leaf toward its root.
@@ -36,11 +41,15 @@ pub(super) fn eval_dimension_write(
         let mut parents = Vec::new();
         let mode = if op.is_some() { DimensionFetchMode::ReadWrite } else { DimensionFetchMode::Write };
         let current = resolve(plan, &mut parents, &mut owners, mode, true, context, scope, values)?;
-        if values.type_tag(current)? != EVAL_TAG_OBJECT
+        if values.type_tag(current.value)? != EVAL_TAG_OBJECT
             && !parents.iter().any(|parent| !matches!(parent, Parent::Index { .. })) {
             return eval_throw_error("Unsupported dimension write: temporary arrays have no attached storage", context, values);
         }
-        let mut replacement = write_value(current, key, op, assigned, &mut owners, context, values)?;
+        let mut replacement = if current.published {
+            write_attached_value(current.value, key, op, assigned, &mut owners, context, values)?
+        } else {
+            write_value(current.value, key, op, assigned, &mut owners, context, values)?
+        };
         while let Some(value) = replacement {
             let Some(parent) = parents.pop() else { break; };
             replacement = match parent {
@@ -58,23 +67,13 @@ pub(super) fn eval_dimension_write(
                     eval_property_set_result(object, &property, value, context, values)?;
                     None
                 }
-                Parent::Spl { array, index, owner } => {
-                    // An eval subclass uses the builtin backing class, so this bypasses its
-                    // virtual override. A native subclass needs a separate non-virtual ABI.
-                    let backing = eval_runtime_object_class_name(array, values)?;
-                    if values.reflection_method_declaring_class(&backing, "offsetSet")?
-                        .is_some_and(|setter| !same_eval_class_name(&setter, &owner)) {
-                        return eval_throw_error("Unsupported dimension write: native SPL offsetSet override", context, values);
-                    }
-                    let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
-                        array.borrowed(), &owner, "offsetSet", vec![index.borrowed(), value.borrowed()],
-                        Some(&owner), None, context, values,
-                    )?;
-                    owners.push(result);
-                    None
-                }
-                Parent::Index { array, index } => write_value(array, Some(index), None, value,
-                    &mut owners, context, values)?,
+                Parent::Index { array, index, published } => if published {
+                    write_attached_value(array, Some(index), None, value,
+                        &mut owners, context, values)?
+                } else {
+                    write_value(array, Some(index), None, value,
+                        &mut owners, context, values)?
+                },
             };
         }
         Ok(())
@@ -91,7 +90,7 @@ fn resolve(
     plan: PreparedWriteReceiver<'_>, parents: &mut Vec<Parent>, owners: &mut Vec<RuntimeCellHandle>,
     mode: DimensionFetchMode, dimension_container: bool,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
+) -> Result<ResolvedValue, EvalStatus> {
     let current = match plan {
         PreparedWriteReceiver::Late(EvalExpr::LoadVar(name)) => {
             let current = match visible_scope_cell(context, scope, name) {
@@ -114,7 +113,7 @@ fn resolve(
         PreparedWriteReceiver::Late(expr) => eval_owned_expr(expr, context, scope, values)?,
         PreparedWriteReceiver::Value(value) => values.retain(value)?,
         PreparedWriteReceiver::Property(parent, property) => {
-            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?;
+            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?.value;
             let current = if dimension_container {
                 selected_property(object, &property, mode, context, values)?
             } else { eval_write_property_get_result(object, &property, context, values)? };
@@ -123,7 +122,7 @@ fn resolve(
         }
         PreparedWriteReceiver::DynamicProperty(parent, property, name_first) => {
             let early = if name_first { Some(finish_name(property, owners, context, scope, values)?) } else { None };
-            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?;
+            let object = resolve(*parent, parents, owners, mode, false, context, scope, values)?.value;
             let property = if let Some(name) = early { name } else {
                 finish_name(property, owners, context, scope, values)?
             };
@@ -134,7 +133,8 @@ fn resolve(
             current
         }
         PreparedWriteReceiver::Index(parent, index) => {
-            let array = resolve(*parent, parents, owners, mode, true, context, scope, values)?;
+            let resolved_array = resolve(*parent, parents, owners, mode, true, context, scope, values)?;
+            let array = resolved_array.value;
             let index = finish_index(index, owners, context, scope, values)?;
             let native = super::super::runtime_ops::simplexml_properties::dimension(
                 values, array.borrowed(), elephc_builtin_contract::ObjectDimension::WriteSelect,
@@ -143,38 +143,63 @@ fn resolve(
             let attachment = if native.is_none() && values.type_tag(array)? == EVAL_TAG_OBJECT {
                 overloaded_attachment(array, context, values)?
             } else { OverloadedAttachment::Copy };
-            let current = match native {
-                Some(current) => current,
-                None => quiet_child(array, index, owners, context, values)?,
+            let (current, attached_spl) = match (native, &attachment) {
+                (Some(current), _) => (current, false),
+                (None, OverloadedAttachment::Spl) => {
+                    let current = values.spl_storage_fetch_for_write(array, index)?;
+                    mark_attached_spl_root_changed(parents, context, scope)?;
+                    (current, true)
+                }
+                (None, _) => (quiet_child(array, index, owners, context, values)?, false),
             };
             let current = if current.is_borrowed() { values.retain(current)? } else { current };
             owners.push(current);
-            if values.type_tag(array)? == EVAL_TAG_OBJECT && values.type_tag(current)? != EVAL_TAG_OBJECT {
+            if attached_spl {
+                // The protected fetch returned the cell already installed in internal SPL
+                // storage. Its later replacement is observable through that cell, so a
+                // public offsetSet replay would overwrite destructor reentry and setter hooks.
+                parents.push(Parent::Discard);
+            } else if values.type_tag(array)? == EVAL_TAG_OBJECT && values.type_tag(current)? != EVAL_TAG_OBJECT {
                 if matches!(attachment, OverloadedAttachment::Reference) {
                     return eval_throw_error("Unsupported dimension write: by-reference offsetGet", context, values);
                 }
-                if let OverloadedAttachment::Spl(owner) = attachment {
-                    parents.push(Parent::Spl { array, index, owner });
-                } else {
-                    // Native write-select already emits its own indirect-modification notice.
-                    if native.is_none() {
-                        let class = eval_dynamic_class_name(array, context, values)?;
-                        eval_dispatch_php_error(
-                            &format!("Indirect modification of overloaded element of {class} has no effect"),
-                            8, context, values,
-                        )?;
-                    }
-                    parents.push(Parent::Discard);
+                // Native write-select already emits its own indirect-modification notice.
+                if native.is_none() {
+                    let class = eval_dynamic_class_name(array, context, values)?;
+                    eval_dispatch_php_error(
+                        &format!("Indirect modification of overloaded element of {class} has no effect"),
+                        8, context, values,
+                    )?;
                 }
+                parents.push(Parent::Discard);
             } else {
-                parents.push(Parent::Index { array, index });
+                parents.push(Parent::Index {
+                    array,
+                    index,
+                    published: resolved_array.published,
+                });
             }
-            return Ok(current);
+            return Ok(ResolvedValue { value: current, published: attached_spl });
         }
     };
     let current = if current.is_borrowed() { values.retain(current)? } else { current };
     owners.push(current);
-    Ok(current)
+    Ok(ResolvedValue { value: current, published: false })
+}
+
+/// Marks an imported root dirty once the attached fetch may have autovivified SPL storage.
+fn mark_attached_spl_root_changed(
+    parents: &[Parent],
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+) -> Result<(), EvalStatus> {
+    if let Some(name) = parents.iter().find_map(|parent| match parent {
+        Parent::Variable(name) => Some(name.as_str()),
+        _ => None,
+    }) {
+        mark_scope_binding_changed(context, scope, name)?;
+    }
+    Ok(())
 }
 
 /// Autovivification reads absent array children without an undefined-key warning.
@@ -198,7 +223,7 @@ fn quiet_child(
 }
 
 /// Distinguishes native writable storage, ordinary copies, and unsupported reference getters.
-enum OverloadedAttachment { Spl(String), Copy, Reference }
+enum OverloadedAttachment { Spl, Copy, Reference }
 
 /// Resolves inherited eval methods before consulting the first native ancestor's metadata.
 fn overloaded_attachment(
@@ -215,7 +240,7 @@ fn overloaded_attachment(
     let owner = values.reflection_method_declaring_class(&native_class, "offsetGet")?;
     if let Some(owner) = owner {
         if ["ArrayObject", "ArrayIterator"].iter().any(|class| same_eval_class_name(&owner, class)) {
-            return Ok(OverloadedAttachment::Spl(owner));
+            return Ok(OverloadedAttachment::Spl);
         }
     }
     let by_ref = values.reflection_method_flags(&native_class, "offsetGet")?

@@ -193,6 +193,7 @@ fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunc
             original,
             slot: Box::new(current),
             target: None,
+            force_writeback: false,
         }],
         named_keys: Vec::new(),
     }

@@ -50,6 +50,48 @@ fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {
     }
 }
 
+/// Native scalar references reserve both words written by concrete invoker markers.
+#[test]
+fn native_scalar_reference_staging_reserves_a_full_marker_slot() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let original = values.int(3).unwrap();
+    scope.set_from_aot("value", original, ScopeCellOwnership::Owned);
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+    assert!(function.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false),
+    ));
+    assert!(function.set_param_by_ref(0, true));
+    let mut bound = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg {
+            name: None,
+            value: original.borrowed(),
+            ref_target: Some(EvalReferenceTarget::Variable {
+                scope: &mut scope,
+                name: "value".into(),
+            }),
+        }],
+        &mut context,
+        &mut values,
+    ).unwrap();
+    let BoundNativeFunctionRefSlot::RawWord { slot, .. } = &mut bound.ref_slots[0] else {
+        panic!("integer references must use a raw scalar marker slot");
+    };
+    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
+    assert_eq!(**slot, [3, 0]);
+    slot[0] = 7;
+    slot[1] = u64::MAX;
+    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+    assert_eq!(values.get(scope.visible_cell("value").unwrap()), FakeValue::Int(7));
+    for marker in bound.values { values.release(marker).unwrap(); }
+    let current = scope.visible_cell("value").unwrap();
+    values.release(current).unwrap();
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+}
+
 /// Deferred default trees retire allocated prefixes and restore lexical scope on every failure.
 #[test]
 fn native_default_expression_releases_partial_arrays_and_restores_scope() {
@@ -320,6 +362,7 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
                 BoundNativeFunctionRefSlot::RawString {
                     original: [string.as_ptr() as u64, 6],
                     slot: Box::new([string.as_ptr() as u64, 6]), target: None,
+                    force_writeback: false,
                 },
                 BoundNativeFunctionRefSlot::OwnedRawWord {
                     original: array.as_ptr() as u64,

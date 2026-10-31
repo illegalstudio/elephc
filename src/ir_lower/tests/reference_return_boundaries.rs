@@ -997,3 +997,43 @@ function &protectedStringReference(mixed $input): string {
         }
     }
 }
+
+/// Nullable object staging is refused when a handler can observe its raw pre-promotion slot.
+#[test]
+fn protected_nullable_object_reference_returns_require_safe_finalizer_rebinding() {
+    let sources = [r#"<?php
+class ProtectedNullableNode {}
+function &caughtNullableReference(?ProtectedNullableNode $input): ProtectedNullableNode {
+    $value = $input;
+    try { return $value; }
+    catch (TypeError $error) { var_dump($value); throw $error; }
+}
+"#, r#"<?php
+class FinallyObservedNullableNode {}
+function &finallyObservedNullableReference(?FinallyObservedNullableNode $input): FinallyObservedNullableNode {
+    $value = $input;
+    try { return $value; }
+    finally { var_dump($value); }
+}
+"#];
+    for name in TARGETS {
+        for source in sources {
+            let error = super::try_lower_source_at_for_target(
+                source,
+                Path::new("main.php"),
+                Path::new("."),
+                Target::parse(name).unwrap(),
+            ).unwrap_err();
+            let LoweringError::Unsupported(error) = error else {
+                panic!("{name}: expected a source refusal");
+            };
+            assert!(
+                error.message.contains(
+                    "coercing this local to a different payload representation inside try/finally"
+                ),
+                "{name}: {}",
+                error.message
+            );
+        }
+    }
+}

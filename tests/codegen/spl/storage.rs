@@ -8,6 +8,34 @@
 //! Key details:
 //! - ArrayIterator and ArrayObject preserve insertion-order keys through Mixed keys/values storage.
 
+/// Opaque eval mutates attached SPL cells without replaying a stale offsetSet copy.
+#[test]
+fn test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class EvalSplReplacement { public string $label = 'new'; }
+class EvalSplRetired {
+    public function __destruct() {
+        global $evalSpl;
+        echo $evalSpl['x'][0]->label, '|';
+        $evalSpl['x'] = ['retargeted'];
+    }
+}
+class EvalSplSetter extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+}
+$evalSpl = new ArrayObject(['x' => [new EvalSplRetired()]]);
+$evalSetter = new EvalSplSetter(['x' => [1]]);
+$source = $argc > 0 ? '$evalSpl["x"][0] = new EvalSplReplacement();
+$evalSetter["x"][] = 2;
+return json_encode($evalSpl->getArrayCopy()) . "|" . json_encode($evalSetter->getArrayCopy());' : '';
+echo eval($source);
+unset($evalSetter, $evalSpl);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "new|{\"x\":[\"retargeted\"]}|{\"x\":[1,2]}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Interface erasure preserves attached SPL writes and ordinary value/reference getters.
 #[test]
 fn test_spl_nested_writes_through_array_access_interface_preserve_user_getters() {
@@ -20,7 +48,8 @@ class InterfaceNestedValue implements ArrayAccess {
     public function offsetUnset(mixed $key): void {}
 }
 class InterfaceNestedReference implements ArrayAccess {
-    public mixed $items = [1];
+    public mixed $items;
+    public function __construct() { $this->items = new ArrayObject([1]); }
     public function offsetExists(mixed $key): bool { return true; }
     public function &offsetGet(mixed $key): mixed { return $this->items; }
     public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
@@ -41,7 +70,7 @@ set_error_handler(function(int $severity, string $message, string $file, int $li
 $value = new InterfaceNestedValue(); interfaceNestedWrite($value);
 restore_error_handler(); echo json_encode($value->items), '|';
 $reference = new InterfaceNestedReference(); interfaceNestedWrite($reference);
-echo json_encode($reference->items);
+echo json_encode($reference->items->getArrayCopy());
 unset($reference, $value, $setter, $iterator, $object);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);

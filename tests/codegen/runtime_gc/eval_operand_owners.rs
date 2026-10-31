@@ -496,6 +496,29 @@ unset($source);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Scalar by-reference variadics expose a full two-word marker slot to compiled element writes.
+#[test]
+fn test_core_eval_native_scalar_variadic_reference_slots_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeBinderIntVariadic(int &...$items): void { $items[0] = 7; }
+function nativeBinderFloatVariadic(float &...$items): void { $items[0] = 2.5; }
+function nativeBinderBoolVariadic(bool &...$items): void { $items[0] = false; }
+$source = '
+for ($i = 0; $i < 3; $i++) {
+    $integer = 1; $float = 1.5; $boolean = true;
+    $intFn = "nativeBinderIntVariadic"; $intFn($integer);
+    $floatFn = "nativeBinderFloatVariadic"; $floatFn($float);
+    $boolFn = "nativeBinderBoolVariadic"; $boolFn($boolean);
+    echo $integer, ":", $float, ":", (int)$boolean, "|";
+    unset($integer, $float, $boolean, $intFn, $floatFn, $boolFn);
+} // ' . $argc;
+eval($source); unset($source);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:2.5:0|7:2.5:0|7:2.5:0|", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// An `iterable` by-reference variadic element write reaches the same concrete ref-cell marker arm
 /// for arrays (tag 4), hashes (tag 5) and Iterator objects (tag 6), each of which must release the
 /// heap occupant it replaces (issue #1289 review).

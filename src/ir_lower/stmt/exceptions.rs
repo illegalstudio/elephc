@@ -73,7 +73,7 @@ pub(super) fn lower_try_catch(
     // outlived the body, and a later throw landed in this `catch`, then resumed after it
     // (`AFTER WRONG:outside AFTER` where reference prints `AFTER OUTER:outside`). A throw
     // still goes to the handler, which pops itself (`run_on_throw` is false).
-    let depth = push_finally_frame(ctx, &[], false, Some((handler_token, span)));
+    let depth = push_finally_frame(ctx, &[], false, Some((handler_token, span)), true);
     // A throw raised inside this body may be caught here, so it does not leave the loops this
     // `try` is nested in; recording the depth is what tells `terminate_throw` which loops it
     // really leaves (issue #690).
@@ -145,7 +145,13 @@ pub(super) fn lower_try_catch_finally(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
-    let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
+    let depth = push_finally_frame(
+        ctx,
+        finally_body,
+        false,
+        Some((handler_token, span)),
+        !catches.is_empty(),
+    );
     // See the twin in `lower_try_catch`: the handler is active for this body only.
     ctx.push_try_loop_depth();
     lower_block(ctx, try_body);
@@ -245,7 +251,13 @@ pub(super) fn lower_catch_dispatch_with_finally(
             Op::TryPushHandler.default_effects(),
             Some(span),
         );
-        let depth = push_finally_frame(ctx, finally_body, false, Some((body_token, span)));
+        let depth = push_finally_frame(
+            ctx,
+            finally_body,
+            false,
+            Some((body_token, span)),
+            false,
+        );
         ctx.push_try_loop_depth();
         lower_block(ctx, &catch.body);
         ctx.pop_try_loop_depth();
@@ -313,7 +325,7 @@ fn lower_finally_with_pending_exception(
         Some(span),
     );
     // An empty frame: a jump out of the body only has to pop the handler.
-    let depth = push_finally_frame(ctx, &[], false, Some((chain_token, span)));
+    let depth = push_finally_frame(ctx, &[], false, Some((chain_token, span)), false);
     ctx.push_try_loop_depth();
     lower_block(ctx, finally_body);
     ctx.pop_try_loop_depth();

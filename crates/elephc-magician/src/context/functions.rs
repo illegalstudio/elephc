@@ -230,6 +230,9 @@ impl ElephcEvalContext {
             .and_then(|target| match target {
                 EvalClosureObjectTarget::Named(name)
                 | EvalClosureObjectTarget::BoundNamed { name, .. } => Some(name.as_str()),
+                EvalClosureObjectTarget::NativeDescriptor { display_name, .. } => {
+                    Some(display_name.as_str())
+                }
                 _ => None,
             })
     }

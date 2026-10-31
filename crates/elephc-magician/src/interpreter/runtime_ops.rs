@@ -29,11 +29,43 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// One PHP-visible parameter decoded from a native callable descriptor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeCallableParameterMetadata {
+    /// PHP parameter name, without `$`.
+    pub name: String,
+    /// Descriptor ABI type tag for the parameter's physical representation.
+    pub type_tag: u64,
+    /// Whether the PHP declaration passes this parameter by reference.
+    pub by_ref: bool,
+}
+
+/// The caller-visible argument shape carried by a native callable descriptor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeCallableSignatureMetadata {
+    /// PHP display name retained by the descriptor.
+    pub display_name: String,
+    /// Caller-visible regular parameters followed by the source variadic, when present.
+    pub parameters: Vec<NativeCallableParameterMetadata>,
+    /// Number of non-variadic parameters visible to PHP callers.
+    pub regular_param_count: usize,
+    /// Public index of the source-declared variadic parameter.
+    pub variadic_index: Option<usize>,
+}
+
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
     /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
     fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Decodes the public signature of a boxed native callable descriptor.
+    fn native_callable_signature(
+        &mut self,
+        _callback: RuntimeCellHandle,
+    ) -> Result<Option<NativeCallableSignatureMetadata>, EvalStatus> {
+        Ok(None)
     }
 
     /// Invokes a borrowed native callable and supplied argument box under an explicit native scope.
@@ -338,6 +370,25 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Fetches an owned child cell attached to trusted internal SPL storage for mutation.
+    fn spl_storage_fetch_for_write(
+        &mut self,
+        _array: RuntimeCellHandle,
+        _index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Stores one element through the protected companion path for an attached SPL child cell.
+    fn spl_storage_array_set(
+        &mut self,
+        _array: RuntimeCellHandle,
+        _index: RuntimeCellHandle,
+        _value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
 
     /// Reads one insertion-order element using the same ownership contract as array_get.
     /// Providers with distinct numeric string keys must override the normalized-key fallback.

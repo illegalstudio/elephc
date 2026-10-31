@@ -95,6 +95,7 @@ fn eval_validate_callback(
             };
             eval_validate_callback(callback, error, owner_context, values)
         }
+        EvaluatedCallable::NativeDescriptor { .. } => Ok(()),
         EvaluatedCallable::Named { name, display_name } => {
             eval_validate_named_callable(name, display_name, error, context, values)
         }

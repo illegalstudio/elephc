@@ -68,13 +68,15 @@ pub(super) enum BoundNativeFunctionRefSlot {
     RawWord {
         tag: u64,
         original: u64,
-        slot: Box<u64>,
+        slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
+        force_writeback: bool,
     },
     RawString {
         original: [u64; 2],
         slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
+        force_writeback: bool,
     },
     TaggedScalar {
         original: [u64; 2],
@@ -102,6 +104,10 @@ pub(super) enum EvaluatedCallable {
     ForeignContext {
         callback: Box<EvaluatedCallable>,
         owner: EvalPcntlContextLease,
+    },
+    NativeDescriptor {
+        callback: RuntimeCellHandle,
+        display_name: String,
     },
     Named {
         name: String,

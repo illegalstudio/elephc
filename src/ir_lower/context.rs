@@ -79,6 +79,8 @@ pub(crate) struct FinallyFrame {
     pub body: Vec<Stmt>,
     pub run_on_throw: bool,
     pub handler_cleanup: Option<(i64, Span)>,
+    /// Whether the protected body can transfer a pre-promotion failure to a same-function catch.
+    pub has_catches: bool,
     /// Loop-stack length when the frame was pushed, so the loops enclosing the protected region
     /// have indices `0..loop_depth` and the ones opened inside it start at `loop_depth`. A
     /// `break`/`continue` whose target loop INDEX is strictly below `loop_depth` leaves the

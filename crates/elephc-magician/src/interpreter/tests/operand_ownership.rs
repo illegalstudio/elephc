@@ -187,6 +187,7 @@ fn native_function_ref_staging_releases_only_its_current_owner() {
                 let slot = if string {
                     BoundNativeFunctionRefSlot::RawString {
                         original: [original_word, 3], slot: Box::new([current_word, 3]), target: None,
+                        force_writeback: false,
                     }
                 } else {
                     BoundNativeFunctionRefSlot::OwnedRawWord {

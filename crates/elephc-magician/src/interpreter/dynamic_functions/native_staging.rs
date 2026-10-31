@@ -41,9 +41,9 @@ pub(super) fn stage_native_function_invoker_args(
             match raw_ref_kind {
                 NativeFunctionRawRefKind::Scalar { tag } => {
                     let original = values.raw_value_word(bound_arg.value)?;
-                    let mut slot = Box::new(original);
+                    let mut slot = Box::new([original, 0]);
                     let marker =
-                        values.invoker_raw_ref_cell(slot.as_mut() as *mut u64 as *mut c_void, tag)?;
+                        values.invoker_raw_ref_cell(slot.as_mut() as *mut [u64; 2] as *mut c_void, tag)?;
                     staged.owners.push(marker);
                     invoker_values.push(marker);
                     ref_slots.push(BoundNativeFunctionRefSlot::RawWord {
@@ -51,6 +51,7 @@ pub(super) fn stage_native_function_invoker_args(
                         original,
                         slot,
                         target,
+                        force_writeback: false,
                     });
                 }
                 NativeFunctionRawRefKind::String => {
@@ -74,6 +75,7 @@ pub(super) fn stage_native_function_invoker_args(
                         original: [retained.0, retained.1],
                         slot,
                         target,
+                        force_writeback: false,
                     });
                 }
                 NativeFunctionRawRefKind::OwnedHeap => {

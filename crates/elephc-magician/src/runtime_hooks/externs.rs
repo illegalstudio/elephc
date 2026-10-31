@@ -135,6 +135,13 @@ unsafe extern "C" {
         index: *mut RuntimeCell,
         value: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Fetches or mutates attached SPL storage behind one protected versioned boundary.
+    pub(super) fn __elephc_eval_spl_storage_write_v1(
+        operation: u64,
+        array: *mut RuntimeCell,
+        index: *mut RuntimeCell,
+        payload: *mut RuntimeCell,
+    ) -> u64;
     /// Reads an instance property using the supplied visibility scope.
     pub(super) fn __elephc_eval_value_property_get(
         object: *mut RuntimeCell,

@@ -278,6 +278,9 @@ pub(in crate::interpreter) fn eval_callable_probe_exists(
             };
             eval_callable_probe_exists(callback, owner_context, values)
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            Ok(values.native_callable_signature(*callback)?.is_some())
+        }
         EvaluatedCallable::Named { name, .. } => Ok(context.has_closure(name)
             || generic_function_is_callable(name, context)
             || super::function_exists::eval_function_probe_exists(context, name)),

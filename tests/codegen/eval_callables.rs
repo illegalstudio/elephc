@@ -15,6 +15,31 @@
 
 use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_regex};
 
+/// Native callable descriptors keep their public signature and owner across opaque eval calls.
+#[test]
+fn test_eval_native_descriptor_callable_preserves_named_refs_defaults_and_variadics() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_native_descriptor_probe(int &$value, int $delta = 2, string ...$rest): string {
+    $value += $delta;
+    return func_num_args() . ":" . $value . ":" . implode(",", array_keys($rest));
+}
+
+$callback = eval_native_descriptor_probe(...);
+$source = $argc > 0 ? '$first = "3";
+$a = call_user_func_array($callback, ["value" => &$first]);
+$closure = Closure::fromCallable($callback);
+unset($callback);
+$second = 4;
+$b = call_user_func_array($closure, ["delta" => 3, "value" => &$second, "extra" => "z"]);
+return $a . ":" . gettype($first) . ":" . $first . "|" . $b . ":" . gettype($second) . ":" . $second;' : '';
+echo eval($source);
+"#,
+    );
+
+    assert_eq!(out, "1:5::integer:5|3:7:extra:integer:7");
+}
+
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.
 #[test]
 fn test_eval_aot_function_callables_preserve_by_ref_writeback() {

@@ -70,7 +70,7 @@ pub(super) fn stage_native_function_invoker_args(
 }
 
 /// Creates one reference marker and retires an acquired payload if marker allocation fails.
-fn stage_native_function_ref_arg(
+pub(in crate::interpreter) fn stage_native_function_ref_arg(
     param_type: Option<&EvalParameterType>,
     tagged_scalar: bool,
     original: RuntimeCellHandle,
@@ -90,9 +90,20 @@ fn stage_native_function_ref_arg(
     match native_function_raw_ref_kind(param_type) {
         Some(NativeFunctionRawRefKind::Scalar { tag }) => {
             let original = values.raw_value_word(original)?;
-            let mut slot = Box::new(original);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut u64).cast(), tag)?;
-            Ok((marker, BoundNativeFunctionRefSlot::RawWord { tag, original, slot, target }))
+            // Generated marker writers publish the complete two-word source slot even for
+            // scalar tags. Keep the second word addressable so a typed by-ref variadic cannot
+            // write past this Rust allocation after its marker enters an Array(Mixed) collector.
+            let mut slot = Box::new([original, 0]);
+            let marker = values.invoker_raw_ref_cell(
+                (slot.as_mut() as *mut [u64; 2]).cast(), tag,
+            )?;
+            Ok((marker, BoundNativeFunctionRefSlot::RawWord {
+                tag,
+                original,
+                slot,
+                target,
+                force_writeback: false,
+            }))
         }
         Some(NativeFunctionRawRefKind::String) => {
             let ptr = values.raw_value_word(original)?;
@@ -110,7 +121,10 @@ fn stage_native_function_ref_arg(
                 }
             };
             Ok((marker, BoundNativeFunctionRefSlot::RawString {
-                original: [retained.0, retained.1], slot, target,
+                original: [retained.0, retained.1],
+                slot,
+                target,
+                force_writeback: false,
             }))
         }
         Some(NativeFunctionRawRefKind::OwnedHeap) => {

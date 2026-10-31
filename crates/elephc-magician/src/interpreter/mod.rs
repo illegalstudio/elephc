@@ -88,7 +88,9 @@ use null_object_boundaries::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
-pub use runtime_ops::RuntimeValueOps;
+pub use runtime_ops::{
+    NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
+};
 use runtime_ops::*;
 #[cfg(not(test))]
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;

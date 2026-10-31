@@ -1410,6 +1410,12 @@ fn push_invoker_ref_storage_address(
             emitter.instruction(&format!("jne {}", direct_label));              // concrete source storage already has the target ABI shape
         }
     }
+    if boxed_mixed_ref_target_has_incompatible_layout(target_ty) {
+        abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+        abi::emit_reg_move(emitter, result_reg, storage_reg);
+        abi::emit_push_result_value(emitter, &PhpType::Int);
+        abi::emit_jump(emitter, &done_label);
+    }
     emit_invoker_ref_heap_layout_guard(storage_reg, source_tag_reg, false, emitter, ctx);
     abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
     match emitter.target.arch {
@@ -1423,6 +1429,21 @@ fn push_invoker_ref_storage_address(
     abi::emit_reg_move(emitter, result_reg, storage_reg);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     emitter.label(&done_label);
+}
+
+/// Rejects boxed generic storage when a concrete reference expects a narrower heap layout.
+fn boxed_mixed_ref_target_has_incompatible_layout(target_ty: Option<&PhpType>) -> bool {
+    match target_ty.map(PhpType::codegen_repr) {
+        Some(PhpType::Array(element)) => {
+            !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        }
+        Some(PhpType::AssocArray { key, value }) => {
+            !matches!(key.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                || !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        }
+        Some(PhpType::Object(class_name)) => !class_name.is_empty(),
+        _ => false,
+    }
 }
 
 /// Distinguishes boxed handles from raw iterable pointers before adapting legacy source tag7.

@@ -91,7 +91,7 @@ fn invoke_native_function_with_staged_args(
 /// source-declared variadic absorbs. The key cell is a temporary this function owns; `array_set`
 /// only borrows it, and the container retains the value, so the key is released either way and
 /// the staged value keeps the single owner staging gave it.
-fn build_native_function_arg_array(
+pub(in crate::interpreter) fn build_native_function_arg_array(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -189,9 +189,10 @@ fn write_back_native_function_ref_slot(
             original,
             slot,
             target,
+            force_writeback,
         } => {
-            let word = **slot;
-            if word == *original {
+            let word = slot[0];
+            if word == *original && !force_writeback {
                 return Ok(());
             }
             let Some(target) = target else {
@@ -215,12 +216,13 @@ fn write_back_native_function_ref_slot(
             original,
             slot,
             target,
+            force_writeback,
         } => {
             let words = **slot;
             let Some(target) = target else {
                 return values.release_raw_string_words(words[0], words[1]);
             };
-            if words == *original {
+            if words == *original && !force_writeback {
                 return values.release_raw_string_words(words[0], words[1]);
             }
             let value = values.raw_string_value(words[0], words[1]);
