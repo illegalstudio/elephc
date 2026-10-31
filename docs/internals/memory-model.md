@@ -655,8 +655,14 @@ Proven typed stores with destructor-free elements, scalar keys and matching repl
 those defaults to storage effects before callable summaries are computed. Unknown Mixed stores
 keep their callback effects; concat reset analysis still applies its precise operand proof.
 For packed arrays with a runtime key, shape12 marker writes also validate and publish directly
-before indexed-to-hash promotion. A refusal therefore leaves the destination owner intact;
+before indexed-to-hash promotion, including numeric strings normalized to integer keys.
+A refusal therefore leaves the destination owner intact;
 successful integer/null writes retain the same marker and retire the full replacement box.
+Reference-cell, static and global storebacks acquire a separate container owner for the
+consuming helper. Their setter entry marks that owner for retirement on shape12 refusal;
+ordinary raw-local transfers leave their stored owner intact. The flag follows already-hash
+destinations into the hash setter and stays independent from float-key diagnostic and shared
+payload flags, so successful writes retain their existing COW behavior.
 
 A nullable local returned by reference with a non-null object result is checked before
 promotion to an object-payload cell. The original local name stays attached, including

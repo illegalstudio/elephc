@@ -19,6 +19,8 @@
 //!   `zend_hash_update`, so building a new array never mutates the array it was copied from.
 //! - `__rt_hash_set_shared` is restricted to a pending append selected before a diagnostic
 //!   callback. It preserves the exact payload retained by a surviving child copy.
+//! - `__rt_hash_set_owned_refusal` keeps ordinary COW and retires only the separate helper
+//!   owner when a mixed-key storeback refuses a nullable-reference assignment.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
@@ -44,6 +46,9 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_entry");                               // share insertion and update machinery
     emitter.label_global("__rt_hash_set_shared");
     emitter.instruction("mov x9, #1");                                          // pending append mutates its pre-callback selected payload
+    emitter.instruction("b __rt_hash_set_entry");                               // keep selected-payload mode distinct from exceptional owner retirement
+    emitter.label_global("__rt_hash_set_owned_refusal");
+    emitter.instruction("mov x9, #2");                                          // a mixed-key caller supplied a separate owner to retire on refusal
     emitter.label_shared("__rt_hash_set_entry");
 
     // -- set up stack frame, save all inputs --
@@ -76,7 +81,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // publish the freshly allocated table
     emitter.label("__rt_hash_set_have_table");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the candidate table
-    emitter.instruction("cbnz x9, __rt_hash_set_ready");                        // selected payloads must remain visible through surviving copies
+    emitter.instruction("tbnz x9, #0, __rt_hash_set_ready");                    // only selected-payload mode bypasses the ordinary COW boundary
     emitter.instruction("bl __rt_hash_ensure_unique");                          // split ordinary shared hash tables before mutation
     emitter.label("__rt_hash_set_ready");
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash_table_ptr
@@ -315,6 +320,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #32]");                                   // preserve string lengths and other high words during cleanup
     abi::emit_call_label(emitter, "__rt_hash_to_mixed_box_owned");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    super::container_refusal_owner::emit_release(emitter);
     abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid");
     emitter.instruction("ldr x1, [sp, #24]");                                   // load the direct nullable-integer payload
@@ -332,6 +338,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid");
     abi::emit_pop_reg_pair(emitter, "x0", "x14");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    super::container_refusal_owner::emit_release(emitter);
     abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid");
     abi::emit_load_temporary_stack_slot(emitter, "x14", 8);
@@ -445,6 +452,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_x86_entry");                         // share insertion and update machinery
     emitter.label_global("__rt_hash_set_shared");
     emitter.instruction("mov r10d, 1");                                         // pending append mutates its pre-callback selected payload
+    emitter.instruction("jmp __rt_hash_set_x86_entry");                         // keep selected-payload mode independent from refusal ownership
+    emitter.label_global("__rt_hash_set_owned_refusal");
+    emitter.instruction("mov r10d, 2");                                         // identify the caller's extra destination owner on nullable refusal
     emitter.label("__rt_hash_set_x86_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-insert spill slots
@@ -471,7 +481,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // keep the new table as the mutation target
     emitter.label("__rt_hash_set_x86_have_table");
     emitter.instruction("mov rax, rdi");                                        // selected mode returns the original table without a COW helper call
-    emitter.instruction("test r10, r10");                                       // was this table selected before a callback retained its payload?
+    emitter.instruction("test r10, 1");                                         // only pending-append selection bypasses COW
     emitter.instruction("jnz __rt_hash_set_x86_ready");                         // yes, preserve that exact payload identity
     emitter.instruction("call __rt_hash_ensure_unique");                        // split ordinary shared associative arrays before mutation
     emitter.label("__rt_hash_set_x86_ready");
@@ -684,6 +694,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // preserve string lengths and other high words during cleanup
     abi::emit_call_label(emitter, "__rt_hash_to_mixed_x86_box_owned");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    super::container_refusal_owner::emit_release(emitter);
     abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
@@ -701,6 +712,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid_x");
     abi::emit_pop_reg_pair(emitter, "rax", "r14");
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    super::container_refusal_owner::emit_release(emitter);
     abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid_x");
     abi::emit_load_temporary_stack_slot(emitter, "r14", 8);

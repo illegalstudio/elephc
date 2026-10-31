@@ -10,6 +10,39 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Ref-cell storebacks retire the helper's extra owner on both indexed and named-hash refusal.
+#[test]
+fn test_nullable_marker_ref_cell_storeback_refusals_retire_extra_destination_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RetiringNullableReferenceHolder { public ?int $value = null; }
+function retiringNullableReferenceWrite(array<mixed> &$items): void {
+    $key = array_key_first($items);
+    try { $items[$key] = 'invalid'; }
+    catch (Error $error) { echo 'refused:', json_encode($items[$key]), '|'; unset($error); }
+    $items[$key] = 9; echo json_encode($items[$key]), '|';
+    $items[$key] = null; echo json_encode($items[$key]), '|';
+    if ($key === 0) {
+        set_error_handler(function(int $severity, string $message, string $file, int $line): bool {
+            echo 'warn|'; return true;
+        });
+        $key = json_decode('0.5');
+        try { $items[$key] = 'invalid'; }
+        catch (Error $error) { echo 'float-refused|'; unset($error); }
+        restore_error_handler();
+    }
+}
+function retiringNullableReferenceTarget(&...$items): void { retiringNullableReferenceWrite($items); }
+function retiringNullableReferenceOther(&...$items): void { echo 'unexpected'; }
+$holder = new RetiringNullableReferenceHolder(); $value =& $holder->value;
+$target = $argc > 0 ? 'retiringNullableReferenceTarget' : 'retiringNullableReferenceOther';
+$target($value); $target(last: $value);
+unset($value, $holder, $target);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "refused:null|9|null|warn|float-refused|refused:null|9|null|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Runtime Iterable references refuse boxed fresh locals but preserve existing raw Iterable aliases.
 #[test]
 fn test_unknown_descriptor_iterable_reference_layout_subset() {

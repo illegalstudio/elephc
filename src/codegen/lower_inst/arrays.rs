@@ -1255,10 +1255,12 @@ pub(super) fn lower_array_set_mixed_key(
         )));
     }
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    let helper = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
-        "__rt_array_set_mixed_key_already_diagnosed"
-    } else {
-        "__rt_array_set_mixed_key"
+    let helper = match (mixed_key_storeback_retires_source(ctx, array)?,
+        matches!(inst.immediate, Some(Immediate::Bool(true)))) {
+        (true, true) => "__rt_array_set_mixed_key_owned_refusal_already_diagnosed",
+        (true, false) => "__rt_array_set_mixed_key_owned_refusal",
+        (false, true) => "__rt_array_set_mixed_key_already_diagnosed",
+        (false, false) => "__rt_array_set_mixed_key",
     };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

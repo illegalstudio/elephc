@@ -36,6 +36,8 @@
 //!   of a compound update has already reported it.
 //! - Nullable-integer invoker markers validate and write through before any promotion.
 //!   Other markers promote to hash storage for the shared ownership-safe setter.
+//! - Owned-refusal entries retire the separate destination owner of a ref-cell/static/global
+//!   storeback on shape-12 errors. Mode bit zero still controls only float-key diagnostics.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -55,6 +57,12 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b __rt_array_set_mixed_key_entry");                    // enter with float-key diagnostics enabled
     emitter.label_global("__rt_array_set_mixed_key_already_diagnosed");
     abi::emit_load_int_immediate(emitter, "x3", 1);
+    emitter.instruction("b __rt_array_set_mixed_key_entry");                    // retain the original raw-local owner when a nullable write refuses
+    emitter.label_global("__rt_array_set_mixed_key_owned_refusal");
+    abi::emit_load_int_immediate(emitter, "x3", 2);
+    emitter.instruction("b __rt_array_set_mixed_key_entry");                    // identify the separate destination owner acquired for a retiring storeback
+    emitter.label_global("__rt_array_set_mixed_key_owned_refusal_already_diagnosed");
+    abi::emit_load_int_immediate(emitter, "x3", 3);
     emitter.label_shared("__rt_array_set_mixed_key_entry");
 
     emitter.instruction("sub sp, sp, #96");                                     // reserve frame for array, key, value, promoted key, temp/merged hash
@@ -92,6 +100,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_array_set_mixed_key_int_ready");             // integer/bool keys are already valid indexed indexes
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
     emitter.instruction("ldr x9, [sp, #56]");                                   // check whether the read half already diagnosed this key
+    emitter.instruction("and x9, x9, #1");                                      // ownership mode must not suppress a required float-key warning
     emitter.instruction("cbnz x9, __rt_array_set_mixed_key_int_float_silent");  // use the silent PHP cast for a diagnosed compound key
     abi::emit_call_label(emitter, "__rt_float_key_to_int");
     emitter.instruction("b __rt_array_set_mixed_key_int_float_done");           // keep the diagnosed integer result
@@ -186,7 +195,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the consumed boxed Mixed value
     emitter.instruction("mov x4, #0");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov x5, #7");                                          // value_type 7 marks the slot as a boxed Mixed pointer
-    emitter.instruction("bl __rt_hash_set");                                    // insert the entry into the promoted hash and return it
+    emit_hash_set_with_refusal_owner(emitter, true);
     emitter.instruction("b __rt_array_set_mixed_key_done");                     // finish after a promoted hash write
 
     // -- already-hash destination: materialize the key and set directly --
@@ -201,6 +210,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_array_set_mixed_key_hash_int");              // integer/bool keys become scalar integer hash keys
     emitter.instruction("fmov d0, x1");                                         // load the float key payload into the FP register
     emitter.instruction("ldr x9, [sp, #56]");                                   // check whether the read half already diagnosed this key
+    emitter.instruction("and x9, x9, #1");                                      // inspect only the already-diagnosed flag
     emitter.instruction("cbnz x9, __rt_array_set_mixed_key_hash_float_silent"); // use the silent PHP cast for a diagnosed compound key
     abi::emit_call_label(emitter, "__rt_float_key_to_int");
     emitter.instruction("b __rt_array_set_mixed_key_hash_float_done");          // keep the diagnosed integer result
@@ -223,7 +233,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #16]");                                   // reload the consumed boxed Mixed value
     emitter.instruction("mov x4, #0");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov x5, #7");                                          // value_type 7 marks the slot as a boxed Mixed pointer
-    emitter.instruction("bl __rt_hash_set");                                    // insert the entry into the hash and return it
+    emit_hash_set_with_refusal_owner(emitter, false);
 
     emitter.label("__rt_array_set_mixed_key_done");
     emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
@@ -240,6 +250,12 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_array_set_mixed_key_entry");                  // enter with float-key diagnostics enabled
     emitter.label_global("__rt_array_set_mixed_key_already_diagnosed");
     abi::emit_load_int_immediate(emitter, "rcx", 1);
+    emitter.instruction("jmp __rt_array_set_mixed_key_entry");                  // retain raw-local ownership on a refused write
+    emitter.label_global("__rt_array_set_mixed_key_owned_refusal");
+    abi::emit_load_int_immediate(emitter, "rcx", 2);
+    emitter.instruction("jmp __rt_array_set_mixed_key_entry");                  // identify the distinct owner acquired for a retiring storeback
+    emitter.label_global("__rt_array_set_mixed_key_owned_refusal_already_diagnosed");
+    abi::emit_load_int_immediate(emitter, "rcx", 3);
     emitter.label("__rt_array_set_mixed_key_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -277,7 +293,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_int_ready");              // integer/bool keys are already valid indexed indexes
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
-    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // check whether the read half already diagnosed this key
+    emitter.instruction("test QWORD PTR [rbp - 64], 1");                        // ownership mode does not suppress float-key diagnostics
     emitter.instruction("jne __rt_array_set_mixed_key_int_float_silent");       // use the silent PHP cast for a diagnosed compound key
     abi::emit_call_label(emitter, "__rt_float_key_to_int");
     emitter.instruction("jmp __rt_array_set_mixed_key_int_float_done");         // keep the diagnosed integer result
@@ -374,7 +390,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the consumed boxed Mixed value
     emitter.instruction("xor r8, r8");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov r9, 7");                                           // value_type 7 marks the slot as a boxed Mixed pointer
-    emitter.instruction("call __rt_hash_set");                                  // insert the entry into the promoted hash and return it
+    emit_hash_set_with_refusal_owner(emitter, true);
     emitter.instruction("jmp __rt_array_set_mixed_key_done");                   // finish after a promoted hash write
 
     // -- already-hash destination: materialize the key and set directly --
@@ -388,7 +404,7 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, 2");                                          // float mixed keys are cast to integer keys like PHP
     emitter.instruction("jne __rt_array_set_mixed_key_hash_int");               // integer/bool keys become scalar integer hash keys
     emitter.instruction("movq xmm0, rdi");                                      // load the float key payload into the FP register
-    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // check whether the read half already diagnosed this key
+    emitter.instruction("test QWORD PTR [rbp - 64], 1");                        // inspect only the already-diagnosed flag
     emitter.instruction("jne __rt_array_set_mixed_key_hash_float_silent");      // use the silent PHP cast for a diagnosed compound key
     abi::emit_call_label(emitter, "__rt_float_key_to_int");
     emitter.instruction("jmp __rt_array_set_mixed_key_hash_float_done");        // keep the diagnosed integer result
@@ -415,12 +431,36 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // reload the consumed boxed Mixed value
     emitter.instruction("xor r8, r8");                                          // boxed Mixed hash payloads leave the high value word empty
     emitter.instruction("mov r9, 7");                                           // value_type 7 marks the slot as a boxed Mixed pointer
-    emitter.instruction("call __rt_hash_set");                                  // insert the entry into the hash and return it
+    emit_hash_set_with_refusal_owner(emitter, false);
 
     emitter.label("__rt_array_set_mixed_key_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return the final array/hash pointer in rax
+}
+
+/// Forwards the extra owner into the hash setter while retaining ordinary COW semantics.
+fn emit_hash_set_with_refusal_owner(emitter: &mut Emitter, promoted: bool) {
+    if promoted {
+        abi::emit_call_label(emitter, "__rt_hash_set_owned_refusal");
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp, #56]");                           // forward the mixed-key caller's separate helper-owner contract
+            emitter.instruction("tbz x9, #1, 987f");                            // raw-local transfers keep their destination owner on refusal
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test QWORD PTR [rbp - 64], 2");                // preserve the ownership distinction for already-hash destinations
+            emitter.instruction("jz 987f");                                     // raw locals use the ordinary non-consuming refusal path
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_hash_set_owned_refusal");
+    emitter.instruction(if emitter.target.arch == Arch::AArch64 { "b 988f" }
+        else { "jmp 988f" });                                                   // preserve the resulting owned hash pointer
+    emitter.label("987");
+    abi::emit_call_label(emitter, "__rt_hash_set");
+    emitter.label("988");
 }
 
 /// Consumes a nullable scalar replacement without consuming or relocating its destination array.
@@ -455,6 +495,7 @@ fn emit_tagged_marker_write_or_promote(emitter: &mut Emitter) {
         Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rbp - 24]"),   // consume the rejected box while the original array owner is still intact
     }
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    super::container_refusal_owner::emit_release(emitter);
     abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
     emitter.label(valid);
     match emitter.target.arch {

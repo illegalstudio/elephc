@@ -10,6 +10,30 @@
 use crate::{codegen::platform::Target, ir::Op, types::PhpType};
 use std::path::Path;
 
+/// A native generic by-reference parameter reaches the retiring mixed-key storeback entry.
+#[test]
+fn nullable_mixed_key_ref_cell_destinations_select_owned_refusal_entries_on_every_target() {
+    let source = r#"<?php
+function nullableRetiringWriteIr(array<mixed> &$items): void {
+    $key = array_key_first($items);
+    try { $items[$key] = 'invalid'; } catch (Error $error) { echo count($items); }
+}
+function nullableRetiringWrapperIr(&...$items): void { nullableRetiringWriteIr($items); }
+$value = null; nullableRetiringWrapperIr($value);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, Path::new("main.php"),
+            Path::new("."), Target::parse(name).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nullableRetiringWriteIr").unwrap();
+        let write = function.instructions.iter().find(|inst| inst.op == Op::ArraySetMixedKey).unwrap();
+        let crate::ir::ValueDef::Instruction { inst, .. } = function.value(write.operands[0]).unwrap().def
+            else { panic!("retiring destination needs a local reference load"); };
+        assert_eq!(function.instruction(inst).unwrap().op, Op::LoadRefCell, "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_array_set_mixed_key_owned_refusal"), "{name}");
+    }
+}
+
 /// Runtime Iterable dispatch distinguishes boxed fresh arguments from existing raw aliases.
 #[test]
 fn unknown_descriptor_iterable_reference_layouts_remain_explicit_on_every_target() {

@@ -19,6 +19,7 @@ mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
 mod call_argument_unpack;
+mod container_refusal_owner;
 mod array_count_values;
 mod array_column;
 mod array_column_boxed;
