@@ -12,6 +12,46 @@ use super::support::*;
 
 mod argument_ownership;
 
+/// In-place array writes dirty imported snapshots even when the fake runtime keeps the same box.
+#[test]
+fn native_array_snapshots_mark_element_mutations_dirty() {
+    for source in ["$items[0] = 4;", "$items[] = 3;", "$items[0] += 1;", "unset($items[1]);"] {
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let initialize = parse_fragment(b"$items = [1, 2];").unwrap();
+        execute_program_with_context(&mut context, &initialize, &mut scope, &mut values).unwrap();
+        scope.mark_all_clean();
+        let original = scope.visible_cell("items").unwrap();
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        assert!(scope.entry("items").unwrap().flags().dirty, "{source}: mutation lost its reload marker");
+        if !source.starts_with("unset") {
+            assert_eq!(scope.visible_cell("items"), Some(original), "{source}: must exercise the same-box shortcut");
+        }
+    }
+}
+
+/// A local global-alias write marks the global snapshot that native reload actually reads.
+#[test]
+fn native_global_array_snapshot_marks_in_place_alias_writes_dirty() {
+    let mut context = ElephcEvalContext::new();
+    let mut local = ElephcEvalScope::new();
+    let mut global = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let array = values.array_new(1).unwrap();
+    let key = values.int(0).unwrap();
+    let value = values.int(1).unwrap();
+    values.array_set(array, key, value).unwrap();
+    global.set_from_aot("items", array, crate::scope::ScopeCellOwnership::Owned);
+    global.mark_name_clean("items");
+    assert!(context.set_global_scope(&mut global));
+    let program = parse_fragment(b"global $items; $items[] = 2;").unwrap();
+    execute_program_with_context(&mut context, &program, &mut local, &mut values).unwrap();
+    assert!(global.entry("items").unwrap().flags().dirty);
+    assert_eq!(global.visible_cell("items"), Some(array));
+}
+
 /// Verifies eval fragments can dispatch registered native AOT functions.
 #[test]
 fn execute_program_calls_registered_native_function() {

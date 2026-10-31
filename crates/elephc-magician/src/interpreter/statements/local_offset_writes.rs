@@ -109,7 +109,10 @@ fn eval_local_offset_write(
         } else {
             eval_array_append_owned_value_with_type(array, value, &declared, context, values)?
         };
-        if visible_scope_cell(context, scope, name) == Some(replacement) { return Ok(()); }
+        if visible_scope_cell(context, scope, name) == Some(replacement) {
+            mark_scope_binding_changed(context, scope, name)?;
+            return Ok(());
+        }
         write_back_owned_variable_ref_target(scope, name, replacement, context, values)
     })();
     for operand in operands.into_iter().rev() {
