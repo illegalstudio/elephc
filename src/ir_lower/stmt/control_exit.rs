@@ -299,6 +299,16 @@ fn promote_local_to_reference_return_payload(
         // slot written only here keeps the declared payload shape independent of that
         // final frame layout. Attach the source name so finally writes reach the same cell.
         let value = ctx.load_local(name, Some(span));
+        let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. })
+            && matches!(ctx.return_php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            // Container conversions consume their input. The source slot still owns its
+            // payload until alias publication, so lend the conversion a separate owner.
+            let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            retained
+        } else { value };
         let value = coerce_to_return_type(ctx, value, Some(span));
         let result_type = ctx.return_php_type.clone();
         let staged = ctx.declare_synthetic_php_local(result_type.clone());

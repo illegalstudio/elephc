@@ -9,6 +9,26 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Consuming reference-return conversions preserve unique, shared and empty source containers.
+#[test]
+fn test_reference_return_container_conversions_own_their_input() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function &uniqueContainerReference(): array<mixed> { $items = [1, 2]; return $items; }
+function &sharedContainerReference(array<int> $input): array<mixed> {
+    $items = $input; return $items;
+}
+function &emptyHashContainerReference(): array<string, int> { $items = []; return $items; }
+$unique =& uniqueContainerReference(); $unique[] = 3;
+$original = [4, 5]; $shared =& sharedContainerReference($original); $shared[] = 6;
+$map =& emptyHashContainerReference(); $map['answer'] = 7;
+echo count($unique), ':', json_encode($original), ':', count($shared), ':', json_encode($map);
+unset($unique, $original, $shared, $map);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "3:[4,5]:3:{\"answer\":7}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval native calls preserve nullable-integer reference tags, hidden argument reads and variadics.
 #[test]
 fn test_eval_native_nullable_integer_reference_arguments_preserve_both_words() {

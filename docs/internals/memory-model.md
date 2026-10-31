@@ -581,7 +581,9 @@ the declared shape and a later write through either alias has to keep meaning.
 For a concrete declared result, storage is staged in a dedicated typed local before promotion,
 then the original name is attached to that cell. This keeps the payload independent of
 the source slot's final frame layout, which can become `Mixed` after a nullable store
-lowered earlier or later in the function. Storage that other aliases ALREADY share cannot
+lowered earlier or later in the function. A consuming container conversion receives an
+independent retained payload; alias publication can then retire the source slot without
+releasing the conversion's result a second time. Storage that other aliases ALREADY share cannot
 be re-shaped that way, so it is checked instead
 of widened:
 
