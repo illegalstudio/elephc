@@ -630,8 +630,11 @@ and neither word of the caller's slot is modified. These refusals are compiler s
 PHP reference parameter types do not constrain later assignments to an untyped local alias.
 Shared hashes select shape12 marker writes before copy-on-write can consume the caller's old
 hash owner. The write leaves the marker and hash unchanged, so both success and refusal can
-use the original header. Unique hashes avoid the preliminary lookup. The affected EIR stores
+use the original header. Unique hashes avoid the preliminary lookup. Callback-capable EIR stores
 retain full user-code effects because replacement cleanup can invoke PHP destructors or throw.
+Proven typed stores with destructor-free elements, scalar keys and matching replacements refine
+those defaults to storage effects before callable summaries are computed. Unknown Mixed stores
+keep their callback effects; concat reset analysis still applies its precise operand proof.
 For packed arrays with a runtime key, shape12 marker writes also validate and publish directly
 before indexed-to-hash promotion. A refusal therefore leaves the destination owner intact;
 successful integer/null writes retain the same marker and retire the full replacement box.

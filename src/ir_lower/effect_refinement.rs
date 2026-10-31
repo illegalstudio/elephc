@@ -18,6 +18,8 @@ use crate::ir::{
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
+mod container_stores;
+
 const MAX_EFFECT_ITERATIONS: usize = 64;
 
 /// Read-only module facts used while summarizing and rewriting instructions.
@@ -206,6 +208,9 @@ fn refined_instruction_effects(
     context: &RefinementContext<'_>,
 ) -> Effects {
     match instruction.op {
+        Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey => {
+            container_stores::effects(function, instruction).unwrap_or(instruction.effects)
+        }
         // Float and boxed truthiness may dispatch a PHP 8.5 NaN warning handler.
         Op::IsTruthy if instruction.operands.first().and_then(|&value| function.value(value))
             .is_none_or(|value| matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => {

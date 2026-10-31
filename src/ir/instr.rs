@@ -1668,6 +1668,8 @@ impl Op {
     /// `ir_lower::expr::arithmetic_effects()` drops that bit when the right operand is a literal
     /// that rules the error out, so `$x << 3` and `$x / 2` stay removable, hoistable, and
     /// CSE-able exactly as they were before the guards existed.
+    /// Element stores also refine their callback-capable defaults when container, key and
+    /// replacement types prove that no marker, PHP coercion or destructor can be reached.
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
@@ -1678,6 +1680,10 @@ impl Op {
                 | Op::IShl
                 | Op::IShrA
                 | Op::Call
+                | Op::ArraySet
+                | Op::HashSet
+                | Op::DescriptorArgSet
+                | Op::ArraySetMixedKey
                 | Op::FunctionVariantCall
                 | Op::ClosureBind
                 | Op::LanguageConstructCall
