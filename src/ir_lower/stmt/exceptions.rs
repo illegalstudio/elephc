@@ -239,7 +239,11 @@ pub(super) fn lower_catch_dispatch_with_finally(
     span: Span,
 ) -> bool {
     let mut after_reachable = false;
+    let dispatch_types = ctx.local_types_snapshot();
+    let dispatch_initialized = ctx.initialized_slots_snapshot();
     for catch in catches {
+        ctx.restore_local_types(dispatch_types.clone());
+        ctx.restore_initialized_slots(dispatch_initialized.clone());
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
