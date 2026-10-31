@@ -53,6 +53,8 @@ pub unsafe extern "C" fn __elephc_eval_class_string_relation_v1(
             return u64::from(crate::context::native_class_string_relation(context, &source, &candidates, exclude_self != 0));
         }
         // A read-only query can use a metadata snapshot without registering object ownership.
+        // Unknown names need no declaration bodies or temporary context.
+        if !crate::context::global_eval_class_like_exists(&source) { return 0; }
         let mut snapshot = ElephcEvalContext::new();
         snapshot.sync_global_eval_classes();
         u64::from(crate::context::native_class_string_relation(&snapshot, &source, &candidates, exclude_self != 0))

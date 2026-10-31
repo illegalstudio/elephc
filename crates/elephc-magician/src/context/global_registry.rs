@@ -240,8 +240,8 @@ mod active_context_tests {
     }
 }
 
-#[cfg(not(test))]
 #[derive(Default)]
+#[cfg_attr(test, allow(dead_code))]
 pub(super) struct GlobalEvalClassRegistry {
     pub(super) classes: HashMap<String, EvalClass>,
     pub(super) declared_class_names: Vec<String>,
@@ -252,6 +252,22 @@ pub(super) struct GlobalEvalClassRegistry {
     pub(super) enums: HashMap<String, EvalEnum>,
     pub(super) declared_enum_names: Vec<String>,
     pub(super) aliases: HashMap<String, EvalClassAlias>,
+}
+
+impl GlobalEvalClassRegistry {
+    /// Rejects undeclared names without copying declaration bodies into a temporary context.
+    fn contains_class_like(&self, name: &str) -> bool {
+        let key = normalize_class_name(name);
+        self.classes.contains_key(&key) || self.interfaces.contains_key(&key)
+            || self.traits.contains_key(&key) || self.enums.contains_key(&key)
+            || self.aliases.contains_key(&key)
+    }
+}
+
+/// Probes PHP-global declaration keys before a context-free relation lookup builds a snapshot.
+#[cfg(not(test))]
+pub(crate) fn global_eval_class_like_exists(name: &str) -> bool {
+    global_eval_classes().lock().is_ok_and(|registry| registry.contains_class_like(name))
 }
 
 /// Returns the process-local eval class registry for generated-code eval contexts.
@@ -320,5 +336,30 @@ pub(super) fn register_global_eval_alias(alias_name: &str, alias: &EvalClassAlia
     let key = normalize_class_name(alias_name);
     if let Ok(mut registry) = global_eval_classes().lock() {
         registry.aliases.insert(key, alias.clone());
+    }
+}
+
+#[cfg(test)]
+mod registry_probe_tests {
+    use super::*;
+
+    /// Negative lookups inspect only map keys, while aliases and qualified names remain visible.
+    #[test]
+    fn class_like_presence_probe_preserves_case_and_aliases_without_a_snapshot() {
+        let mut registry = GlobalEvalClassRegistry::default();
+        assert!(!registry.contains_class_like("MissingRegistryClass"));
+        registry.classes.insert(normalize_class_name("RegistryClass"),
+            EvalClass::new("RegistryClass", vec![], vec![]));
+        registry.interfaces.insert(normalize_class_name("RegistryInterface"),
+            EvalInterface::new("RegistryInterface", vec![], vec![]));
+        registry.aliases.insert(normalize_class_name("RegistryAlias"), EvalClassAlias {
+            target: "RegistryClass".into(), kind: EvalClassAliasKind::Class,
+        });
+        assert!(registry.contains_class_like("\\registryclass"));
+        assert!(registry.contains_class_like("REGISTRYINTERFACE"));
+        assert!(registry.contains_class_like("registryalias"));
+        assert!(!registry.contains_class_like("MissingRegistryClass"));
+        assert_eq!(registry.classes.len(), 1);
+        assert_eq!(registry.aliases.len(), 1);
     }
 }
