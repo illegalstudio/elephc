@@ -18,6 +18,24 @@ macro_rules! impl_reflection_ops {
         })
     }
 
+    /// Enters native code behind a complete handler and adopts the result only after status checks.
+    fn invoke_native_callable(
+        &mut self,
+        callback: RuntimeCellHandle,
+        arguments: RuntimeCellHandle,
+        invocation_scope: i64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut output = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_invoke_native_callable_v2(
+                callback.as_ptr(), arguments.as_ptr(), invocation_scope, &mut output,
+            )
+        };
+        if status == 1 { return Err(EvalStatus::UnsupportedConstruct); }
+        self.handle_native_cleanup_status(status)?;
+        self.handle_native_call_result(output)
+    }
+
     /// Materializes a populated synthetic `ReflectionAttribute` object for eval metadata.
     fn reflection_attribute_new(
         &mut self,

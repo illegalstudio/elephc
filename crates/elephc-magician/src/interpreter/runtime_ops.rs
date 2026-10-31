@@ -36,6 +36,17 @@ pub trait RuntimeValueOps {
         Err(EvalStatus::UnsupportedConstruct)
     }
 
+    /// Invokes a borrowed native callable and supplied argument box under an explicit native scope.
+    /// Implementors return an owned result and contain native exceptions below the Rust boundary.
+    fn invoke_native_callable(
+        &mut self,
+        _callback: RuntimeCellHandle,
+        _arguments: RuntimeCellHandle,
+        _invocation_scope: i64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Invokes a reviewed static operator adapter using PHP-visible arguments.
     /// Native implementations bind hidden physical parameters before entering the method.
     fn operator_static_call(&mut self, class: &str, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {

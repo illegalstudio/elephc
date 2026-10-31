@@ -24,6 +24,13 @@ unsafe extern "C" {
 
     /// Boxes a borrowed persistent native descriptor for a lazy Reflection default factory.
     pub(super) fn __elephc_eval_value_callable_from_raw(descriptor: usize) -> *mut RuntimeCell;
+    /// Contains a three-argument descriptor invocation and transfers only a successful owned result.
+    pub(super) fn __elephc_eval_invoke_native_callable_v2(
+        callback: *mut RuntimeCell,
+        arguments: *mut RuntimeCell,
+        invocation_scope: i64,
+        output: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Wraps a PHP value in an independently owned runtime reference cell.
     pub(super) fn __elephc_eval_value_reference_new(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Reports whether a boxed value is a runtime reference cell.

@@ -13,7 +13,7 @@
 //!   capture/receiver metadata available to runtime dispatch without changing the
 //!   one-word callable ABI.
 //! - The optional invoker slot points at a generated uniform runtime adapter whose
-//!   ABI is `(descriptor, argument array) -> Mixed`.
+//!   ABI is `(descriptor, argument array, invocation scope) -> Mixed`.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::data_section::{DataSection, DataWord};
