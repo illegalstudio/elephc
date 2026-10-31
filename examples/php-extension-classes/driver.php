@@ -2,8 +2,11 @@
 
 declare(strict_types=1);
 
-// The native run loads only the extension. The source run provides a PHP comparison.
-if (!extension_loaded('main')) {
+// Show which implementation runs before the shared demonstration below.
+if (extension_loaded('main')) {
+    echo "Mode: native extension (main.so)\n";
+} else {
+    echo "Mode: PHP source (fallback)\n";
     require __DIR__ . '/main.php';
 }
 

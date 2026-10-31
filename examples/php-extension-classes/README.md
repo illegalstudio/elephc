@@ -10,14 +10,17 @@ elephc --emit phpext --heap-size=1048576 \
 php -n -d extension=./main.so driver.php
 ```
 
-The native run calls `new PippoDemo\Pippo()` without including its PHP source or
-loading a wrapper. The same driver can run the ordinary PHP source for comparison:
+The native run starts with `Mode: native extension (main.so)` and calls
+`new PippoDemo\Pippo()` without including its PHP source or loading a wrapper.
+Use `-d extension=./main.so`; `-d main.so` does not load the extension.
+The same driver can run the ordinary PHP source for comparison:
 
 ```sh
 php -n driver.php
 ```
 
-Expected output:
+Without the extension, the first line is `Mode: PHP source (fallback)`.
+Both modes then print the same demonstration output:
 
 ```text
 Ciao, PHP!

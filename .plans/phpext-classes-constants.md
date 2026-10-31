@@ -254,8 +254,9 @@ including nested destructor failures and pressure recovery. After the shutdown-r
 phases also pass with both PHP itself and the adapter compiled with ASan, with
 LeakSanitizer enabled on each actual harness process. No sanitizer findings remain.
 
-The Pippo example produces exactly the same output as its pure-PHP source and
-requires only extension loading on the native path. Its actual module is built
+The Pippo example produces the same demonstration results as its pure-PHP source.
+The driver prints a distinct mode line for the native extension and source fallback,
+and requires only extension loading on the native path. Its actual module is built
 with the matching installed PHP 8.5.12 SDK. Clang accepts extension assembly for
 ELF x86_64, ELF aarch64 and Mach-O arm64. Real ARM64-host execution and the
 Valgrind/Apple-leaks matrix remain for the existing SDK CI matrix. No full local
