@@ -203,6 +203,10 @@ pub enum RuntimeBuiltinId {
     MemoryGetUsage = 92,
     /// Native heap metric `memory_reset_peak_usage`.
     MemoryResetPeakUsage = 93,
+    /// PHP `serialize`.
+    Serialize = 94,
+    /// PHP `unserialize` with its default options.
+    Unserialize = 95,
 }
 
 /// Status returned by `__elephc_runtime_builtin_call_v1`.
@@ -234,7 +238,7 @@ impl RuntimeBuiltinStatus {
 
 impl RuntimeBuiltinId {
     /// Every version-one runtime builtin in stable ABI order.
-    pub const ALL: [Self; 93] = [
+    pub const ALL: [Self; 95] = [
         Self::Boolval,
         Self::Floatval,
         Self::Intval,
@@ -328,6 +332,8 @@ impl RuntimeBuiltinId {
         Self::MemoryGetPeakUsage,
         Self::MemoryGetUsage,
         Self::MemoryResetPeakUsage,
+        Self::Serialize,
+        Self::Unserialize,
     ];
 
     /// Every operation currently implemented by the optional mbstring engine.
@@ -506,6 +512,8 @@ impl RuntimeBuiltinId {
             Self::MemoryGetPeakUsage => "memory_get_peak_usage",
             Self::MemoryGetUsage => "memory_get_usage",
             Self::MemoryResetPeakUsage => "memory_reset_peak_usage",
+            Self::Serialize => "serialize",
+            Self::Unserialize => "unserialize",
 
             Self::MbOutputHandler => "mb_output_handler",
             Self::MbEregReplaceCallback => "mb_ereg_replace_callback",
@@ -617,6 +625,8 @@ impl RuntimeBuiltinId {
             91 => Some(Self::MemoryGetPeakUsage),
             92 => Some(Self::MemoryGetUsage),
             93 => Some(Self::MemoryResetPeakUsage),
+            94 => Some(Self::Serialize),
+            95 => Some(Self::Unserialize),
 
             _ => None,
         }
@@ -688,6 +698,7 @@ impl RuntimeBuiltinId {
             Self::MbDecodeNumericentity => arg_count >= 2 && arg_count <= 3,
             Self::MemoryGetUsage | Self::MemoryGetPeakUsage => arg_count <= 1,
             Self::MemoryGetAllocations | Self::MemoryGetFrees | Self::MemoryResetPeakUsage => arg_count == 0,
+            Self::Serialize | Self::Unserialize => arg_count == 1,
             Self::ObGetLevel
             | Self::ObGetLength
             | Self::ObClean

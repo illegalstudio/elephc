@@ -317,11 +317,16 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_property_len_zero",
     );
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
-    emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
-    emitter.instruction("jne __elephc_eval_value_object_property_len_zero");    // non-stdClass objects expose no bridge-visible properties
-    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load stdClass dynamic-property hash pointer
+    abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");    // resolve the class-id table extent
+    emitter.instruction("cmp rax, QWORD PTR [r11]");                            // is the class id within the metadata tables?
+    emitter.instruction("jae __elephc_eval_value_object_property_len_zero");    // incomplete or unknown ids expose no properties
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags"); // resolve the dynamic-property storage flags
+    emitter.instruction("cmp QWORD PTR [r11 + rax * 8], 0");                    // does this class own a dynamic-property tail?
+    emitter.instruction("je __elephc_eval_value_object_property_len_zero");     // classes without the tail expose no dynamic properties
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes"); // resolve the class payload-size table
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the object payload size
+    emitter.instruction("mov r10, QWORD PTR [r10 + r11 - 8]");                  // load the dynamic-property hash pointer
     emitter.instruction("test r10, r10");                                       // is the property hash null?
     emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null property hashes are treated as empty objects
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the hash entry count
@@ -348,11 +353,16 @@ pub(super) fn emit_x86_64_arrays(emitter: &mut Emitter) {
         "r11",
         "__elephc_eval_value_object_property_iter_key_null",
     );
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
-    emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
-    emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-stdClass objects have no bridge-visible key
-    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load stdClass dynamic-property hash pointer
+    abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_count");    // resolve the class-id table extent
+    emitter.instruction("cmp rax, QWORD PTR [r11]");                            // is the class id within the metadata tables?
+    emitter.instruction("jae __elephc_eval_value_object_property_iter_key_null"); // incomplete or unknown ids expose no properties
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags"); // resolve the dynamic-property storage flags
+    emitter.instruction("cmp QWORD PTR [r11 + rax * 8], 0");                    // does this class own a dynamic-property tail?
+    emitter.instruction("je __elephc_eval_value_object_property_iter_key_null"); // classes without the tail expose no keys
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes"); // resolve the class payload-size table
+    emitter.instruction("mov r11, QWORD PTR [r11 + rax * 8]");                  // load the object payload size
+    emitter.instruction("mov r10, QWORD PTR [r10 + r11 - 8]");                  // load the dynamic-property hash pointer
     emitter.instruction("test r10, r10");                                       // is the property hash null?
     emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null property hashes produce a null key
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls

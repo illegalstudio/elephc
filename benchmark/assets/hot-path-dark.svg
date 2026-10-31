@@ -3,33 +3,34 @@
 <desc id="desc">CI process execution medians in milliseconds. Lower is better. Lines break when environment or fixture changes.</desc>
 <rect width="1000" height="300" rx="16" fill="#0b1220"/>
 <text x="28.0" y="40.0" fill="#eef3fa" font-family="ui-monospace,monospace" font-size="22" font-weight="700">ELEPHC / Buffer and array storage</text>
-<text x="28.0" y="67.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="13" font-weight="400">Latest: 2026-10-29 | 17 saved samples | recent 90 days</text>
+<text x="28.0" y="67.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="13" font-weight="400">Latest: 2026-10-30 | 18 saved samples | recent 90 days</text>
 <rect x="20" y="85" width="960" height="140" rx="10" fill="#131d2d" stroke="#344158"/>
 <text x="36.0" y="110.0" fill="#eef3fa" font-family="ui-monospace,monospace" font-size="16" font-weight="700">buffer-vs-arrays</text>
-<text x="36.0" y="134.0" fill="#eef3fa" font-family="ui-monospace,monospace" font-size="12" font-weight="400">buffer 5.36 ms | indexed 60.17 ms | assoc 55.26 ms</text>
-<text x="36.0" y="155.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-29 | 00350105 | trend: buffer ms</text>
+<text x="36.0" y="134.0" fill="#eef3fa" font-family="ui-monospace,monospace" font-size="12" font-weight="400">buffer 6.95 ms | indexed 75.21 ms | assoc 43.19 ms</text>
+<text x="36.0" y="155.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="11" font-weight="400">2026-10-30 | 66824704 | trend: buffer ms</text>
 <path d="M565 193 H955" stroke="#344158" fill="none"/>
-<polyline points="565.00,156.19 598.23,142.12 617.84,157.56 646.67,157.13 670.25,134.91 691.00,138.32 714.56,128.00 741.08,149.28" stroke="#d85a26" stroke-width="2" fill="none"/>
+<polyline points="565.00,156.19 596.29,142.12 614.76,157.56 641.91,157.13 664.11,134.91 683.65,138.32 705.85,128.00 730.82,149.28" stroke="#d85a26" stroke-width="2" fill="none"/>
 <circle cx="565.00" cy="156.19" r="1.5" fill="#d85a26"/>
-<circle cx="598.23" cy="142.12" r="1.5" fill="#d85a26"/>
-<circle cx="617.84" cy="157.56" r="1.5" fill="#d85a26"/>
-<circle cx="646.67" cy="157.13" r="1.5" fill="#d85a26"/>
-<circle cx="670.25" cy="134.91" r="1.5" fill="#d85a26"/>
-<circle cx="691.00" cy="138.32" r="1.5" fill="#d85a26"/>
-<circle cx="714.56" cy="128.00" r="1.5" fill="#d85a26"/>
-<circle cx="741.08" cy="149.28" r="1.5" fill="#d85a26"/>
-<polyline points="761.46,150.96 789.51,162.36 814.01,161.92 838.30,160.89 855.74,157.84 884.67,169.77 910.23,152.78 933.92,162.50 955.00,158.74" stroke="#d85a26" stroke-width="2" fill="none"/>
-<circle cx="761.46" cy="150.96" r="1.5" fill="#d85a26"/>
-<circle cx="789.51" cy="162.36" r="1.5" fill="#d85a26"/>
-<circle cx="814.01" cy="161.92" r="1.5" fill="#d85a26"/>
-<circle cx="838.30" cy="160.89" r="1.5" fill="#d85a26"/>
-<circle cx="855.74" cy="157.84" r="1.5" fill="#d85a26"/>
-<circle cx="884.67" cy="169.77" r="1.5" fill="#d85a26"/>
-<circle cx="910.23" cy="152.78" r="1.5" fill="#d85a26"/>
-<circle cx="933.92" cy="162.50" r="1.5" fill="#d85a26"/>
-<circle cx="955.00" cy="158.74" r="1.5" fill="#d85a26"/>
+<circle cx="596.29" cy="142.12" r="1.5" fill="#d85a26"/>
+<circle cx="614.76" cy="157.56" r="1.5" fill="#d85a26"/>
+<circle cx="641.91" cy="157.13" r="1.5" fill="#d85a26"/>
+<circle cx="664.11" cy="134.91" r="1.5" fill="#d85a26"/>
+<circle cx="683.65" cy="138.32" r="1.5" fill="#d85a26"/>
+<circle cx="705.85" cy="128.00" r="1.5" fill="#d85a26"/>
+<circle cx="730.82" cy="149.28" r="1.5" fill="#d85a26"/>
+<polyline points="750.01,150.96 776.42,162.36 799.50,161.92 822.38,160.89 838.80,157.84 866.04,169.77 890.11,152.78 912.42,162.50 932.27,158.74 955.00,148.53" stroke="#d85a26" stroke-width="2" fill="none"/>
+<circle cx="750.01" cy="150.96" r="1.5" fill="#d85a26"/>
+<circle cx="776.42" cy="162.36" r="1.5" fill="#d85a26"/>
+<circle cx="799.50" cy="161.92" r="1.5" fill="#d85a26"/>
+<circle cx="822.38" cy="160.89" r="1.5" fill="#d85a26"/>
+<circle cx="838.80" cy="157.84" r="1.5" fill="#d85a26"/>
+<circle cx="866.04" cy="169.77" r="1.5" fill="#d85a26"/>
+<circle cx="890.11" cy="152.78" r="1.5" fill="#d85a26"/>
+<circle cx="912.42" cy="162.50" r="1.5" fill="#d85a26"/>
+<circle cx="932.27" cy="158.74" r="1.5" fill="#d85a26"/>
+<circle cx="955.00" cy="148.53" r="1.5" fill="#d85a26"/>
 <text x="565.0" y="212.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-13</text>
-<text x="875.0" y="212.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-29</text>
+<text x="875.0" y="212.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="10" font-weight="400">2026-10-30</text>
 <text x="490.0" y="133.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="10" font-weight="400">10.2</text>
 <text x="530.0" y="194.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="10" font-weight="400">0</text>
 <text x="28.0" y="265.0" fill="#a8b7cb" font-family="ui-monospace,monospace" font-size="11" font-weight="400">Process execution only; compile/link excluded. Shared CI runners have timing noise.</text>

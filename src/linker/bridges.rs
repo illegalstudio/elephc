@@ -138,6 +138,21 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_gmp",
+        env_var: "ELEPHC_GMP_LIB_DIR",
+        crate_name: "elephc-gmp",
+        flag_name: "gmp",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge is a thin adapter over libgmp (the managed `gmp` catalog
+        // package, spliced in by `src/pipeline/backend.rs` whenever this bridge is
+        // planned). It owns PHP's `gmp` extension surface.
+        php_extensions: &["gmp"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_random",
         env_var: "ELEPHC_RANDOM_LIB_DIR",
         crate_name: "elephc-random",
@@ -1985,6 +2000,7 @@ mod tests {
         assert!(php_extensions_for_lib("elephc_pdo").is_empty());
         assert_eq!(php_extensions_for_lib("elephc_crypto"), ["hash"]);
         assert_eq!(php_extensions_for_lib("elephc_bcmath"), ["bcmath"]);
+        assert_eq!(php_extensions_for_lib("elephc_gmp"), ["gmp"]);
         assert_eq!(php_extensions_for_lib("elephc_random"), ["random"]);
         assert_eq!(php_extensions_for_lib("elephc_phar"), ["Phar"]);
         assert_eq!(php_extensions_for_lib("elephc_image"), ["gd"]);

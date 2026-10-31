@@ -2,7 +2,7 @@
 title: "mb_detect_encoding()"
 description: "Guesses the most likely candidate encoding using the request's detection settings."
 sidebar:
-  order: 861
+  order: 912
 ---
 
 ## mb_detect_encoding()

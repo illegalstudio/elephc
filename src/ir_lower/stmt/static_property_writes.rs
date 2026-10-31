@@ -439,6 +439,52 @@ pub(crate) fn lower_static_property_array_assign_with_diagnosed_key(
         return;
     }
 
+    // A concrete hash-stamped static property writes through the hash store and is published
+    // back, the way the indexed branch above does: the generic boxed writer would mutate a
+    // detached clone and lose the element (#1950).
+    if let Some(property_ty) = static_property_type(ctx, receiver, property)
+        .filter(|ty| matches!(ty.codegen_repr(), PhpType::AssocArray { .. }))
+    {
+        let value = ctx.retype_value_for_container_element(&property_ty, value, Some(span));
+        let property_value = load_static_property_as(ctx, receiver, property, property_ty.clone(), span);
+        // A value the stamped hash cannot hold must not be written with the stamp's tag: widening
+        // the storage is refused by the property store, which is the loud, fail-closed outcome —
+        // PHP would keep the runtime value, tracked with the untyped-property storage change
+        // (#1951's shared helper unifies this predicate once it lands).
+        if let Some(updated_ty) = widened_hash_storage(
+            &property_ty,
+            &ctx.builder.value_php_type(value.value),
+        ) {
+            let converted = ctx.emit_value(
+                Op::HashToMixed,
+                vec![property_value.value],
+                None,
+                updated_ty.clone(),
+                Op::HashToMixed.default_effects(),
+                Some(span),
+            );
+            store_static_property(ctx, receiver, property, converted.value, span);
+            release_persisted_string_operand(ctx, index, span);
+            release_persisted_string_operand(ctx, value, span);
+            return;
+        }
+        crate::ir_lower::expr::unpin_in_flight_owners(
+            ctx,
+            std::mem::take(&mut index_pins),
+            span,
+        );
+        ctx.emit_void(
+            Op::HashSet,
+            vec![property_value.value, index.value, value.value],
+            key_marker,
+            Op::HashSet.default_effects(),
+            Some(span),
+        );
+        store_static_property(ctx, receiver, property, property_value.value, span);
+        release_persisted_string_operand(ctx, index, span);
+        release_persisted_string_operand(ctx, value, span);
+        return;
+    }
     let array_access_ty = static_property_type(ctx, receiver, property)
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty));
     // `offsetSet` receives the original key, so only a boxed array receiver has a key to rebuild.
@@ -558,6 +604,24 @@ fn separate_php_array_static_property(
     );
     store_static_property(ctx, receiver, property, separated.value, span);
     Some(separated)
+}
+
+/// Returns the widened storage when a stamped static hash cannot hold the assigned value.
+///
+/// PHP's untyped arrays keep the runtime value; a value the stamp cannot represent widens the
+/// storage to `Mixed` values, which the property store then refuses loudly rather than writing
+/// the value with the stamp's tag (#1950).
+fn widened_hash_storage(storage: &PhpType, value: &PhpType) -> Option<PhpType> {
+    let PhpType::AssocArray { key, value: stored } = storage.codegen_repr() else {
+        return None;
+    };
+    if stored.codegen_repr() == PhpType::Mixed || stored.codegen_repr() == value.codegen_repr() {
+        return None;
+    }
+    Some(PhpType::AssocArray {
+        key,
+        value: Box::new(PhpType::Mixed),
+    })
 }
 
 /// Returns true when a named static-property receiver may resolve through eval metadata.

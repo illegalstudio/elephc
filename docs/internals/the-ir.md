@@ -203,7 +203,7 @@ diagnostic, it produces a conversion.
 | a constant or class constant | the resolved constant/enum-case metadata |
 | a call to a user or extern function | `ctx.functions` / `ctx.extern_functions`, the declared return type |
 | a call to a **builtin** | `ctx.builtin_call_types`, keyed by the call's own span |
-| a method, static-method, property, or element read | the matching `*_expr_type_for_ir` resolver |
+| a method, static-method, property, or element read | the matching `*_expr_type_for_ir` resolver; a method call on a receiver of no single class takes the return type every declaring class shares, or `Mixed` |
 | anything else | `infer_expr_type_syntactic` |
 The builtin row is the one with a history. A builtin is in neither function map,
 so before issue #1096 it fell through to `infer_expr_type_syntactic`, which

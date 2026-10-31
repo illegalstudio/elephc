@@ -126,7 +126,16 @@ impl Parser {
                 source,
             }]);
         }
-        let value = self.parse_expr()?;
+        let value = self.parse_assignment()?;
+        if matches!(self.current(), TokenKind::Ident(word) if ident_eq(word, "and") || ident_eq(word, "xor") || ident_eq(word, "or")) {
+            let value = assignment_value(&name, op, value);
+            let assigned = EvalExpr::Assign { name, value: Box::new(value) };
+            let expr = self.parse_keyword_logical_from(assigned)?;
+            if require_semicolon {
+                self.expect_semicolon()?;
+            }
+            return Ok(vec![EvalStmt::Expr(expr)]);
+        }
         if require_semicolon {
             self.expect_semicolon()?;
         }

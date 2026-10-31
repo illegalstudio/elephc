@@ -77,6 +77,59 @@ pub unsafe extern "C" fn __elephc_eval_object_class_name(
     .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
 }
 
+/// Status returned when an object has no owning eval context.
+///
+/// The generated runtime treats this as "fall back to the compiled class-name tables"; every
+/// other non-zero code is a real eval failure.
+pub const EVAL_DYNAMIC_CLASS_NOT_FOUND: i32 = 1;
+
+/// Resolves `get_class()` for an object that may belong to an eval-declared class.
+///
+/// Unlike [`__elephc_eval_object_class_name`], this entry takes the object's raw payload
+/// pointer and finds its owning eval context from the process-local dynamic-object registry.
+/// Compiled functions that do not own an eval context (the GMP prelude helpers, ordinary AOT
+/// functions called from eval) use it so their diagnostics name the eval class instead of the
+/// native `stdClass` carrier.
+///
+/// # Safety
+/// `object` must be null or a live object payload, `lookup_kind` must be a supported lookup
+/// discriminator, and `out` may be null.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(
+    object: *mut RuntimeCell,
+    lookup_kind: u64,
+    out: *mut ElephcEvalResult,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        if object.is_null() {
+            return EVAL_DYNAMIC_CLASS_NOT_FOUND;
+        }
+        let Some(context) =
+            crate::ffi::dynamic_destructors::dynamic_object_owner_context(object as u64)
+        else {
+            return EVAL_DYNAMIC_CLASS_NOT_FOUND;
+        };
+        let Some(context) = context.as_mut() else {
+            return EVAL_DYNAMIC_CLASS_NOT_FOUND;
+        };
+        if context.abi_version() != ABI_VERSION {
+            return EvalStatus::AbiMismatch.code();
+        }
+        // `eval_object_class_name_inner` consumes a boxed runtime cell, while compiled
+        // callers hold the raw object payload. Box it with the runtime heap kind and release
+        // that wrapper once the lookup has published its own result cell.
+        let mut values = ElephcRuntimeOps::new();
+        let Ok(boxed) = values.raw_heap_word_value(object as u64) else {
+            return EVAL_DYNAMIC_CLASS_NOT_FOUND;
+        };
+        let status = eval_object_class_name_inner(context, boxed.as_ptr(), lookup_kind, out);
+        let _ = values.release(boxed);
+        status
+    })
+    .unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Tests whether an object satisfies a class/interface relation in the eval context.
 ///
 /// # Safety

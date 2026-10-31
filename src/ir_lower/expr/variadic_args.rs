@@ -257,6 +257,20 @@ pub(super) fn lower_variadic_tail_source_value(
             }
             return lower_invoker_ref_variadic_arg_marker(ctx, name, expr.span);
         }
+        // A property by-reference rewrite stages `$temp = <place>` as the argument so the
+        // read happens at this argument's source position. Execute it, then mark the hidden
+        // local as the reference the collector transports.
+        if let ExprKind::Assignment { target, .. } = &expr.kind {
+            if let ExprKind::Variable(name) = &target.kind {
+                if name.starts_with(crate::names::SYNTHETIC_PLACE_LOCAL_STEM) {
+                    let assigned = lower_expr(ctx, expr);
+                    if ctx.value_is_owning_temporary(assigned) {
+                        crate::ir_lower::ownership::release_if_owned(ctx, assigned, Some(expr.span));
+                    }
+                    return lower_invoker_ref_variadic_arg_marker(ctx, name, expr.span);
+                }
+            }
+        }
     }
     let value = prelowered
         .map(|value| lowered_value_from_id(ctx, value))

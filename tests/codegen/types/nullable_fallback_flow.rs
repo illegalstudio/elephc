@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// A nullable object invalidated on a loop back edge reaches the runtime guard before entry.
+#[test]
+fn test_nullable_fallback_flow_review_loop_object_argument_guard_runtime() {
+    let source = r#"<?php
+final class LoopArgumentService {}
+function needLoopArgument(LoopArgumentService $value): void { echo "called\n"; }
+function resetLoopArgument(?LoopArgumentService &$value): void { $value = null; }
+function runLoopArgument(?LoopArgumentService $value, array $items): void {
+    $value = $value ?? new LoopArgumentService();
+    foreach ($items as $item) { needLoopArgument($value); WRITE }
+}
+try { runLoopArgument(null, [1, 2]); echo "missing\n"; }
+catch (TypeError $error) { echo "caught\n"; }
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            for write in ["$value = null;", "resetLoopArgument($value);"] {
+                let source = source.replace("WRITE", write);
+                for source in [source.clone(), source.replace("$value = $value ??", "$value ??=")] {
+                    assert_nullable_flow_heap_output(&source, "called\ncaught\n");
+                }
+            }
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Conditional unset retires a coalesced receiver proof before an inferred return or new fallback.
 #[test]
 fn test_nullable_fallback_flow_review_conditional_unset_runtime() {

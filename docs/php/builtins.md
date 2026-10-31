@@ -599,6 +599,57 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`floor()`](./builtins/math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./builtins/math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`getrandmax()`](./builtins/math/getrandmax.md) | `(): int` | `int` | ✓ | - |
+| [`gmp_abs()`](./builtins/math/gmp_abs.md) | `(object|string|int $num): object` | `object` | ✓ | ✓ |
+| [`gmp_add()`](./builtins/math/gmp_add.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_and()`](./builtins/math/gmp_and.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_binomial()`](./builtins/math/gmp_binomial.md) | `(object|string|int $num, int $k): object` | `object` | ✓ | ✓ |
+| [`gmp_clrbit()`](./builtins/math/gmp_clrbit.md) | `(object $num, int $index): void` | `void` | ✓ | ✓ |
+| [`gmp_cmp()`](./builtins/math/gmp_cmp.md) | `(object|string|int $num1, object|string|int $num2): int` | `int` | ✓ | ✓ |
+| [`gmp_com()`](./builtins/math/gmp_com.md) | `(object|string|int $num): object` | `object` | ✓ | ✓ |
+| [`gmp_div()`](./builtins/math/gmp_div.md) | `(object|string|int $num1, object|string|int $num2, int $rounding_mode = 0): object` | `object` | ✓ | ✓ |
+| [`gmp_div_q()`](./builtins/math/gmp_div_q.md) | `(object|string|int $num1, object|string|int $num2, int $rounding_mode = 0): object` | `object` | ✓ | ✓ |
+| [`gmp_div_qr()`](./builtins/math/gmp_div_qr.md) | `(object|string|int $num1, object|string|int $num2, int $rounding_mode = 0): array` | `array` | ✓ | ✓ |
+| [`gmp_div_r()`](./builtins/math/gmp_div_r.md) | `(object|string|int $num1, object|string|int $num2, int $rounding_mode = 0): object` | `object` | ✓ | ✓ |
+| [`gmp_divexact()`](./builtins/math/gmp_divexact.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_export()`](./builtins/math/gmp_export.md) | `(object|string|int $num, int $word_size = 1, int $flags = 17): string` | `string` | ✓ | ✓ |
+| [`gmp_fact()`](./builtins/math/gmp_fact.md) | `(object|string|int $num): object` | `object` | ✓ | ✓ |
+| [`gmp_gcd()`](./builtins/math/gmp_gcd.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_gcdext()`](./builtins/math/gmp_gcdext.md) | `(object|string|int $num1, object|string|int $num2): array` | `array` | ✓ | ✓ |
+| [`gmp_hamdist()`](./builtins/math/gmp_hamdist.md) | `(object|string|int $num1, object|string|int $num2): int` | `int` | ✓ | ✓ |
+| [`gmp_import()`](./builtins/math/gmp_import.md) | `(string $data, int $word_size = 1, int $flags = 17): object` | `object` | ✓ | ✓ |
+| [`gmp_init()`](./builtins/math/gmp_init.md) | `(string|int $num, int $base = 0): object` | `object` | ✓ | ✓ |
+| [`gmp_intval()`](./builtins/math/gmp_intval.md) | `(object|string|int $num): int` | `int` | ✓ | ✓ |
+| [`gmp_invert()`](./builtins/math/gmp_invert.md) | `(object|string|int $num1, object|string|int $num2): object|false` | `object|false` | ✓ | ✓ |
+| [`gmp_jacobi()`](./builtins/math/gmp_jacobi.md) | `(object|string|int $num1, object|string|int $num2): int` | `int` | ✓ | ✓ |
+| [`gmp_kronecker()`](./builtins/math/gmp_kronecker.md) | `(object|string|int $num1, object|string|int $num2): int` | `int` | ✓ | ✓ |
+| [`gmp_lcm()`](./builtins/math/gmp_lcm.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_legendre()`](./builtins/math/gmp_legendre.md) | `(object|string|int $num1, object|string|int $num2): int` | `int` | ✓ | ✓ |
+| [`gmp_mod()`](./builtins/math/gmp_mod.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_mul()`](./builtins/math/gmp_mul.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_neg()`](./builtins/math/gmp_neg.md) | `(object|string|int $num): object` | `object` | ✓ | ✓ |
+| [`gmp_nextprime()`](./builtins/math/gmp_nextprime.md) | `(object|string|int $num): object` | `object` | ✓ | ✓ |
+| [`gmp_or()`](./builtins/math/gmp_or.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_perfect_power()`](./builtins/math/gmp_perfect_power.md) | `(object|string|int $num): bool` | `bool` | ✓ | ✓ |
+| [`gmp_perfect_square()`](./builtins/math/gmp_perfect_square.md) | `(object|string|int $num): bool` | `bool` | ✓ | ✓ |
+| [`gmp_popcount()`](./builtins/math/gmp_popcount.md) | `(object|string|int $num): int` | `int` | ✓ | ✓ |
+| [`gmp_pow()`](./builtins/math/gmp_pow.md) | `(object|string|int $num, int $exponent): object` | `object` | ✓ | ✓ |
+| [`gmp_powm()`](./builtins/math/gmp_powm.md) | `(object|string|int $num, object|string|int $exponent, object|string|int $modulus): object` | `object` | ✓ | ✓ |
+| [`gmp_prob_prime()`](./builtins/math/gmp_prob_prime.md) | `(object|string|int $num, int $repetitions = 10): int` | `int` | ✓ | ✓ |
+| [`gmp_random_bits()`](./builtins/math/gmp_random_bits.md) | `(int $bits): object` | `object` | ✓ | ✓ |
+| [`gmp_random_range()`](./builtins/math/gmp_random_range.md) | `(object|string|int $min, object|string|int $max): object` | `object` | ✓ | ✓ |
+| [`gmp_random_seed()`](./builtins/math/gmp_random_seed.md) | `(object|string|int $seed): void` | `void` | ✓ | ✓ |
+| [`gmp_root()`](./builtins/math/gmp_root.md) | `(object|string|int $num, int $nth): object` | `object` | ✓ | ✓ |
+| [`gmp_rootrem()`](./builtins/math/gmp_rootrem.md) | `(object|string|int $num, int $nth): array` | `array` | ✓ | ✓ |
+| [`gmp_scan0()`](./builtins/math/gmp_scan0.md) | `(object|string|int $num1, int $start): int` | `int` | ✓ | ✓ |
+| [`gmp_scan1()`](./builtins/math/gmp_scan1.md) | `(object|string|int $num1, int $start): int` | `int` | ✓ | ✓ |
+| [`gmp_setbit()`](./builtins/math/gmp_setbit.md) | `(object $num, int $index, bool $value = true): void` | `void` | ✓ | ✓ |
+| [`gmp_sign()`](./builtins/math/gmp_sign.md) | `(object|string|int $num): int` | `int` | ✓ | ✓ |
+| [`gmp_sqrt()`](./builtins/math/gmp_sqrt.md) | `(object|string|int $num): object` | `object` | ✓ | ✓ |
+| [`gmp_sqrtrem()`](./builtins/math/gmp_sqrtrem.md) | `(object|string|int $num): array` | `array` | ✓ | ✓ |
+| [`gmp_strval()`](./builtins/math/gmp_strval.md) | `(object|string|int $num, int $base = 10): string` | `string` | ✓ | ✓ |
+| [`gmp_sub()`](./builtins/math/gmp_sub.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
+| [`gmp_testbit()`](./builtins/math/gmp_testbit.md) | `(object|string|int $num, int $index): bool` | `bool` | ✓ | ✓ |
+| [`gmp_xor()`](./builtins/math/gmp_xor.md) | `(object|string|int $num1, object|string|int $num2): object` | `object` | ✓ | ✓ |
 | [`hexdec()`](./builtins/math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | - |
 | [`hypot()`](./builtins/math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./builtins/math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
@@ -716,11 +767,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./builtins/misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./builtins/misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
-| [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | - |
+| [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
 | [`set_error_handler()`](./builtins/misc/set_error_handler.md) | `(mixed $callback, int $error_levels = E_ALL): mixed` | `mixed` | ✓ | ✓ |
 | [`set_exception_handler()`](./builtins/misc/set_exception_handler.md) | `(mixed $callback): mixed` | `mixed` | ✓ | ✓ |
 | [`trigger_error()`](./builtins/misc/trigger_error.md) | `(string $message, int $error_level = E_USER_NOTICE): bool` | `bool` | ✓ | ✓ |
-| [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | - |
+| [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | ✓ |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`user_error()`](./builtins/misc/user_error.md) | `(string $message, int $error_level = 1024): bool` | `bool` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |

@@ -358,7 +358,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, eval, regex, curl, web)
+# Force-enable an optional bridge (pdo, mysqli, tls, crypto, bcmath, gmp, random, mbstring, iconv, phar, tz, image, pcntl, xml, fileinfo, tokenizer, eval, regex, curl, web)
 elephc app.php --with-pdo --with-crypto
 # Force-inject the mysqli surface (links the shared elephc_pdo bridge, without the PDO classes)
 elephc app.php --with-mysqli
@@ -577,7 +577,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
 - **Random**: PHP's `ext/random` — `mt_srand`/`srand`/`rand`/`mt_rand`/`mt_getrandmax`/`getrandmax`, `random_bytes`, `random_int`, `lcg_value`, `array_rand()`'s multi-key form, the `Random\Engine\Mt19937`, `PcgOneseq128XslRr64`, `Xoshiro256StarStar` and `Secure` engines, `Random\Randomizer` (`nextInt`, `nextFloat`, `getFloat`, `getInt`, `getBytes`, `getBytesFromString`, `shuffleArray`, `shuffleBytes`, `pickArrayKeys`), `Random\IntervalBoundary` and the `Random\*` exception hierarchy, matching php-src 8.5's streams, serialization and deprecations; see the [Random guide](docs/php/random.md)
-- **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
+- **Native extensions**: complete PHP 8.5.10 `mbstring` function and constant inventory, complete `iconv` conversion and MIME helpers, the full php-src 8.5 [`GMP`](docs/php/gmp.md) surface over a pinned libgmp 6.3.0, plus the supported `curl` easy, multi, share, callback, stream, and multipart API through pay-for-use bridges
 - **OPcache**: the API reports the compiled script manifest and a live cache for dynamic `include`/`require` through `eval()`, with optional persistent file caching, revalidation, admission limits, blacklists, and preloading; see the [OPcache guide](docs/php/opcache.md)
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
@@ -587,9 +587,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (1093)
+### Built-in functions (1146)
 
-The generated builtin documentation currently exposes 1093 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1146 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, GMP, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -799,6 +799,7 @@ src/
 crates/
 ├── elephc-builtin-contract/ # Dependency-neutral builtin catalog and signatures
 ├── elephc-bcmath/       # Exact arbitrary-precision decimal bridge
+├── elephc-gmp/          # php-src GMP surface over pinned libgmp 6.3.0
 ├── elephc-crypto/       # Hashing, HMAC, and OpenSSL-compatible crypto bridge
 ├── elephc-curl/         # Static libcurl easy, multi, share, callback, and multipart bridge
 ├── elephc-iconv/        # Character-set conversion and MIME header bridge

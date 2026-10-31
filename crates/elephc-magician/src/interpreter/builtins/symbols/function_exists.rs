@@ -140,6 +140,9 @@ pub(in crate::interpreter) fn eval_function_probe_exists(
     context: &ElephcEvalContext,
     name: &str,
 ) -> bool {
+    if name.starts_with("__elephc_") {
+        return false;
+    }
     // The version filter is applied to the BUILTIN arm only: a user-declared function with
     // one of these names (which PHP allows precisely because the extension function does not
     // exist on that profile) must still be reported. The xml surface is filtered the same

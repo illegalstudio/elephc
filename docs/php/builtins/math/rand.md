@@ -2,7 +2,7 @@
 title: "rand()"
 description: "Generate a random integer."
 sidebar:
-  order: 608
+  order: 659
 ---
 
 ## rand()

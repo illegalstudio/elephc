@@ -791,6 +791,7 @@ dependencies = [
  "elephc-crypto",
  "elephc-curl",
  "elephc-generics",
+ "elephc-gmp",
  "elephc-image",
  "elephc-magician",
  "elephc-mbstring",
@@ -810,6 +811,7 @@ dependencies = [
  "inventory",
  "libc",
  "lzma-rs",
+ "regex",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -877,6 +879,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "elephc-gmp"
+version = "0.1.0"
 
 [[package]]
 name = "elephc-iconv"

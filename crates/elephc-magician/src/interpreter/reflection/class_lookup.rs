@@ -64,8 +64,13 @@ pub(super) fn eval_reflection_aot_member_names(
     } else {
         values.reflection_property_names(runtime_class_name)?
     };
-    let names = eval_reflection_string_array_to_vec(names_array, values)?;
+    let mut names = eval_reflection_string_array_to_vec(names_array, values)?;
     values.release(names_array)?;
+    if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        if let Some(class) = elephc_builtin_contract::lookup_class(runtime_class_name) {
+            names.retain(|name| class.method_is_php_visible(name));
+        }
+    }
     Ok(names)
 }
 

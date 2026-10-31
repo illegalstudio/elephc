@@ -30,12 +30,18 @@ pub(super) fn lower_compare(
     let lhs = pending[0];
     unpin_in_flight_owners(ctx, pending_pins, left.span);
     unpin_in_flight_owners(ctx, left_pins, left.span);
-    if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
-        return result;
-    }
-    if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
-        |ctx| lower_compare_values(ctx, lhs, op, rhs, left, right, expr)) {
-        return result;
+    // A literal null never reaches a class comparison handler in PHP: object-versus-null
+    // uses the engine's standard ordering. The checker already excludes it, but lowering
+    // sees the boxed operand type, so gate on the source shapes as well.
+    let null_comparison = matches!(left.kind, ExprKind::Null) || matches!(right.kind, ExprKind::Null);
+    if !null_comparison {
+        if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
+            return result;
+        }
+        if let Some(result) = object_operators::lower_dynamic_object_binary(ctx, lhs, op, rhs, expr, true,
+            |ctx| lower_compare_values(ctx, lhs, op, rhs, left, right, expr)) {
+            return result;
+        }
     }
     lower_compare_values(ctx, lhs, op, rhs, left, right, expr)
 }
@@ -63,17 +69,49 @@ fn lower_compare_values(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    // PHP's standard ordering places any object above null, and `<=>` reports that as
+    // 1/-1. The generic spaceship backend has no object-versus-null arm, so answer it
+    // directly and retire any owning operand temporaries.
+    if matches!(op, BinOp::Spaceship) {
+        let left_object = matches!(ctx.builder.value_php_type(lhs.value).codegen_repr(), PhpType::Object(_));
+        let right_object = matches!(ctx.builder.value_php_type(rhs.value).codegen_repr(), PhpType::Object(_));
+        let left_null = lhs.ir_type == IrType::Void || matches!(ctx.builder.value_php_type(lhs.value), PhpType::Void);
+        let right_null = rhs.ir_type == IrType::Void || matches!(ctx.builder.value_php_type(rhs.value), PhpType::Void);
+        if (left_object && right_null) || (left_null && right_object) {
+            let result = lower_int_literal(ctx, if left_object { 1 } else { -1 }, expr);
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
+        }
+    }
     // Two strings ORDER through the runtime rule, not through `StrCmp`. `__rt_strcmp` is
     // byte-lexicographic — which is right for `strcmp()` and wrong for `<`, because PHP
     // compares two NUMERIC strings numerically: `"10" > "9"` is true, where byte order says
     // otherwise. `__rt_php_compare`'s two-string leg already implements exactly that rule,
     // and `emit_runtime_ordering_compare` boxes plain operands for it (issue #507).
     let string_ordering = lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str;
+    // A value-class handler has already taken precedence above, so an object reaching this
+    // point is a userland/internal object without an ordering adapter. PHP still orders it
+    // (class then properties, or object-versus-null) through the shared runtime comparator;
+    // the default integer fallback would try to cast it instead.
+    let object_ordering = matches!(lhs.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object))
+        || matches!(rhs.ir_type, IrType::Heap(crate::ir::IrHeapKind::Object))
+        || matches!(
+            ctx.builder.value_php_type(lhs.value).codegen_repr(),
+            PhpType::Object(_)
+        )
+        || matches!(
+            ctx.builder.value_php_type(rhs.value).codegen_repr(),
+            PhpType::Object(_)
+        );
     let uses_runtime_relational_compare = matches!(
         op,
         BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq
     )
         && (string_ordering
+            || object_ordering
             || needs_runtime_ordering_dispatch(ctx, lhs.value)
             || needs_runtime_ordering_dispatch(ctx, rhs.value));
     let opcode = match op {
@@ -94,6 +132,18 @@ fn lower_compare_values(
     } else if matches!(opcode, Op::ICmp) {
         lhs = coerce_to_int(ctx, lhs, left);
         rhs = coerce_to_int(ctx, rhs, right);
+    } else if matches!(opcode, Op::PhpRelCmp) && object_ordering {
+        // The shared ordering helper dispatches on runtime tags. A plain object slot and a
+        // null slot are not tagged; box them so `__rt_php_compare` sees their runtime kinds
+        // instead of rejecting the operands.
+        for operand in [&mut lhs, &mut rhs] {
+            if !matches!(
+                ctx.builder.value_php_type(operand.value).codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar
+            ) {
+                *operand = ctx.box_value_as_mixed(*operand, PhpType::Mixed, Some(expr.span));
+            }
+        }
     }
     let immediate = if matches!(opcode, Op::ICmp | Op::FCmp | Op::StrCmp | Op::PhpRelCmp) {
         Some(Immediate::CmpPredicate(cmp_predicate(op)))

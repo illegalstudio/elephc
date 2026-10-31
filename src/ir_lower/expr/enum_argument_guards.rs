@@ -93,7 +93,7 @@ fn bind_implicit_integer(
 }
 
 /// Builds the runtime predicate for PHP weak scalar and class parameter acceptance.
-fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
+pub(super) fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Expr> {
     let predicate = |name| predicate(name, value, span);
     let either = |a, b| Expr::new(ExprKind::BinaryOp {
         left: Box::new(a), op: BinOp::Or, right: Box::new(b),

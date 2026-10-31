@@ -131,6 +131,7 @@ fn emit_dynamic_plan_write(
                 property,
                 object,
                 *hash_offset,
+                inst.span.map_or(0, |span| span.line),
             )?;
             lower_allow_dynamic_prop_set(ctx, object, value, property, *hash_offset)
         }
@@ -160,6 +161,7 @@ fn emit_dynamic_plan_write(
                 &arm.class_name,
                 hash_offset,
                 recursive_refusal.as_deref(),
+                inst.span.map_or(0, |span| span.line),
             )
         }
         PropertyRuntimeAction::MagicGet => Err(CodegenIrError::invalid_module(
@@ -188,12 +190,9 @@ fn emit_named_dynamic_property_creation_deprecation(
     property: &str,
     object: ValueId,
     hash_offset: usize,
+    line: u32,
 ) -> Result<()> {
-    let deprecated = ctx
-        .module
-        .class_infos
-        .get(class_name)
-        .is_some_and(|info| info.dynamic_property_creation_is_deprecated());
+    let deprecated = class_dynamic_property_creation_is_deprecated(ctx, class_name);
     if !deprecated {
         return Ok(());
     }
@@ -219,12 +218,14 @@ fn emit_named_dynamic_property_creation_deprecation(
     emit_property_warning_fragment(
         ctx,
         format!(
-            "Deprecated: Creation of dynamic property {}::${} is deprecated\n",
+            "Deprecated: Creation of dynamic property {}::${} is deprecated",
             class_name, property
         )
         .as_bytes(),
-        true,
+        false,
     );
+    emit_property_warning_location(ctx, line);
+    emit_property_warning_fragment(ctx, b"\n", true);
     ctx.emitter.label(&skip_label);
     Ok(())
 }
@@ -397,6 +398,23 @@ pub(super) fn lower_stacked_named_dynamic_prop_set(
     Ok(())
 }
 
+/// Returns whether creating a dynamic property on `class_name` is deprecated.
+///
+/// `ClassInfo` is the authority for compiler-reserved storage; a reviewed class contract
+/// can additionally force the php-src deprecation for an internal class that opts into
+/// dynamic-property storage (GMP) without the `AllowDynamicProperties` exemption.
+fn class_dynamic_property_creation_is_deprecated(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> bool {
+    ctx.module
+        .class_infos
+        .get(class_name)
+        .is_some_and(|info| info.dynamic_property_creation_is_deprecated())
+        || elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|contract| contract.dynamic_properties_deprecated)
+}
+
 /// Emits php's dynamic-creation notice for a STATIC name on a stacked receiver.
 ///
 /// Same probe-then-report shape as the two siblings: the notice belongs to CREATION, so an
@@ -409,12 +427,9 @@ pub(super) fn emit_stacked_named_dynamic_property_creation_deprecation(
     property: &str,
     hash_offset: usize,
     receiver_offset: usize,
+    line: u32,
 ) -> Result<()> {
-    let deprecated = ctx
-        .module
-        .class_infos
-        .get(class_name)
-        .is_some_and(|info| info.dynamic_property_creation_is_deprecated());
+    let deprecated = class_dynamic_property_creation_is_deprecated(ctx, class_name);
     if !deprecated {
         return Ok(());
     }
@@ -436,12 +451,14 @@ pub(super) fn emit_stacked_named_dynamic_property_creation_deprecation(
     emit_property_warning_fragment(
         ctx,
         format!(
-            "Deprecated: Creation of dynamic property {}::${} is deprecated\n",
+            "Deprecated: Creation of dynamic property {}::${} is deprecated",
             class_name, property
         )
         .as_bytes(),
-        true,
+        false,
     );
+    emit_property_warning_location(ctx, line);
+    emit_property_warning_fragment(ctx, b"\n", true);
     ctx.emitter.label(&skip_label);
     Ok(())
 }
@@ -559,12 +576,9 @@ pub(super) fn emit_dynamic_property_creation_deprecation(
     hash_offset: usize,
     receiver_offset: usize,
     name_offset: usize,
+    line: u32,
 ) -> Result<()> {
-    let deprecated = ctx
-        .module
-        .class_infos
-        .get(class_name)
-        .is_some_and(|info| info.dynamic_property_creation_is_deprecated());
+    let deprecated = class_dynamic_property_creation_is_deprecated(ctx, class_name);
     if !deprecated {
         return Ok(());
     }
@@ -598,7 +612,9 @@ pub(super) fn emit_dynamic_property_creation_deprecation(
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_ptr_reg, name_offset);
     abi::emit_load_temporary_stack_slot(ctx.emitter, name_len_reg, name_offset + 8);
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning_fragment");
-    emit_property_warning_fragment(ctx, b" is deprecated\n", true);
+    emit_property_warning_fragment(ctx, b" is deprecated", false);
+    emit_property_warning_location(ctx, line);
+    emit_property_warning_fragment(ctx, b"\n", true);
     ctx.emitter.label(&skip_label);
     Ok(())
 }

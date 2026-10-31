@@ -39,6 +39,16 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The GMP eval parity fixture compiles one opaque-eval host (the whole builtin catalog)
+# and links the GMP bridge; it measured 329s on a debug macOS host.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
 # REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
 [[profile.default.overrides]]
 filter = 'binary(codegen_tests) and test(~codegen::repl)'
@@ -88,6 +98,9 @@ path = "debug/libelephc_crypto.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_bcmath.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_gmp.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_random.a"

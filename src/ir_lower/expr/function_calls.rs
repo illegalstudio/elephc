@@ -110,6 +110,19 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    if is_user_function {
+        if let Some(signature) = sig.as_ref() {
+            if let Some(rewrite) =
+                ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+            {
+                let previous = ctx.call_description.replace(canonical.to_string());
+                let result = lower_function_call(ctx, name, &rewrite.args, expr);
+                ctx.call_description = previous;
+                ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+                return result;
+            }
+        }
+    }
     if !is_extern && !is_user_function {
         if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
             return call;
@@ -144,6 +157,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         ),
         _ => None,
     };
+    // A by-value object parameter can reject a `Class|false`/`Class|null` argument at
+    // binding time. Name the callee here so that guard's TypeError uses PHP's
+    // `take(): Argument #1 ...` spelling instead of the generic `call()` fallback.
+    let previous_description = is_user_function
+        .then(|| ctx.call_description.replace(canonical.to_string()));
     begin_call_argument_evaluation(ctx);
     let mut operands = if is_user_function {
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
@@ -179,6 +197,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
                 .retype_packed_address_for_pointer_sink(value, expected, Some(expr.span))
                 .value;
         }
+    }
+    if let Some(previous) = previous_description {
+        ctx.call_description = previous;
     }
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)

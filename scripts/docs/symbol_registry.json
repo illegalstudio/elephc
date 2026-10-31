@@ -2083,6 +2083,24 @@
       "extension": false,
       "internal": false,
       "kind": "class",
+      "module": "gmp",
+      "name": "GMP",
+      "php_manual": null,
+      "since": "8.2"
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
       "module": "hash",
       "name": "HashContext",
       "php_manual": null,
@@ -18392,6 +18410,168 @@
       "route": "predefined",
       "since": null,
       "value": 1073741824
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_BIG_ENDIAN",
+      "route": "prelude",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_LITTLE_ENDIAN",
+      "route": "prelude",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_LSW_FIRST",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_MSW_FIRST",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_NATIVE_ENDIAN",
+      "route": "prelude",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_ROUND_MINUSINF",
+      "route": "prelude",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_ROUND_PLUSINF",
+      "route": "prelude",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_ROUND_ZERO",
+      "route": "prelude",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "reason": "eval-implementation-pending",
+        "supported": false
+      },
+      "extension": false,
+      "internal": false,
+      "module": "gmp",
+      "name": "GMP_VERSION",
+      "route": "prelude",
+      "since": null,
+      "value": "6.3.0"
     },
     {
       "aot": {

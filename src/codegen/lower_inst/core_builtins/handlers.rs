@@ -494,9 +494,20 @@ fn emit_default_user_error(
             Arch::X86_64 => ctx.load_string_value_to_regs(file, "rdi", "rsi")?,
         },
         TriggerSite::Caller => {
-            let (pointer_reg, length_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_symbol_to_reg(ctx.emitter, pointer_reg, "_php_diagnostic_file", 0);
-            abi::emit_load_symbol_to_reg(ctx.emitter, length_reg, "_php_diagnostic_file_len", 0);
+            // `__rt_diag_write` takes (pointer, length) in the target's diagnostic ABI
+            // registers: x1/x2 on AArch64, rdi/rsi on x86_64. Do not use the string-result
+            // pair here: rax/rdx on x86_64 would hand the writer the caller's stale
+            // registers and print an empty diagnostic filename.
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_load_symbol_to_reg(ctx.emitter, "x1", "_php_diagnostic_file", 0);
+                    abi::emit_load_symbol_to_reg(ctx.emitter, "x2", "_php_diagnostic_file_len", 0);
+                }
+                Arch::X86_64 => {
+                    abi::emit_load_symbol_to_reg(ctx.emitter, "rdi", "_php_diagnostic_file", 0);
+                    abi::emit_load_symbol_to_reg(ctx.emitter, "rsi", "_php_diagnostic_file_len", 0);
+                }
+            }
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_write");

@@ -1013,6 +1013,16 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
+    if ctx.module.required_runtime_features.eval_bridge {
+        let fallback_label = ctx.next_label("get_class_aot_fallback");
+        super::eval::emit_context_free_object_class_name(
+            ctx,
+            if name == "get_class" { 0 } else { 1 },
+            &fallback_label,
+            &done_label,
+        );
+        ctx.emitter.label(&fallback_label);
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_dynamic_object_class_name_aarch64(ctx, name, &empty_label, &done_label),
         Arch::X86_64 => emit_dynamic_object_class_name_x86_64(ctx, name, &empty_label, &done_label),

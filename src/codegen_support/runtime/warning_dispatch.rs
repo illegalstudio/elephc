@@ -195,6 +195,7 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     }
     abi::emit_call_label(e, "__rt_diag_write");
     e.label("__rt_warning_release");
+    abi::emit_store_zero_to_symbol(e, "_rt_diag_warning_message_len", 0);
     abi::emit_load_temporary_stack_slot(e, scratch, ACTIVATION);
     abi::emit_store_reg_to_symbol(e, scratch, "_exc_call_frame_top", 0);
     abi::emit_temporary_stack_address(e, a0, 0);
@@ -238,7 +239,16 @@ fn emit_arguments(e: &mut Emitter) {
             1 => {
                 let (ptr, len) = abi::string_result_regs(e);
                 abi::emit_load_temporary_stack_slot(e, ptr, BUFFER);
-                abi::emit_load_temporary_stack_slot(e, len, LENGTH);
+                // A producer may append ` in <file> on line <n>` for the default output.
+                // PHP's error handler receives the message alone, so prefer the length the
+                // producer recorded before appending that suffix; otherwise use the whole
+                // buffered diagnostic.
+                abi::emit_load_symbol_to_reg(e, scratch, "_rt_diag_warning_message_len", 0);
+                ins(e, "cbnz x10, __rt_warning_message_length_ready", "test r10, r10");
+                if !arm { e.instruction("jnz __rt_warning_message_length_ready"); } // keep a recorded message length
+                abi::emit_load_temporary_stack_slot(e, scratch, LENGTH);
+                e.label("__rt_warning_message_length_ready");
+                abi::emit_reg_move(e, len, scratch);
                 abi::emit_load_temporary_stack_slot(e, scratch, PREFIX);
                 ins(e, "add x1, x1, x10", "add rax, r10");
                 ins(e, "sub x2, x2, x10", "sub rdx, r10");

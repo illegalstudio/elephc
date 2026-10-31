@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
 
-Overall coverage: functions **1002 / 2169** (46%), classes **184 / 329** (56%), constants **1340 / 3180** (42%).
+Overall coverage: functions **1053 / 2169** (49%), classes **185 / 329** (56%), constants **1349 / 3180** (42%).
 
 ## Coverage by PHP module
 
@@ -35,7 +35,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `ftp` | 0 / 36 · 0% | 0 / 1 · 0% | 0 / 11 · 0% |
 | [`gd`](./image.md#functions) | 83 / 106 · 78% | 1 / 2 · 50% | 67 / 89 · 75% |
 | `gettext` | 0 / 10 · 0% | - | - |
-| `gmp` | 0 / 51 · 0% | 0 / 1 · 0% | 0 / 9 · 0% |
+| `gmp` | 51 / 51 · 100% | 1 / 1 · 100% | 9 / 9 · 100% |
 | `hash` | 9 / 20 · 45% | 1 / 1 · 100% | 0 / 40 · 0% |
 | [`iconv`](./iconv.md#functions) | 10 / 10 · 100% | - | 4 / 4 · 100% |
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
@@ -92,12 +92,13 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `exif` constants: 1 / 0
 - `gd` functions: 83 / 0
 - `gd` constants: 67 / 0
+- `gmp` constants: 9 / 0
 - `mysqli` functions: 84 / 0
 - `mysqli` constants: 52 / 0
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 390 / 348
+- `standard` functions: 390 / 350
 - `standard` constants: 163 / 142
 
 Of those functions, 201 from `exif`, `gd`, `mysqli`, `pdo`, `random`, `session` are implemented by PHP preludes and have no shared `eval_builtin!` binding. This count is separate from OPcache's dedicated interpreter handlers and native prelude dispatch, which are counted as supported inside `eval()`. See **eval() coverage of the prelude-implemented modules** under [Known limitations](#known-limitations) for what is tracked.

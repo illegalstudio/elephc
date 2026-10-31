@@ -13,6 +13,12 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+class LoopArgumentTarget {}
+function needLoopArgumentTarget(LoopArgumentTarget $value): void {}
+function loopArgumentGuardTarget(?LoopArgumentTarget $value, array $items): void {
+    $value ??= new LoopArgumentTarget();
+    foreach ($items as $item) { needLoopArgumentTarget($value); $value = null; }
+}
 class ConditionalUnsetTarget {}
 function conditionalUnsetTarget(?ConditionalUnsetTarget $value, int $key) {
     $value ??= new ConditionalUnsetTarget();

@@ -2,7 +2,7 @@
 title: "xmlwriter_start_attribute()"
 description: "Starts an attribute."
 sidebar:
-  order: 1071
+  order: 1122
 ---
 
 ## xmlwriter_start_attribute()

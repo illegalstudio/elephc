@@ -380,6 +380,12 @@ fn test_nullable_fallback_flow_review_loop_entry_writes() {
         for coalesce in [format!("$value ??= {default};"), format!("$value = $value ?? {default};")] {
             for write in ["$value = null;", "resetValue($value);"] {
                 let source = format!("<?php final class Service {{}} function need({ty} $value): void {{}} function resetValue(?{ty} &$value): void {{ $value = null; }} function run(?{ty} $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); {write} }} }}");
+                // Class|null now binds through main's runtime instance guard. The native
+                // loop-object regression verifies a null next iteration throws before entry.
+                if ty == "Service" {
+                    check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+                    continue;
+                }
                 let error = check_source(&source).expect_err(&source);
                 assert!(error.contains(&format!("expects {ty}")) && error.contains("null"), "{source}: {error}");
             }

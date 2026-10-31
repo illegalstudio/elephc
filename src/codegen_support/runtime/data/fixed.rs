@@ -30,7 +30,8 @@ use super::{
     STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
     UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
     UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_PROPERTY_ASSIGN_PREFIX,
-    UNSER_TYPE_GIVEN_SUFFIX,
+    UNSER_TYPE_GIVEN_SUFFIX, UNSER_ERROR_PREFIX, UNSER_ERROR_OF, UNSER_ERROR_BYTES_IN,
+    UNSER_ERROR_ON_LINE, UNSER_ERROR_NEWLINE,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -175,6 +176,17 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&format!(
         ".globl _unser_type_given_suffix\n_unser_type_given_suffix:\n    .ascii {UNSER_TYPE_GIVEN_SUFFIX:?}\n"
     ));
+    for (label, message) in [
+        ("_unser_error_prefix", UNSER_ERROR_PREFIX),
+        ("_unser_error_of", UNSER_ERROR_OF),
+        ("_unser_error_bytes_in", UNSER_ERROR_BYTES_IN),
+        ("_unser_error_on_line", UNSER_ERROR_ON_LINE),
+        ("_unser_error_newline", UNSER_ERROR_NEWLINE),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {message:?}\n"
+        ));
+    }
     for (label, name) in [
         ("_unser_type_int", "int"),
         ("_unser_type_string", "string"),
@@ -343,6 +355,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
     out.push_str(&comm_directive("_ser_legacy_active", 8, target));
     out.push_str(&comm_directive("_unser_legacy_active", 8, target));
+    out.push_str(&comm_directive("_unser_call_line", 8, target));
     // The active serialize() output stream: a pointer to the `__rt_strbuf_*` descriptor in the
     // frame of the innermost `__rt_serialize_call_value`, which saves and restores it around itself and
     // every hook call that can re-enter serialize().
@@ -401,7 +414,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // frame aliases. The owning walk boundary restores the saved head after unwinding.
     out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
-    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
+    for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
     }
     for (symbol, value) in [("_rt_warning_prefix", "Warning: "), ("_rt_notice_prefix", "Notice: "), ("_rt_deprecated_prefix", "Deprecated: ")] {

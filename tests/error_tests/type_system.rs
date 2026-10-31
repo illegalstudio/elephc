@@ -71,11 +71,33 @@ fn test_nested_spread_literal_merges_type_in_linear_time() {
 #[test]
 fn test_error_by_ref_argument_rejects_direct_property_storage() {
     for source in [
-        "<?php function setv(mixed &$value): void {} class Box { public mixed $value = 1; } $box = new Box(); setv($box->value);",
-        "<?php function setv(mixed &$value): void {} class Box { public static mixed $value = 1; } setv(Box::$value);",
+        "<?php function setv(mixed &$value): void {} class Box { public iterable $value = []; } $box = new Box(); setv($box->value);",
+        "<?php function setv(mixed &$value): void {} class Box { public static iterable $value = []; } setv(Box::$value);",
     ] {
         expect_error(source, "must be passed a variable");
     }
+}
+
+/// Method by-reference parameters reject property storage the rewrite cannot narrow back.
+///
+/// Union and callable properties need a runtime type dispatch the current write-back does not
+/// provide; they keep their pre-existing rejection instead of silently passing a copy.
+#[test]
+fn test_error_method_by_ref_argument_rejects_unsupported_property_storage() {
+    for source in [
+        "<?php class Sink { public function setv(mixed &$value): void {} } class Box { public iterable $value = []; } $sink = new Sink(); $box = new Box(); $sink->setv($box->value);",
+    ] {
+        expect_error(source, "must be passed a variable");
+    }
+}
+
+/// A by-reference variadic cannot bind an array property through the scalar place rewrite.
+#[test]
+fn test_error_variadic_by_ref_argument_rejects_array_property_storage() {
+    expect_error(
+        "<?php function collect(&...$refs): void {} class Box { public array $items = [1]; } $box = new Box(); collect($box->items);",
+        "cannot bind an array property by reference",
+    );
 }
 
 /// Mixed property storage cannot provide the declared array slot needed by nested ref writeback.

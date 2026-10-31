@@ -2,7 +2,7 @@
 title: "curl_multi_add_handle()"
 description: "Adds a normal cURL handle to a cURL multi handle."
 sidebar:
-  order: 723
+  order: 774
 ---
 
 ## curl_multi_add_handle()

@@ -10,9 +10,10 @@
 //! - Uses `(a, b)` in the first two argument registers and ordering in the result
 //!   register. The stable scalar-slot sorter consumes this adapter without
 //!   duplicating the shared PHP ordering table.
-//! - A validation pass rejects non-scalar runtime tags before sorting. The shared
-//!   comparator does not yet implement PHP ordering for containers or objects,
-//!   so accepting those values would silently report them as equal.
+//! - A validation pass rejects non-scalar runtime tags before sorting. Internal
+//!   contract classes that declare a comparison adapter (GMP) are the exception:
+//!   their boxed objects reach the program-specific comparator instead of being
+//!   silently reported equal, while containers and unhandled objects still fail.
 //! - The ordering itself is `__rt_php_compare`, which is what `<` and `<=>`
 //!   already use for runtime-tagged operands. Reimplementing PHP's cross-type
 //!   comparison here would be a second answer to a question the runtime already
@@ -31,12 +32,14 @@ pub fn emit_php_compare_slots(emitter: &mut Emitter) {
     emit_one(emitter, "__rt_php_compare_slots_desc", true);
 }
 
-/// Emits a target-specific guard that rejects non-scalar Mixed array elements.
+/// Emits a target-specific guard that rejects unsupported Mixed array elements.
 ///
 /// The helper receives an indexed-array pointer in the first integer argument
 /// register and returns the same pointer in the integer result register. Tags
-/// 0 through 3 and tag 8 are the supported scalar and null values. Any other
-/// tag reports the unsupported runtime value and terminates before sorting.
+/// 0 through 3 and tag 8 are the supported scalar and null values; tag 6 is
+/// accepted only when the object's class declares a comparison adapter. Any
+/// other value reports the unsupported runtime value and terminates before
+/// sorting.
 fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_sort_require_scalars ---");
@@ -56,7 +59,16 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction("cmp x12, #3");                                 // are int, string, float, or bool semantics sufficient?
             emitter.instruction("b.ls __rt_mixed_sort_scalar_next");            // accept runtime scalar tags 0 through 3
             emitter.instruction("cmp x12, #8");                                 // is this value PHP null?
-            emitter.instruction("b.ne __rt_mixed_sort_non_scalar");             // reject containers, objects, resources, and callables
+            emitter.instruction("b.eq __rt_mixed_sort_scalar_next");            // null is a supported scalar comparison operand
+            emitter.instruction("cmp x12, #6");                                 // is this value an object?
+            emitter.instruction("b.ne __rt_mixed_sort_non_scalar");             // reject containers, resources, and callables
+            // -- objects sort only through a reviewed internal comparison adapter --
+            emitter.instruction("ldr x12, [x11, x10, lsl #3]");                 // reload this slot's boxed Mixed cell
+            emitter.instruction("ldr x12, [x12, #8]");                          // load the object pointer from the cell payload
+            emitter.instruction("ldr x12, [x12]");                              // load the object's runtime class id
+            abi::emit_symbol_address(emitter, "x13", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
+            emitter.instruction("ldr x13, [x13, x12, lsl #3]");                 // read this class's comparison adapter
+            emitter.instruction("cbz x13, __rt_mixed_sort_non_scalar");         // unhandled object classes still fail closed
             emitter.label("__rt_mixed_sort_scalar_next");
             emitter.instruction("add x10, x10, #1");                            // advance to the next Mixed slot
             emitter.instruction("b __rt_mixed_sort_scalar_scan");               // continue validating runtime tags
@@ -87,7 +99,16 @@ fn emit_mixed_sort_scalar_guard(emitter: &mut Emitter) {
             emitter.instruction("cmp r9, 3");                                   // are int, string, float, or bool semantics sufficient?
             emitter.instruction("jbe __rt_mixed_sort_scalar_next_x86");         // accept runtime scalar tags 0 through 3
             emitter.instruction("cmp r9, 8");                                   // is this value PHP null?
-            emitter.instruction("jne __rt_mixed_sort_non_scalar_x86");          // reject containers, objects, resources, and callables
+            emitter.instruction("je __rt_mixed_sort_scalar_next_x86");          // null is a supported scalar comparison operand
+            emitter.instruction("cmp r9, 6");                                   // is this value an object?
+            emitter.instruction("jne __rt_mixed_sort_non_scalar_x86");          // reject containers, resources, and callables
+            // -- objects sort only through a reviewed internal comparison adapter --
+            emitter.instruction("mov r9, QWORD PTR [r8 + rdx * 8]");            // reload this slot's boxed Mixed cell
+            emitter.instruction("mov r9, QWORD PTR [r9 + 8]");                  // load the object pointer from the cell payload
+            emitter.instruction("mov r9, QWORD PTR [r9]");                      // load the object's runtime class id
+            abi::emit_symbol_address(emitter, "r10", "_class_compare_ptrs");    // resolve the per-class comparison adapter table
+            emitter.instruction("cmp QWORD PTR [r10 + r9 * 8], 0");             // does this class declare a comparison adapter?
+            emitter.instruction("je __rt_mixed_sort_non_scalar_x86");           // unhandled object classes still fail closed
             emitter.label("__rt_mixed_sort_scalar_next_x86");
             emitter.instruction("add rdx, 1");                                  // advance to the next Mixed slot
             emitter.instruction("jmp __rt_mixed_sort_scalar_scan_x86");         // continue validating runtime tags

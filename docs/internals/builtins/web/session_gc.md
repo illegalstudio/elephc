@@ -2,7 +2,7 @@
 title: "session_gc() - internals"
 description: "Compiler internals for session_gc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1015
+  order: 1066
 ---
 
 ## `session_gc()` - internals

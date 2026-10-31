@@ -1715,6 +1715,16 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #40]");                                   // reload key len
     emitter.instruction("cmn x2, #1");                                          // integer key? (len == -1)
     emitter.instruction("b.eq __rt_vd_hash_int_key");                           // format integer keys as [N]
+    // Normalize numeric-string property names only for real string keys: an integer key's
+    // payload is the integer itself, not a readable string pointer.
+    emitter.instruction("ldr x1, [sp, #32]");                                   // reload key pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // reload key length
+    emitter.instruction("bl __rt_hash_normalize_key");                          // numeric property names render as [N], matching PHP's debug array
+    emitter.instruction("str x1, [sp, #32]");                                   // save the normalized key payload
+    emitter.instruction("str x2, [sp, #40]");                                   // save the normalized key length (-1 for int keys)
+    emitter.instruction("ldr x2, [sp, #40]");                                   // reload the normalized key len
+    emitter.instruction("cmn x2, #1");                                          // did normalization make it an integer key?
+    emitter.instruction("b.eq __rt_vd_hash_int_key");                           // format the normalized key as [N]
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload key ptr
     emitter.instruction("ldr x2, [sp, #40]");                                   // reload key len
     emitter.instruction("bl __rt_var_dump_emit_string_key");                    // emit `<indent>["KEY"]=>\n`
@@ -1779,9 +1789,19 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload key len
     emitter.instruction("cmp rdx, -1");                                         // integer key?
     emitter.instruction("je __rt_vd_hash_int_key_x86");                         // format integer keys as [N]
+    // Normalize PHP numeric-string property names to integer array keys. This must run only for
+    // real string keys: an integer key's "pointer" is its payload, not a readable string.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload key pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload key length
+    emitter.instruction("call __rt_hash_normalize_key");                        // numeric property names render as [N], matching PHP's debug array
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the normalized key payload
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save the normalized key length (-1 for int keys)
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // reload the normalized key len
+    emitter.instruction("cmp rdx, -1");                                         // did normalization make it an integer key?
+    emitter.instruction("je __rt_vd_hash_int_key_x86");                         // format the normalized key as [N]
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload key ptr → string-key helper's rdi
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // reload key len → string-key helper's rsi
-    emitter.instruction("call __rt_var_dump_emit_string_key");                  // emit `<indent>["KEY"]=>\n`
+    emitter.instruction("call __rt_var_dump_emit_string_key");                  // emit the string key prefix
     emitter.instruction("jmp __rt_vd_hash_after_key_x86");                      // continue to the value line
     emitter.label("__rt_vd_hash_int_key_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // integer key payload → indexed-key helper's rdi

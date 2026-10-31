@@ -89,6 +89,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Deg2rad,
     /// Dispatches `exp(...)`.
     Exp,
+    /// Dispatches the `ext/gmp` procedural surface by forwarding to the compiled GMP prelude.
+    Gmp,
     /// Dispatches `hypot(...)`.
     Hypot,
     /// Dispatches `printf(...)`.
@@ -387,6 +389,7 @@ impl EvalDirectHook {
             },
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
+            Self::Gmp => eval_builtin_gmp_expr_call(name, args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
             #[cfg(feature = "curl")]
             Self::Curl => eval_builtin_curl_declared_call(name, args, context, scope, values),

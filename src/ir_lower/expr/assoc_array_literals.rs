@@ -488,10 +488,34 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
     object: &Expr,
     method: &str,
 ) -> Option<PhpType> {
-    let class_name = instance_callable_object_class(ctx, object)?;
     let method_key = php_symbol_key(method);
+    let Some(class_name) = instance_callable_object_class(ctx, object) else {
+        return dynamic_receiver_method_call_type_for_ir(ctx, object, &method_key);
+    };
     class_method_signature(ctx, &class_name, &method_key)
         .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
+}
+
+/// Returns the result type of a call on a receiver of no single class (a `foreach` element of
+/// an untyped array, a `mixed` value), as its lowering types it: dispatch on the runtime class
+/// answers the signature every declaring class shares, or a boxed `mixed`. `None` for a receiver
+/// that is not dynamic. Without it a literal holding `$block->component()` was stamped by the
+/// syntactic `int` and the element was cast from the `Component` the call returned.
+fn dynamic_receiver_method_call_type_for_ir(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    method_key: &str,
+) -> Option<PhpType> {
+    let object_ty = super::merge_temps::materialized_expr_type_for_merge(ctx, object);
+    if !super::method_metadata::dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
+        return None;
+    }
+    let shared = if ctx.has_eval_barrier() {
+        None
+    } else {
+        super::method_metadata::common_dynamic_method_signature(ctx, method_key)
+    };
+    Some(shared.map_or(PhpType::Mixed, |signature| normalize_value_php_type(signature.return_type)))
 }
 
 /// Returns the declared method result type plus `null` when a nullsafe receiver may be null.

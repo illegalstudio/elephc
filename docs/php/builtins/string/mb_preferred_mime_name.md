@@ -2,7 +2,7 @@
 title: "mb_preferred_mime_name()"
 description: "Returns the preferred MIME encoding name, or false when none is registered."
 sidebar:
-  order: 889
+  order: 940
 ---
 
 ## mb_preferred_mime_name()

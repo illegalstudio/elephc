@@ -2,7 +2,7 @@
 title: "mb_http_output()"
 description: "Reads or changes the encoding selected for HTTP output conversion."
 sidebar:
-  order: 880
+  order: 931
 ---
 
 ## mb_http_output()

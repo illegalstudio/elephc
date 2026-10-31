@@ -106,7 +106,47 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
         ins(emitter, &format!("cmp x0, #{tag}"), &format!("cmp rax, {tag}"));
         branch(emitter, "eq", "e", &format!("{prefix}_{suffix}"));
     }
+    // -- a reviewed internal numeric cast keeps GMP objects in the sum instead of skipping them --
+    ins(emitter, "cmp x0, #6", "cmp rax, 6");
+    branch(emitter, "eq", "e", &format!("{prefix}_object"));
     abi::emit_jump(emitter, &format!("{prefix}_unsupported"));
+
+    emitter.label(&format!("{prefix}_object"));
+    if emitter.target.arch == Arch::AArch64 {
+        abi::load_at_offset(emitter, "x0", ENTRY - 8);                        // load the object pointer from the unboxed entry payload
+        emitter.instruction("ldr x9, [x0]");                                   // load the object's runtime class id
+        abi::emit_symbol_address(emitter, "x10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
+        emitter.instruction("ldr x10, [x10, x9, lsl #3]");                     // read this class's numeric cast adapter
+        emitter.instruction(&format!("cbz x10, {prefix}_unsupported"));         // classes without a cast keep the warning path
+        emitter.instruction("blr x10");                                        // x0 = boxed int-or-float PHP number
+        emitter.instruction("str x0, [sp, #-16]!");                            // park the number box and keep the stack aligned
+        emitter.instruction("bl __rt_mixed_unbox");                            // x0=tag, x1=lo, x2=hi for the cast value
+        abi::store_at_offset(emitter, "x0", ENTRY);                           // store the cast tag into the entry cell
+        abi::store_at_offset(emitter, "x1", ENTRY - 8);                       // store the cast low payload word into the entry cell
+        abi::store_at_offset(emitter, "x2", ENTRY - 16);                      // store the cast high payload word into the entry cell
+        emitter.instruction("ldr x0, [sp], #16");                              // recover the number box after the entry cell is written
+        emitter.instruction("bl __rt_decref_mixed");                           // release the temporary cast box
+        abi::emit_jump(emitter, &format!("{prefix}_combine"));                 // add the cast number to the running total
+    } else {
+        emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                  // load the object pointer from the unboxed entry payload
+        emitter.instruction("mov r9, QWORD PTR [rdi]");                        // load the object's runtime class id
+        abi::emit_symbol_address(emitter, "r10", "_class_to_number_ptrs");     // resolve the per-class numeric cast table
+        emitter.instruction("mov r10, QWORD PTR [r10 + r9 * 8]");              // read this class's numeric cast adapter
+        emitter.instruction("test r10, r10");                                  // does this class provide a numeric cast?
+        emitter.instruction(&format!("jz {prefix}_unsupported"));              // classes without a cast keep the warning path
+        emitter.instruction("call r10");                                       // rax = boxed int-or-float PHP number
+        emitter.instruction("sub rsp, 16");                                    // reserve an aligned slot for the number box
+        emitter.instruction("mov QWORD PTR [rsp], rax");                       // park the number box across the unbox call
+        emitter.instruction("mov rdi, rax");                                   // pass the boxed number to the unbox helper
+        emitter.instruction("call __rt_mixed_unbox");                          // rax=tag, rdi=lo, rdx=hi for the cast value
+        emitter.instruction("mov QWORD PTR [rbp - 64], rax");                  // store the cast tag into the entry cell
+        emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                  // store the cast low payload word into the entry cell
+        emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                  // store the cast high payload word into the entry cell
+        emitter.instruction("mov rax, QWORD PTR [rsp]");                       // recover the number box after the entry cell is written
+        emitter.instruction("add rsp, 16");                                    // release the temporary box slot
+        emitter.instruction("call __rt_decref_mixed");                         // release the temporary cast box
+        emitter.instruction(&format!("jmp {prefix}_combine"));                 // add the cast number to the running total
+    }
 
     emitter.label(&format!("{prefix}_scalar"));
     abi::emit_frame_slot_address(emitter, result, ENTRY);

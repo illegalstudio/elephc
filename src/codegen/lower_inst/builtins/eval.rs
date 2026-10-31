@@ -352,9 +352,9 @@ pub(super) use dynamic_calls::{
     lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
 pub(super) use introspection::{
-    lower_eval_callable_call_array, lower_eval_class_relation, lower_eval_is_callable,
-    lower_eval_member_exists, lower_eval_object_class_name, lower_eval_object_is_a,
-    lower_eval_object_is_a_dynamic,
+    emit_context_free_object_class_name, lower_eval_callable_call_array,
+    lower_eval_class_relation, lower_eval_is_callable, lower_eval_member_exists,
+    lower_eval_object_class_name, lower_eval_object_is_a, lower_eval_object_is_a_dynamic,
 };
 pub(super) use scope_access::{lower_eval_scope_get, lower_eval_scope_set};
 pub(super) use symbol_queries::{

@@ -103,6 +103,27 @@ pub(super) fn lower_prop_get_nonnull(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
+    // `num` is GMP's virtual debug projection, not a declared property. PHP reads a real
+    // dynamic property when one was created, otherwise warns `Undefined property` and
+    // answers null. Route that name through the dynamic hash probe with its miss warning.
+    if let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() {
+        if class_name.eq_ignore_ascii_case("GMP") && property == "num" {
+            if let Some(hash_offset) =
+                dynamic_property_hash_offset_for_class(ctx, &class_name, property)?
+            {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                ctx.load_value_to_reg(object, base_reg)?;
+                emit_scope_dynamic_property_hash_probe(
+                    ctx, &class_name, property, base_reg, hash_offset, true,
+                )?;
+                cast_loaded_mixed_pointer_to_result(
+                    ctx, &inst.result_php_type.codegen_repr(),
+                )?;
+                store_if_result(ctx, inst)?;
+                return Ok(());
+            }
+        }
+    }
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }

@@ -179,6 +179,17 @@ pub(crate) const SLEEP_WARNING_SUFFIX: &str =
 /// Prefix for a catchable TypeError naming a non-array `unserialize()` options argument.
 pub(crate) const UNSER_OPTIONS_TYPE_PREFIX: &str =
     "unserialize(): Argument #2 ($options) must be of type array, ";
+/// Runtime warning fragments for malformed `unserialize()` wire data.
+///
+/// php-src reports the failing byte offset and the total source length before returning
+/// `false`; the runtime composes the same line from these pieces plus `_script_source_file`
+/// and the call-site line.
+pub(crate) const UNSER_ERROR_PREFIX: &str = "Warning: unserialize(): Error at offset ";
+pub(crate) const UNSER_ERROR_OF: &str = " of ";
+pub(crate) const UNSER_ERROR_BYTES_IN: &str = " bytes in ";
+pub(crate) const UNSER_ERROR_ON_LINE: &str = " on line ";
+pub(crate) const UNSER_ERROR_NEWLINE: &str = "\n";
+
 /// Prefix for a catchable TypeError naming an invalid `allowed_classes` policy value.
 pub(crate) const UNSER_ALLOWED_CLASSES_POLICY_PREFIX: &str =
     "unserialize(): Option \"allowed_classes\" must be of type array|bool, ";

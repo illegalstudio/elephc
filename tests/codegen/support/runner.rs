@@ -104,6 +104,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["bcmath"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_gmp",
+        package: "elephc-gmp",
+        php_extensions: &["gmp"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_random",
         package: "elephc-random",
         php_extensions: &["random"],
@@ -1333,6 +1338,14 @@ fn test_link_plan(
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
     }
+    // The gmp bridge declares libgmp's `__gmpz_*` symbols without linking them; the
+    // managed `gmp` package supplies the single `libgmp.a` archive at final link time.
+    // The harness reads the same durable cache structurally (see `super::gmp_native`).
+    if named.contains("elephc_gmp") {
+        if let Some(package) = gmp_native_package() {
+            push_gmp_native_archives(&mut plan, package);
+        }
+    }
     for path in extra_link_paths {
         plan.push(LinkItem::SearchPath(path.as_str().into()));
     }
@@ -1385,6 +1398,18 @@ fn push_xml_native_if_available(plan: &mut elephc::link_plan::LinkPlan) -> bool 
             true
         }
         None => false,
+    }
+}
+
+/// Appends the managed native libgmp artifact as an exact archive path.
+fn push_gmp_native_archives(
+    plan: &mut elephc::link_plan::LinkPlan,
+    package: &GmpNativePackage,
+) {
+    use elephc::link_plan::LinkItem;
+    plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+    for archive in &package.archives {
+        plan.push(LinkItem::managed_archive(archive, GMP_NATIVE_PACKAGE));
     }
 }
 
@@ -1492,6 +1517,31 @@ fn append_test_frameworks(command: &mut Command, plan: &elephc::link_plan::LinkP
 /// Used for post-link execution of already-assembled test binaries.
 pub(crate) fn run_binary(bin_path: &Path, dir: &Path) -> Output {
     run_binary_with_env(bin_path, dir, &[])
+}
+
+/// Runs a compiled binary with stderr redirected onto stdout, preserving write order.
+///
+/// Used only by PHPT fixtures, whose expected output is PHP's single displayed stream.
+pub(crate) fn run_binary_merged(bin_path: &Path, dir: &Path) -> Output {
+    let mut cmd = if target().platform == Platform::Linux
+        && target().arch == Arch::AArch64
+        && cfg!(target_arch = "x86_64")
+    {
+        let mut command = Command::new("/bin/sh");
+        let mut script = String::from("exec qemu-aarch64-static");
+        if let Some(sysroot) = qemu_sysroot() {
+            script.push_str(&format!(" -L {}", sysroot));
+        }
+        script.push_str(" \"$0\" \"$@\" 2>&1");
+        command.arg("-c").arg(script).arg(bin_path);
+        command
+    } else {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg("exec \"$0\" \"$@\" 2>&1").arg(bin_path);
+        command
+    };
+    cmd.current_dir(dir);
+    run_command_with_timeout(cmd)
 }
 
 /// Runs a compiled binary with isolated environment overrides, using qemu for
@@ -1783,6 +1833,41 @@ pub(crate) fn assemble_and_run_capture(
     ProgramOutput {
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
+        success: output.status.success(),
+    }
+}
+
+/// Assembles and runs one fixture with stderr merged into stdout at the OS level.
+///
+/// PHP's CLI writes `display_errors` diagnostics to stdout, and PHPT `--EXPECT--`
+/// records them interleaved with program output. elephc writes runtime diagnostics to
+/// stderr, so a PHPT runner must merge the two file descriptors before reading them;
+/// concatenating captured streams afterwards would lose the source order.
+pub(crate) fn assemble_and_run_capture_merged(
+    user_asm: &str,
+    runtime_obj: &Path,
+    dir: &Path,
+    requirements: &TestLinkRequirements,
+    extra_link_paths: &[String],
+    extra_frameworks: &[String],
+) -> ProgramOutput {
+    let obj_path = dir.join("test.o");
+    let bin_path = dir.join("test");
+
+    assemble_from_stdin(user_asm, &obj_path);
+    link_binary(
+        &obj_path,
+        runtime_obj,
+        &bin_path,
+        requirements,
+        extra_link_paths,
+        extra_frameworks,
+    );
+
+    let output = run_binary_merged(&bin_path, dir);
+    ProgramOutput {
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::new(),
         success: output.status.success(),
     }
 }
