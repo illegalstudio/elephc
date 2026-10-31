@@ -324,6 +324,24 @@ fn test_computed_property_element_increment_retains_php_incdec() {
     assert!(matches!(value.kind, ExprKind::PreIncrement(_)));
 }
 
+/// Prefix updates accept call-rooted places and keep rejecting bare call results.
+#[test]
+fn test_prefix_call_rooted_property_element_statements() {
+    for source in [
+        "<?php ++receiver()->items[0];", "<?php --receiver()->items[0];",
+        "<?php ++\\receiver()->{name()}[0];", "<?php --(receiver())->items[0];",
+    ] {
+        let statements = parse_source(source);
+        assert_eq!(statements.len(), 1, "{source}");
+        assert!(matches!(&statements[0].kind, StmtKind::Synthetic(_)
+            | StmtKind::ExprStmt(Expr { kind: ExprKind::Assignment { .. }, .. })),
+            "{source}: expected an attached place update, got {statements:?}");
+    }
+    for source in ["<?php ++receiver();", "<?php --receiver();"] {
+        assert!(parse_fails(source), "{source}");
+    }
+}
+
 /// Statement write captures carry a dedicated scope tag while expression captures keep theirs.
 #[test]
 fn test_computed_statement_capture_scope_does_not_escape_to_expressions() {

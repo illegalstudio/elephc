@@ -207,7 +207,9 @@ mod tests {
                     "{name}, {pic}"
                 );
                 assert_eq!(EVAL_SCOPE_ACCESS_MASK_OFFSET + 8, EVAL_CATALOG_PHASE_OFFSET);
-                assert_eq!(EVAL_CATALOG_PHASE_OFFSET + 8, EVAL_BRIDGE_STACK_BYTES);
+                assert_eq!(EVAL_CATALOG_PHASE_OFFSET + 8, EVAL_REFERENCE_ACCESS_MASK_OFFSET);
+                assert!(EVAL_REFERENCE_ACCESS_MASK_OFFSET + 8 <= EVAL_BRIDGE_STACK_BYTES);
+                assert_eq!(EVAL_BRIDGE_STACK_BYTES % 16, 0);
             }
         }
     }

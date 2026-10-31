@@ -69,19 +69,87 @@ reusableCaptureIncrement($box); reusableCaptureDecrement($box); reusableCaptureC
                 slot.name.as_deref().is_some_and(|name| name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX))
                     && slot.php_type.codegen_repr() == crate::types::PhpType::Mixed
             }).expect("computed mixed receiver needs a scoped capture");
-            let loads = function.instructions.iter().enumerate().filter_map(|(position, inst)|
-                (inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(receiver.id)))
-                    .then_some(position)).collect::<Vec<_>>();
             let cleanup = function.instructions.iter().position(|inst|
                 inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(receiver.id)))
                 .expect("the receiver must retire after the update");
-            assert!(loads.len() >= 2 && loads.iter().all(|load| *load < cleanup),
+            assert!(scoped_receiver_borrows_stay_live(function, receiver.id),
                 "{target}: {name} consumed the receiver before both update halves\n{}",
                 crate::ir::print_function(function));
+            // Prove the check also rejects an early retirement when SSA reuses one load.
+            let mut early_cleanup = function.clone();
+            let (block, first_load) = function.blocks.iter().find_map(|block|
+                block.instructions.iter().position(|id| function.instruction(*id).is_some_and(|inst|
+                    inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(receiver.id))))
+                    .map(|position| (block.id, position))).unwrap();
+            early_cleanup.blocks[block.as_raw() as usize].instructions
+                .insert(first_load, crate::ir::InstId::from_raw(cleanup as u32));
+            assert!(!scoped_receiver_borrows_stay_live(&early_cleanup, receiver.id),
+                "{target}: {name} must detect a receiver retired before its borrowed uses");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
+}
+
+/// Checks every reachable receiver borrow against the owning slot's CFG lifetime.
+fn scoped_receiver_borrows_stay_live(function: &crate::ir::Function, slot: crate::ir::LocalSlotId) -> bool {
+    use crate::ir::{Immediate, Op, Ownership, Terminator};
+    use std::collections::HashSet;
+    let local = Some(Immediate::LocalSlot(slot));
+    let mut borrowed = function.instructions.iter().filter(|inst| inst.op == Op::LoadLocal
+        && inst.immediate == local).filter_map(|inst| inst.result).collect::<HashSet<_>>();
+    if borrowed.is_empty() { return false; }
+    loop {
+        let before = borrowed.len();
+        for inst in &function.instructions {
+            if matches!(inst.op, Op::Borrow | Op::MixedUnbox)
+                && inst.operands.iter().any(|value| borrowed.contains(value)) {
+                if let Some(result) = inst.result.filter(|value| function.value(*value)
+                    .is_some_and(|value| value.ownership == Ownership::Borrowed)) {
+                    borrowed.insert(result);
+                }
+            }
+        }
+        if borrowed.len() == before { break; }
+    }
+    let mut pending = vec![(function.entry, false)];
+    let mut visited = HashSet::new();
+    let mut uses = HashSet::new();
+    while let Some((block, mut live)) = pending.pop() {
+        if !visited.insert((block, live)) { continue; }
+        let block = &function.blocks[block.as_raw() as usize];
+        for id in &block.instructions {
+            let inst = function.instruction(*id).unwrap();
+            if (inst.op == Op::LoadLocal && inst.immediate == local)
+                || inst.operands.iter().any(|value| borrowed.contains(value)) {
+                if !live { return false; }
+                if !matches!(inst.op, Op::LoadLocal | Op::Borrow | Op::MixedUnbox) { uses.insert(*id); }
+            }
+            if inst.immediate == local {
+                match inst.op {
+                    Op::StoreLocal => live = true,
+                    Op::ReleaseLocalSlot | Op::UnsetLocal | Op::ZeroLocalSlot => live = false,
+                    _ => {}
+                }
+            }
+        }
+        let terminator = block.terminator.as_ref().unwrap();
+        if !live && terminator.used_values().iter().any(|value| borrowed.contains(value)) { return false; }
+        match terminator {
+            Terminator::Br { target, .. } => pending.push((*target, live)),
+            Terminator::CondBr { then_target, else_target, .. } => {
+                pending.extend([(*then_target, live), (*else_target, live)]);
+            }
+            Terminator::Switch { cases, default, .. } => {
+                pending.extend(cases.iter().map(|case| (case.target, live)));
+                pending.push((*default, live));
+            }
+            Terminator::GeneratorSuspend { resume, .. } => pending.push((*resume, live)),
+            Terminator::Return { .. } | Terminator::Throw { .. }
+            | Terminator::Fatal { .. } | Terminator::Unreachable => {}
+        }
+    }
+    uses.len() >= 2
 }
 
 /// Null typed slots are tested before mutation and their temporary read lease is retired.

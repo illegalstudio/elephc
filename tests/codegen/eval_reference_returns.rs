@@ -9,6 +9,33 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A conservative eval mask preserves raw locals and unaccessed live native aliases independently.
+#[test]
+fn test_eval_unaccessed_native_reference_aliases_keep_conditional_bindings() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ConditionalNativeAlias {
+    public mixed $value = 'before';
+    public function &valueRef(): mixed { return $this->value; }
+}
+function exerciseConditionalNativeAlias(bool $bind, bool $run): void {
+    $box = new ConditionalNativeAlias();
+    $value = 'raw';
+    if ($bind) { $value =& $box->valueRef(); }
+    $source = $run ? '$box->value = "updated";' : '';
+    eval($source);
+    echo $value, ':', $box->value, '|';
+    eval($source);
+    echo $value, ':', $box->value, '|';
+    unset($value, $box, $source);
+}
+exerciseConditionalNativeAlias(false, $argc > 0);
+exerciseConditionalNativeAlias(true, $argc > 0);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "raw:updated|raw:updated|updated:updated|updated:updated|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval writes preserve promoted native cell aliases and by-value array snapshots.
 #[test]
 fn test_eval_native_reference_property_payloads_and_aliases() {

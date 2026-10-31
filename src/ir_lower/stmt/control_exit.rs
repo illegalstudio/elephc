@@ -282,6 +282,25 @@ fn promote_local_to_reference_return_payload(
     name: &str,
     span: Span,
 ) {
+    let source = ctx.local_type(name);
+    if matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+        && matches!(&source, PhpType::Union(members) if members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
+            && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)))
+    {
+        // This local has no existing alias. Check null while its boxed tag is available,
+        // then publish a typed cell and attach the original name to it. Keeping that name
+        // attached lets a finally block mutate the actual returned cell, as PHP requires.
+        let value = ctx.load_local(name, Some(span));
+        let value = coerce_to_return_type(ctx, value, Some(span));
+        let result_type = ctx.return_php_type.clone();
+        let staged = ctx.declare_synthetic_php_local(result_type.clone());
+        ctx.store_local(&staged, value, result_type, Some(span));
+        ctx.mark_local_initialized(&staged);
+        ctx.promote_local_ref_cell(&staged, Some(span));
+        ctx.alias_local_ref_cell(name, &staged, Some(span));
+        ctx.release_ref_cell_owner(&staged, Some(span));
+        return;
+    }
     if ctx.return_php_type.codegen_repr() == PhpType::Mixed
         && ctx.local_type(name).codegen_repr() != PhpType::Mixed
     {

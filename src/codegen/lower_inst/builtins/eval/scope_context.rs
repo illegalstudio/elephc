@@ -81,7 +81,37 @@ pub(super) fn prepare_dynamic_eval_scope_access_mask(
     abi::emit_call_label(ctx.emitter, &symbol);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_SCOPE_ACCESS_MASK_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_REFERENCE_ACCESS_MASK_OFFSET);
     promote_unsafe_eval_scope_access_to_full(ctx, locals, globals)
+}
+
+/// Keeps unaccessed native aliases out of snapshot synchronization when heap aliases force a full mask.
+pub(super) fn emit_branch_if_eval_local_unaccessed(
+    ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal, offset: usize, unaccessed: &str,
+) -> Result<()> {
+    if offset != EVAL_SCOPE_ACCESS_MASK_OFFSET {
+        emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, unaccessed);
+    } else if ctx.local_ref_cell_representation_is_definite(local.slot) {
+        emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name,
+            EVAL_REFERENCE_ACCESS_MASK_OFFSET, unaccessed);
+    } else if ctx.local_ref_cell_representation_is_dynamic(local.slot) {
+        let raw = ctx.next_label("eval_scope_access_raw_local");
+        let done = ctx.next_label("eval_scope_access_local_ready");
+        let state = ctx.ref_cell_state_offset(local.slot).ok_or_else(||
+            CodegenIrError::invalid_module("dynamic eval alias has no reference state flag"))?;
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result, state);
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
+        emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name,
+            EVAL_REFERENCE_ACCESS_MASK_OFFSET, unaccessed);
+        abi::emit_jump(ctx.emitter, &done);
+        ctx.emitter.label(&raw);
+        emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, unaccessed);
+        ctx.emitter.label(&done);
+    } else {
+        emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, unaccessed);
+    }
+    Ok(())
 }
 
 /// Promotes selected heap, reference-capable, or union bindings to full synchronization.

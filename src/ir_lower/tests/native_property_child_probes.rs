@@ -56,7 +56,7 @@ $box = new TargetGenericProbe(); targetGenericProbeBorrowed($box); $box->targetG
             RuntimeCallTarget::PropertyHashRead))), "{target}: stored getter-class entries need a raw read");
         assert!(computed.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
             "{target}: an ordinary probe must skip uninitialized storage without reading it");
-        let borrowed = module.functions.iter().filter(|function| function.name == "targetGenericProbeBorrowed"
+        let borrowed = module.functions.iter().chain(module.class_methods.iter()).filter(|function| function.name == "targetGenericProbeBorrowed"
             || (function.flags.is_method && function.name.to_ascii_lowercase().contains("targetgenericprobethishot")))
             .collect::<Vec<_>>();
         assert_eq!(borrowed.len(), 2, "{target}: both borrowed receiver fixtures must remain reachable");

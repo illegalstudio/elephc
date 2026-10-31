@@ -550,12 +550,15 @@ fn emit_guarded_adapter(
     ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, class: &str, method: &str,
     result_type: PhpType, span: Option<Span>,
 ) -> LoweredValue {
-    let receiver = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {
-        let value = ctx.emit_value(Op::Borrow, vec![input.value], None,
-            PhpType::Object(class.to_string()), Op::Borrow.default_effects(), span);
-        ctx.builder.set_value_ownership(value.value, Ownership::Borrowed);
-        value
-    } else { input };
+    let receiver_type = match ctx.builder.value_php_type(input.value).codegen_repr() {
+        PhpType::Object(_) => PhpType::Object(class.to_string()),
+        // A nullable ordinary object is boxed, but its nominal class hint would still
+        // select that ordinary class's method table in this guarded native branch.
+        other => other,
+    };
+    let receiver = ctx.emit_value(Op::Borrow, vec![input.value], None,
+        receiver_type, Op::Borrow.default_effects(), span);
+    ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
     let signature = ctx.classes.get(class).and_then(|info| info.methods.get(method)).cloned();
     let expr = Expr::new(ExprKind::Null, span.unwrap_or_else(Span::dummy));
     let mut operands = vec![receiver.value];

@@ -4086,20 +4086,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Returns whether a `MixedUnbox` already handed back a reference of its own.
     ///
-    /// `lower_mixed_unbox` ends in `emit_unbox_mixed_to_owned_refcounted_result`, so the payload
-    /// it produces is OWNED, not a borrow of the box. Reading it as a borrow made the store that
+    /// Unless explicitly borrowed, `lower_mixed_unbox` retains the extracted payload.
+    /// Reading an owning result as a borrow made the store that
     /// consumes it acquire a second reference, which the single slot release in the epilogue
     /// never balanced — the unboxed object, and the whole subtree it owns, stayed alive for the
     /// rest of the process.
     ///
-    /// `coerce_typed_assign_value` is the only emitter, and it has two callers — a typed local
-    /// (`lower_typed_assign`) and a typed property write (`lower_property_assign`) — so this says
-    /// one thing about both: a typed target initialized from a Mixed source already owns the value
-    /// it was handed. The property path has a separate leak of its own that predates this and is
-    /// unchanged by it (#1115): measured at three blocks per assignment with the predicate both on
-    /// and off.
+    /// Typed assignments take owned payloads. Exact-class write dispatch deliberately lends
+    /// its receiver from a still-published box and must retain that borrowed distinction.
     fn value_is_owning_mixed_unbox(&self, value: ValueId) -> bool {
         self.builder.value_defining_op(value) == Some(Op::MixedUnbox)
+            && self.builder.value_ownership(value) != Ownership::Borrowed
     }
 
     /// Returns whether a generic cast owns a detached Mixed string or an object method result.

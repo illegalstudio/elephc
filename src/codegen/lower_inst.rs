@@ -104,6 +104,9 @@ mod reference_return_dispatch;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
 mod null_parameter_guard_tests;
+#[cfg(test)]
+#[path = "lower_inst/mixed_unbox_ownership_tests.rs"]
+mod mixed_unbox_ownership_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;

@@ -7,6 +7,52 @@
 //! Key details:
 //! - Covers document factories, dimensions, casts, JSON, DOM import, and iteration.
 
+/// Nullable local returns check null before promoting compatible typed reference payloads.
+#[test]
+fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php");
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for name in ["referenceReturnBoundaryXml", "presentReferenceBoundaryXml", "finallyReferenceBoundaryXml"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+            let promotion = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
+                && matches!(&inst.result_php_type, crate::types::PhpType::Object(class) if class == "SimpleXMLElement"))
+                .unwrap_or_else(|| panic!("{target}: {name} must promote an object payload rather than its nullable box"));
+            assert!(guard < promotion, "{target}: {name} must reject null before changing representation");
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::AliasLocalRefCell),
+                "{target}: {name} must keep the source name attached for finally writes");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Nullable ordinary DOM values erase their class hint in guarded native boolean branches.
+#[test]
+fn ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid_on_every_target() {
+    let source = r#"<?php
+function ordinaryNullableDomTruthy(?DOMNode $node): bool { return (bool)$node; }
+$document = new DOMDocument();
+echo ordinaryNullableDomTruthy($document->createElement('r')), ordinaryNullableDomTruthy(null);
+$xml = new SimpleXMLElement('<r/>');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "ordinaryNullableDomTruthy").unwrap();
+        let adapters = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::MethodCall
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "__elephc_bool")).collect::<Vec<_>>();
+        assert!(!adapters.is_empty(), "{target}: the native boolean branch must remain covered");
+        for adapter in adapters {
+            assert_eq!(function.value(adapter.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+                "{target}: the boxed native branch must not resolve the DOMNode method table");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Nullable native children bypass public ArrayAccess methods on every supported target.
 #[test]
 fn native_xml_child_reads_bypass_public_offset_get_on_every_target() {

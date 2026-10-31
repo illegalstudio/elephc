@@ -150,9 +150,11 @@ fn reload_eval_scope_locals_with_mask(
     for local in locals {
         let unaccessed = access_mask_offset.map(|offset| {
             let unaccessed = ctx.next_label("eval_scope_reload_unaccessed");
-            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, &unaccessed);
-            unaccessed
+            (offset, unaccessed)
         });
+        if let Some((offset, unaccessed)) = &unaccessed {
+            emit_branch_if_eval_local_unaccessed(ctx, local, *offset, unaccessed)?;
+        }
         emit_eval_scope_get(ctx, local);
         let missing = ctx.next_label("eval_scope_reload_missing");
         let done = ctx.next_label("eval_scope_reload_done");
@@ -164,7 +166,7 @@ fn reload_eval_scope_locals_with_mask(
         ctx.emitter.label(&missing);
         store_missing_scope_entry_to_local(ctx, local, pending_throw)?;
         ctx.emitter.label(&done);
-        if let Some(unaccessed) = unaccessed {
+        if let Some((_, unaccessed)) = unaccessed {
             ctx.emitter.label(&unaccessed);
         }
     }

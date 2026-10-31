@@ -33,18 +33,18 @@ function exerciseScalarUnionCounter(): void {
         $old = $counter->optionalPost();
         if ($i === 39) { var_dump($old, $counter->optional); }
         $counter->numeric = PHP_INT_MAX;
-        $old = $counter->numericPost();
-        if ($i === 39) { echo $old === PHP_INT_MAX ? 'old-int|' : 'bad|'; echo is_float($counter->numeric) ? 'overflow-float|' : 'bad|'; }
+        $numericOld = $counter->numericPost();
+        if ($i === 39) { echo $numericOld === PHP_INT_MAX ? 'old-int|' : 'bad|'; echo is_float($counter->numeric) ? 'overflow-float|' : 'bad|'; }
         $counter->numeric = 4.5;
-        $old = $counter->numericPost();
-        $prefix = $counter->numericPre();
-        if ($i === 39) { echo $old, ':', $prefix, ':', $counter->numeric, '|'; }
+        $numericOld = $counter->numericPost();
+        $numericPrefix = $counter->numericPre();
+        if ($i === 39) { echo $numericOld, ':', $numericPrefix, ':', $counter->numeric, '|'; }
     }
     $reference =& $counter->numeric;
     $counter->numeric = 8.5;
-    $old = $counter->numericPost();
-    echo $old, ':', $reference;
-    unset($reference, $counter, $old, $prefix);
+    $numericOld = $counter->numericPost();
+    echo $numericOld, ':', $reference;
+    unset($reference, $counter, $old, $prefix, $numericOld, $numericPrefix);
 }
 exerciseScalarUnionCounter();
 "#, "float(2.5)\nfloat(4.5)\nfloat(4.5)\nNULL\nfloat(1)\nold-int|overflow-float|4.5:6.5:6.5|8.5:9.5");

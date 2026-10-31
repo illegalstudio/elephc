@@ -62,7 +62,9 @@ const EVAL_RELOAD_VALUE_OWNER_OFFSET: usize = 144;
 const EVAL_SCOPE_ACCESS_MASK_OFFSET: usize = 192;
 /// Whether catalog registration must resume before scope flush or before interpreter entry.
 const EVAL_CATALOG_PHASE_OFFSET: usize = 200;
-const EVAL_BRIDGE_STACK_BYTES: usize = 208;
+/// Parsed names before heap synchronization expands the working access mask.
+const EVAL_REFERENCE_ACCESS_MASK_OFFSET: usize = 208;
+const EVAL_BRIDGE_STACK_BYTES: usize = 224;
 const EVAL_SCOPE_FLAG_PRESENT: i64 = 1;
 const EVAL_SCOPE_FLAG_OWNED: i64 = 1 << 4;
 const EVAL_CLASS_LOOKUP_GET_CLASS: i64 = 0;
@@ -272,6 +274,8 @@ mod property_attribute_registration;
 mod constructor_params;
 mod function_params;
 mod scope_context;
+#[cfg(test)]
+mod scope_reference_mask_tests;
 mod sync_inventory;
 mod scope_io;
 mod scope_reload;

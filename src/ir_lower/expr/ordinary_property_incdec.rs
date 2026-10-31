@@ -52,7 +52,7 @@ pub(super) fn lower_old_capture(
     let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
     if name != old || value != target || ctx.has_local_slot(old) { return None; }
     // Receiver/name preludes have already run, so declared property types are available here.
-    let ty = array_cast_source_type_for_ir(ctx, value);
+    let ty = declared_snapshot_type(ctx, value);
     if !scalar_storage(&ty) || ty.codegen_repr() != PhpType::Mixed { return None; }
     let value = lower_expr(ctx, value);
     // Clone the scalar cell, as a PHP assignment does: a setter or a reference alias may
@@ -64,6 +64,21 @@ pub(super) fn lower_old_capture(
     ctx.mark_local_initialized(old);
     register_owned_call_operand(ctx, slot, span);
     Some(slot)
+}
+
+/// Keeps nullable scalar declarations before the general expression query erases their storage.
+fn declared_snapshot_type(ctx: &LoweringContext<'_, '_>, value: &Expr) -> PhpType {
+    if let ExprKind::PropertyAccess { object, property } = &value.kind {
+        if let Some(class) = instance_object_class_for_ir(ctx, object) {
+            if !crate::types::builtin_classes::has_native_dimensions(&class, ctx.classes) {
+                if let Some((_, ty)) = ctx.classes.get(class.trim_start_matches('\\'))
+                    .and_then(|class| class.properties.iter().find(|(name, _)| name == property)) {
+                    return ty.clone();
+                }
+            }
+        }
+    }
+    array_cast_source_type_for_ir(ctx, value)
 }
 
 /// Acquires a borrowed postfix result before retiring its expression-scoped scalar snapshot.
