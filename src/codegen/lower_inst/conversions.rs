@@ -6,7 +6,7 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Concrete scalar casts stay inline; Mixed numeric casts delegate to boxed runtime helpers.
+//! - Proven numeric frame casts inline integer payloads; other Mixed casts use runtime helpers.
 //! - String numeric parsing delegates to shared runtime routines.
 //! - A string-to-string cast replaces the missing typed-array sentinel with the
 //!   canonical empty string and leaves every other string payload unchanged.
@@ -134,6 +134,9 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
                 ctx.emitter.label(&no_warning);
                 abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
                 return store_if_result(ctx, inst);
+            }
+            if super::numeric_cast::try_lower_int(ctx, inst, value)? {
+                return Ok(());
             }
             load_value_to_first_int_arg(ctx, value)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");

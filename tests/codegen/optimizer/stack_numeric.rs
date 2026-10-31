@@ -9,6 +9,11 @@
 
 use super::*;
 
+#[path = "stack_numeric/comparisons.rs"]
+mod comparisons;
+#[path = "stack_numeric/integer_casts.rs"]
+mod integer_casts;
+
 /// Runtime-bound typed reductions exercise both a return check and a checked producer chain.
 const TYPED_CHAIN: &str = r#"<?php
 function addOnly(int $n): int {
