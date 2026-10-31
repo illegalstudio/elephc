@@ -295,9 +295,12 @@ pub(crate) fn inject_builtin_interfaces(
 
 /// Applies implicit `Stringable` interface to classes that implement `__toString`.
 ///
-/// After all user class declarations are resolved, this scans every class and adds
-/// `Stringable` to its interface list if the class has a `public __toString(): string`
-/// method. This mirrors PHP's implicit interface behavior.
+/// Once every user class declaration is resolved, this scans every class and adds
+/// `Stringable` to its interface list if the class has a public `__toString()` declared
+/// `string` or with no declared return type, which PHP makes `string` implicitly (the magic
+/// method contract check rejects one whose body returns anything else). This mirrors PHP's
+/// implicit interface behavior. The driver runs it before any body is checked, so a call or
+/// return that passes such an object as `Stringable` type-checks on the first pass.
 ///
 /// ## Inputs
 /// - `classes`: mutable map of `ClassInfo` entries; `Stringable` is pushed into each
@@ -310,7 +313,7 @@ pub(crate) fn apply_implicit_stringable_interfaces(
         let has_compatible_tostring = class_info
             .methods
             .get(&tostring_key)
-            .is_some_and(|sig| sig.return_type == PhpType::Str)
+            .is_some_and(|sig| !sig.declared_return || sig.return_type == PhpType::Str)
             && class_info
                 .method_visibilities
                 .get(&tostring_key)

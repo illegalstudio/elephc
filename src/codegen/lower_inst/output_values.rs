@@ -51,6 +51,13 @@ pub(super) fn lower_object_echo_value(
 ) -> Result<()> {
     let normalized = class_name.trim_start_matches('\\');
     if !object_class_has_tostring(ctx, normalized) {
+        if super::conversions::object_class_dispatches_tostring(ctx, normalized) {
+            return super::conversions::emit_object_tostring_dispatch(
+                ctx,
+                value,
+                super::conversions::MixedStringContextMode::Stdout,
+            );
+        }
         emit_missing_tostring_fatal(ctx, normalized);
         return Ok(());
     }
