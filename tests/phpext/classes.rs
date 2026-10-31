@@ -354,6 +354,23 @@ fn phpext_classes_native_typed_float_constant_unions_match_php() {
     public const COPIED = self::EXACT;
     public const array NESTED = [self::NULLABLE];
     public mixed $copied = self::UNION_STRING;
+    public function exactValue(): mixed { return self::EXACT; }
+    public function nullableValue(): mixed { return self::NULLABLE; }
+    public function unionNullValue(): mixed { return self::UNION_NULL; }
+    public function stringUnionValue(): mixed { return self::UNION_STRING; }
+    public function numericUnionValue(): mixed { return self::UNION_INT; }
+    public function reversedNumericValue(): mixed { return self::REVERSED_INT; }
+    public function nullValue(): mixed { return self::NULL_VALUE; }
+    public function mixedValue(): mixed { return self::MIXED_VALUE; }
+    public function copiedValue(): mixed { return self::COPIED; }
+    public function nestedValue(): mixed { return self::NESTED; }
+    public function globalArray(): array { return [FLOAT_COPY]; }
+    public function classArray(): array { return [self::COPIED]; }
+    public static function nativeValues(): array {
+        return [self::EXACT, self::NULLABLE, self::UNION_NULL, self::UNION_STRING,
+            self::UNION_INT, self::REVERSED_INT, self::NULL_VALUE, self::MIXED_VALUE,
+            self::COPIED, self::NESTED, FLOAT_COPY];
+    }
 }
 const FLOAT_COPY = FloatConstants::NULLABLE;
 "#;
@@ -365,7 +382,15 @@ foreach ((new ReflectionClass(FloatConstants::class))->getReflectionConstants() 
     $values[] = [constant('FloatConstants::' . $constant->getName()), $constant->getValue(), (string)$constant->getType()];
 }
 $values[] = FLOAT_COPY;
-$values[] = (new FloatConstants())->copied;
+$instance = new FloatConstants();
+$values[] = $instance->copied;
+foreach (['exactValue', 'nullableValue', 'unionNullValue', 'stringUnionValue', 'numericUnionValue',
+    'reversedNumericValue', 'nullValue', 'mixedValue', 'copiedValue', 'nestedValue'] as $method) {
+    $values[] = $instance->$method();
+}
+$values[] = FloatConstants::nativeValues();
+$values[] = $instance->globalArray();
+$values[] = $instance->classArray();
 echo json_encode($values, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR), "\n";
 "#;
     let reference = project.0.join("reference.php");

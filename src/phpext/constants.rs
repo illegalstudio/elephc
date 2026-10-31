@@ -61,6 +61,34 @@ pub(super) fn declared_type(ty: &TypeExpr) -> Result<PhpType, String> {
     })
 }
 
+/// Resolves hosted constant values before EIR storage inference and native reads.
+pub fn materialize_native_constants(
+    program: &mut Program, classes: &mut HashMap<String, crate::types::ClassInfo>, target: Target,
+) {
+    let constants = context(program, target);
+    for (class, info) in classes {
+        for (name, value) in &mut info.constants {
+            let ty = info.constant_types.get(name).and_then(|ty| declared_type(ty).ok()).unwrap_or(PhpType::Mixed);
+            if let Some(kind) = native_value(value, class, &ty, &constants) { value.kind = kind; }
+        }
+    }
+    for statement in program {
+        if let StmtKind::ConstDecl { value, .. } = &mut statement.kind {
+            if let Some(kind) = native_value(value, "", &PhpType::Mixed, &constants) { value.kind = kind; }
+        }
+    }
+}
+
+/// Keeps supported constant trees identical in native schemas and persistent Zend metadata.
+fn native_value(value: &Expr, class: &str, ty: &PhpType, constants: &HashMap<String, (ExprKind, PhpType)>) -> Option<ExprKind> {
+    let mut resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::new(), 0).ok()?;
+    super::constant_values::from_expression(&resolved, 0).ok()?;
+    if ty.coerces_integer_to_float() {
+        if let ExprKind::IntLiteral(integer) = resolved.kind { resolved.kind = ExprKind::FloatLiteral(integer as f64); }
+    }
+    Some(resolved.kind)
+}
+
 /// Combines checked source constants with lexical bindings for class constant references.
 pub(super) fn context(program: &Program, target: Target) -> HashMap<String, (ExprKind, PhpType)> {
     // Top-level statements never run when PHP loads the module, so define() is not a source.

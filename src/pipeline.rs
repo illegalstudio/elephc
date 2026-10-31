@@ -857,7 +857,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let check_options = types::CheckOptions { strict_locals };
     // Type checking runs to a generic-instantiation fixpoint, so every reachable template has
     // become an ordinary monomorphic declaration before anything downstream sees the program.
-    let (ast, mut check_result) = match crate::generics::monomorphize(ast, |program, bounds| {
+    let (mut ast, mut check_result) = match crate::generics::monomorphize(ast, |program, bounds| {
         types::check_with_target_and_options(program, target, check_options, bounds)
     }) {
         Ok(pair) => pair,
@@ -894,6 +894,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("exports-scan");
     let phase_started = Instant::now();
     let exported_classes = if emit == Emit::Phpext {
+        crate::phpext::constants::materialize_native_constants(&mut ast, &mut check_result.classes, target);
         match crate::phpext::classes::collect(&ast, &check_result.classes, target) {
             Ok(classes) => classes,
             Err(error) => {

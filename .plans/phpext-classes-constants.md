@@ -9,7 +9,7 @@
 - [x] Register real Zend classes, typed properties, methods and public class constants with coherent Reflection.
 - [x] Extend transport for exported object parameters/results without exposing foreign PHP objects or raw handles.
 - [x] Validate request teardown, fatal paths and Fiber reentry on Linux x86_64 NTS/ZTS.
-- [ ] Run the existing SDK CI matrix on real Linux aarch64 and macOS arm64 NTS/ZTS hosts.
+- [x] Run the existing SDK CI matrix on real Linux aarch64 and macOS arm64 NTS/ZTS hosts.
 - [x] Document the supported surface and demonstrate new Pippo() with only extension loading.
 
 ## Goal and boundaries
@@ -259,8 +259,9 @@ The driver prints a distinct mode line for the native extension and source fallb
 and requires only extension loading on the native path. Its actual module is built
 with the matching installed PHP 8.5.12 SDK. Clang accepts extension assembly for
 ELF x86_64, ELF aarch64 and Mach-O arm64. Real ARM64-host execution and the
-Valgrind/Apple-leaks matrix remain for the existing SDK CI matrix. No full local
-Rust suite is run. PR2185 remains draft during independent Grok review and CI.
+Valgrind/Apple-leaks matrix passed in all six SDK jobs on `2f0f4738ef`
+(run `41202917299`). No full local Rust suite is run. Current-head review and
+validation remain visible on PR2185.
 
 ## CPU comparison example
 
@@ -285,3 +286,10 @@ class failures on Linux/macOS ARM64, both NTS and ZTS, while x86_64 passed. The
 mode query must materialize its symbol in the destination register so the live
 heap header in x9 survives. A focused target regression and all-host CI validate
 that correction as the independent review continues.
+
+Typed class constants share one resolved type contract for integer-to-float
+coercion and Reflection. Their resolved expressions also populate hosted class
+schemas and global constant declarations before EIR lowering, so native methods and array storage inference see
+the same values as Zend. The real-host parity fixture compares nullable/union
+constants, aliases, nested arrays, property defaults, mixed-return methods and
+native array construction against identical pure PHP source.
