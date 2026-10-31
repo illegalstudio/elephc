@@ -143,6 +143,7 @@ pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
     native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    native_detached_names: HashSet<String>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
@@ -156,6 +157,7 @@ impl ElephcEvalScope {
             entries: HashMap::new(),
             local_types: HashMap::new(),
             native_storage_types: HashMap::new(),
+            native_detached_names: HashSet::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
@@ -182,6 +184,16 @@ impl ElephcEvalScope {
     pub(crate) fn set_native_storage_type(&mut self, name: String, ty: Option<crate::eval_ir::EvalParameterType>) {
         self.native_storage_types.remove(&name);
         if let Some(ty) = ty { self.native_storage_types.insert(name, ty); }
+    }
+
+    /// Remembers name detachment independently of a later present-value scope entry.
+    pub(crate) fn native_name_detached(&self, name: &str) -> bool {
+        self.native_detached_names.contains(name)
+    }
+
+    /// Starts a fresh native snapshot after the previous detachment has been reloaded.
+    pub(crate) fn clear_native_name_detachment(&mut self, name: &str) {
+        self.native_detached_names.remove(name);
     }
 
     /// Collects explicit contracts from every visible name sharing this PHP reference group.
@@ -355,6 +367,7 @@ impl ElephcEvalScope {
         self.bump_generation();
         let name = name.into();
         self.native_storage_types.remove(&name);
+        if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
         let previous = self
             .entries
@@ -369,6 +382,7 @@ impl ElephcEvalScope {
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
         self.native_storage_types.remove(&name);
+        if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
             return self.unset(name);
         };

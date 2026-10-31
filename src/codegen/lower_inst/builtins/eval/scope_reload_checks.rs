@@ -117,3 +117,26 @@ pub(super) fn detach_missing_local(
     }
     Ok(())
 }
+
+/// A present value after unset belongs to the newly bound PHP name, not its former property cell.
+pub(super) fn detach_rebound_local(
+    ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal, pending_throw: Option<usize>,
+) -> Result<()> {
+    if ctx.ref_cell_state_offset(local.slot).is_none() { return Ok(()); }
+    let attached = ctx.next_label("eval_reload_still_attached");
+    let flags = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flags, 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_NATIVE_DETACHED}")); // test the persistent native-name detachment marker
+            ctx.emitter.instruction(&format!("b.eq {attached}"));              // preserve the original alias unless unset detached this name
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_NATIVE_DETACHED}")); // test the persistent native-name detachment marker
+            ctx.emitter.instruction(&format!("je {attached}"));                // preserve the original alias unless unset detached this name
+        }
+    }
+    detach_missing_local(ctx, local, pending_throw)?;
+    ctx.emitter.label(&attached);
+    Ok(())
+}

@@ -162,6 +162,7 @@ fn reload_eval_scope_locals_with_mask(
             emit_branch_if_scope_entry_clean(ctx, &done);
         }
         emit_branch_if_scope_entry_missing(ctx, &missing);
+        scope_reload_checks::detach_rebound_local(ctx, local, pending_throw)?;
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
         store_mixed_scope_cell_to_local(ctx, local, pending_throw)?;

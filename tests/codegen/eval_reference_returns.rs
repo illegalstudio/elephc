@@ -30,6 +30,9 @@ function checkedNativeScopeAliases(bool $run): void {
     $source = $run ? 'try { $node = null; } catch (TypeError $error) { echo "null|"; } try { $node = 5; } catch (TypeError $error) { echo "int|"; } unset($error);' : '';
     eval($source);
     echo $node->label, ':', $box->node->label, '|';
+    $source = $run ? '$replacement = new stdClass(); $replacement->label = "rebound"; unset($node); $node = $replacement; unset($replacement);' : '';
+    eval($source);
+    echo $node->label, ':', $box->node->label, '|';
     $source = $run ? 'unset($node, $text, $number);' : '';
     eval($source);
     echo $box->node->label, ':', $box->text, ':', $box->number, '|';
@@ -38,7 +41,7 @@ function checkedNativeScopeAliases(bool $run): void {
 checkedNativeScopeAliases($argc > 0);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "null|int|node:node|node:original:7|");
+    assert_eq!(out.stdout, "null|int|node:node|rebound:node|node:original:7|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
