@@ -27,8 +27,11 @@ pub(super) fn lower_builtin_throwable_new(
     // PHP's `getLine()` is the line of the `new`, not of the `throw`, and this instruction IS the
     // `new` — so the span it already carries is exactly the right one. A missing span (an
     // exception synthesized by an optimizer pass, say) degrades to zero rather than to a guess.
+    // Injected prelude code has a synthetic span; php attributes those throws to the user call
+    // site published in `_php_diagnostic_line` before entering the prelude helper.
     let creation_line = inst.span.map_or(0, |span| span.line);
-    emit_throwable_allocation(ctx, class_id, creation_line);
+    let runtime_line = inst.span.is_some_and(|span| !span.is_from_source());
+    emit_throwable_allocation(ctx, class_id, creation_line, runtime_line);
     preserve_throwable_for_init(ctx);
     emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
     emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
@@ -141,7 +144,12 @@ pub(super) fn emit_regular_throwable_creation_line(
 /// instruction carried no span. PHP records the line where a Throwable is CONSTRUCTED, not where
 /// it is thrown — `$e = new RuntimeException(...)` on line 2 followed by `throw $e;` on line 5
 /// reports line 2 — so the value belongs here rather than on the throw terminator.
-pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, creation_line: u32) {
+pub(super) fn emit_throwable_allocation(
+    ctx: &mut FunctionContext<'_>,
+    class_id: u64,
+    creation_line: u32,
+    runtime_line: bool,
+) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- allocate and stamp the compact Throwable payload --
@@ -154,7 +162,11 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
-            emit_throwable_creation_line_aarch64(ctx, "x0", "x9", creation_line);
+            if runtime_line {
+                emit_throwable_runtime_line_aarch64(ctx, "x0", "x9");
+            } else {
+                emit_throwable_creation_line_aarch64(ctx, "x0", "x9", creation_line);
+            }
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
         }
         Arch::X86_64 => {
@@ -171,10 +183,40 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
-            emit_throwable_creation_line_x86_64(ctx, "rax", creation_line);
+            if runtime_line {
+                emit_throwable_runtime_line_x86_64(ctx, "rax", "r10");
+            } else {
+                emit_throwable_creation_line_x86_64(ctx, "rax", creation_line);
+            }
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
         }
     }
+}
+
+/// Writes the caller line published by `prepare_call_site` into an AArch64 Throwable payload.
+fn emit_throwable_runtime_line_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    payload_reg: &str,
+    scratch_reg: &str,
+) {
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+    ctx.emitter.instruction(&format!(                                           // record the caller's source line for a prelude-synthesized throwable
+        "str {}, [{}, #{}]",
+        scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
+    ));                                                                         // store the one-based caller line of the internal function
+}
+
+/// Writes the caller line published by `prepare_call_site` into an x86_64 Throwable payload.
+fn emit_throwable_runtime_line_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    payload_reg: &str,
+    scratch_reg: &str,
+) {
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch_reg, "_php_diagnostic_line", 0);
+    ctx.emitter.instruction(&format!(                                           // record the caller's source line for a prelude-synthesized throwable
+        "mov QWORD PTR [{} + {}], {}",
+        payload_reg, THROWABLE_CREATION_LINE_OFFSET, scratch_reg
+    ));                                                                         // store the one-based caller line of the internal function
 }
 
 /// Writes an AArch64 Throwable creation line into the payload, via `scratch_reg`.

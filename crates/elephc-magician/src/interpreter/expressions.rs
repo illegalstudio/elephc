@@ -205,6 +205,21 @@ fn eval_expr_with_result_ownership(
                 values.null()
             }
         }
+        EvalExpr::Assign { name, value } => {
+            let value = eval_owned_expr(value, context, scope, values)?;
+            for replaced in set_owned_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                values,
+            )? {
+                eval_release_value(context, values, replaced)?;
+            }
+            // The scope owns the stored cell; the expression result borrows that owner so
+            // `eval_owned_expr` retains once when the surrounding call needs its own lease.
+            Ok(value.borrowed())
+        }
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::Match {
             subject,

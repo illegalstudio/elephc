@@ -324,6 +324,11 @@ pub(in crate::codegen::lower_inst) fn static_method_exists_on_class_info(
     target_is_object: bool,
 ) -> bool {
     let method_key = php_symbol_key(method_name);
+    if elephc_builtin_contract::lookup_class(resolved_class)
+        .is_some_and(|class| !class.method_is_php_visible(&method_key))
+    {
+        return false;
+    }
     if class_info.methods.contains_key(&method_key) {
         return target_is_object
             || method_visible_from_class_string(
@@ -397,6 +402,11 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
     property_name: &str,
     _target_is_object: bool,
 ) -> bool {
+    if elephc_builtin_contract::lookup_class(resolved_class)
+        .is_some_and(|class| class.property_is_hidden(property_name))
+    {
+        return false;
+    }
     property_visible_from_class_string(
         resolved_class,
         property_name,

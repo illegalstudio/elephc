@@ -94,6 +94,38 @@ pub trait RuntimeValueOps {
         self.pow_raw(left, right)
     }
 
+    /// Applies the shared internal-class handler before scalar bitwise operations.
+    fn bitwise_dispatch(
+        &mut self,
+        op: EvalBinOp,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::shift(self, op, left, right)? {
+            return Ok(result);
+        }
+        if let Some(result) = object_operators::bitwise(self, op, left, right)? {
+            return Ok(result);
+        }
+        self.bitwise(op, left, right)
+    }
+
+    /// Applies the shared internal-class handler before scalar bitwise NOT.
+    fn bit_not_dispatch(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if let Some(result) = object_operators::bit_not(self, value)? {
+            return Ok(result);
+        }
+        self.bit_not(value)
+    }
+
+    /// Materializes PHP's `_IS_NUMBER` view of an internal value object for numeric aggregates.
+    fn number_value(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        match object_operators::number_cast(self, value)? {
+            Some(number) => Ok(number),
+            None => Ok(value),
+        }
+    }
+
     /// Compares internal value classes while preserving strict object identity.
     fn compare(&mut self, op: EvalBinOp, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         if !matches!(op, EvalBinOp::StrictEq | EvalBinOp::StrictNotEq) {

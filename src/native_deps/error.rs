@@ -115,6 +115,9 @@ impl fmt::Display for NativeError {
                 ProjectContext::Found(root) => {
                     write!(formatter, "\nproject: {}", root.display())?;
                 }
+                ProjectContext::Missing { searched_from } if searched_from.as_os_str().is_empty() => {
+                    write!(formatter, "\nproject: not found")?;
+                }
                 ProjectContext::Missing { searched_from } => {
                     write!(
                         formatter,
@@ -144,10 +147,12 @@ pub(crate) fn recovery_from_project(root: &std::path::Path, command: &str) -> St
 fn format_recovery(project: Option<&ProjectContext>, command: &str) -> String {
     match project {
         Some(ProjectContext::Found(root)) => recovery_from_project(root, command),
-        Some(ProjectContext::Missing { searched_from }) => {
+        Some(ProjectContext::Missing { searched_from })
+            if !searched_from.as_os_str().is_empty() =>
+        {
             recovery_from_project(searched_from, command)
         }
-        None => command.to_string(),
+        Some(ProjectContext::Missing { .. }) | None => command.to_string(),
     }
 }
 

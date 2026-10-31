@@ -400,6 +400,38 @@ $b = 2;
 echo $a; // 2
 ```
 
+An **object property** can also be passed directly to a by-reference parameter of a user
+method or constructor when the parameter and the property are both object-typed:
+
+```php
+<?php
+class Value { public function __construct(public int $number) {} }
+class Box { public function __construct(public Value $value) {} }
+class Ops {
+    public function replace(Value &$value): void {
+        $value = new Value(9);
+    }
+}
+
+$box = new Box(new Value(1));
+(new Ops())->replace($box->value);
+echo $box->value->number; // 9
+```
+
+elephc lowers the call as `$temporary = $box->value; replace($temporary); $box->value = $temporary;`
+through a hidden reference cell, so the callee's replacement is visible on the property
+exactly as PHP's shared reference is. The same rewrite accepts scalar, string, array,
+`mixed`, union, and nullable properties, static properties, static methods, and free
+functions.
+
+The same property places also bind to by-reference **variadics**, except array properties:
+the variadic collector needs the container payload repacked, so `collect($box->items)` is
+rejected and asks for a local variable instead. Properties whose declared type needs a runtime
+type dispatch the rewrite does not implement (`iterable`, pointers, buffers) still report
+`must be passed a variable`. The write-back runs after the call
+returns; if the callee throws after mutating the reference, the property keeps its previous
+value (PHP would already have applied the mutation).
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

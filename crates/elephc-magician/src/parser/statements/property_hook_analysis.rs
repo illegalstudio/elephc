@@ -325,6 +325,7 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
             eval_expr_uses_this_property(array, property_name)
                 || eval_expr_uses_this_property(index, property_name)
         }
+        EvalExpr::Assign { value, .. } => eval_expr_uses_this_property(value, property_name),
         EvalExpr::Call { args, .. }
         | EvalExpr::NamespacedCall { args, .. }
         | EvalExpr::NewObject { args, .. }

@@ -2,7 +2,7 @@
 title: "xml_get_current_column_number()"
 description: "Returns the current column number of the parser."
 sidebar:
-  order: 1034
+  order: 1085
 ---
 
 ## xml_get_current_column_number()

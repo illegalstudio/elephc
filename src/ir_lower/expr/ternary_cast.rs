@@ -110,6 +110,14 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
+    if matches!(target, CastType::Int | CastType::Float) {
+        if let Some(result) = object_operators::lower_object_cast(ctx, value, target, expr) {
+            if ctx.value_is_owning_temporary(value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+            }
+            return result;
+        }
+    }
     if matches!(target, CastType::Bool) {
         if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {
             release_binary_operand_temporary(ctx, value, expr.span);

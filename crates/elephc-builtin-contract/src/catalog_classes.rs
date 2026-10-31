@@ -17,11 +17,18 @@ macro_rules! class {
     (
         $name:literal, $canonical:literal, $kind:ident, $module:ident, $route:ident
         $(, since: $since:ident)? $(, extension: $extension:literal)? $(, internal: $internal:literal)?
-        $(, targets: $targets:expr)? $(, operators: $operators:expr)? $(, cloneable: $cloneable:literal)? $(,)?
+        $(, targets: $targets:expr)? $(, operators: $operators:expr)?
+        $(, cloneable: $cloneable:literal)?
+        $(, dynamic_deprecated: $dynamic_deprecated:literal)?
+        $(, dynamic_first: $dynamic_first:literal)?
+        $(, hidden_properties: $hidden_properties:expr)?
+        $(, visible_methods: $visible_methods:expr)? $(,)?
     ) => {
         ClassContract {
             cloneable: class!(@cloneable $($cloneable)?),
             operators: class!(@operators $($operators)?),
+            dynamic_properties_deprecated: class!(@flag $($dynamic_deprecated)?),
+            dump_dynamic_properties_first: class!(@flag $($dynamic_first)?),
             id: BuiltinId::from_canonical_name($canonical),
             name: $name,
             kind: ClassKind::$kind,
@@ -31,6 +38,8 @@ macro_rules! class {
             target_support: class!(@targets $($targets)?),
             extension: class!(@flag $($extension)?),
             internal: class!(@flag $($internal)?),
+            hidden_properties: class!(@hidden_properties $($hidden_properties)?),
+            php_visible_methods: class!(@visible_methods $($visible_methods)?),
             php_manual: None,
         }
     };
@@ -44,6 +53,10 @@ macro_rules! class {
     (@cloneable) => { true };
     (@operators $operators:expr) => { Some($operators) };
     (@operators) => { None };
+    (@hidden_properties $hidden_properties:expr) => { $hidden_properties };
+    (@hidden_properties) => { &[] };
+    (@visible_methods $visible_methods:expr) => { Some($visible_methods) };
+    (@visible_methods) => { None };
 }
 
 pub(crate) static CLASSES: &[ClassContract] = &[
@@ -161,6 +174,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("GmagickException", "gmagickexception", Class, Gmagick, Prelude),
     class!("GmagickPixel", "gmagickpixel", Class, Gmagick, Prelude),
     class!("GmagickPixelException", "gmagickpixelexception", Class, Gmagick, Prelude),
+    class!("GMP", "gmp", Class, Gmp, Prelude, since: Php82, operators: &crate::GMP_OPERATORS, dynamic_deprecated: true, dynamic_first: true, hidden_properties: &["__elephc_num"], visible_methods: &["__construct", "__serialize", "__unserialize"]),
     class!("HashContext", "hashcontext", Class, Hash, Prelude),
     class!("ImageException", "imageexception", Class, Gd, Prelude, extension: true),
     class!("Imagick", "imagick", Class, Imagick, Prelude),

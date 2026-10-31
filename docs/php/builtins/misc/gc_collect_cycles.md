@@ -2,7 +2,7 @@
 title: "gc_collect_cycles()"
 description: "Forces collection of any existing garbage cycles."
 sidebar:
-  order: 630
+  order: 681
 ---
 
 ## gc_collect_cycles()

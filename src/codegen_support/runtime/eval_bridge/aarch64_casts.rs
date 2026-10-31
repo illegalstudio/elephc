@@ -314,4 +314,40 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("b __rt_mixed_from_value");                             // persist and box the string payload for eval
 
+    label_c_global(emitter, "__elephc_eval_value_serialize");
+    emitter.instruction("sub sp, sp, #16");                                     // reserve a wrapper frame across unbox and serialize
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the concrete tag and payload words
+    emitter.instruction("bl __rt_serialize_call_value");                        // serialize the tagged value through the shared runtime
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the serialized string
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the serialize wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed serialized string to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_unserialize");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve slots for pointer/length and the boxed result
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_mixed_cast_string");                           // coerce the eval value to PHP's string context
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save the string pointer and length across context calls
+    emitter.instruction("bl __rt_unserialize_begin");                           // start an isolated unserialize context
+    emitter.instruction("bl __rt_unserialize_inherit_policy");                  // use the default allowed-classes policy
+    abi::emit_store_zero_to_symbol(emitter, "_unser_call_line", 0);             // eval warnings report the fragment root line
+    emitter.instruction("ldp x1, x2, [sp, #0]");                                // restore the string pointer and length
+    emitter.instruction("bl __rt_unserialize_mixed");                           // parse the payload into a boxed Mixed value
+    emitter.instruction("str x0, [sp, #16]");                                   // save the boxed result across context teardown
+    emitter.instruction("bl __rt_unserialize_end");                             // close the unserialize context
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload the parse result
+    emitter.instruction("cbnz x0, __elephc_eval_value_unserialize_done");       // preserve a successful boxed value
+    emitter.instruction("mov x0, #3");                                          // runtime tag 3 = boolean
+    emitter.instruction("mov x1, xzr");                                         // false has no low payload word
+    emitter.instruction("mov x2, xzr");                                         // false has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box PHP's false parse failure
+    emitter.label("__elephc_eval_value_unserialize_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the unserialize wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed unserialized value to Rust
+
 }

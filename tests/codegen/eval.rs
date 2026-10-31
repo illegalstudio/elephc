@@ -8579,6 +8579,44 @@ eval($code);
     );
 }
 
+/// Verifies compiled helpers resolve eval-declared class names through the eval bridge.
+#[test]
+fn test_dynamic_eval_compiled_get_class_sees_eval_declared_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class AotClass {}
+function name_of($value) {
+    return get_class($value);
+}
+$code = $argc > 1 ? $argv[1] : 'class EvalClass {} $object = new EvalClass(); var_dump(name_of($object));';
+eval($code);
+var_dump(name_of(new AotClass()));
+"#,
+    );
+    assert_eq!(out, "string(9) \"EvalClass\"\nstring(8) \"AotClass\"\n");
+}
+
+/// Verifies an assignment expression inside a call argument stores and yields its value.
+#[test]
+fn test_dynamic_eval_assignment_expression_in_call_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : '$n = 1;
+var_dump($n = 42);
+var_dump($n);
+var_dump($n += 8);
+var_dump($n);
+var_dump(($n = 5) + 1);
+var_dump($n);';
+eval($code);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nint(42)\nint(50)\nint(50)\nint(6)\nint(5)\n"
+    );
+}
+
 /// Verifies eval stat metadata builtins return scalar metadata and dispatch dynamically.
 #[test]
 fn test_eval_dispatches_stat_metadata_builtin_calls() {
@@ -31037,4 +31075,19 @@ echo $created;
         "a bridge-free literal eval still needs the shared status dispatch defined"
     );
     assert_global_label(&user_asm, "__elephc_eval_check_status", "literal eval");
+}
+
+/// Verifies statement-level keyword `and` binds below the completed assignment.
+///
+/// `$x = true and false;` is `($x = true) and false;` in PHP, so `$x` remains true. The
+/// expression-position parser already had the right precedence; the statement assignment
+/// fast path used the full expression grammar and swallowed the keyword.
+#[test]
+fn test_eval_statement_assignment_stops_before_keyword_and() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$x = true and false; var_dump($x); $y = 1 or 0; var_dump($y);');
+"#,
+    );
+    assert_eq!(out, "bool(true)\nint(1)\n");
 }

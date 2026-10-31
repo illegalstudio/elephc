@@ -58,9 +58,36 @@ fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let value = call.operand(0)?;
+    if matches!(
+        ctx.value_php_type(value).codegen_repr(),
+        PhpType::Object(name) if name.eq_ignore_ascii_case("GMP")
+    ) {
+        let method = ctx.intern_string("__elephc_to_float");
+        return Ok(ctx.emit_value(
+            Op::MethodCall,
+            vec![value],
+            Some(Immediate::Data(method)),
+            call.result_type.clone(),
+            Op::MethodCall.default_effects(),
+            Some(call.span),
+        ));
+    }
+    if matches!(
+        ctx.value_php_type(value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) && ctx.has_class("GMP")
+    {
+        return Ok(ctx.emit_user_call(
+            "__elephc_gmp_floatval_cast",
+            vec![value],
+            call.result_type.clone(),
+            Some(call.span),
+        ));
+    }
     Ok(ctx.emit_value(
         Op::Cast,
-        vec![call.operand(0)?],
+        vec![value],
         Some(Immediate::CastTarget(IrType::F64)),
         call.result_type.clone(),
         Op::Cast.default_effects(),

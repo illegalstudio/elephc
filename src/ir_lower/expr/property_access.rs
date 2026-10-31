@@ -151,6 +151,40 @@ pub(crate) fn lower_ref_assign_call(
     // The target now owns the returned cell, including when old-payload retirement threw.
     unregister_owned_call_operand(ctx, owner, span);
     ctx.release_ref_cell_owner(&staged, Some(span));
+    // `function &grab(&$x) { return $x; }` transfers the parameter's storage. When that
+    // parameter was an object property, the call lowered through a hidden temp, so the
+    // returned cell aliases the temp rather than the property. Rebind the target to the
+    // property place itself so later writes through `$target` reach `$obj->prop`.
+    if let Some(property) = aliased_property_argument(ctx, source) {
+        lower_ref_assign_property(ctx, target, &property, span);
+    }
+}
+
+/// Returns a property argument whose by-reference storage the callee provably returns.
+fn aliased_property_argument(
+    ctx: &LoweringContext<'_, '_>,
+    source: &Expr,
+) -> Option<Expr> {
+    let ExprKind::FunctionCall { name, args } = &source.kind else {
+        return None;
+    };
+    let signature = ctx.functions.get(name.as_str())?;
+    if !signature.by_ref_return {
+        return None;
+    }
+    let alias = ctx.return_alias_summaries.function(name.as_str())?;
+    for (index, arg) in args.iter().enumerate() {
+        let place = match &arg.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => arg,
+        };
+        if matches!(place.kind, ExprKind::PropertyAccess { .. })
+            && alias.proven_aliases_parameter(index)
+        {
+            return Some(place.clone());
+        }
+    }
+    None
 }
 
 /// Lowers `$target =& $arr[idx]` using the ownership represented by the container.

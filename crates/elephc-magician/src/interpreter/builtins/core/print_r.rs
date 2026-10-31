@@ -39,9 +39,32 @@ pub(in crate::interpreter) enum EvalDebugPropertyVisibilityKind {
 #[derive(Clone)]
 pub(in crate::interpreter) struct EvalDebugObjectProperty {
     pub(in crate::interpreter) name: String,
+    /// Original integer dynamic key, when the property hash stored one instead of a string.
+    pub(in crate::interpreter) numeric_key: Option<i64>,
     pub(in crate::interpreter) visibility: EvalDebugPropertyVisibility,
     pub(in crate::interpreter) value: RuntimeCellHandle,
     pub(in crate::interpreter) is_reference: bool,
+}
+
+/// Returns the integer key PHP's dump walker would print for one object-property key.
+///
+/// Dynamic-property hashes may store a numeric name as text even when PHP's visible
+/// property key is an integer; canonical numeric strings therefore render unquoted.
+fn eval_debug_numeric_key(
+    key: RuntimeCellHandle,
+    key_bytes: &[u8],
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<i64>, EvalStatus> {
+    if values.type_tag(key)? == EVAL_TAG_INT {
+        return Ok(Some(values.raw_value_word(key)? as i64));
+    }
+    let Ok(text) = std::str::from_utf8(key_bytes) else {
+        return Ok(None);
+    };
+    Ok(text
+        .parse::<i64>()
+        .ok()
+        .filter(|numeric| numeric.to_string() == text))
 }
 
 /// Evaluates PHP `print_r()` over one value and an optional return flag.
@@ -280,12 +303,87 @@ pub(in crate::interpreter) fn eval_debug_object_properties(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalDebugObjectProperty>, EvalStatus> {
+    if let Some(properties) = eval_debug_info_properties(object, class_name, context, values)? {
+        return Ok(properties);
+    }
     if let Some(identity) = identity {
         if context.dynamic_object_class(identity).is_some() {
             return eval_debug_dynamic_object_properties(object, identity, class_name, context, values);
         }
     }
     eval_debug_public_object_properties(object, values)
+}
+
+/// Replaces the object's visible properties with `__debugInfo()`'s returned array, as PHP's
+/// `var_dump()` and `print_r()` do. Returns `None` when the object has no such method.
+fn eval_debug_info_properties(
+    object: RuntimeCellHandle,
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<Vec<EvalDebugObjectProperty>>, EvalStatus> {
+    let declared = context.class_method(class_name, "__debugInfo").is_some()
+        || context
+            .native_method_signature(class_name, "__debugInfo")
+            .is_some()
+        || eval_aot_method_dispatch_metadata_in_hierarchy(
+            class_name,
+            "__debugInfo",
+            context,
+            values,
+        )?
+        .is_some();
+    if !declared {
+        return Ok(None);
+    }
+    let result = eval_method_call_result(object, "__debugInfo", Vec::new(), context, values)?;
+    let tag = values.type_tag(result)?;
+    if tag == EVAL_TAG_NULL {
+        // PHP 8.5 deprecates `null` but keeps the empty property table it produces.
+        values.release(result)?;
+        return Ok(Some(Vec::new()));
+    }
+    if tag != EVAL_TAG_ARRAY && tag != EVAL_TAG_ASSOC {
+        values.release(result)?;
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    let len = values.array_len(result)?;
+    let mut properties = Vec::with_capacity(len);
+    for position in 0..len {
+        let key = values.array_iter_key(result, position)?;
+        let key_bytes = values.string_bytes(key)?;
+        let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
+        values.release(key)?;
+        let name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+        let value = values.array_iter_value(result, position)?;
+        properties.push(EvalDebugObjectProperty {
+            name,
+            numeric_key,
+            visibility: EvalDebugPropertyVisibility {
+                kind: EvalDebugPropertyVisibilityKind::Public,
+            },
+            value,
+            is_reference: false,
+        });
+    }
+    values.release(result)?;
+    if elephc_builtin_contract::lookup_class(class_name)
+        .is_some_and(|class| class.dump_dynamic_properties_first)
+    {
+        // GMP's internal debug handler prints the dynamic-property tail first and then its
+        // virtual `num` row, unlike a userland `__debugInfo()` that replaces the table.
+        let mut properties_with_dynamic = Vec::new();
+        eval_debug_append_dynamic_public_properties(
+            object,
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut properties_with_dynamic,
+            values,
+        )?;
+        properties_with_dynamic.extend(properties);
+        return Ok(Some(properties_with_dynamic));
+    }
+    Ok(Some(properties))
 }
 
 /// Collects eval-declared object properties plus public dynamic properties.
@@ -322,6 +420,7 @@ fn eval_debug_dynamic_object_properties(
             }
             properties.push(EvalDebugObjectProperty {
                 name: property.name().to_string(),
+                numeric_key: None,
                 visibility: eval_debug_property_visibility(class.name(), property.visibility()),
                 value,
                 is_reference: alias.is_some(),
@@ -351,6 +450,7 @@ fn eval_debug_append_dynamic_public_properties(
     for position in 0..property_count {
         let key = values.object_property_iter_key(object, position)?;
         let key_bytes = values.string_bytes(key)?;
+        let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
         values.release(key)?;
         let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         if key_name.contains('\0')
@@ -362,6 +462,7 @@ fn eval_debug_append_dynamic_public_properties(
         let value = values.property_get(object, &key_name)?;
         properties.push(EvalDebugObjectProperty {
             name: key_name,
+            numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },
@@ -382,11 +483,13 @@ fn eval_debug_public_object_properties(
     for position in 0..property_count {
         let key = values.object_property_iter_key(object, position)?;
         let key_bytes = values.string_bytes(key)?;
+        let numeric_key = eval_debug_numeric_key(key, &key_bytes, values)?;
         values.release(key)?;
         let key_name = String::from_utf8(key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         let value = values.property_get(object, &key_name)?;
         properties.push(EvalDebugObjectProperty {
             name: key_name,
+            numeric_key,
             visibility: EvalDebugPropertyVisibility {
                 kind: EvalDebugPropertyVisibilityKind::Public,
             },

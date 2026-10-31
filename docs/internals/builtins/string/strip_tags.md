@@ -2,7 +2,7 @@
 title: "strip_tags() - internals"
 description: "Compiler internals for strip_tags(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 946
+  order: 997
 ---
 
 ## `strip_tags()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strip_tags.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strip_tags.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:706](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L706) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

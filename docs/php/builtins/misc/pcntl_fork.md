@@ -2,7 +2,7 @@
 title: "pcntl_fork()"
 description: "Forks the current process and returns the child or parent process identifier."
 sidebar:
-  order: 670
+  order: 721
 ---
 
 ## pcntl_fork()

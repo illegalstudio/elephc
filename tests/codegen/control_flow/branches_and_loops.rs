@@ -514,3 +514,46 @@ echo $x, "\n";
         )
     );
 }
+
+/// A `mixed` switch matches `case null` with PHP's loose comparison while other cases are
+/// present. The null case value used to reach `loose_eq` as a pointer type, so the backend
+/// refused the whole program (#1994).
+#[test]
+fn test_mixed_switch_matches_null_alongside_other_cases() {
+    let out = compile_and_run(
+        r#"<?php
+function f(mixed $x): string {
+    switch ($x) {
+        case 1: return "one";
+        case null: return "null";
+        case "a": return "a";
+        default: return "other";
+    }
+}
+echo f(1), "|", f(null), "|", f(0), "|", f("a"), "|", f("b"), "\n";
+"#,
+    );
+    // PHP 8.5: `1` matches the first case, `0` matches `null` because `0 == null`, `"a"`
+    // matches its own case, and `"b"` falls through to the default.
+    assert_eq!(out, "one|null|null|a|other\n");
+}
+
+/// A `case null` follows PHP's `== null` for every subject type: only the strings/arrays/numbers
+/// PHP equates to null match, an int/bool subject keeps the integer fast path with the cast
+/// materialized, and packed record addresses keep their pointer identity (#1994).
+#[test]
+fn test_null_case_matches_php_across_subject_types() {
+    let out = compile_and_run(
+        r#"<?php
+function s_string(string $x): string { switch ($x) { case null: return "null"; case "a": return "a"; default: return "other"; } }
+function s_array(): string { $a = []; switch ($a) { case null: return "null"; case 1: return "one"; default: return "other"; } }
+function s_float(float $x): string { switch ($x) { case null: return "null"; case 1: return "one"; default: return "other"; } }
+function s_int(int $x): string { switch ($x) { case null: return "null"; case 1: return "one"; default: return "other"; } }
+function s_bool(bool $x): string { switch ($x) { case null: return "null"; case 1: return "one"; default: return "other"; } }
+function s_nullable(?int $x): string { switch ($x) { case null: return "null"; case 2: return "two"; default: return "other"; } }
+echo s_string("a"), s_string(""), "|", s_array(), "|", s_float(0.0), s_float(1.0), "|",
+    s_int(0), s_int(1), "|", s_bool(false), s_bool(true), "|", s_nullable(null), s_nullable(2), "\n";
+"#,
+    );
+    assert_eq!(out, "anull|null|nullone|nullone|nullone|nulltwo\n");
+}

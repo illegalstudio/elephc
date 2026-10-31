@@ -66,6 +66,14 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #32]");                                   // save value_hi
     emitter.instruction("str x5, [sp, #40]");                                   // save value_tag
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the pending-append selection mode
+    emitter.instruction("str x0, [sp, #0]");                                    // save the candidate hash table before null normalization
+    emitter.instruction("cbnz x0, __rt_hash_set_have_table");                   // a live table skips the null-hash allocation
+    emitter.instruction("mov x0, #4");                                          // allocate a four-entry hash for a null dynamic-property slot
+    emitter.instruction("ldr x1, [sp, #40]");                                   // preserve the caller's value tag as the hash value type
+    emitter.instruction("bl __rt_hash_new");                                    // create the missing hash table
+    emitter.instruction("str x0, [sp, #0]");                                    // publish the freshly allocated table
+    emitter.label("__rt_hash_set_have_table");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the candidate table
     emitter.instruction("cbnz x9, __rt_hash_set_ready");                        // selected payloads must remain visible through surviving copies
     emitter.instruction("bl __rt_hash_ensure_unique");                          // split ordinary shared hash tables before mutation
     emitter.label("__rt_hash_set_ready");
@@ -408,7 +416,15 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the high payload word across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the runtime value tag across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // preserve the pending-append selection mode
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer so the copy-on-write helper sees the current mutation target
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer before null normalization
+    emitter.instruction("test rdi, rdi");                                       // is the dynamic-property hash slot still null?
+    emitter.instruction("jnz __rt_hash_set_x86_have_table");                    // a live table skips the null-hash allocation
+    emitter.instruction("mov rdi, 4");                                          // allocate a four-entry hash for a null dynamic-property slot
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // preserve the caller's value tag as the hash value type
+    emitter.instruction("call __rt_hash_new");                                  // create the missing hash table
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // publish the freshly allocated table
+    emitter.instruction("mov rdi, rax");                                        // keep the new table as the mutation target
+    emitter.label("__rt_hash_set_x86_have_table");
     emitter.instruction("mov rax, rdi");                                        // selected mode returns the original table without a COW helper call
     emitter.instruction("test r10, r10");                                       // was this table selected before a callback retained its payload?
     emitter.instruction("jnz __rt_hash_set_x86_ready");                         // yes, preserve that exact payload identity

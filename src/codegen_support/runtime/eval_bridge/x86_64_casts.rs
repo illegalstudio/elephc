@@ -312,4 +312,48 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string, with C ptr/len already in rdi/rsi
     emitter.instruction("jmp __rt_mixed_from_value");                           // persist and box the string payload for eval
 
+    label_c_global(emitter, "__elephc_eval_value_serialize");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // expose the concrete tag and payload words
+    emitter.instruction("mov rdx, rsi");                                        // move the high payload word into serialize value_hi
+    emitter.instruction("mov rsi, rdi");                                        // move the low payload word into serialize value_lo
+    emitter.instruction("mov rdi, rax");                                        // move the runtime tag into serialize value_tag
+    emitter.instruction("call __rt_serialize_call_value");                      // serialize the tagged value through the shared runtime
+    emitter.instruction("mov rdi, rax");                                        // move the serialized pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the serialized length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the serialized string
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed serialized string to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_unserialize");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve slots for the string pair and boxed result
+    emitter.instruction("mov rax, rdi");                                        // move the boxed eval value into the string cast
+    emitter.instruction("call __rt_mixed_cast_string");                         // coerce the eval value to PHP's string context
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the string pointer across context calls
+    emitter.instruction("mov QWORD PTR [rsp + 8], rdx");                        // save the string length across context calls
+    emitter.instruction("call __rt_unserialize_begin");                         // start an isolated unserialize context
+    emitter.instruction("call __rt_unserialize_inherit_policy");                // use the default allowed-classes policy
+    abi::emit_store_zero_to_symbol(emitter, "_unser_call_line", 0);             // eval warnings report the fragment root line
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // restore the string pointer
+    emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // restore the string length
+    emitter.instruction("call __rt_unserialize_mixed");                         // parse the payload into a boxed Mixed value
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // save the boxed result across context teardown
+    emitter.instruction("call __rt_unserialize_end");                           // close the unserialize context
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // reload the parse result
+    emitter.instruction("test rax, rax");                                       // did the parser produce a value?
+    emitter.instruction("jne __elephc_eval_value_unserialize_done");            // preserve a successful boxed value
+    emitter.instruction("mov eax, 3");                                          // runtime tag 3 = boolean
+    emitter.instruction("xor edi, edi");                                        // false has no low payload word
+    emitter.instruction("xor esi, esi");                                        // false has no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // box PHP's false parse failure
+    emitter.label("__elephc_eval_value_unserialize_done");
+    emitter.instruction("add rsp, 16");                                         // release the wrapper stack slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed unserialized value to Rust
+
 }

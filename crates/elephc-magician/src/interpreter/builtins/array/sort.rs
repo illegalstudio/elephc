@@ -43,6 +43,7 @@ pub(in crate::interpreter) enum EvalArraySortKey {
     Numeric(f64),
     Natural(Vec<u8>),
     String(Vec<u8>),
+    Object,
 }
 
 /// One source array entry plus its precomputed ordering key.
@@ -76,14 +77,11 @@ pub(in crate::interpreter) fn eval_array_sort_replacement(
             eval_array_flagged_key_sort_entries(&mut entries, mode, descending, values)?;
         }
     } else {
-        entries.sort_by(|left, right| {
-            let order = eval_array_sort_key_cmp(&left.sort_key, &right.sort_key);
-            if matches!(name, "arsort" | "rsort") {
-                order.reverse()
-            } else {
-                order
-            }
-        });
+        eval_array_value_sort_entries_stable(
+            &mut entries,
+            matches!(name, "arsort" | "rsort"),
+            values,
+        )?;
     }
 
     if matches!(
@@ -215,11 +213,19 @@ pub(in crate::interpreter) fn eval_array_value_sort_entries(
         let source_key = values.array_iter_key(array, position)?;
         let value = values.array_get(array, source_key)?;
         let sort_key = eval_array_sort_key(value, values)?;
-        let is_numeric = matches!(sort_key, EvalArraySortKey::Numeric(_));
-        match expects_numeric {
-            Some(expected) if expected != is_numeric => return Err(EvalStatus::RuntimeFatal),
-            Some(_) => {}
-            None => expects_numeric = Some(is_numeric),
+        let is_numeric = match sort_key {
+            EvalArraySortKey::Numeric(_) => Some(true),
+            // Internal value objects participate through their operator adapter, so they
+            // must not force the scalar numeric/string homogeneity guard.
+            EvalArraySortKey::Object => None,
+            _ => Some(false),
+        };
+        if let Some(is_numeric) = is_numeric {
+            match expects_numeric {
+                Some(expected) if expected != is_numeric => return Err(EvalStatus::RuntimeFatal),
+                Some(_) => {}
+                None => expects_numeric = Some(is_numeric),
+            }
         }
         entries.push(EvalArraySortEntry {
             sort_key,
@@ -229,6 +235,50 @@ pub(in crate::interpreter) fn eval_array_value_sort_entries(
     }
 
     Ok(entries)
+}
+
+/// Stably orders value-sorted entries, dispatching internal objects through their adapter.
+fn eval_array_value_sort_entries_stable(
+    entries: &mut [EvalArraySortEntry],
+    descending: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    for pass in 0..entries.len() {
+        let upper = entries.len().saturating_sub(pass + 1);
+        for index in 0..upper {
+            let comparison = eval_array_value_sort_cmp(
+                &entries[index],
+                &entries[index + 1],
+                values,
+            )?;
+            let comparison = if descending { -comparison } else { comparison };
+            if comparison > 0 {
+                entries.swap(index, index + 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compares two value-sort entries, using the object operator contract when either is an object.
+fn eval_array_value_sort_cmp(
+    left: &EvalArraySortEntry,
+    right: &EvalArraySortEntry,
+    values: &mut impl RuntimeValueOps,
+) -> Result<i64, EvalStatus> {
+    if matches!(left.sort_key, EvalArraySortKey::Object)
+        || matches!(right.sort_key, EvalArraySortKey::Object)
+    {
+        let result = values.spaceship(left.value, right.value)?;
+        let comparison = values.raw_value_word(result)? as i64;
+        values.release(result)?;
+        return Ok(comparison);
+    }
+    Ok(match eval_array_sort_key_cmp(&left.sort_key, &right.sort_key) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    })
 }
 
 /// Collects values and natural-sort keys from one eval array.
@@ -320,6 +370,7 @@ pub(in crate::interpreter) fn eval_array_sort_key(
                 None => Ok(EvalArraySortKey::String(bytes)),
             }
         }
+        EVAL_TAG_OBJECT => Ok(EvalArraySortKey::Object),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -345,6 +396,7 @@ pub(in crate::interpreter) fn eval_array_sort_key_cmp(
             eval_natural_bytes_cmp(left, right)
         }
         (EvalArraySortKey::String(left), EvalArraySortKey::String(right)) => left.cmp(right),
+        (EvalArraySortKey::Object, EvalArraySortKey::Object) => std::cmp::Ordering::Equal,
         _ => eval_array_sort_key_rank(left).cmp(&eval_array_sort_key_rank(right)),
     }
 }
@@ -355,6 +407,7 @@ pub(in crate::interpreter) fn eval_array_sort_key_rank(key: &EvalArraySortKey) -
         EvalArraySortKey::Numeric(_) => 0,
         EvalArraySortKey::Natural(_) => 1,
         EvalArraySortKey::String(_) => 2,
+        EvalArraySortKey::Object => 3,
     }
 }
 

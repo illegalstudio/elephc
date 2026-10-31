@@ -68,7 +68,17 @@ pub(super) fn lower_new_object(
         expr.span,
     );
     begin_call_argument_evaluation(ctx);
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let previous_description = ctx
+        .call_description
+        .replace(format!("{}::__construct", class_name.as_str()));
+    let ref_place_rewrite = sig.as_ref().and_then(|signature| {
+        super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
+    });
+    let call_args = ref_place_rewrite
+        .as_ref()
+        .map_or(args, |rewrite| rewrite.args.as_slice());
+    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    ctx.call_description = previous_description;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
     let roots = root_user_call_operands(
         ctx,
@@ -99,6 +109,9 @@ pub(super) fn lower_new_object(
         expr.span,
     );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
+    if let Some(rewrite) = ref_place_rewrite {
+        super::ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
+    }
     take_prepublished_call_result(ctx, result_staging, object, expr.span)
 }
 

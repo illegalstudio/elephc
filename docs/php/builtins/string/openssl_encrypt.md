@@ -2,7 +2,7 @@
 title: "openssl_encrypt()"
 description: "Encrypts data with a supported AES cipher."
 sidebar:
-  order: 922
+  order: 973
 ---
 
 ## openssl_encrypt()

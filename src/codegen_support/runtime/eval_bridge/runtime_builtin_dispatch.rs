@@ -63,6 +63,8 @@ pub(super) fn emit_aarch64_runtime_builtin_dispatch(emitter: &mut Emitter, featu
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush");
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_aarch64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
+    emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Serialize, "serialize", "__elephc_eval_value_serialize");
+    emit_aarch64_unary_case(emitter, RuntimeBuiltinId::Unserialize, "unserialize", "__elephc_eval_value_unserialize");
 
     super::memory::emit_cases(emitter);
 
@@ -143,6 +145,8 @@ pub(super) fn emit_x86_64_runtime_builtin_dispatch(emitter: &mut Emitter, featur
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObFlush, "ob_flush");
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndClean, "ob_end_clean");
     emit_x86_64_zero_arg_boxed_bool_case(emitter, RuntimeBuiltinId::ObEndFlush, "ob_end_flush");
+    emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Serialize, "serialize", "__elephc_eval_value_serialize");
+    emit_x86_64_unary_case(emitter, RuntimeBuiltinId::Unserialize, "unserialize", "__elephc_eval_value_unserialize");
 
     super::memory::emit_cases(emitter);
 
@@ -197,6 +201,8 @@ fn runtime_dispatch_labels() -> Vec<(RuntimeBuiltinId, String)> {
         (RuntimeBuiltinId::ObFlush, "__elephc_runtime_builtin_v1_ob_flush"),
         (RuntimeBuiltinId::ObEndClean, "__elephc_runtime_builtin_v1_ob_end_clean"),
         (RuntimeBuiltinId::ObEndFlush, "__elephc_runtime_builtin_v1_ob_end_flush"),
+        (RuntimeBuiltinId::Serialize, "__elephc_runtime_builtin_v1_serialize"),
+        (RuntimeBuiltinId::Unserialize, "__elephc_runtime_builtin_v1_unserialize"),
     ];
     let mut labels: Vec<_> = labels.into_iter().map(|(id, label)| (id, label.to_owned())).collect();
     labels.extend(super::memory::OPERATIONS.iter().map(|(id, name)|

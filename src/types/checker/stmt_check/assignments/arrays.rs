@@ -37,10 +37,24 @@ pub(super) fn check_array_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    // PHP auto-vivifies an undefined variable on `$a[$k] = ...`: the write creates an
+    // array (associative for a string key, indexed for an integer key). Mirror that
+    // instead of rejecting the target, exactly as the append form already does.
+    let Some(arr_ty) = env.get(array).cloned() else {
+        let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
+        let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+        let key_ty = normalized_array_key_type(index, idx_ty);
+        let created = if key_ty == PhpType::Int {
+            PhpType::Array(Box::new(val_ty))
+        } else {
+            PhpType::AssocArray {
+                key: Box::new(key_ty),
+                value: Box::new(val_ty),
+            }
+        };
+        env.insert(array.to_string(), created);
+        return Ok(());
+    };
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
@@ -455,10 +469,14 @@ pub(super) fn check_array_push(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    let arr_ty = env
-        .get(array)
-        .cloned()
-        .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
+    // PHP 8 auto-vivifies an undefined variable on `$a[] = ...`: the append creates an
+    // empty array and stores the value. Mirror that here instead of rejecting the write;
+    // the generic Mixed element keeps subsequent pushes of other types representable.
+    let Some(arr_ty) = env.get(array).cloned() else {
+        let _ = checker.infer_type_with_assignment_effects(value, env)?;
+        env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
+        return Ok(());
+    };
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     // Nested appends retain their catchable runtime Error through the generated temporary.

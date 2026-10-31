@@ -321,6 +321,14 @@ pub trait BuiltinLoweringContext {
     /// Returns the PHP type metadata attached to an existing SSA operand.
     fn value_php_type(&self, value: ValueId) -> PhpType;
 
+    /// Reports whether the compiled program declares the named internal class.
+    ///
+    /// Builtin hooks use this before selecting a prelude helper that only exists when
+    /// the owning extension was detected.
+    fn has_class(&self, _name: &str) -> bool {
+        false
+    }
+
     /// Interns a class-name literal for EIR operations such as `ConstClassName`.
     fn intern_class_name(&mut self, value: &str) -> crate::ir::DataId;
 

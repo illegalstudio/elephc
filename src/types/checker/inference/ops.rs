@@ -163,8 +163,9 @@ impl Checker {
                 // `__rt_php_compare`'s two-string leg already implements. Rejecting them
                 // made the ordinary character-range idiom (`$c >= '0' && $c <= '9'`) a
                 // compile error and pushed callers onto `ord()` (issue #507).
-                let strings_ok = lt == PhpType::Str && rt == PhpType::Str;
-                if !numeric_ok && !datetime_ok && !strings_ok {
+                let strings_ok = orders_as_strings(&lt, &rt);
+                let object_null = crate::types::object_operators::null_comparison_allowed(&lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !object_null {
                     return Err(CompileError::new(
                         expr.span,
                         "Comparison operators require numeric or string operands",
@@ -197,8 +198,9 @@ impl Checker {
                 // `<=>` is the same ordering as `<` and `>`, only reported as -1/0/1, so it
                 // accepts the same two-string pair rather than leaving `"a" <=> "b"` a
                 // compile error while `"a" < "b"` works (issue #507).
-                let strings_ok = lt == PhpType::Str && rt == PhpType::Str;
-                if !numeric_ok && !datetime_ok && !strings_ok {
+                let strings_ok = orders_as_strings(&lt, &rt);
+                let object_null = crate::types::object_operators::null_comparison_allowed(&lt, &rt);
+                if !numeric_ok && !datetime_ok && !strings_ok && !object_null {
                     return Err(CompileError::new(
                         expr.span,
                         "Spaceship operator requires numeric or string operands",
@@ -1631,6 +1633,17 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Mixed
     ) || checker.is_union_with_mixed_numeric_dispatch(ty)
+}
+
+/// Returns `true` when an ordering comparison (`<`, `<=`, `>`, `>=`, `<=>`) of `lt` and `rt`
+/// takes the string leg: two strings, or a string beside a `mixed` value, whose run-time
+/// kind `__rt_php_compare` resolves as it does for `mixed` beside a number. A string beside a
+/// concrete number stays a type error.
+fn orders_as_strings(lt: &PhpType, rt: &PhpType) -> bool {
+    matches!(
+        (lt, rt),
+        (PhpType::Str, PhpType::Str) | (PhpType::Str, PhpType::Mixed) | (PhpType::Mixed, PhpType::Str)
+    )
 }
 
 /// Returns `true` if `ty` is a valid operand type for arithmetic operators (`+ - * / % **`).

@@ -304,11 +304,14 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
-        ExprKind::FunctionCall { .. }
-        | ExprKind::MethodCall { .. }
-        | ExprKind::StaticMethodCall { .. }
-        | ExprKind::ClosureCall { .. }
-        | ExprKind::ExprCall { .. } => {
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. } => {
+            for arg in args {
+                promote_ref_call_property_argument(checker, arg, env)?;
+            }
             let target_ty = checker.infer_type(source, env)?;
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
@@ -377,6 +380,44 @@ pub(super) fn check_ref_assign(
 }
 
 /// Type-checks `$target =& $source` where the source is a plain variable.
+/// Promotes a property passed to a by-reference call so `=&` can later alias its storage.
+///
+/// `function &grab(&$x) { return $x; } $r = &grab($obj->prop);` must leave `$r` aliasing the
+/// property itself, not the hidden temporary used to call `grab`. The property needs reference
+/// storage before codegen; the direct-property RefAssign branch records the same promotion.
+fn promote_ref_call_property_argument(
+    checker: &mut Checker,
+    arg: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let mut place = arg;
+    while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
+        place = value;
+    }
+    let ExprKind::PropertyAccess { object, property } = &place.kind else {
+        return Ok(());
+    };
+    let object_ty = checker.infer_type(object, env)?;
+    if let Some(class) = crate::types::checker::single_object_class_name(&object_ty) {
+        checker
+            .reference_property_promotions
+            .insert((class, property.clone()));
+    } else {
+        let owners: Vec<String> = checker
+            .classes
+            .iter()
+            .filter(|(_, info)| info.properties.iter().any(|(name, _)| name == property))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for owner in owners {
+            checker
+                .reference_property_promotions
+                .insert((owner, property.clone()));
+        }
+    }
+    Ok(())
+}
+
 fn check_ref_assign_variable(
     checker: &mut Checker,
     target: &str,
