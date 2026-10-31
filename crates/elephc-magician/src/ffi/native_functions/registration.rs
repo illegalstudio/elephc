@@ -165,7 +165,13 @@ pub(super) unsafe fn register_native_function_param_flags_inner(
         return 0;
     };
     let function_name = function_name.to_ascii_lowercase();
-    if !context.define_native_function_param_by_ref(&function_name, param_index, is_by_ref != 0) {
+    if is_by_ref & !3 != 0 || is_by_ref == 2 {
+        return 0;
+    }
+    if !context.define_native_function_param_by_ref(&function_name, param_index, is_by_ref & 1 != 0) {
+        return 0;
+    }
+    if !context.define_native_function_param_tagged_scalar_ref(&function_name, param_index, is_by_ref & 2 != 0) {
         return 0;
     }
     if is_variadic != 0 {

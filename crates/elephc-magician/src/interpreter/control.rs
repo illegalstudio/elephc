@@ -76,6 +76,11 @@ pub(super) enum BoundNativeFunctionRefSlot {
         slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
     },
+    TaggedScalar {
+        original: [u64; 2],
+        slot: Box<[u64; 2]>,
+        target: Option<EvalReferenceTarget>,
+    },
     OwnedRawWord {
         original: u64,
         slot: Box<u64>,

@@ -18,6 +18,28 @@ use crate::types::PhpType;
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
 pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
+/// Internal source layout for inline nullable integers, matching tagged-scalar property metadata.
+pub(crate) const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = 12;
+
+/// Reads a tagged scalar's actual PHP tag, branching to boxing with an already-zero high word.
+pub(crate) fn emit_tagged_scalar_ref_source(
+    emitter: &mut Emitter, source_tag: &str, storage: &str, box_label: &str, ordinary_label: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {source_tag}, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // identify inline nullable-integer reference storage
+            emitter.instruction(&format!("b.ne {ordinary_label}"));             // other source layouts keep their existing decoding
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {source_tag}, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // identify inline nullable-integer reference storage
+            emitter.instruction(&format!("jne {ordinary_label}"));              // other source layouts keep their existing decoding
+        }
+    }
+    abi::emit_load_from_address(emitter, source_tag, storage, 8);
+    abi::emit_jump(emitter, box_label);
+    emitter.label(ordinary_label);
+}
+
 /// Clones a boxed runtime Mixed argument container into a normalized boxed Mixed container.
 pub(crate) fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
     dest_reg: &str,

@@ -385,6 +385,14 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match source_tag {
+        EVAL_INVOKER_TAGGED_SCALAR_SOURCE => {
+            let words = unsafe { *(slot as *const [u64; 2]) };
+            match words[1] {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0]),
+                EVAL_TAG_NULL => values.null(),
+                _ => Err(EvalStatus::RuntimeFatal),
+            }
+        }
         EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
             let word = unsafe { *(slot as *const u64) };
             values.raw_word_value(source_tag, word)
@@ -415,6 +423,13 @@ pub(super) fn write_back_invoker_slot_ref_target(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match source_tag {
+        EVAL_INVOKER_TAGGED_SCALAR_SOURCE => {
+            let tag = values.type_tag(value)?;
+            if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
+            let word = values.raw_value_word(value)?;
+            unsafe { *(slot as *mut [u64; 2]) = [word, tag]; }
+            Ok(())
+        }
         EVAL_TAG_INT | EVAL_TAG_FLOAT | EVAL_TAG_BOOL | EVAL_TAG_RESOURCE => {
             let word = values.raw_value_word(value)?;
             unsafe {

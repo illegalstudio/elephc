@@ -600,6 +600,16 @@ Compatibility is representation, not identity: two object classes share one poin
 layout and are interchangeable here, while container element layouts are part of the
 payload and are compared recursively.
 
+Eval-to-native reference arguments also carry their physical storage shape. Native free
+function parameter registration uses reference flag bit0 for by-reference binding and
+bit1 for the compiled inline nullable-integer layout. A nullable PHP type alone does not
+select that layout, because the legacy null representation can use boxed storage instead.
+Inline nullable integers stage both `[payload, tag]` words under invoker source shape12.
+Marker value reads box the actual tag from the second word; writes publish the replacement
+value's tag there. Native writeback rebuilds the caller's boxed value and marks it dirty,
+including a change between integer zero and null. Ordinary reference flags0/1 retain their
+existing storage policy.
+
 A nullable local returned by reference with a non-null object result is checked before
 promotion to an object-payload cell. The original local name stays attached, including
 during `finally`. A boxed replacement is checked and unboxed before publication, with

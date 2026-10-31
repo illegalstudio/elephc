@@ -9,6 +9,37 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Eval native calls preserve nullable-integer reference tags, hidden argument reads and variadics.
+#[test]
+fn test_eval_native_nullable_integer_reference_arguments_preserve_both_words() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeMaybeReference(?int &$value, ?int $replacement): void {
+    echo json_encode($value), ':'; $value = $replacement;
+    echo json_encode(func_get_args()[0]), '|';
+}
+class NativeMaybeReferenceWriter {
+    public function write(?int &$value, ?int $replacement): void {
+        echo json_encode($value), ':'; $value = $replacement; echo json_encode($value), '|';
+    }
+}
+function nativeMaybeReferenceVariadic(?int &...$values): void {
+    $values[0] = null; $values['last'] = 9;
+    echo json_encode($values[0]), ':', json_encode($values['last']), '|';
+}
+function runNativeMaybeReference(string $source): void {
+    $value = null; $other = 4; $writer = new NativeMaybeReferenceWriter();
+    eval($source);
+    echo json_encode($value), ':', json_encode($other);
+    unset($value, $other, $writer, $source);
+}
+$source = $argc > 0 ? 'nativeMaybeReference($value, 3); nativeMaybeReference($value, null); nativeMaybeReference($value, 7); $writer->write($value, null); $writer->write($value, 5); $writer->write($value, 6); nativeMaybeReferenceVariadic($value, last: $other);' : '';
+runNativeMaybeReference($source); unset($source);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "null:3|3:null|null:7|7:null|null:5|5:6|null:9|null:9");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Typed reference payloads remain readable when nullable stores widen their original frame slot.
 #[test]
 fn test_concrete_reference_return_payloads_survive_final_frame_widening() {

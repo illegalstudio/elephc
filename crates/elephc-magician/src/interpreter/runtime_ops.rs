@@ -735,7 +735,7 @@ pub trait RuntimeValueOps {
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
-    /// Creates an invoker-only by-reference marker for a staged raw one-word slot.
+    /// Creates an invoker-only marker for raw storage whose source tag identifies its full layout.
     fn invoker_raw_ref_cell(
         &mut self,
         slot: *mut c_void,
@@ -1135,6 +1135,8 @@ pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
+/// Internal invoker source shape for a two-word nullable integer, never a PHP value tag.
+pub(super) const EVAL_INVOKER_TAGGED_SCALAR_SOURCE: u64 = 12;
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

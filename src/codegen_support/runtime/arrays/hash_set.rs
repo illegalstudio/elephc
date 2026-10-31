@@ -20,7 +20,8 @@
 //! - `__rt_hash_set_shared` is restricted to a pending append selected before a diagnostic
 //!   callback. It preserves the exact payload retained by a surviving child copy.
 
-use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
+use crate::codegen_support::abi;
+use crate::codegen_support::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use super::hash_layout;
@@ -275,6 +276,8 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_done");                                // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw");
+    emitter.instruction(&format!("cmp x15, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}"));                                        // source shape12 stores a nullable integer payload and tag
+    emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged");         // decode boxed replacements before publishing both words
     emitter.instruction("ldr x14, [x14, #8]");                                  // load the concrete caller-storage address
     emitter.instruction("ldr x0, [x14]");                                       // retain the previous low payload for optional release
     emitter.instruction("ldr x13, [sp, #24]");                                  // load replacement value_lo
@@ -296,6 +299,26 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_release_callable");
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the overwritten callable after publication
     emitter.instruction("b __rt_hash_set_done");                                // return the unchanged argument hash
+
+    emitter.label("__rt_hash_set_invoker_reference_tagged");
+    emitter.instruction("ldr x14, [x14, #8]");                                  // address the caller's inline tagged-scalar slot
+    emitter.instruction("ldr x0, [sp, #40]");                                   // inspect the replacement PHP representation
+    emitter.instruction("cmp x0, #7");                                          // a Mixed replacement owns a box that must be decoded
+    emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged_box");     // preserve the boxed value until both words are published
+    emitter.instruction("ldr x1, [sp, #24]");                                   // load the direct nullable-integer payload
+    emitter.instruction("str x1, [x14]");                                       // publish the scalar payload
+    emitter.instruction("str x0, [x14, #8]");                                   // publish its actual PHP tag
+    emitter.instruction("b __rt_hash_set_done");                                // the marker remains owned by the argument hash
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // load the replacement box owned by this write
+    abi::emit_push_reg_pair(emitter, "x0", "x14");
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    abi::emit_load_temporary_stack_slot(emitter, "x14", 8);
+    emitter.instruction("str x1, [x14]");                                       // publish the unboxed scalar payload
+    emitter.instruction("str x0, [x14, #8]");                                   // publish the unboxed null or integer tag
+    abi::emit_pop_reg_pair(emitter, "x0", "x14");
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("b __rt_hash_set_done");                                // retire the consumed box without changing marker identity
 
     // -- write through an existing PHP reference set instead of replacing the entry --
     emitter.label("__rt_hash_set_reference_write");
@@ -601,6 +624,8 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw_x");
+    emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}"));                                         // source shape12 stores a nullable integer payload and tag
+    emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x");         // decode boxed replacements before publishing both words
     emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the concrete caller-storage address
     emitter.instruction("mov rax, QWORD PTR [r14]");                            // retain the previous low payload for optional release
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load replacement value_lo
@@ -622,6 +647,26 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_release_callable_x");
     emitter.instruction("call __rt_callable_descriptor_release");               // release the overwritten callable after publication
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // return the unchanged argument hash
+
+    emitter.label("__rt_hash_set_invoker_reference_tagged_x");
+    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // address the caller's inline tagged-scalar slot
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // inspect the replacement PHP representation
+    emitter.instruction("cmp rax, 7");                                          // a Mixed replacement owns a box that must be decoded
+    emitter.instruction("je __rt_hash_set_invoker_reference_tagged_box_x");     // preserve the boxed value until both words are published
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
+    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the scalar payload
+    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish its actual PHP tag
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the marker remains owned by the argument hash
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the replacement box owned by this write
+    abi::emit_push_reg_pair(emitter, "rax", "r14");
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    abi::emit_load_temporary_stack_slot(emitter, "r14", 8);
+    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the unboxed scalar payload
+    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish the unboxed null or integer tag
+    abi::emit_pop_reg_pair(emitter, "rax", "r14");
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // retire the consumed box without changing marker identity
 
     emitter.label("__rt_hash_set_reference_write_x");
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag
@@ -751,6 +796,15 @@ mod tests {
                 write_through.find(publish).unwrap() < write_through.find(release).unwrap(),
                 "{name}: publish replacement before releasing the previous Mixed owner"
             );
+            let (tagged_label, tagged_store) = if name == "linux-x86_64" {
+                ("__rt_hash_set_invoker_reference_tagged_x:", "mov QWORD PTR [r14 + 8], rax")
+            } else {
+                ("__rt_hash_set_invoker_reference_tagged:", "str x0, [x14, #8]")
+            };
+            let tagged = write_through.split(tagged_label).nth(1).unwrap();
+            assert!(tagged.contains(tagged_store), "{name}: nullable sources publish their actual PHP tag");
+            assert!(tagged.contains("__rt_mixed_unbox"), "{name}: boxed replacements must be decoded");
+            assert!(tagged.contains("__rt_decref_mixed"), "{name}: the consumed replacement box must retire");
         }
     }
 }

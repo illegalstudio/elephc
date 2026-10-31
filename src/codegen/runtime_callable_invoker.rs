@@ -1452,8 +1452,13 @@ fn emit_materialize_invoker_ref_cell_value_as_mixed(
     let string_hi_label = ctx.next_label("invoker_ref_string_hi");
     let box_label = ctx.next_label("invoker_ref_box");
     let done_label = ctx.next_label("invoker_ref_materialized");
+    let ordinary_label = ctx.next_label("invoker_ref_not_tagged_scalar");
 
     abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
+    abi::emit_load_int_immediate(emitter, hi_reg, 0);
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
+        emitter, source_tag_reg, ref_cell_reg, &box_label, &ordinary_label,
+    );
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, #7", source_tag_reg));        // detect an already-boxed Mixed value in the reference cell
@@ -3717,6 +3722,25 @@ mod tests {
             assert!(boxed < mixed && mixed < retained && retained < done, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_mixed_from_value").count(), 1, "{name}: {asm}");
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+        }
+    }
+
+    /// Marker value reads select the nullable-integer slot's runtime tag on every target.
+    #[test]
+    fn invoker_tagged_scalar_reference_values_read_the_dynamic_tag_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx = InvokerEmitContext::new("tagged_ref_value", owners, false, false, Vec::new(), target);
+            let (storage, source_tag, load_tag) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "ldr x20, [x19, #8]"),
+                Arch::X86_64 => ("r12", "r13", "mov r13, QWORD PTR [r12 + 8]"),
+            };
+            emit_materialize_invoker_ref_cell_value_as_mixed(storage, source_tag, &mut emitter, &mut ctx);
+            let assembly = emitter.output();
+            assert!(assembly.contains(load_tag), "{name}: {assembly}");
+            assert!(assembly.find(load_tag).unwrap() < assembly.find("__rt_mixed_from_value").unwrap(), "{name}");
         }
     }
 

@@ -142,7 +142,7 @@ pub(in crate::interpreter) fn cleanup_native_function_ref_args(
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
                 values.release(RuntimeCellHandle::from_raw(**slot))
             }
-            BoundNativeFunctionRefSlot::RawWord { .. } => Ok(()),
+            BoundNativeFunctionRefSlot::RawWord { .. } | BoundNativeFunctionRefSlot::TaggedScalar { .. } => Ok(()),
         };
         if result.is_ok() { result = released; }
     }
@@ -198,6 +198,17 @@ fn write_back_native_function_ref_slot(
                 return Ok(());
             };
             let value = values.raw_word_value(*tag, word)?;
+            publish_native_function_ref_value(target, value, context, values)
+        }
+        BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target } => {
+            let words = **slot;
+            if words == *original { return Ok(()); }
+            let Some(target) = target else { return Ok(()); };
+            let value = match words[1] {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0])?,
+                EVAL_TAG_NULL => values.null()?,
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
             publish_native_function_ref_value(target, value, context, values)
         }
         BoundNativeFunctionRefSlot::RawString {

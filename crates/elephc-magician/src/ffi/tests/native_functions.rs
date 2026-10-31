@@ -10,6 +10,24 @@
 
 use super::*;
 
+/// Reference layout flags retain old boolean registrations and reject incomplete shape flags.
+#[test]
+fn native_function_reference_flags_preserve_compiled_tagged_scalar_layout() {
+    let mut ctx = ElephcEvalContext::new();
+    let name = b"native_nullable_ref";
+    assert_eq!(unsafe { __elephc_eval_register_native_function(
+        &mut ctx, name.as_ptr(), name.len() as u64, 1usize as *mut c_void, Some(fake_native_invoker), 1,
+    ) }, 1);
+    for (flags, accepted, tagged) in [(3, 1, true), (2, 0, true), (4, 0, true), (1, 1, false), (0, 1, false)] {
+        assert_eq!(unsafe { __elephc_eval_register_native_function_param_flags(
+            &mut ctx, name.as_ptr(), name.len() as u64, 0, flags, 0,
+        ) }, accepted);
+        let function = ctx.native_function("native_nullable_ref").unwrap();
+        assert_eq!(function.param_tagged_scalar_ref(0), tagged);
+        if accepted == 1 { assert_eq!(function.param_by_ref(0), flags & 1 != 0); }
+    }
+}
+
 /// Function attribute records retain named arguments, source order and repeated entries.
 #[test]
 fn register_native_function_attributes_preserves_metadata() {

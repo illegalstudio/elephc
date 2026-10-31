@@ -335,6 +335,14 @@ impl ElephcEvalContext {
             .is_some_and(|function| function.set_param_by_ref(index, by_ref))
     }
 
+    /// Records a native reference parameter's compiled nullable-integer storage shape.
+    pub fn define_native_function_param_tagged_scalar_ref(
+        &mut self, function_name: &str, index: usize, tagged: bool,
+    ) -> bool {
+        self.native_functions.get_mut(function_name)
+            .is_some_and(|function| function.set_param_tagged_scalar_ref(index, tagged))
+    }
+
     /// Records which native AOT callback parameter is variadic.
     pub fn define_native_function_variadic_param(
         &mut self,
