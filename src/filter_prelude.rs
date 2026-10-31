@@ -118,8 +118,12 @@ pub(crate) fn filter_declarations(config: request::FilterDefault, initialize: bo
 /// Returns whether the program names the filter surface, directly or through introspection.
 pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
+    // `dynamic_function_call` also covers callable VALUES passed to unrelated builtins
+    // (`set_error_handler`, `array_map`, …). Treating those as filter reachability injected
+    // this bridge into every callback-using program, including native-extension output that
+    // must stay bridge-free. Literal callables are already recorded in `references`/`literals`,
+    // and only an opaque eval or an explicit introspection needs the full surface.
     usage.introspects
-        || usage.dynamic_function_call
         || FUNCTIONS
             .iter()
             .any(|name| usage.references(name) || usage.literals.contains(*name))
@@ -184,4 +188,40 @@ fn inject_if_used_with_config(
     inventory.record_program("filter", &declarations);
     declarations.extend(program);
     declarations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses one inline PHP program for the surface-detection tests.
+    fn parse(source: &str) -> Program {
+        let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
+        crate::parser::parse(&tokens).expect("fixture must parse")
+    }
+
+    /// Registering a callback is not a dynamic call to the filter surface.
+    #[test]
+    fn callback_registration_does_not_request_the_filter_surface() {
+        assert!(!program_uses_surface(&parse(
+            "<?php set_error_handler(function () { file_put_contents('unsafe', 'value'); return true; });"
+        )));
+        assert!(!program_uses_surface(&parse(
+            "<?php usort($items, function ($a, $b) { return $a <=> $b; });"
+        )));
+    }
+
+    /// Direct calls, literal callables, constants and introspection still request the surface.
+    #[test]
+    fn filter_reachability_keeps_direct_and_literal_forms() {
+        for source in [
+            "<?php filter_var('1', FILTER_VALIDATE_INT);",
+            "<?php call_user_func('filter_var', '1', FILTER_VALIDATE_INT);",
+            "<?php echo FILTER_VALIDATE_EMAIL;",
+            "<?php $name = $argc > 1 ? 'filter_var' : 'strlen'; echo function_exists($name);",
+            "<?php try { filter_var('x', FILTER_THROW_ON_FAILURE); } catch (\\Filter\\FilterFailedException $e) {}",
+        ] {
+            assert!(program_uses_surface(&parse(source)), "{source}");
+        }
+    }
 }
