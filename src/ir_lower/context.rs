@@ -2453,6 +2453,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
+        let value = if self.is_ref_bound_local(name) {
+            crate::ir_lower::object_boundaries::coerce_reference_store(
+                self, name, value, &previous_type, span,
+            )
+        } else {
+            value
+        };
         let previous_kind = self
             .local_kinds
             .get(name)
@@ -2461,6 +2468,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let uses_global = self.uses_global_storage(name, previous_kind);
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if self.is_ref_bound_local(name)
+            && matches!(previous_type.codegen_repr(), PhpType::Object(_))
+        {
+            previous_type.clone()
         } else if previous_kind == LocalKind::PhpLocal {
             // A `string` local PHP's `++`/`--` can retype uses boxed Mixed storage from its
             // FIRST store, so no read of the slot is ever typed `Str` against boxed storage.

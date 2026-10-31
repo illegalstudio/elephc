@@ -14,7 +14,7 @@ fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_tar
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        for name in ["referenceReturnBoundaryXml", "presentReferenceBoundaryXml", "finallyReferenceBoundaryXml"] {
+        for name in ["referenceReturnBoundaryXml", "presentReferenceBoundaryXml", "finallyReferenceBoundaryXml", "nullFinallyReferenceBoundaryXml"] {
             let function = module.functions.iter().find(|function| function.name == name).unwrap();
             let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
             let promotion = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
@@ -23,6 +23,18 @@ fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_tar
             assert!(guard < promotion, "{target}: {name} must reject null before changing representation");
             assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::AliasLocalRefCell),
                 "{target}: {name} must keep the source name attached for finally writes");
+            if name.contains("Finally") || name.starts_with("finally") {
+                let writes = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StoreRefCell
+                    && matches!(inst.result_php_type, crate::types::PhpType::Object(_))).collect::<Vec<_>>();
+                assert!(!writes.is_empty(), "{target}: {name} must update the returned cell");
+                for write in writes {
+                    assert!(matches!(function.value(write.operands[0]).unwrap().php_type,
+                        crate::types::PhpType::Object(_)),
+                        "{target}: {name} must not publish a nullable box as an object payload");
+                }
+                assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf),
+                    "{target}: {name} must check the replacement before unboxing");
+            }
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }

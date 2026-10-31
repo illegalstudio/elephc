@@ -596,6 +596,13 @@ Compatibility is representation, not identity: two object classes share one poin
 layout and are interchangeable here, while container element layouts are part of the
 payload and are compared recursively.
 
+A nullable local returned by reference with a non-null object result is checked before
+promotion to an object-payload cell. The original local name stays attached, including
+during `finally`. A boxed replacement is checked and unboxed before publication, with
+its own object lease. This fixed representation cannot accept a later null or other
+incompatible replacement: it raises an explicit `TypeError` instead of changing the
+cell layout behind the caller's reference.
+
 A source that is none of the accepted shapes is refused during lowering with a source
 diagnostic instead of being lowered as a value. Those refusals describe this lowering's
 subset, not PHP: PHP does return references to array elements and to other

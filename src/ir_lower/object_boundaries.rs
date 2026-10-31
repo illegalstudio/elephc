@@ -9,11 +9,60 @@
 //! - The existing frontend verifies nominal classes; these guards enforce non-nullness.
 //! - All call surfaces share the callee entry, including references and inlined methods.
 
-use crate::ir::{Op, Terminator};
+use crate::ir::{Immediate, Op, PhpTypePredicate, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
 use crate::types::PhpType;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
+
+/// Checks and extracts a boxed assignment before publishing it through a raw object cell.
+///
+/// An object-payload reference cannot change its representation after another frame has
+/// acquired it. Reject incompatible replacements explicitly, including a finally assignment
+/// of null, instead of storing a Mixed pointer in the object word.
+pub(super) fn coerce_reference_store(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue,
+    target: &PhpType, span: Option<Span>,
+) -> LoweredValue {
+    let PhpType::Object(class) = target.codegen_repr() else { return value; };
+    if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Object(_)) {
+        return value;
+    }
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Mixed) {
+        value
+    } else {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
+    };
+    let condition = if class.is_empty() || class.eq_ignore_ascii_case("object") {
+        ctx.emit_value(Op::TypePredicate, vec![value.value],
+            Some(Immediate::TypePredicate(PhpTypePredicate::Object)), PhpType::Bool,
+            Op::TypePredicate.default_effects(), span)
+    } else {
+        let data = ctx.intern_class_name(&class);
+        ctx.emit_value(Op::InstanceOf, vec![value.value], Some(Immediate::Data(data)),
+            PhpType::Bool, Op::InstanceOf.default_effects(), span)
+    };
+    let initialized = ctx.initialized_slots_snapshot();
+    let accepted = ctx.builder.create_named_block("object.reference.accepted", vec![]);
+    let rejected = ctx.builder.create_named_block("object.reference.rejected", vec![]);
+    ctx.builder.terminate(Terminator::CondBr { cond: condition.value,
+        then_target: accepted, then_args: vec![], else_target: rejected, else_args: vec![] });
+    ctx.builder.position_at_end(rejected);
+    crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    let expected = crate::types::diagnostic_names::php_type_name(target);
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("TypeError"),
+        args: vec![Expr::string_lit(format!(
+            "Unsupported assignment through object reference ${name}: value must be of type {expected}"))],
+    }, span.unwrap_or_else(Span::dummy));
+    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Throw(error), span.unwrap_or_else(Span::dummy)));
+    ctx.builder.position_at_end(accepted);
+    ctx.restore_initialized_slots(initialized);
+    let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, target.clone(),
+        Op::mixed_unbox_effects(target), span);
+    crate::ir_lower::ownership::release_if_owned(ctx, value, span);
+    result
+}
 
 /// Checks declared object parameters before user statements or constructor promotions run.
 pub(super) fn guard_parameters(ctx: &mut LoweringContext<'_, '_>) {
