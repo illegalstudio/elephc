@@ -41,7 +41,7 @@ function orderedUnsetRoot(): array {
     global $orderedUnsetRows;
     echo 'root|';
     if (!is_array($orderedUnsetRows)) { throw new Error('expected array'); }
-    return $orderedUnsetRows;
+    return (array)$orderedUnsetRows;
 }
 function orderedUnsetLateKey(): string {
     global $orderedUnsetPosition;

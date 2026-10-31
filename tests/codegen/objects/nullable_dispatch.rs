@@ -9,6 +9,23 @@
 
 use super::*;
 
+/// A boxed nullable instance crosses a bare object boundary, while null gets the PHP type label.
+#[test]
+fn test_nullable_to_bare_object_argument_checks_the_runtime_tag() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BareObjectArgumentNode {}
+function acceptBareObjectArgument(object $node): string { return get_class($node); }
+function passBareObjectArgument(?BareObjectArgumentNode $node): string { return acceptBareObjectArgument($node); }
+echo passBareObjectArgument(new BareObjectArgumentNode()), '|';
+try { passBareObjectArgument(null); }
+catch (TypeError $error) { echo explode(', called in ', $error->getMessage())[0]; }
+unset($error);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "BareObjectArgumentNode|acceptBareObjectArgument(): Argument #1 ($node) must be of type object, null given");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Tests that a method call on a `?Holder` parameter dispatches correctly
 /// when the receiver is non-null. Verifies the codegen unboxes the boxed
 /// mixed cell to recover the concrete object pointer before reading the

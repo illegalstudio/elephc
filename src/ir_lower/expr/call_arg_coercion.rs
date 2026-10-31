@@ -685,15 +685,16 @@ fn guard_union_object_param(
             span,
         )
     };
-    let class_data = ctx.intern_class_name(class_name);
-    let condition = ctx.emit_value(
-        Op::InstanceOf,
-        vec![value.value],
-        Some(Immediate::Data(class_data)),
-        PhpType::Bool,
-        Op::InstanceOf.default_effects(),
-        span,
-    );
+    let bare_object = class_name.is_empty() || class_name.eq_ignore_ascii_case("object");
+    let condition = if bare_object {
+        ctx.emit_value(Op::TypePredicate, vec![value.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+            PhpType::Bool, Op::TypePredicate.default_effects(), span)
+    } else {
+        let class_data = ctx.intern_class_name(class_name);
+        ctx.emit_value(Op::InstanceOf, vec![value.value], Some(Immediate::Data(class_data)),
+            PhpType::Bool, Op::InstanceOf.default_effects(), span)
+    };
     let accepted = ctx.builder.create_named_block("object.arg.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("object.arg.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -722,7 +723,7 @@ fn guard_union_object_param(
         callable,
         index + 1,
         param_name,
-        class_name
+        if bare_object { "object" } else { class_name }
     );
     let suffix = format!(" given, called in {} on line {}", source, arg.span.line);
     let given = match given {
