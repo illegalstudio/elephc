@@ -175,6 +175,7 @@ fn phpext_classes_native_properties_exceptions_and_callbacks() {
     public int $uninitialized;
     public array $items = [];
     public mixed $dynamic = null;
+    public int|string $choice = 1;
     public function __construct(int $value = 0) {
         if ($value < 0) { throw new RuntimeException('constructor'); }
         $this->value = $value;
@@ -182,6 +183,7 @@ fn phpext_classes_native_properties_exceptions_and_callbacks() {
     public function add(int $amount): int { $this->value += $amount; return $this->value; }
     public function identity(string $value): string { return $value; }
     public function readItems(): array { return $this->items; }
+    public function choiceValue(): int|string { return $this->choice; }
     public function initialize(int $value): void { $this->uninitialized = $value; }
     public function clear(): void { unset($this->uninitialized); }
     public function fail(): void { $this->value = 9; throw new RuntimeException('expected'); }
@@ -204,6 +206,14 @@ check($p->add(0) === 7 && $dynamic === ['value' => 42], 'mixed property alias im
 unset($dynamic);
 $p->items['nested']['key'] = 7;
 check($p->readItems() === ['nested' => ['key' => 7]], 'indirect array write');
+$choice =& $p->choice;
+$choice = 2;
+check($p->choiceValue() === 2, 'scalar union alias imports');
+$holder = new class { public int|string $choice = 1; };
+$holder->choice =& $p->choice;
+$holder->choice = 'three';
+check($p->choiceValue() === 'three' && $choice === 'three', 'identical foreign union constraints');
+unset($holder->choice, $holder, $choice);
 $property = new ReflectionProperty(NativeState::class, 'uninitialized');
 check(!$property->isInitialized($p), 'uninitialized property');
 $p->initialize(4);
@@ -335,77 +345,6 @@ echo "reflection ok\n";
     project.assert_clean();
 }
 
-/// Matches PHP's materialized values for nullable, union and mixed typed class constants.
-#[test]
-#[ignore = "requires a real PHP 8.5 development SDK"]
-fn phpext_classes_native_typed_float_constant_unions_match_php() {
-    let project = Project::new();
-    let sdk = project.sdk();
-    let source = r#"<?php
-#[Export] final class FloatConstants {
-    public const float EXACT = 2;
-    public const ?float NULLABLE = 2;
-    public const float|null UNION_NULL = 2;
-    public const float|string UNION_STRING = 2;
-    public const int|float UNION_INT = 2;
-    public const float|int REVERSED_INT = 2;
-    public const ?float NULL_VALUE = null;
-    public const mixed MIXED_VALUE = 2;
-    public const COPIED = self::EXACT;
-    public const array NESTED = [self::NULLABLE];
-    public mixed $copied = self::UNION_STRING;
-    public function exactValue(): mixed { return self::EXACT; }
-    public function nullableValue(): mixed { return self::NULLABLE; }
-    public function unionNullValue(): mixed { return self::UNION_NULL; }
-    public function stringUnionValue(): mixed { return self::UNION_STRING; }
-    public function numericUnionValue(): mixed { return self::UNION_INT; }
-    public function reversedNumericValue(): mixed { return self::REVERSED_INT; }
-    public function nullValue(): mixed { return self::NULL_VALUE; }
-    public function mixedValue(): mixed { return self::MIXED_VALUE; }
-    public function copiedValue(): mixed { return self::COPIED; }
-    public function nestedValue(): mixed { return self::NESTED; }
-    public function globalArray(): array { return [FLOAT_COPY]; }
-    public function classArray(): array { return [self::COPIED]; }
-    public static function nativeValues(): array {
-        return [self::EXACT, self::NULLABLE, self::UNION_NULL, self::UNION_STRING,
-            self::UNION_INT, self::REVERSED_INT, self::NULL_VALUE, self::MIXED_VALUE,
-            self::COPIED, self::NESTED, FLOAT_COPY];
-    }
-}
-const FLOAT_COPY = FloatConstants::NULLABLE;
-"#;
-    let module = project.compile_with_options("class_float_constants", source,
-        &["--heap-size=524288", "--export-constant=FLOAT_COPY"]);
-    let check = r#"
-$values = [];
-foreach ((new ReflectionClass(FloatConstants::class))->getReflectionConstants() as $constant) {
-    $values[] = [constant('FloatConstants::' . $constant->getName()), $constant->getValue(), (string)$constant->getType()];
-}
-$values[] = FLOAT_COPY;
-$instance = new FloatConstants();
-$values[] = $instance->copied;
-foreach (['exactValue', 'nullableValue', 'unionNullValue', 'stringUnionValue', 'numericUnionValue',
-    'reversedNumericValue', 'nullValue', 'mixedValue', 'copiedValue', 'nestedValue'] as $method) {
-    $values[] = $instance->$method();
-}
-$values[] = FloatConstants::nativeValues();
-$values[] = $instance->globalArray();
-$values[] = $instance->classArray();
-echo json_encode($values, JSON_PRESERVE_ZERO_FRACTION | JSON_THROW_ON_ERROR), "\n";
-"#;
-    let reference = project.0.join("reference.php");
-    fs::write(&reference, format!("{source}\n{check}")).unwrap();
-    let expected = Command::new(sdk.php_binary()).arg("-n").arg(&reference).output().unwrap();
-    assert!(expected.status.success(), "{}", String::from_utf8_lossy(&expected.stderr));
-    assert!(expected.stderr.is_empty(), "{}", String::from_utf8_lossy(&expected.stderr));
-    let actual = Command::new(sdk.php_binary()).args(["-n", "-d"])
-        .arg(format!("extension={}", module.display())).args(["-r", check]).output().unwrap();
-    assert!(actual.status.success(), "{}", String::from_utf8_lossy(&actual.stderr));
-    assert!(actual.stderr.is_empty(), "{}", String::from_utf8_lossy(&actual.stderr));
-    assert_eq!(String::from_utf8_lossy(&actual.stdout), String::from_utf8_lossy(&expected.stdout));
-    project.assert_clean();
-}
-
 /// Leaves published Zend objects usable while refusing unsafe native reentry after a bridge failure.
 #[test]
 #[ignore = "requires a real PHP 8.5 development SDK"]
@@ -492,6 +431,7 @@ fn phpext_classes_reject_unsupported_shapes_before_sdk() {
         "<?php #[Export] class NotFinal {}",
         "<?php #[Export] final class StaticProperty { public static int $value = 0; }",
         "<?php #[Export] final class UntypedProperty { public $value = 0; }",
+        "<?php #[Export] final class NominalConstant { public const float|NominalConstant VALUE = 2; }",
         "<?php #[Export] final class Magic { public function __destruct() {} }",
         "<?php #[Export] final class PrivateConstructor { private function __construct() {} }",
         "<?php #[Export] interface Contract {}",

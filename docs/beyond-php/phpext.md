@@ -128,6 +128,13 @@ registered value, including binary strings, nested immutable arrays and typed
 class constant/default metadata. Changing a PHP array copy does not change a
 constant or another instance's default. Registration rejects existing class or
 constant names rather than replacing host declarations.
+Native class and interface constants preserve integer-to-float widening, including
+private declarations and nominal union members. In modules exporting classes,
+reachable constants requiring that widening must use supported compile-time expressions.
+Unresolved expressions are diagnosed before SDK discovery. Supported offset
+expressions include binary strings, constant arrays and unpacked arrays with
+lossless keys. Expressions needing runtime numeric-string conversion or warnings
+remain unsupported in this constant conversion path.
 
 ## Values and exceptions
 

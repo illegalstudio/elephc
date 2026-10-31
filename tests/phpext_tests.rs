@@ -36,6 +36,8 @@ mod review;
 mod constants;
 #[path = "phpext/classes.rs"]
 mod classes;
+#[path = "phpext/class_constants.rs"]
+mod class_constants;
 
 struct Project(PathBuf);
 

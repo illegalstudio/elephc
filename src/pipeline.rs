@@ -894,7 +894,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     crate::progress::phase("exports-scan");
     let phase_started = Instant::now();
     let exported_classes = if emit == Emit::Phpext {
-        crate::phpext::constants::materialize_native_constants(&mut ast, &mut check_result.classes, target);
+        crate::phpext::constants::materialize_native_constants(
+            &mut ast, &mut check_result.classes, &mut check_result.interfaces, target,
+        );
         match crate::phpext::classes::collect(&ast, &check_result.classes, target) {
             Ok(classes) => classes,
             Err(error) => {
@@ -1049,6 +1051,15 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         crate::progress::clear();
         eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
         process::exit(1);
+    }
+    if emit == Emit::Phpext && !exported_classes.is_empty() {
+        if let Err(error) = crate::phpext::constants::validate_native_widening(
+            &check_result.classes, &check_result.interfaces,
+        ) {
+            crate::progress::clear();
+            errors::report(&error.with_file(filename.to_string()));
+            process::exit(1);
+        }
     }
     codegen::prepare_declared_name_order(
         &ast,

@@ -47,36 +47,75 @@ pub fn collect(program: &Program, names: &[String], target: Target) -> Result<Ve
     Ok(exports)
 }
 
-/// Resolves the supported constant type atoms through the shared PHP value contract.
-pub(super) fn declared_type(ty: &TypeExpr) -> Result<PhpType, String> {
-    Ok(match ty {
-        TypeExpr::Int => PhpType::Int, TypeExpr::Float => PhpType::Float, TypeExpr::Bool => PhpType::Bool,
-        TypeExpr::False => PhpType::False, TypeExpr::Str => PhpType::Str,
-        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed") => PhpType::Mixed,
-        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null") => PhpType::Void,
-        TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("array") => PhpType::php_array(),
-        TypeExpr::Nullable(inner) => PhpType::Union(vec![declared_type(inner)?, PhpType::Void]),
-        TypeExpr::Union(members) => PhpType::Union(members.iter().map(declared_type).collect::<Result<Vec<_>, _>>()?),
-        _ => return Err("unsupported PHP extension class constant type".into()),
-    })
-}
+pub(super) use super::constant_types::declared_type;
+use super::constant_types::coercion_type;
 
 /// Resolves hosted constant values before EIR storage inference and native reads.
 pub fn materialize_native_constants(
-    program: &mut Program, classes: &mut HashMap<String, crate::types::ClassInfo>, target: Target,
+    program: &mut Program, classes: &mut HashMap<String, crate::types::ClassInfo>,
+    interfaces: &mut HashMap<String, crate::types::InterfaceInfo>, target: Target,
 ) {
-    let constants = context(program, target);
-    for (class, info) in classes {
-        for (name, value) in &mut info.constants {
-            let ty = info.constant_types.get(name).and_then(|ty| declared_type(ty).ok()).unwrap_or(PhpType::Mixed);
-            if let Some(kind) = native_value(value, class, &ty, &constants) { value.kind = kind; }
+    let mut constants = context(program, target);
+    for (owner, info) in classes.iter() {
+        for (name, value) in &info.constants {
+            let ty = info.constant_types.get(name).map(coercion_type).unwrap_or(PhpType::Mixed);
+            constants.entry(format!("{owner}::{name}")).or_insert((bind_scope(value.clone(), owner).kind, ty));
         }
+    }
+    for (owner, info) in interfaces.iter() {
+        for (name, value) in &info.constants {
+            let scope = info.constant_declaring_interfaces.get(name).map(String::as_str).unwrap_or(owner);
+            let ty = info.constant_types.get(name).map(coercion_type).unwrap_or(PhpType::Mixed);
+            constants.entry(format!("{owner}::{name}")).or_insert((bind_scope(value.clone(), scope).kind, ty));
+        }
+    }
+    for (owner, info) in classes {
+        native_schema(owner, &mut info.constants, &info.constant_types, None, &constants);
+        for ((_, ty), value) in info.properties.iter().zip(&mut info.defaults) {
+            if let Some(value) = value {
+                if let Some(kind) = native_value(value, owner, ty, &constants) { value.kind = kind; }
+            }
+        }
+    }
+    for (owner, info) in interfaces {
+        native_schema(owner, &mut info.constants, &info.constant_types,
+            Some(&info.constant_declaring_interfaces), &constants);
     }
     for statement in program {
         if let StmtKind::ConstDecl { value, .. } = &mut statement.kind {
             if let Some(kind) = native_value(value, "", &PhpType::Mixed, &constants) { value.kind = kind; }
         }
     }
+}
+
+/// Preserves lexical interface owners while rewriting the supported native constant trees.
+fn native_schema(
+    owner: &str, values: &mut HashMap<String, Expr>, types: &HashMap<String, TypeExpr>,
+    declaring: Option<&HashMap<String, String>>, constants: &HashMap<String, (ExprKind, PhpType)>,
+) {
+    for (name, value) in values {
+        let ty = types.get(name).map(coercion_type).unwrap_or(PhpType::Mixed);
+        let scope = declaring.and_then(|owners| owners.get(name)).map(String::as_str).unwrap_or(owner);
+        if let Some(kind) = native_value(value, scope, &ty, constants) { value.kind = kind; }
+    }
+}
+
+/// Rejects unresolved widening only after unused declarations have been pruned.
+pub fn validate_native_widening(
+    classes: &HashMap<String, crate::types::ClassInfo>, interfaces: &HashMap<String, crate::types::InterfaceInfo>,
+) -> Result<(), CompileError> {
+    let schemas = classes.iter().map(|(owner, info)| (owner, &info.constants, &info.constant_types))
+        .chain(interfaces.iter().map(|(owner, info)| (owner, &info.constants, &info.constant_types)));
+    for (owner, values, types) in schemas {
+        for (name, value) in values {
+            if types.get(name).map(coercion_type).is_some_and(|ty| ty.coerces_integer_to_float())
+                && super::constant_values::from_expression(value, 0).is_err() {
+                return Err(CompileError::new(value.span, &format!(
+                    "PHP extension constant '{owner}::{name}' requires a statically resolved value for integer-to-float coercion")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Keeps supported constant trees identical in native schemas and persistent Zend metadata.
@@ -105,7 +144,7 @@ pub(super) fn context(program: &Program, target: Target) -> HashMap<String, (Exp
             _ => continue,
         };
         for declaration in declarations {
-            let ty = declaration.type_expr.as_ref().and_then(|ty| declared_type(ty).ok()).unwrap_or(PhpType::Mixed);
+            let ty = declaration.type_expr.as_ref().map(coercion_type).unwrap_or(PhpType::Mixed);
             constants.insert(format!("{class}::{}", declaration.name),
                 (bind_scope(declaration.value.clone(), class).kind, ty));
         }
@@ -137,6 +176,10 @@ fn bind_scope(mut expr: Expr, class: &str) -> Expr {
                 _ => None,
             };
             if let Some(owner) = owner { expr.kind = ExprKind::StringLiteral(owner); }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            **array = bind_scope((**array).clone(), class);
+            **index = bind_scope((**index).clone(), class);
         }
         ExprKind::BinaryOp { left, right, .. } => {
             **left = bind_scope((**left).clone(), class);
@@ -214,6 +257,11 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
                 }
                 active.remove(&key);
             }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            **array = resolve((**array).clone(), constants, active, depth + 1)?;
+            **index = resolve((**index).clone(), constants, active, depth + 1)?;
+            if let Some(value) = super::constant_arrays::access(array, index) { expr.kind = value; }
         }
         ExprKind::BinaryOp { left, right, .. } => {
             **left = resolve((**left).clone(), constants, active, depth + 1)?;

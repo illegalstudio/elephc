@@ -30,7 +30,7 @@ pub enum ConstantArrayEntry {
 }
 
 /// PHP-compatible keys after shared numeric-string and float-key classification.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConstantKey { Int(i64), String(Vec<u8>) }
 
 /// Converts a fully resolved expression without evaluating unknown code or following references.
@@ -72,7 +72,7 @@ fn spread(expr: &Expr, depth: usize) -> Result<ConstantArrayEntry, CompileError>
 }
 
 /// Applies the shared compiler's PHP array-key rules without inventing another key parser.
-fn array_key(expr: &Expr) -> Result<ConstantKey, CompileError> {
+pub(super) fn array_key(expr: &Expr) -> Result<ConstantKey, CompileError> {
     Ok(match &expr.kind {
         ExprKind::IntLiteral(value) => ConstantKey::Int(*value),
         ExprKind::BoolLiteral(value) => ConstantKey::Int(i64::from(*value)),

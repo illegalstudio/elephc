@@ -14,6 +14,8 @@ pub mod class_helpers;
 pub mod class_registration;
 pub mod constants;
 pub mod constant_values;
+mod constant_types;
+mod constant_arrays;
 mod producer;
 mod prune;
 mod flags;

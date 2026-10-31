@@ -293,3 +293,9 @@ schemas and global constant declarations before EIR lowering, so native methods 
 the same values as Zend. The real-host parity fixture compares nullable/union
 constants, aliases, nested arrays, property defaults, mixed-return methods and
 native array construction against identical pure PHP source.
+
+Hosted constant normalization includes interface schemas and their lexical
+declaring scopes. Array/string offsets use shared byte and array-key rules,
+including unpacking and overwrites. Native widening uses complete checked type
+categories while public constant metadata keeps its supported primitive subset.
+Modules exporting classes reject unresolved widening after pruning and before SDK discovery.

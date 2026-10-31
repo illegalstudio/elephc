@@ -135,6 +135,9 @@ pub fn collect(program: &Program, classes: &HashMap<String, ClassInfo>, target: 
         let mut constants = Vec::new();
         for constant in &info.constant_order {
             if info.constant_visibilities.get(constant).is_some_and(|visibility| *visibility != Visibility::Public) { continue; }
+            if let Some(ty) = info.constant_types.get(constant) {
+                super::constants::declared_type(ty).map_err(|detail| fail(&detail))?;
+            }
             constants.push(ExportedClassConstant {
                 name: constant.clone(), declared_type: info.constant_types.get(constant).cloned(),
                 is_final: info.final_constants.contains(constant),
