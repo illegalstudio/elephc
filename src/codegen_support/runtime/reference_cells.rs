@@ -23,6 +23,13 @@ const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;
 /// Byte length of `_borrowed_reference_return_msg`, kept beside the data that defines it.
 const BORROWED_REFERENCE_RETURN_MSG_LEN: i64 = 75;
 
+/// Diagnostic for a descriptor reference whose caller and selected parameter layouts differ.
+pub(crate) const TAGGED_REFERENCE_ARGUMENT_MSG: &str =
+    "Unsupported reference argument: caller storage does not match the selected parameter layout";
+/// Diagnostic for a replacement that cannot inhabit an existing inline nullable-integer cell.
+pub(crate) const TAGGED_REFERENCE_ASSIGNMENT_MSG: &str =
+    "Unsupported assignment through a nullable integer reference: value must be int or null";
+
 /// Returns the descriptor tag for the actual stored property representation.
 pub(crate) fn payload_tag(php_type: &PhpType) -> i64 {
     match php_type.codegen_repr() {
@@ -46,6 +53,10 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter) {
     emit_unmanaged_borrow_lookup(emitter);
     emit_unmanaged_borrow_escape_error(emitter);
     emit_borrowed_reference_return_error(emitter);
+    emit_reference_escape_error(emitter, "__rt_tagged_reference_argument_error",
+        "_tagged_reference_argument_msg", TAGGED_REFERENCE_ARGUMENT_MSG.len() as i64);
+    emit_reference_escape_error(emitter, "__rt_tagged_reference_assignment_error",
+        "_tagged_reference_assignment_msg", TAGGED_REFERENCE_ASSIGNMENT_MSG.len() as i64);
 }
 
 /// Allocates a zeroed two-word cell; C argument zero supplies its payload descriptor tag.
@@ -483,6 +494,8 @@ mod tests {
                 "__rt_reference_cell_is_unmanaged_borrow",
                 "__rt_unmanaged_reference_escape_error_new",
                 "__rt_unmanaged_reference_escape_error",
+                "__rt_tagged_reference_argument_error_new", "__rt_tagged_reference_argument_error",
+                "__rt_tagged_reference_assignment_error_new", "__rt_tagged_reference_assignment_error",
                 "__rt_local_ref_cell_release_managed", "__rt_gc_collect_cycles_count_reference",
                 "__rt_gc_collect_cycles_free_reference", "__rt_gc_mark_reachable_reference"] {
                 assert!(assembly.contains(&format!("{entry}:")), "{name}: missing {entry}");

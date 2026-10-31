@@ -1512,7 +1512,10 @@ impl Op {
             // the hash removal can reallocate the table.
             PropUnset | DynamicPropUnset => E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::MAY_FATAL | E::REFCOUNT_OP,
-            ArraySet | HashSet | DescriptorArgSet | ArrayPush | HashAppend
+            // Marker writes can refuse an incompatible reference payload with a catchable Error.
+            // Retiring the rejected or replaced value can also invoke arbitrary PHP destructors.
+            ArraySet | HashSet | DescriptorArgSet | ArraySetMixedKey => E::all(),
+            ArrayPush | HashAppend
             | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // `PropSet` and `DynamicPropSet` now carry the SAME conservative contract, because
@@ -1535,9 +1538,6 @@ impl Op {
             SlotDetach => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayElemAddr => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
-            }
-            ArraySetMixedKey => {
-                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
             }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,

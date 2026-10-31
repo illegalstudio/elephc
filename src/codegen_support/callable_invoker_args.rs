@@ -21,6 +21,27 @@ pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 /// Internal source layout for inline nullable integers, matching tagged-scalar property metadata.
 pub(crate) const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = 12;
 
+/// Branches before publication so inline nullable-integer references only receive int or null.
+pub(crate) fn emit_tagged_scalar_ref_assignment_guard(
+    emitter: &mut Emitter, tag: &str, valid: &str, invalid: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {tag}, #0"));                     // integer payloads fit the existing nullable-integer slot
+            emitter.instruction(&format!("b.eq {valid}"));                      // publish the replacement only after validating its actual PHP tag
+            emitter.instruction(&format!("cmp {tag}, #8"));                     // null uses the same two-word scalar storage
+            emitter.instruction(&format!("b.eq {valid}"));                      // preserve the distinction between null and integer zero
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {tag}, 0"));                      // integer payloads fit the existing nullable-integer slot
+            emitter.instruction(&format!("je {valid}"));                        // publish the replacement only after validating its actual PHP tag
+            emitter.instruction(&format!("cmp {tag}, 8"));                      // null uses the same two-word scalar storage
+            emitter.instruction(&format!("je {valid}"));                        // preserve the distinction between null and integer zero
+        }
+    }
+    abi::emit_jump(emitter, invalid);
+}
+
 /// Reads a tagged scalar's actual PHP tag, branching to boxing with an already-zero high word.
 pub(crate) fn emit_tagged_scalar_ref_source(
     emitter: &mut Emitter, source_tag: &str, storage: &str, box_label: &str, ordinary_label: &str,

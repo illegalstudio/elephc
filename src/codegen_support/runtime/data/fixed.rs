@@ -762,6 +762,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
     out.push_str(".globl _borrowed_reference_return_msg\n_borrowed_reference_return_msg:\n    .ascii \"Cannot return a reference to storage that has no independent reference cell\"\n");
+    for (label, message) in [
+        ("_tagged_reference_argument_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ARGUMENT_MSG),
+        ("_tagged_reference_assignment_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ASSIGNMENT_MSG),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");

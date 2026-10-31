@@ -48,6 +48,7 @@ mod closure_scope_variants;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
+mod descriptor_reference_layouts;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
 mod dom_html_review;

@@ -666,6 +666,16 @@ Both the compile-time rejection and the run-time `Error` are compiler subset lim
 PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
 condition.
 
+Runtime-selected callable reference arguments must also match the selected parameter's
+physical storage. Fresh local arguments use boxed storage so an untyped reference can change
+their value type. A selected inline `?int` reference parameter cannot alias that box and raises
+a catchable `Error`: `Unsupported reference argument: caller storage does not match the
+selected parameter layout`. Compatible existing nullable-integer aliases remain usable.
+When such an alias reaches a by-reference variadic parameter, writes of `int` and `null` succeed;
+other writes raise `Unsupported assignment through a nullable integer reference: value must be
+int or null` before changing the slot. These diagnostics describe compiler limits, including
+when PHP would allow an ordinary local reference to change type.
+
 ## Variadic functions
 
 ```php

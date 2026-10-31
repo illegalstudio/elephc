@@ -3216,6 +3216,17 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx.emitter.instruction("str x12, [x10, #8]");                              // write the replacement high word through the caller ref-cell
     ctx.emitter.instruction(&format!("b {published_label}"));                   // ordinary raw pairs already published their high word
     ctx.emitter.label(&tagged_label);
+    let scalar_valid = ctx.next_label("mixed_array_set_ref_tagged_valid");
+    let scalar_invalid = ctx.next_label("mixed_array_set_ref_tagged_invalid");
+    ctx.emitter.instruction("ldr x12, [x2]");                                   // validate the actual PHP tag before touching caller storage
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        ctx.emitter, "x12", &scalar_valid, &scalar_invalid,
+    );
+    ctx.emitter.label(&scalar_invalid);
+    ctx.emitter.instruction("mov x0, x2");                                      // consume the rejected replacement and its owned payload
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_call_label(ctx.emitter, "__rt_tagged_reference_assignment_error");
+    ctx.emitter.label(&scalar_valid);
     ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement nullable-integer payload
     ctx.emitter.instruction("str x12, [x10]");                                  // publish the new scalar payload
     ctx.emitter.instruction("ldr x12, [x2]");                                   // load the replacement PHP tag instead of its unused high payload
@@ -3322,6 +3333,17 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // write the replacement high word through the caller ref-cell
     ctx.emitter.instruction(&format!("jmp {published_label}"));                 // ordinary raw pairs already published their high word
     ctx.emitter.label(&tagged_label);
+    let scalar_valid = ctx.next_label("mixed_array_set_ref_tagged_valid");
+    let scalar_invalid = ctx.next_label("mixed_array_set_ref_tagged_invalid");
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdx]");                        // validate the actual PHP tag before touching caller storage
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        ctx.emitter, "r11", &scalar_valid, &scalar_invalid,
+    );
+    ctx.emitter.label(&scalar_invalid);
+    ctx.emitter.instruction("mov rax, rdx");                                    // consume the rejected replacement and its owned payload
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_call_label(ctx.emitter, "__rt_tagged_reference_assignment_error");
+    ctx.emitter.label(&scalar_valid);
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement nullable-integer payload
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // publish the new scalar payload
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx]");                        // load the replacement PHP tag instead of its unused high payload

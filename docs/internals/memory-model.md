@@ -613,6 +613,22 @@ value's tag there. Native writeback rebuilds the caller's boxed value and marks 
 including a change between integer zero and null. Ordinary reference flags0/1 retain their
 existing storage policy.
 
+Signature-unknown descriptor calls widen fresh, promotable caller locals to boxed `Mixed`
+before making their reference markers, including arguments of runtime-named methods. Existing
+shared aliases keep their physical layout. The selected invoker checks that layout before
+publishing an address: inline nullable integers require source shape12; a `Mixed` parameter
+requires a real box. Legacy source tag7 also describes raw `Iterable` pointers, so heap kind5
+selects a box and kinds2 through4 select raw iterable storage. A layout mismatch raises a
+catchable `Error`, rather than interpreting a box's `[low, high]` words as `[payload, tag]`.
+When a variadic marker points at existing shape12 storage, indexed and named writes accept
+only actual PHP tags0 and8. Rejected replacements retire their owned payload before the error,
+and neither word of the caller's slot is modified. These refusals are compiler subset limits;
+PHP reference parameter types do not constrain later assignments to an untyped local alias.
+Shared hashes select shape12 marker writes before copy-on-write can consume the caller's old
+hash owner. The write leaves the marker and hash unchanged, so both success and refusal can
+use the original header. Unique hashes avoid the preliminary lookup. The affected EIR stores
+retain full user-code effects because replacement cleanup can invoke PHP destructors or throw.
+
 A nullable local returned by reference with a non-null object result is checked before
 promotion to an object-payload cell. The original local name stays attached, including
 during `finally`. A boxed replacement is checked and unboxed before publication, with

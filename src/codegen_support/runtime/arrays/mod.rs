@@ -161,6 +161,7 @@ mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_set_reference_layout;
 mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
