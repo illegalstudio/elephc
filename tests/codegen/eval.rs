@@ -11261,6 +11261,7 @@ class NativeEvalRefBox {
         $this->name = $name;
     }
 }
+class NativeEvalRefWrong {}
 
 function native_eval_ref_array_heap(array &$items): string {
     $items = ["A", "B"];
@@ -11289,10 +11290,16 @@ $objectFirst = native_eval_ref_object_heap($box);
 $objectNamed = native_eval_ref_object_heap(box: $box);
 $objectCallable = native_eval_ref_object_heap(...);
 $objectDynamic = $objectCallable($box);
-return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $objectNamed . ":" . $objectDynamic . ":" . $box->name;');
+$wrong = new NativeEvalRefWrong();
+try { native_eval_ref_object_heap($wrong); }
+catch (TypeError $error) { $wrongMessage = $error->getMessage(); unset($error); }
+return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $objectNamed . ":" . $objectDynamic . ":" . $box->name . "|" . $wrongMessage;');
 "#,
     );
-    assert_eq!(out, "array:A:B:iter:R:start!:start!!:start!!!:start!!!");
+    assert_eq!(
+        out,
+        "array:A:B:iter:R:start!:start!!:start!!!:start!!!|native_eval_ref_object_heap(): Argument #1 ($box) must be of type NativeEvalRefBox, NativeEvalRefWrong given",
+    );
 }
 
 /// Eval keeps an object reference alias when an AOT function changes the value type.

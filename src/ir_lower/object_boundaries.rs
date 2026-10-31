@@ -1,12 +1,12 @@
 //! Purpose:
-//! Rejects runtime nulls at declared non-null object parameter and return boundaries.
+//! Rejects runtime nulls and incompatible classes at declared object boundaries.
 //!
 //! Called from:
 //! - Function entry lowering and declared return storage coercion.
 //!
 //! Key details:
 //! - Native property reads can return null despite their useful static object class hint.
-//! - The existing frontend verifies nominal classes; these guards enforce non-nullness.
+//! - Runtime-selected by-reference calls need callee-side nominal class validation.
 //! - All call surfaces share the callee entry, including references and inlined methods.
 
 use crate::ir::{Immediate, Op, PhpTypePredicate, Terminator};
@@ -72,7 +72,15 @@ pub(super) fn guard_parameters(ctx: &mut LoweringContext<'_, '_>) {
         if signature.variadic.as_ref() == Some(name) {
             if let Some(hint) = crate::types::signatures::variadic_source_element_type_expr(&signature) {
                 let element = resolve_context_type(ctx, ctx.type_expr_to_php_type_for_value(hint));
-                if crate::types::builtin_classes::native_object_sink_needs_null_guard(&element, ctx.classes, ctx.interfaces) {
+                let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
+                    && matches!(element.codegen_repr(), PhpType::Object(_));
+                if object_reference_guard
+                    || crate::types::builtin_classes::native_object_sink_needs_null_guard(
+                        &element,
+                        ctx.classes,
+                        ctx.interfaces,
+                    )
+                {
                     guard_variadic(ctx, name, index + 1, &element, &callable);
                 }
             }
@@ -83,16 +91,103 @@ pub(super) fn guard_parameters(ctx: &mut LoweringContext<'_, '_>) {
                 .map(|hint| ctx.type_expr_to_php_type_for_value(hint)).unwrap_or_else(|| ty.clone())
         } else { ty.clone() };
         let declared_type = resolve_context_type(ctx, declared_type);
+        let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
+        let object_reference_guard = by_ref
+            && matches!(declared_type.codegen_repr(), PhpType::Object(_));
         if name == "this" || !signature.declared_params.get(index).copied().unwrap_or(false)
-            || !crate::types::builtin_classes::native_object_sink_needs_null_guard(&declared_type, ctx.classes, ctx.interfaces)
+            || (!object_reference_guard
+                && !crate::types::builtin_classes::native_object_sink_needs_null_guard(
+                    &declared_type,
+                    ctx.classes,
+                    ctx.interfaces,
+                ))
         { continue; }
         let value = ctx.load_local(name, None);
-        let expected = crate::types::diagnostic_names::php_type_name(&declared_type);
-        let message = format!(
-            "{callable}(): Argument #{} (${name}) must be of type {expected}, null given", index + 1,
-        );
-        reject_null(ctx, value, Expr::string_lit(message), Span::dummy(), true);
+        if object_reference_guard {
+            guard_object_reference_parameter(
+                ctx,
+                value,
+                name,
+                index + 1,
+                &declared_type,
+                &callable,
+            );
+        } else {
+            let expected = crate::types::diagnostic_names::php_type_name(&declared_type);
+            let message = format!(
+                "{callable}(): Argument #{} (${name}) must be of type {expected}, null given",
+                index + 1,
+            );
+            reject_null(ctx, value, Expr::string_lit(message), Span::dummy(), true);
+        }
     }
+}
+
+/// Rejects a by-reference object parameter whose runtime value misses its declared class.
+fn guard_object_reference_parameter(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    name: &str,
+    argument: usize,
+    declared_type: &PhpType,
+    callable: &str,
+) {
+    let span = Span::dummy();
+    let PhpType::Object(class) = declared_type.codegen_repr() else { return; };
+    let condition = if class.is_empty() || class.eq_ignore_ascii_case("object") {
+        ctx.emit_value(
+            Op::TypePredicate,
+            vec![value.value],
+            Some(Immediate::TypePredicate(PhpTypePredicate::Object)),
+            PhpType::Bool,
+            Op::TypePredicate.default_effects(),
+            Some(span),
+        )
+    } else {
+        let data = ctx.intern_class_name(&class);
+        ctx.emit_value(
+            Op::InstanceOf,
+            vec![value.value],
+            Some(Immediate::Data(data)),
+            PhpType::Bool,
+            Op::InstanceOf.default_effects(),
+            Some(span),
+        )
+    };
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    let initialized = ctx.initialized_slots_snapshot();
+    let accepted = ctx.builder.create_named_block("object.parameter.accepted", vec![]);
+    let rejected = ctx.builder.create_named_block("object.parameter.rejected", vec![]);
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: condition.value,
+        then_target: accepted,
+        then_args: vec![],
+        else_target: rejected,
+        else_args: vec![],
+    });
+    ctx.builder.position_at_end(rejected);
+    let expected = crate::types::diagnostic_names::php_type_name(declared_type);
+    let variable = Expr::var(name);
+    let given = crate::ir_lower::expr::enum_argument_guards::runtime_debug_type(&variable, span);
+    let message = Expr::binop(
+        Expr::string_lit(format!(
+            "{callable}(): Argument #{argument} (${name}) must be of type {expected}, "
+        )),
+        BinOp::Concat,
+        Expr::binop(given, BinOp::Concat, Expr::string_lit(" given")),
+    );
+    let error = Expr::new(
+        ExprKind::NewObject {
+            class_name: crate::names::Name::unqualified("TypeError"),
+            args: vec![message],
+        },
+        span,
+    );
+    crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::new(StmtKind::Throw(error), span));
+    ctx.builder.position_at_end(accepted);
+    ctx.restore_initialized_slots(initialized);
 }
 
 /// Resolves relative class hints before testing native inheritance or spelling PHP errors.
@@ -119,17 +214,33 @@ fn guard_variadic(ctx: &mut LoweringContext<'_, '_>, name: &str, first: usize, t
     }
     crate::ir_lower::stmt::lower_stmt(ctx, &Stmt::assign(&number, Expr::int_lit(first as i64)));
     let expected = crate::types::diagnostic_names::php_type_name(ty);
-    let message = Expr::binop(Expr::binop(Expr::string_lit(format!("{callable}(): Argument #")),
-        BinOp::Concat, Expr::var(&number)), BinOp::Concat,
-        Expr::string_lit(format!(" must be of type {expected}, null given")));
-    let error = Expr::new(ExprKind::NewObject {
-        class_name: crate::names::Name::unqualified("TypeError"), args: vec![message],
-    }, span);
     let call = |function: &str, variable: &str| Expr::new(ExprKind::FunctionCall {
         name: crate::names::Name::unqualified(function), args: vec![Expr::var(variable)],
     }, span);
+    let prefix = Expr::binop(Expr::binop(Expr::string_lit(format!("{callable}(): Argument #")),
+        BinOp::Concat, Expr::var(&number)), BinOp::Concat,
+        Expr::string_lit(format!(" must be of type {expected}, ")));
+    let (condition, given) = if let PhpType::Object(class) = ty.codegen_repr() {
+        let accepted = if class.is_empty() || class.eq_ignore_ascii_case("object") {
+            call("is_object", &value)
+        } else {
+            Expr::new(ExprKind::InstanceOf {
+                value: Box::new(Expr::var(&value)),
+                target: crate::parser::ast::InstanceOfTarget::Name(crate::names::Name::from(class.as_str())),
+            }, span)
+        };
+        (Expr::new(ExprKind::Not(Box::new(accepted)), span),
+            crate::ir_lower::expr::enum_argument_guards::runtime_debug_type(&Expr::var(&value), span))
+    } else {
+        (call("is_null", &value), Expr::string_lit("null"))
+    };
+    let message = Expr::binop(prefix, BinOp::Concat,
+        Expr::binop(given, BinOp::Concat, Expr::string_lit(" given")));
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("TypeError"), args: vec![message],
+    }, span);
     let reject = Stmt::new(StmtKind::If {
-        condition: call("is_null", &value), then_body: vec![Stmt::new(StmtKind::Throw(error), span)],
+        condition, then_body: vec![Stmt::new(StmtKind::Throw(error), span)],
         elseif_clauses: vec![], else_body: None,
     }, span);
     // Named entries all use the next positional argument number, regardless of their order.
@@ -157,7 +268,10 @@ pub(super) fn needs_parameter_guards(
             || (*ty == PhpType::Mixed && signature.ref_params.get(index).copied().unwrap_or(false)) {
             hint.map(crate::ir_lower::context::type_expr_to_php_type).unwrap_or_else(|| ty.clone())
         } else { ty.clone() };
-        crate::types::builtin_classes::native_object_sink_needs_null_guard(&declared, classes, interfaces)
+        let object_reference_guard = signature.ref_params.get(index).copied().unwrap_or(false)
+            && matches!(declared.codegen_repr(), PhpType::Object(_));
+        object_reference_guard
+            || crate::types::builtin_classes::native_object_sink_needs_null_guard(&declared, classes, interfaces)
             || (has_relative_class(&declared)
                 && classes.keys().any(|class| crate::types::builtin_classes::has_native_dimensions(class, classes)))
     })

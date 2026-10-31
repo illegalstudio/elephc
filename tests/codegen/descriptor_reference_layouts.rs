@@ -143,7 +143,13 @@ fn test_unknown_descriptor_named_object_reference_validates_runtime_class() {
 class RuntimeObjectReferenceValue {
     public function __construct(public string $name) {}
 }
+class RuntimeObjectReferenceChild extends RuntimeObjectReferenceValue {}
 class RuntimeObjectReferenceWrong {}
+interface RuntimeObjectReferenceContract { public function label(): string; }
+class RuntimeObjectReferenceImplementation implements RuntimeObjectReferenceContract {
+    public function __construct(public string $name) {}
+    public function label(): string { return $this->name; }
+}
 function runtimeObjectReferenceLeft(RuntimeObjectReferenceValue &$value): void {
     echo 'accepted:', $value->name, '|';
     $value = new RuntimeObjectReferenceValue('left');
@@ -152,19 +158,103 @@ function runtimeObjectReferenceRight(RuntimeObjectReferenceValue &$value): void 
     echo 'accepted:', $value->name, '|';
     $value = new RuntimeObjectReferenceValue('right');
 }
+function runtimeObjectReferenceInterfaceLeft(RuntimeObjectReferenceContract &$value): void {
+    echo 'interface:', $value->label(), '|';
+    $value = new RuntimeObjectReferenceImplementation('interface-left');
+}
+function runtimeObjectReferenceInterfaceRight(RuntimeObjectReferenceContract &$value): void {
+    echo 'interface:', $value->label(), '|';
+    $value = new RuntimeObjectReferenceImplementation('interface-right');
+}
+function runtimeObjectReferenceVariadic(RuntimeObjectReferenceValue &...$values): void {
+    echo 'variadic:', $values[0]->name, '|';
+    $values[0] = new RuntimeObjectReferenceValue('variadic-changed');
+}
+class RuntimeObjectReferenceMethods {
+    public function left(RuntimeObjectReferenceValue &$value): void {
+        $value = new RuntimeObjectReferenceValue('method-left');
+    }
+    public function right(RuntimeObjectReferenceValue &$value): void {
+        $value = new RuntimeObjectReferenceValue('method-right');
+    }
+    public static function staticLeft(RuntimeObjectReferenceValue &$value): void {
+        $value = new RuntimeObjectReferenceValue('static-left');
+    }
+    public static function staticRight(RuntimeObjectReferenceValue &$value): void {
+        $value = new RuntimeObjectReferenceValue('static-right');
+    }
+}
 $target = $argc > 0 ? 'runtimeObjectReferenceLeft' : 'runtimeObjectReferenceRight';
 $value = new RuntimeObjectReferenceValue('start');
 $target($value); echo 'changed:', $value->name, '|';
+$child = new RuntimeObjectReferenceChild('child');
+$target($child); echo 'subclass:', $child->name, '|';
+$interfaceTarget = $argc > 0 ? 'runtimeObjectReferenceInterfaceLeft' : 'runtimeObjectReferenceInterfaceRight';
+$implementation = new RuntimeObjectReferenceImplementation('contract');
+$interfaceTarget($implementation); echo 'interface-changed:', $implementation->label(), '|';
+$variadicTarget = $argc > 0 ? 'runtimeObjectReferenceVariadic' : 'runtimeObjectReferenceUnused';
+$variadic = new RuntimeObjectReferenceChild('variadic-child');
+$variadicTarget($variadic); echo 'variadic-result:', $variadic->name, '|';
 $wrong = new RuntimeObjectReferenceWrong();
 try { $target($wrong); echo 'unexpected'; }
-catch (Error $error) { echo $error->getMessage(), ':wrong'; unset($error); }
-unset($wrong, $value, $target);
+catch (TypeError $error) { echo $error->getMessage(), ':wrong|'; unset($error); }
+try { $target(value: $wrong); echo 'unexpected'; }
+catch (TypeError $error) { echo $error->getMessage(), ':named|'; unset($error); }
+try { $variadicTarget($wrong); echo 'unexpected'; }
+catch (TypeError $error) { echo $error->getMessage(), ':variadic|'; unset($error); }
+$methods = new RuntimeObjectReferenceMethods();
+$method = $argc > 0 ? 'left' : 'right';
+try { $methods->$method($wrong); echo 'unexpected'; }
+catch (TypeError $error) { echo $error->getMessage(), ':method|'; unset($error); }
+$staticMethod = $argc > 0 ? 'staticLeft' : 'staticRight';
+try { RuntimeObjectReferenceMethods::$staticMethod($wrong); echo 'unexpected'; }
+catch (TypeError $error) { echo $error->getMessage(), ':static'; unset($error); }
+unset($implementation, $interfaceTarget, $variadicTarget, $variadic, $child, $wrong, $value, $target, $methods, $method, $staticMethod);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(
         out.stdout,
-        "accepted:start|changed:left|Unsupported reference argument: caller storage does not match the selected parameter layout:wrong",
+        "accepted:start|changed:left|accepted:child|subclass:left|interface:contract|interface-changed:interface-left|variadic:variadic-child|variadic-result:variadic-changed|runtimeObjectReferenceLeft(): Argument #1 ($value) must be of type RuntimeObjectReferenceValue, RuntimeObjectReferenceWrong given:wrong|runtimeObjectReferenceLeft(): Argument #1 ($value) must be of type RuntimeObjectReferenceValue, RuntimeObjectReferenceWrong given:named|runtimeObjectReferenceVariadic(): Argument #1 must be of type RuntimeObjectReferenceValue, RuntimeObjectReferenceWrong given:variadic|RuntimeObjectReferenceMethods::left(): Argument #1 ($value) must be of type RuntimeObjectReferenceValue, RuntimeObjectReferenceWrong given:method|RuntimeObjectReferenceMethods::staticLeft(): Argument #1 ($value) must be of type RuntimeObjectReferenceValue, RuntimeObjectReferenceWrong given:static",
     );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Closure object references resolve `self` and reject incompatible direct marker layouts.
+#[test]
+fn test_unknown_descriptor_closure_object_reference_guards_relative_and_direct_sources() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeClosureReferenceOwner {
+    public function __construct(public string $name) {}
+    public static function callback(): callable {
+        return function(self &$value): void {
+            echo 'self:', $value->name, '|';
+            $value = new self('changed');
+        };
+    }
+}
+class RuntimeClosureReferenceOther {}
+class RuntimeClosureReferenceHolder {
+    public int $number = 4;
+    public RuntimeClosureReferenceOther $other;
+    public function __construct() { $this->other = new RuntimeClosureReferenceOther(); }
+}
+$callback = RuntimeClosureReferenceOwner::callback();
+$value = new RuntimeClosureReferenceOwner('start');
+$callback($value); echo 'changed:', $value->name, '|';
+$other = new RuntimeClosureReferenceOther();
+try { $callback($other); echo 'unexpected'; }
+catch (TypeError $error) { echo 'boxed-class|'; unset($error); }
+$holder = new RuntimeClosureReferenceHolder();
+$number =& $holder->number;
+try { $callback($number); echo 'unexpected'; }
+catch (Error $error) { echo 'direct-layout|'; unset($error); }
+$otherAlias =& $holder->other;
+try { $callback($otherAlias); echo 'unexpected'; }
+catch (TypeError $error) { echo 'direct-class'; unset($error); }
+unset($otherAlias, $number, $holder, $other, $value, $callback);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "self:start|changed:changed|boxed-class|direct-layout|direct-class");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

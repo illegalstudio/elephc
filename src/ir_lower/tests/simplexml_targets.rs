@@ -503,6 +503,10 @@ echo $doc->saveXML();
                 && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{target}: missing {op:?} for scoped capture");
         }
     }
+    let reference_parameter = module.functions.iter().find(|function| function.name == "acceptRefBoundaryXml")
+        .expect("typed object references must keep their callee-entry validator");
+    assert!(reference_parameter.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::InstanceOf),
+        "{target}: by-reference object parameters need a nominal class guard");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     let guard_name = crate::names::generator_parameter_guard_name("generatorBoundaryXml");
     let guard = module.closures.iter().find(|function| function.name == guard_name)

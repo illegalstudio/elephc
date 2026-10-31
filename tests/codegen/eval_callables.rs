@@ -2028,6 +2028,31 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
     );
 }
 
+/// Eval-backed objects satisfy AOT closure interface references through callee validation.
+#[test]
+fn test_eval_object_satisfies_aot_closure_interface_by_ref_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalClosureObjectReferenceContract {
+    public function label(): string;
+}
+
+$callback = function(EvalClosureObjectReferenceContract &$value): string {
+    return $value->label();
+};
+
+echo eval('class EvalClosureObjectReferenceImplementation implements EvalClosureObjectReferenceContract {
+    public function label(): string { return "eval"; }
+}
+$value = new EvalClosureObjectReferenceImplementation();
+$first = $callback($value);
+return $first . ":" . $value->label();');
+"#,
+    );
+
+    assert_eq!(out, "eval:eval");
+}
+
 /// Verifies `Closure::call()` rebinds method closures but passes later args by value.
 #[test]
 fn test_eval_closure_from_callable_call_rebinds_targets_and_uses_by_value_args() {
