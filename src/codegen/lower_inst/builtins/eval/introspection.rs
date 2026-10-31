@@ -343,8 +343,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     let false_label = ctx.next_label("eval_object_is_a_dynamic_false");
     let invalid_label = ctx.next_label("eval_object_is_a_dynamic_invalid");
     let done_label = ctx.next_label("eval_object_is_a_dynamic_done");
+    let has_persistent_context = has_eval_context(ctx);
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
-    ensure_eval_context(ctx)?;
+    if has_persistent_context {
+        ensure_eval_context(ctx)?;
+    }
     store_eval_mixed_operand_at(ctx, object, EVAL_TEMP_CELL_OFFSET)?;
     store_eval_mixed_operand_at(ctx, target, EVAL_CODE_PTR_OFFSET)?;
     abi::emit_load_temporary_stack_slot(
@@ -361,7 +364,11 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_object_is_a_dynamic(
     );
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_branch_if_eval_unboxed_not_object(ctx, &false_label);
-    load_eval_context_to_arg(ctx, 0);
+    if has_persistent_context {
+        load_eval_context_to_arg(ctx, 0);
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
+    }
     let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_arg, EVAL_TEMP_CELL_OFFSET);
     let target_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);

@@ -2028,9 +2028,9 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
     );
 }
 
-/// Eval-backed objects satisfy AOT function and closure interface reference guards.
+/// Eval-backed objects satisfy context-free AOT reference guards and relation predicates.
 #[test]
-fn test_eval_object_satisfies_aot_closure_interface_by_ref_parameter() {
+fn test_eval_object_satisfies_aot_reference_guards_and_relations() {
     let out = compile_and_run(
         r#"<?php
 interface EvalClosureObjectReferenceContract {
@@ -2039,6 +2039,14 @@ interface EvalClosureObjectReferenceContract {
 
 function acceptEvalClosureObjectReference(EvalClosureObjectReferenceContract &$value): string {
     return $value->label();
+}
+
+function inspectEvalClosureObjectRelations(mixed $value, string $target): string {
+    return ($value instanceof EvalClosureObjectReferenceContract ? 'i' : 'n')
+        . (is_a($value, EvalClosureObjectReferenceContract::class) ? 'a' : 'n')
+        . (is_subclass_of($value, EvalClosureObjectReferenceContract::class) ? 's' : 'n')
+        . ($value instanceof $target ? 'd' : 'n')
+        . (is_a($value, 'stdClass') ? 'w' : 'n');
 }
 
 $callback = function(EvalClosureObjectReferenceContract &$value): string {
@@ -2051,11 +2059,12 @@ echo eval('class EvalClosureObjectReferenceImplementation implements EvalClosure
 $value = new EvalClosureObjectReferenceImplementation();
 $first = $callback($value);
 $second = acceptEvalClosureObjectReference($value);
-return $first . ":" . $second . ":" . $value->label();');
+$relations = inspectEvalClosureObjectRelations($value, "EvalClosureObjectReferenceContract");
+return $first . ":" . $second . ":" . $value->label() . ":" . $relations;');
 "#,
     );
 
-    assert_eq!(out, "eval:eval:eval");
+    assert_eq!(out, "eval:eval:eval:iasdn");
 }
 
 /// Verifies `Closure::call()` rebinds method closures but passes later args by value.

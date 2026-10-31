@@ -25,9 +25,12 @@ inspectCatchPredicateOwners('throw new RuntimeException("right"); // ' . $argc);
         source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
     );
     let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let function_symbol = crate::names::function_symbol("inspectCatchPredicateOwners");
+    let function = asm.split_once(&format!("{function_symbol}:\n")).unwrap().1;
+    let function = function.split("\n.globl ").next().unwrap();
     let symbol = target.extern_symbol("__elephc_eval_object_is_a");
     let mut probes = 0;
-    for path in asm.split(&format!("{symbol}\n")).skip(1) {
+    for path in function.split(&format!("{symbol}\n")).skip(1) {
         let restore = if name == "linux-x86_64" { "add rsp, 96" } else { "add sp, sp, #96" };
         let cleanup = path.split_once(restore).expect("predicate scratch restoration").0;
         assert!(cleanup.contains("retire temporary eval metadata operand box"), "{name}: {cleanup}");
@@ -67,15 +70,23 @@ fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
     assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
 
-/// Verifies an AOT callee without an eval local still consults escaped-object ownership.
-fn assert_context_free_object_reference_guard_uses_eval_owner(name: &str) {
+/// Verifies AOT object relations without an eval local consult escaped-object ownership.
+fn assert_context_free_object_relations_use_eval_owner(name: &str) {
     let source = r#"<?php
 interface EscapedEvalReferenceContract {}
 function acceptEscapedEvalReference(EscapedEvalReferenceContract &$value): bool { return true; }
+function inspectEscapedEvalRelations(mixed $value, string $target): string {
+    return ($value instanceof EscapedEvalReferenceContract ? 'i' : 'n')
+        . (is_a($value, EscapedEvalReferenceContract::class) ? 'a' : 'n')
+        . (is_subclass_of($value, EscapedEvalReferenceContract::class) ? 's' : 'n')
+        . ($value instanceof $target ? 'd' : 'n')
+        . (is_a($value, 'stdClass') ? 'w' : 'n');
+}
 $source = $argc > 0
     ? 'class EscapedEvalReferenceImplementation implements EscapedEvalReferenceContract {}
        $value = new EscapedEvalReferenceImplementation();
-       acceptEscapedEvalReference($value);'
+       acceptEscapedEvalReference($value);
+       inspectEscapedEvalRelations($value, "EscapedEvalReferenceContract");'
     : '';
 eval($source);
 "#;
@@ -84,29 +95,31 @@ eval($source);
         source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
     );
     let function = module.functions.iter()
-        .find(|function| function.name == "acceptEscapedEvalReference").unwrap();
+        .find(|function| function.name == "inspectEscapedEvalRelations").unwrap();
     assert!(!function.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
     assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOf), "{name}");
+    assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOfDynamic), "{name}");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    let symbol = crate::names::function_symbol("acceptEscapedEvalReference");
+    let symbol = crate::names::function_symbol("inspectEscapedEvalRelations");
     let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
     let body = body.split("\n.globl ").next().unwrap();
     assert!(body.contains(&target.extern_symbol("__elephc_eval_object_is_a")), "{name}");
+    assert!(body.contains(&target.extern_symbol("__elephc_eval_object_is_a_dynamic")), "{name}");
 }
 
-macro_rules! context_free_eval_object_guard_target_test {
+macro_rules! context_free_eval_object_relations_target_test {
     ($test:ident, $target:literal) => {
-        /// A context-free AOT object-reference guard recovers eval ownership on this target.
+        /// Context-free AOT object relations recover eval ownership on this target.
         #[test]
-        fn $test() { assert_context_free_object_reference_guard_uses_eval_owner($target); }
+        fn $test() { assert_context_free_object_relations_use_eval_owner($target); }
     };
 }
 
-context_free_eval_object_guard_target_test!(context_free_eval_object_guard_macos, "macos-aarch64");
-context_free_eval_object_guard_target_test!(context_free_eval_object_guard_ios, "ios-arm64");
-context_free_eval_object_guard_target_test!(context_free_eval_object_guard_ios_sim, "ios-sim-arm64");
-context_free_eval_object_guard_target_test!(context_free_eval_object_guard_linux_arm64, "linux-aarch64");
-context_free_eval_object_guard_target_test!(context_free_eval_object_guard_linux_x86_64, "linux-x86_64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_macos, "macos-aarch64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_ios, "ios-arm64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_ios_sim, "ios-sim-arm64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_linux_arm64, "linux-aarch64");
+context_free_eval_object_relations_target_test!(context_free_eval_object_relations_linux_x86_64, "linux-x86_64");
 
 /// Checks bounded eval scope writeback before unwinding for one independently scheduled target.
 fn check_eval_throw_writeback_is_bounded_before_unwinding(target: &str) {

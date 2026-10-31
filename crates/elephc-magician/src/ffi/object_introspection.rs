@@ -14,7 +14,7 @@
 //! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
 //! - Named predicate probes fail closed as false; dynamic `instanceof` invalid
 //!   targets return -1 so generated code can raise PHP's fatal diagnostic.
-//! - Named predicates recover an escaped dynamic object's owner when the AOT callee has no
+//! - Relation predicates recover an escaped dynamic object's owner when the AOT callee has no
 //!   persistent eval context of its own, then fall back to native class metadata.
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
@@ -32,6 +32,7 @@ const MEMBER_LOOKUP_PROPERTY_EXISTS: u64 = 1;
 const CLASS_RELATION_IMPLEMENTS: u64 = 0;
 const CLASS_RELATION_PARENTS: u64 = 1;
 const CLASS_RELATION_USES: u64 = 2;
+const RUNTIME_TAG_OBJECT: u64 = 6;
 
 /// Tests an eval class string against a target and its compiled inheritance candidates.
 /// The first NUL-separated candidate is the target used by the exclude-self rule.
@@ -165,9 +166,9 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(
 /// Tests whether an object satisfies a class/interface relation in the eval context.
 ///
 /// # Safety
-/// `ctx` must be a valid eval context handle. `object` must point at a boxed
-/// runtime cell. `target_ptr` must be readable for `target_len` bytes when
-/// `target_len > 0`.
+/// `ctx` may be null or must be a valid eval context handle. `object` must point
+/// at a boxed runtime cell. `target_ptr` must be readable for `target_len` bytes
+/// when `target_len > 0`.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_object_is_a(
@@ -186,9 +187,9 @@ pub unsafe extern "C" fn __elephc_eval_object_is_a(
 /// Tests whether an object satisfies a runtime string/object class target.
 ///
 /// # Safety
-/// `ctx` must be a valid eval context handle. `object` and `target` must point
-/// at boxed runtime cells. Returns -1 when the target is invalid for
-/// `instanceof`.
+/// `ctx` may be null or must be a valid eval context handle. `object` and
+/// `target` must point at boxed runtime cells. Returns -1 when the target is
+/// invalid for `instanceof`.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_object_is_a_dynamic(
@@ -353,6 +354,7 @@ unsafe fn eval_object_is_a_inner(
     if context.abi_version() != ABI_VERSION {
         return 0;
     }
+    context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_object_is_a(
         context,
@@ -378,17 +380,37 @@ unsafe fn eval_object_is_a_dynamic_inner(
     target: *mut RuntimeCell,
     exclude_self: u64,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return -1;
-    };
-    if context.abi_version() != ABI_VERSION || object.is_null() || target.is_null() {
+    if object.is_null() || target.is_null() {
         return -1;
     }
+    let object = RuntimeCellHandle::from_raw(object).borrowed();
+    let target = RuntimeCellHandle::from_raw(target).borrowed();
+    let mut probe = ElephcRuntimeOps::new();
+    let object_owner = probe.object_identity(object).ok().and_then(|identity| {
+        crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+    });
+    let target_owner = if probe.type_tag(target).ok() == Some(RUNTIME_TAG_OBJECT) {
+        probe.object_identity(target).ok().and_then(|identity| {
+            crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+        })
+    } else {
+        None
+    };
+    // The subject owner is authoritative; synced global metadata supplies a foreign target class.
+    let resolved = object_owner.or(target_owner).unwrap_or(ctx);
+    let mut fallback = resolved.is_null().then(ElephcEvalContext::new);
+    let Some(context) = resolved.as_mut().or_else(|| fallback.as_mut()) else {
+        return -1;
+    };
+    if context.abi_version() != ABI_VERSION {
+        return -1;
+    }
+    context.sync_global_eval_classes();
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_object_is_a_dynamic(
         context,
-        RuntimeCellHandle::from_raw(object).borrowed(),
-        RuntimeCellHandle::from_raw(target).borrowed(),
+        object,
+        target,
         exclude_self != 0,
         &mut values,
     ) {

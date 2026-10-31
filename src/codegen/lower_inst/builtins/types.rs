@@ -657,7 +657,7 @@ pub(crate) fn lower_is_a_relation(
     }
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            if super::has_eval_context(ctx) {
+            if ctx.module.required_runtime_features.eval_bridge {
                 return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
             }
             if !exclude_self {

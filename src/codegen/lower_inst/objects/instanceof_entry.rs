@@ -178,7 +178,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
-    if builtins::has_eval_context(ctx) {
+    if ctx.module.required_runtime_features.eval_bridge {
         return builtins::lower_eval_object_is_a_dynamic(ctx, inst, value, target, false);
     }
     let value_ty = ctx.value_php_type(value)?;
