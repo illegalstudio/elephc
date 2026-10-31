@@ -3409,7 +3409,10 @@ jobs:
           grep -F '  <title>Design Patterns &amp; Friends</title>' "$RUNNER_TEMP/xml.out"
           grep -F 'book 978-0-13-468599-1' "$RUNNER_TEMP/xml.out"
           grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
-          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out"
+          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out" || {
+            cat "$RUNNER_TEMP/xml.out"
+            exit 1
+          }
 
       - name: Compile and run SimpleXML through the production resolver
         shell: bash
