@@ -201,6 +201,11 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
     }
 
+    /// Associates a PHP name with its hidden reference-cell lease, independently of flow facts.
+    pub(crate) fn set_local_ref_cell_owner(&mut self, slot: LocalSlotId, owner: LocalSlotId) {
+        self.func.locals[slot.as_raw() as usize].ref_cell_owner = Some(owner);
+    }
+
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
     /// lifetime-tracked storage.
     ///

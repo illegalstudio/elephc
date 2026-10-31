@@ -1298,6 +1298,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .add_local(Some(name.to_string()), ir_type, php_type.clone(), kind);
         self.local_slots.insert(name.to_string(), slot);
         self.local_kinds.insert(name.to_string(), kind);
+        if let Some(owner) = self.ref_cell_owner_slot(name) {
+            self.builder.set_local_ref_cell_owner(slot, owner);
+        }
         if overrides_seeded_type {
             self.local_types.insert(name.to_string(), php_type);
         } else {
@@ -2014,6 +2017,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let name = format!("__eir_ref_owner{}_{}", self.hidden_temp_counter, variable);
         self.hidden_temp_counter += 1;
         let slot = self.declare_local_with_kind(&name, php_type, LocalKind::RefCell);
+        if let Some(variable) = self.local_slots.get(variable).copied() {
+            self.builder.set_local_ref_cell_owner(variable, slot);
+        }
         self.ref_cell_owner_locals
             .insert(variable.to_string(), slot);
         slot
@@ -3500,7 +3506,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
         if !self.is_ref_bound_local(source)
-            && matches!(self.local_type(source).codegen_repr(), PhpType::Object(_))
+            && matches!(self.local_type(source).codegen_repr(),
+                PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+                    | PhpType::TaggedScalar)
         {
             self.promote_local_mixed_ref_cell(source, span);
         }

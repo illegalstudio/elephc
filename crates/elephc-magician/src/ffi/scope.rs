@@ -18,6 +18,29 @@ use crate::errors::EvalStatus;
 use crate::scope::ScopeCellOwnership;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
+/// Installs or clears the type of a native reference snapshot before interpreted assignments.
+///
+/// # Safety
+/// The scope must be live and the supplied name and optional type must be readable UTF-8 ranges.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_scope_native_type_v1(
+    scope: *mut ElephcEvalScope, name_ptr: *const u8, name_len: u64,
+    type_ptr: *const u8, type_len: u64,
+) -> i32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(scope) = scope.as_mut() else { return EvalStatus::RuntimeFatal.code(); };
+        let Ok(name) = abi_name_to_string(name_ptr, name_len) else { return EvalStatus::RuntimeFatal.code(); };
+        let ty = if type_len == 0 { None } else {
+            let Some(ty) = super::native_methods::native_callable_type_from_abi(
+                type_ptr, type_len, super::native_methods::NativeCallableTypePosition::Parameter,
+            ) else { return EvalStatus::RuntimeFatal.code(); };
+            Some(ty)
+        };
+        scope.set_native_storage_type(name, ty);
+        EvalStatus::Ok.code()
+    }).unwrap_or_else(|_| EvalStatus::RuntimeFatal.code())
+}
+
 /// Allocates a materialized activation scope handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_scope_new() -> *mut ElephcEvalScope {

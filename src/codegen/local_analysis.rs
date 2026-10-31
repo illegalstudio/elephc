@@ -370,7 +370,7 @@ fn owned_parameter_slots(
                 // An incoming cell is borrowed. Once `unset()` detaches it, however, a later
                 // store can make this same frame slot own a raw value on only some CFG paths.
                 // The representation flag guards cleanup on paths that still hold the cell.
-                return (stored_slots.contains(&slot)
+                return ((stored_slots.contains(&slot) || eval_can_replace_locals)
                     && by_ref_parameter_can_detach(function, slot))
                     .then_some(slot);
             }
@@ -425,7 +425,8 @@ fn dynamic_ref_cell_slots(
 
 /// Returns whether `unset()` can change an incoming reference slot into raw local storage.
 fn by_ref_parameter_can_detach(function: &Function, slot: LocalSlotId) -> bool {
-    function.instructions.iter().any(|inst| {
+    function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::EvalScope)
+        || function.instructions.iter().any(|inst| {
         inst.op == Op::UnsetLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
     })
 }

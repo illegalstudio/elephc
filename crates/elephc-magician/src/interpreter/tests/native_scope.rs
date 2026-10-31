@@ -12,6 +12,27 @@ use super::support::*;
 
 mod argument_ownership;
 
+/// Native object contracts reject assignments before an interpreted catch or later statement runs.
+#[test]
+fn native_object_snapshot_contract_is_checked_before_assignment() {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let initialize = parse_fragment(b"class NativeScopeNode {} $node = new NativeScopeNode();").unwrap();
+    execute_program_with_context(&mut context, &initialize, &mut scope, &mut values).unwrap();
+    let original = scope.visible_cell("node").unwrap();
+    scope.set_native_storage_type("node".into(), Some(EvalParameterType::new(
+        vec![EvalParameterTypeVariant::Class("NativeScopeNode".into())], false,
+    )));
+    let program = parse_fragment(b"try { $node = null; } catch (TypeError $error) { echo 'caught'; } unset($error);").unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    assert_eq!(scope.visible_cell("node"), Some(original));
+    assert_eq!(values.output, "caught");
+    let program = parse_fragment(b"unset($node); $node = 3;").unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    assert_eq!(values.get(scope.visible_cell("node").unwrap()), FakeValue::Int(3));
+}
+
 /// In-place array writes dirty imported snapshots even when the fake runtime keeps the same box.
 #[test]
 fn native_array_snapshots_mark_element_mutations_dirty() {

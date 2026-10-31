@@ -9,6 +9,86 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Rejected assignments are catchable inside eval, and unset detaches typed property aliases.
+#[test]
+fn test_eval_typed_native_aliases_reject_invalid_values_and_detach_on_unset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CheckedNativeScopeAliases {
+    public stdClass $node;
+    public string $text = 'original';
+    public int $number = 7;
+    public function __construct() { $this->node = new stdClass(); $this->node->label = 'node'; }
+    public function &nodeRef(): stdClass { return $this->node; }
+    public function &textRef(): string { return $this->text; }
+    public function &numberRef(): int { return $this->number; }
+}
+function checkedNativeScopeAliases(bool $run): void {
+    $box = new CheckedNativeScopeAliases();
+    $node =& $box->nodeRef();
+    $text =& $box->textRef();
+    $number =& $box->numberRef();
+    $source = $run ? 'try { $node = null; } catch (TypeError $error) { echo "null|"; } try { $node = 5; } catch (TypeError $error) { echo "int|"; } unset($error);' : '';
+    eval($source);
+    echo $node->label, ':', $box->node->label, '|';
+    $source = $run ? 'unset($node, $text, $number);' : '';
+    eval($source);
+    echo $box->node->label, ':', $box->text, ':', $box->number, '|';
+    unset($node, $text, $number, $box, $source);
+}
+checkedNativeScopeAliases($argc > 0);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "null|int|node:node|node:original:7|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Opaque eval mutates the same boxed array group while by-value snapshots keep their contents.
+#[test]
+fn test_eval_array_reference_snapshots_reload_in_place_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function mutateNativeArrayReference(bool $run): void {
+    $items = [1, 2];
+    $snapshot = $items;
+    $alias =& $items;
+    $source = $run ? '$items[0] = 4; $items[] = 3;' : '';
+    eval($source);
+    echo json_encode($items), ':', json_encode($alias), ':', json_encode($snapshot), '|';
+    $source = $run ? '$alias[1] += 5; unset($alias[0]);' : '';
+    eval($source);
+    echo json_encode($items), ':', json_encode($alias), ':', json_encode($snapshot), '|';
+    unset($items, $alias, $snapshot, $source);
+}
+
+mutateNativeArrayReference($argc > 0);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "[4,2,3]:[4,2,3]:[1,2]|{\"1\":7,\"2\":3}:{\"1\":7,\"2\":3}:[1,2]|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Nullable integer aliases convert weak scalar assignments without retaining a borrowed string.
+#[test]
+fn test_eval_nullable_integer_alias_reload_preserves_only_integer_and_null_tags() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class EvalNullableIntegerAlias {
+    public ?int $number = null;
+    public function &numberRef(): ?int { return $this->number; }
+}
+$box = new EvalNullableIntegerAlias();
+$number =& $box->numberRef();
+$source = $argc > 0 ? '$number = "12";' : '';
+eval($source);
+echo $number + 1, ':', $box->number + 1, '|';
+$source = $argc > 0 ? '$number = null;' : '';
+eval($source);
+var_dump($number, $box->number);
+unset($number, $box, $source);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "13:13|NULL\nNULL\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Actual scope writes preserve raw locals and native aliases even with a full or colliding mask.
 #[test]
 fn test_eval_unaccessed_native_reference_aliases_keep_conditional_bindings() {

@@ -279,6 +279,7 @@ mod scope_native_snapshot_tests;
 mod sync_inventory;
 mod scope_io;
 mod scope_reload;
+mod scope_reload_checks;
 mod status;
 
 #[allow(unused_imports)]
