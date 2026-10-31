@@ -39,6 +39,8 @@ mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
+mod local_values;
+use local_values::lower_local_value;
 mod numeric_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::coerce_integer_arithmetic;
@@ -306,7 +308,7 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => lower_local_value(ctx, name, expr.span),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),

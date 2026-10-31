@@ -32,7 +32,11 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            ExprKind::Variable(name) => {
+                let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
+                self.record_integer_local_read(name, expr.span, &ty);
+                Ok(ty)
+            }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {

@@ -9,6 +9,119 @@
 
 use super::*;
 
+/// Opaque alternative guards preserve nullable and Stringable parameter/property conversions.
+#[test]
+fn test_nullable_fallback_flow_review_opaque_alternative_boundaries_runtime() {
+    let source = r#"<?php
+class AlternativeTextA implements Stringable { function __toString(): string { return 'obj'; } }
+class AlternativeTextB implements Stringable { function __toString(): string { return 'other'; } }
+class AlternativeBox { public ?string $text = null; public static ?string $shared = null; }
+function alternativeString(?string $value): string { return $value === null ? 'null' : '['.$value.']'; }
+function nullableAlternative(mixed $value): string {
+    if ($value === null || is_int($value)) { return alternativeString($value); }
+    return 'other';
+}
+function propertyAlternative(mixed $value): string {
+    if (!is_int($value) && $value !== null) { return 'other'; }
+    $box = new AlternativeBox(); $box->text = $value; AlternativeBox::$shared = $value;
+    return alternativeString($box->text).alternativeString(AlternativeBox::$shared);
+}
+function capturedAlternative(mixed $value): string {
+    if ($value === null || is_int($value) || is_string($value)) {
+        $copy = $value; $closure = fn(): string => alternativeString($copy); return $closure();
+    }
+    return 'other';
+}
+function stringObjectAlternative(mixed $value): string {
+    if (is_string($value) || $value instanceof Stringable) { return alternativeString($value); }
+    return 'other';
+}
+function objectAlternative(mixed $value): string {
+    if ($value instanceof AlternativeTextA || $value instanceof AlternativeTextB) { return alternativeString($value); }
+    return 'other';
+}
+function nullObjectAlternative(mixed $value): string {
+    if ($value === null || $value instanceof AlternativeTextA) { return alternativeString($value); }
+    return 'other';
+}
+echo nullableAlternative(5), nullableAlternative(null), nullableAlternative('x'), "\n";
+echo propertyAlternative(5), propertyAlternative(null), "\n";
+echo capturedAlternative(5), capturedAlternative(null), capturedAlternative('x'), "\n";
+echo stringObjectAlternative('x'), stringObjectAlternative(new AlternativeTextA()), stringObjectAlternative(5), "\n";
+echo objectAlternative(new AlternativeTextA()), objectAlternative(new AlternativeTextB()), "\n";
+echo nullObjectAlternative(null), nullObjectAlternative(new AlternativeTextA()), "\n";
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "[5]nullother\n[5][5]nullnull\n[5]null[x]\n[x][obj]other\n[obj][other]\nnull[obj]\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// Proven integer reads retain values in escaped captures and every array consumer.
+#[test]
+fn test_nullable_fallback_flow_review_tagged_value_consumers_runtime() {
+    let template = r#"<?php
+class TaggedValueHolder {
+    public static int $value = 0;
+    function captured(?int $value): Closure { STORE return fn(): int => $value + 2; }
+}
+function returnedArrow(?int $value): Closure { STORE return fn(): int => $value + 2; }
+function returnedClosure(?int $value): Closure { STORE return function () use ($value): int { return $value + 2; }; }
+function callTaggedClosure(Closure $closure): int { return $closure(); }
+function argumentCapture(?int $value): int { STORE return callTaggedClosure(fn(): int => $value + 2); }
+function arrayCapture(?int $value): int { STORE $items = [fn(): int => $value + 2]; return $items[0](); }
+function delayedCapture(?int $value): Closure { STORE $closure = fn(): int => $value + 2; return $closure; }
+function inferredCapture(?int $value) { STORE return fn(): int => $value + 2; }
+function taggedArrayConsumers(?int $value): void {
+    STORE
+    $items = []; $items[] = $value;
+    $pairs = [$value, 'key' => $value];
+    echo count($items), ':', count($pairs), ':', json_encode([$value]), ':';
+    $mapped = array_map(fn($item) => $item + $value, [1, 2]);
+    echo implode(' ', $mapped), ':';
+    TaggedValueHolder::$value = $value; echo TaggedValueHolder::$value, "\n";
+}
+function resetTaggedValue(?int &$value): void { $value = null; }
+function detachedCapture(?int $value): Closure {
+    STORE $closure = fn(): int => $value + 2; resetTaggedValue($value); return $closure;
+}
+function taggedReferenceControl(?int $value): void {
+    STORE echo json_encode([$value]), ':'; resetTaggedValue($value); var_dump($value);
+}
+echo returnedArrow(null)(), ':', returnedArrow(1)(), "\n";
+echo returnedClosure(null)(), ':', returnedClosure(1)(), "\n";
+echo inferredCapture(null)(), ':', inferredCapture(1)(), "\n";
+$holder = new TaggedValueHolder();
+echo $holder->captured(null)(), ':', $holder->captured(1)(), "\n";
+unset($holder);
+echo detachedCapture(null)(), ':', detachedCapture(1)(), "\n";
+echo argumentCapture(null), ':', arrayCapture(1), ':', delayedCapture(null)(), "\n";
+taggedArrayConsumers(null); taggedArrayConsumers(1);
+taggedReferenceControl(null); taggedReferenceControl(1);
+"#;
+    for store in ["$value ??= 40;", "$value = $value ?? 40;", "if ($value === null) { $value = 40; }"] {
+        let source = template.replace("STORE", store);
+        for optimized in [true, false] {
+            let run = || assert_nullable_flow_heap_output(&source,
+                "42:3\n42:3\n42:3\n42:3\n42:3\n42:3:42\n1:2:[40]:41 42:40\n1:2:[1]:2 3:1\n[40]:NULL\n[1]:NULL\n");
+            if optimized { run(); } else { without_ir_opt(run); }
+        }
+    }
+}
+
+/// Generator captures preserve the integer independently of the existing yielded-owner leak.
+#[test]
+fn test_nullable_fallback_flow_review_tagged_generator_capture_runtime() {
+    for store in ["$value ??= 40;", "$value = $value ?? 40;", "if ($value === null) { $value = 40; }"] {
+        let source = format!("<?php function generatedCapture(?int $value): Generator {{ {store} yield fn(): int => $value + 1; }} foreach (generatedCapture(null) as $closure) {{ echo $closure(), ':'; }} foreach (generatedCapture(1) as $closure) {{ echo $closure(); }}");
+        for optimized in [true, false] {
+            let run = || assert_eq!(compile_and_run(&source), "41:2");
+            if optimized { run(); } else { without_ir_opt(run); }
+        }
+    }
+}
+
 /// Total scalar conversions keep parameters, declared returns and properties PHP-equivalent.
 #[test]
 fn test_nullable_fallback_flow_review_total_scalar_boundaries_runtime() {

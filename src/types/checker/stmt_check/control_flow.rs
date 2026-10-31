@@ -635,11 +635,16 @@ impl Checker {
                             self.observe_conditional_flow_exit(&mut flow, env);
                         }
                     }
-                    // Preserve the existing lazy-property initialization join for one guard.
+                    // Preserve lazy-property joins and a nullable integer initialized on its null arm.
                     if single_clause && guards.len() == 1 {
                         let guard = &guards[0];
                         let branch_exit = env.get(&guard.var);
-                        if Self::narrowed_place_key_is_property(&guard.var)
+                        let nullable_integer_local = !Self::narrowed_place_key_is_property(&guard.var)
+                            && saved.iter().any(|(name, original)| name == &guard.var
+                                && matches!(original, Some(PhpType::Union(members)) if members.len() == 2
+                                    && members.contains(&PhpType::Int) && members.contains(&PhpType::Void)))
+                            && branch_exit == Some(&PhpType::Int);
+                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_integer_local)
                             && !self.body_cannot_fall_through(body)
                             && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
                         {
@@ -728,6 +733,9 @@ impl Checker {
                     };
                     Some((key.clone(), joined))
                 });
+                let joined_integer_key = joined.as_ref().filter(|(key, ty)|
+                    !Self::narrowed_place_key_is_property(key) && *ty == PhpType::Int)
+                    .map(|(key, _)| key.clone());
                 if !keep_complement_after_if {
                     self.restore_guarded_storage_provenance(&storage_entry);
                     for (var, original) in &saved_vars {
@@ -757,6 +765,9 @@ impl Checker {
                 }
                 if keep_complement_after_if {
                     self.keep_conditional_views(&mut flow, env, saved_vars.into_iter().map(|(name, _)| name));
+                }
+                if let Some(key) = joined_integer_key {
+                    self.keep_conditional_views(&mut flow, env, std::iter::once(key));
                 }
                 self.finish_statement_conditional_flow(flow, env);
 

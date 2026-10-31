@@ -165,6 +165,7 @@ pub(super) fn lower_builtin_callable_body(
         &Default::default(), // builtin call types
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types are absent in synthesized bodies
+        &Default::default(), // synthesized bodies have no checked integer read sites
         &Default::default(),
         &Default::default(),
         &Default::default(),

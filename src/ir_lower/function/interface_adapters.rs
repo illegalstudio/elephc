@@ -109,6 +109,7 @@ fn lower_interface_adapter(
         &Default::default(), // builtin call types
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types
+        &Default::default(), // checked integer read sites
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments

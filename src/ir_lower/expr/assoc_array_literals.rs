@@ -244,9 +244,9 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
             assoc_array_literal_type_for_ir(ctx, inner_pairs, value)
         }
         ExprKind::Variable(name) => ir_array_storage_type(
-            ctx.local_types
+            local_values::projected_local_value_type(ctx, name, value.span).or_else(|| ctx.local_types
                 .get(name)
-                .cloned()
+                .cloned())
                 .unwrap_or_else(|| infer_expr_type_syntactic(value)),
         ),
         ExprKind::FunctionCall { name, .. } => {

@@ -42,6 +42,7 @@ mod function_names;
 mod loop_backedges;
 mod method_pass;
 mod member_receivers;
+mod local_values;
 mod mixed_storage_scan;
 mod numeric_regions;
 mod packed_counter;
@@ -463,6 +464,8 @@ pub(crate) struct Checker {
     pub array_push_property_plans: HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Receiver types observed at member uses, with conflicting checker visits disabled.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Integer reads agreed by every authoritative flow visit to one scoped local use.
+    pub integer_local_read_sites: crate::types::IntegerLocalReadSites,
     /// Named-function contexts and body scopes queried without their local branch guards.
     pub member_receiver_analysis_scopes: Vec<(Option<String>, String)>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
@@ -1543,6 +1546,7 @@ fn check_types_on_compiler_stack(
         builtin_call_types: checker.builtin_call_types,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
+        integer_local_read_sites: checker.integer_local_read_sites,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),

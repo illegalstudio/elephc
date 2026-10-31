@@ -150,6 +150,7 @@ fn dummy_check_result() -> CheckResult {
         builtin_call_types: HashMap::new(),
         array_push_property_plans: HashMap::new(),
         member_receiver_types: HashMap::new(),
+        integer_local_read_sites: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),

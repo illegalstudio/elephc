@@ -13,6 +13,33 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+class ProjectedValueHolder {
+    public static int $value = 0;
+    function captured(?int $value): Closure { $value ??= 40; return fn(): int => $value + 2; }
+}
+function projectedValueConsumer(?int $value): Closure {
+    $value ??= 40;
+    $items = []; $items[] = $value;
+    $pairs = [$value, 'key' => $value];
+    echo count($items), count($pairs), json_encode([$value]);
+    ProjectedValueHolder::$value = $value;
+    $mapped = array_map(fn($item) => $item + $value, [1, 2]);
+    echo implode(' ', $mapped);
+    return fn(): int => $value + 2;
+}
+function projectedGuardConsumer(?int $value): Closure {
+    if ($value === null) { $value = 40; }
+    return fn(): int => $value + 2;
+}
+function projectedGeneratorCapture(?int $value): Generator {
+    $value ??= 40;
+    yield fn(): int => $value + 1;
+}
+function nullableScalarAlternative(mixed $value): ?string {
+    if ($value === null || is_int($value)) { return nullableScalarTarget($value); }
+    return null;
+}
+function nullableScalarTarget(?string $value): ?string { return $value; }
 class ScalarBoundaryTarget { public string $text = ''; public static string $shared = ''; }
 function scalarStringTarget(string $value): string { return $value; }
 function scalarIntegerTarget(int $value): int { return $value; }
@@ -410,6 +437,17 @@ echo fallback(null);
         let target = crate::codegen::platform::Target::parse(name).unwrap();
         let module = super::lower_source_at_for_target(source,
             std::path::Path::new("main.php"), std::path::Path::new("."), target);
+        for function_name in ["projectedValueConsumer", "projectedGuardConsumer"] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap();
+            assert_eq!(slot.ir_type, IrType::TaggedScalar, "{name}: {function_name}");
+            let captures: Vec<_> = function.instructions.iter().filter(|inst| inst.op == Op::ClosureCapture).collect();
+            assert!(!captures.is_empty(), "{name}: {function_name}");
+            for capture in captures {
+                assert_eq!(function.values[capture.operands[0].as_raw() as usize].ir_type, IrType::I64,
+                    "{name}: {}", crate::ir::print_function(function));
+            }
+        }
         for function_name in ["fallback", "expressionFallback", "guardedFallback", "conditionalFallback"] {
             let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
             let slot = function.locals.iter().find(|local| local.name.as_deref() == Some("value")).unwrap().id;

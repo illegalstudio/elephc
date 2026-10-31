@@ -9,6 +9,36 @@
 
 use super::*;
 
+/// Complete integer fallback joins retain nullable storage and invalidate their read after calls.
+#[test]
+fn test_nullable_fallback_flow_review_integer_read_proof_lifecycle() {
+    check_source("<?php class IntegerReadBox { public static int $value = 0; } function need(int $value): int { return $value; } function run(?int $value): int { if ($value === null) { $value = 40; } IntegerReadBox::$value = $value; return need($value); }").unwrap();
+    expect_error("<?php function need(int $value): void {} function run(?int $value, bool $flag): void { if ($value === null) { if ($flag) { $value = 40; } } need($value); }", "expects int");
+    expect_error("<?php function need(int $value): void {} function resetValue(?int &$value): void { $value = null; } function run(?int $value): void { if ($value === null) { $value = 40; } resetValue($value); need($value); }", "expects int");
+}
+
+/// Null and Stringable alternatives preserve opaque value bindings in every guard order.
+#[test]
+fn test_nullable_fallback_flow_review_opaque_alternative_boundaries() {
+    for guard in ["$value === null || is_int($value)",
+        "!(!is_int($value) && $value !== null)",
+        "$value === null || is_int($value) || is_string($value)",
+        "is_string($value) || $value instanceof Stringable",
+        "$value instanceof TextAlternativeA || $value instanceof TextAlternativeB",
+        "$value === null || $value instanceof TextAlternativeA"]
+    {
+        for body in ["return need($value);", "return $value;",
+            "$box = new NullableBoundaryBox(); $box->text = $value; return $box->text;",
+            "NullableBoundaryBox::$shared = $value; return NullableBoundaryBox::$shared;",
+            "$copy = $value; return need($copy);",
+            "$closure = function () use ($value): ?string { return need($value); }; return $closure();"]
+        {
+            let source = format!("<?php class TextAlternativeA implements Stringable {{ function __toString(): string {{ return 'a'; }} }} class TextAlternativeB implements Stringable {{ function __toString(): string {{ return 'b'; }} }} class NullableBoundaryBox {{ public ?string $text = null; public static ?string $shared = null; }} function need(?string $value): ?string {{ return $value; }} function run(mixed $value): ?string {{ if ({guard}) {{ {body} }} return 'other'; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+}
+
 /// Scalar alternatives over Mixed retain weak bindings through every value boundary.
 #[test]
 fn test_nullable_fallback_flow_review_total_scalar_boundaries() {

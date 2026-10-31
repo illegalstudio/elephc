@@ -194,19 +194,16 @@ impl Checker {
         Ok(guards)
     }
 
-    /// Preserves opaque scalar bindings and original object supertypes across alternatives.
+    /// Preserves opaque value bindings and original object supertypes across alternatives.
     fn join_guard_alternatives(&self, original: &PhpType, left: &PhpType, right: &PhpType) -> PhpType {
         if left == original || right == original {
             return original.clone();
         }
         let joined = self.normalize_union_type(vec![left.clone(), right.clone()]);
-        // A new scalar union would lose Mixed's existing weak value bindings at parameters,
-        // returns, properties, copies and captures. Keep that contract until a single scalar
-        // alternative is known; null and object alternatives retain their precise joins.
+        // A new union would lose Mixed's existing weak bindings, including nullable and
+        // Stringable conversions. Keep that contract until one alternative is known.
         if *original == PhpType::Mixed
-            && matches!(&joined, PhpType::Union(members) if members.len() > 1
-                && members.iter().all(|member| matches!(member,
-                    PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False)))
+            && matches!(&joined, PhpType::Union(members) if members.len() > 1)
         {
             return original.clone();
         }

@@ -487,6 +487,13 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        for capture in captures {
+            if !capture_refs.contains(capture) {
+                if let Some(ty) = env.get(capture) {
+                    self.record_integer_local_read(capture, expr.span, ty);
+                }
+            }
+        }
         // Reference captures carry the enclosing cell's storage, even when the current
         // read view is non-null. Value captures keep their precise read type.
         let capture_env = (!capture_refs.is_empty()).then(|| {
