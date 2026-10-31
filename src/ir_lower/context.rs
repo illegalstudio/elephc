@@ -3161,7 +3161,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.abandon_local_binding(name);
             return null;
         }
-        self.set_local_type(name, PhpType::Void);
+        if self.eval_barrier_active || self.eval_scope_read_param.is_some() {
+            // An eval-visible reference slot must represent both an attached native payload cell
+            // and the raw PHP null left after detachment. Keep the transferred cell ABI in the
+            // binding instruction metadata while widening the slot's raw form to boxed Mixed.
+            self.builder.widen_local_storage_type(slot, PhpType::Mixed);
+            self.local_types.insert(name.to_string(), PhpType::Void);
+        } else {
+            self.set_local_type(name, PhpType::Void);
+        }
         self.initialized_slots.insert(slot);
         null
     }

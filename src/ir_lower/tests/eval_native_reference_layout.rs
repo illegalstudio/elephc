@@ -132,3 +132,54 @@ echo $text, $number, $weight, $maybe;
         assert!(assembly.contains("eval_reload_nullable_int_null"), "{target}: missing nullable scalar tag guard");
     }
 }
+
+/// A final native-alias unset keeps every eval-visible name in boxed raw frame storage.
+#[test]
+fn dynamic_eval_unset_keeps_numeric_aliases_in_the_sync_inventory_on_every_target() {
+    let source = r#"<?php
+class EvalUnsetReferenceLayout {
+    public int $number = 1;
+    public function &numberRef(): int { return $this->number; }
+}
+$box = new EvalUnsetReferenceLayout();
+$number =& $box->numberRef();
+$source = $argc > 0 ? '$number = 2;' : '';
+eval($source);
+echo $number;
+unset($number, $box, $source);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let main = module
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .unwrap();
+        let number = main
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("number"))
+            .unwrap();
+        assert_eq!(
+            number.php_type.codegen_repr(),
+            crate::types::PhpType::Mixed,
+            "{target}: final unset must retain boxed raw storage for eval synchronization"
+        );
+        assert!(
+            number.ref_cell_owner.is_some(),
+            "{target}: the native alias must retain its explicit lease metadata"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
