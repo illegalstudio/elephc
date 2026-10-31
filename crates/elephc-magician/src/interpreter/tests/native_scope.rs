@@ -132,11 +132,12 @@ fn native_global_call_exposes_and_retires_its_active_context() {
     /// Returns the result only while the global native call exposes the expected context.
     unsafe extern "C" fn probe(
         descriptor: *mut std::ffi::c_void,
-        _args: *mut RuntimeCell,
+        _args: *mut crate::value::RuntimeCell,
         _invocation_scope: i64,
-    ) -> *mut RuntimeCell {
+    ) -> *mut crate::value::RuntimeCell {
         let (expected_context, result) = unsafe {
-            &*(descriptor as *const (*mut ElephcEvalContext, *mut RuntimeCell))
+            &*(descriptor
+                as *const (*mut ElephcEvalContext, *mut crate::value::RuntimeCell))
         };
         assert_eq!(crate::context::native_frame_active_eval_context(), Some(*expected_context));
         *result

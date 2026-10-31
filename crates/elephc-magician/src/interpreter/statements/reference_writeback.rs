@@ -416,7 +416,7 @@ pub(in crate::interpreter) fn eval_invoker_slot_ref_target_value(
 }
 
 /// Writes a value back into a native descriptor-invoker by-reference slot.
-pub(super) fn write_back_invoker_slot_ref_target(
+pub(in crate::interpreter) fn write_back_invoker_slot_ref_target(
     slot: usize,
     source_tag: u64,
     value: RuntimeCellHandle,
