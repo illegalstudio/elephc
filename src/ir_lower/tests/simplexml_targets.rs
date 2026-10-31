@@ -7,6 +7,23 @@
 //! Key details:
 //! - Covers document factories, dimensions, casts, JSON, DOM import, and iteration.
 
+/// Prelude factories without eval locals can reach constructorless eval allocation on every ABI.
+#[test]
+fn simplexml_constructorless_factories_probe_active_eval_classes_on_every_target() {
+    let source = r#"<?php
+$source = $argc > 0 ? 'class EvalConstructorlessTargetXml extends SimpleXMLElement {} $root = new EvalConstructorlessTargetXml("<r><item/></r>"); echo get_class($root->item);' : '';
+eval($source);
+$native = new SimpleXMLElement('<r><item/></r>');
+echo get_class($native->item);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
+    }
+}
+
 /// Nullable local returns check null before promoting compatible typed reference payloads.
 #[test]
 fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target() {

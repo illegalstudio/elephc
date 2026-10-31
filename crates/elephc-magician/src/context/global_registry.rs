@@ -114,6 +114,17 @@ pub(crate) fn native_frame_called_class_override_context(
     })
 }
 
+/// Borrows the active eval context while an interpreter call is inside generated code.
+///
+/// Prelude factories can cross ordinary helper frames without an eval context local.
+/// The owning interpreter frame keeps this context alive until the native call returns.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn native_frame_active_eval_context() -> Option<*mut ElephcEvalContext> {
+    NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
+        overrides.borrow().last().map(|entry| entry.context).filter(|context| !context.is_null())
+    })
+}
+
 #[cfg(not(test))]
 #[derive(Default)]
 pub(super) struct GlobalEvalClassRegistry {

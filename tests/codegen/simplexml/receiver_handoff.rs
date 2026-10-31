@@ -10,6 +10,41 @@
 
 use crate::support::*;
 
+/// Eval subclass selections and factories allocate without re-entering the user constructor.
+#[test]
+fn test_simplexml_eval_subclass_constructorless_factories() {
+    if skip_without_xml_native("test_simplexml_eval_subclass_constructorless_factories") { return; }
+    let body = r#"
+class EvalConstructorlessFactoryXml extends SimpleXMLElement {
+    public static int $calls = 0;
+    public function __construct(string $xml, int $marker) {
+        self::$calls++;
+        parent::__construct($xml);
+    }
+}
+$root = new EvalConstructorlessFactoryXml('<r id="x"><item>1</item></r>', 7);
+$child = $root->item;
+$children = $root->children();
+$attributes = $root->attributes();
+$paths = $root->xpath('//item');
+$loaded = simplexml_load_string('<loaded/>', EvalConstructorlessFactoryXml::class);
+$imported = simplexml_import_dom($root, EvalConstructorlessFactoryXml::class);
+echo get_class($child), ':', $child->getName(), '|';
+echo get_class($children), ':', count($children), '|';
+echo get_class($attributes), ':', count($attributes), '|';
+echo get_class($paths[0]), ':', $paths[0]->getName(), '|';
+echo get_class($loaded), ':', $loaded->getName(), '|';
+echo get_class($imported), ':', $imported->getName(), '|';
+echo EvalConstructorlessFactoryXml::$calls;
+unset($root, $child, $children, $attributes, $paths, $loaded, $imported);
+"#;
+    let escaped = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let out = compile_and_run_with_heap_debug(&format!("<?php $source = $argc > 0 ? '{escaped}' : ''; eval($source); unset($source);"));
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:1|EvalConstructorlessFactoryXml:item|EvalConstructorlessFactoryXml:loaded|EvalConstructorlessFactoryXml:r|1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Computed native and erased receivers retire their parent before each child dimension update.
 #[test]
 fn test_simplexml_temporary_parent_handoff_bundle() {

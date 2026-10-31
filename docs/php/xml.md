@@ -85,6 +85,10 @@ PHAR and registered PHP stream wrappers. Standard-input, memory/temp and
 `php://filter` URLs use the existing PHP stream implementation. The original
 URL remains available to libxml2 for diagnostics and relative references.
 
+Selections and factories preserve subclasses declared by dynamic `eval()`. Their
+wrapper allocation initializes property defaults without invoking the subclass
+constructor again, including when that constructor requires additional arguments.
+
 A compiled by-reference function with a non-null object return can return a nullable
 selection after checking it. Later writes through that reference, including in
 `finally`, must preserve the object result type. Assigning null through this fixed

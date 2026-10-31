@@ -355,6 +355,8 @@ pub(super) use dynamic_calls::{
     lower_eval_native_frame_static_property_set, lower_eval_object_new,
     lower_eval_object_new_dynamic_fallback, lower_eval_static_method_call,
 };
+mod constructorless;
+pub(super) use constructorless::lower_eval_constructorless_fallback;
 pub(super) use introspection::{
     emit_context_free_object_class_name, lower_eval_callable_call_array,
     lower_eval_class_relation, lower_eval_is_callable, lower_eval_member_exists,

@@ -11,6 +11,13 @@ sidebar:
 `src/codegen_support/runtime/eval_scope.rs`, and
 `crates/elephc-magician/`.
 
+Constructorless native allocation probes dynamic classes through the private
+`__elephc_eval_try_allocate_object_v1` ABI when Magician is linked. Prelude
+factories with no eval local borrow the context of the active interpreter-to-native
+frame. The existing dynamic allocator initializes defaults and registers the new
+object in that context without invoking its constructor. A missing context or class
+returns the normal class-lookup miss; an escaping Throwable keeps the outcome ABI.
+
 Eval is an experimental hybrid feature. Ordinary elephc source and eligible
 literal eval fragments are compiled ahead of time. Only fragments that require
 runtime parsing or dynamic symbol behavior use the optional Magician

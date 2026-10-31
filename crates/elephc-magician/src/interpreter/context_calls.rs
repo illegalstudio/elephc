@@ -175,6 +175,28 @@ pub fn execute_context_try_new_object_outcome(
     }
 }
 
+/// Attempts to allocate an eval class without invoking its PHP constructor.
+pub fn execute_context_try_allocate_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    let mut scope = ElephcEvalScope::new();
+    let result = (|| {
+        if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
+            return eval_throw_error(&message, context, values);
+        }
+        let Some(class) = context.class(name).cloned() else { return Ok(None); };
+        eval_dynamic_class_allocate_object(&class, context, &mut scope, values).map(Some)
+    })();
+    match result {
+        Ok(value) => Ok(value.map(EvalOutcome::Value)),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Calls a method on a value that may be an eval-created object.
 pub fn execute_context_method_call_outcome(
     context: &mut ElephcEvalContext,
