@@ -19,6 +19,7 @@ mod context;
 mod diagnostics;
 mod effect_refinement;
 mod effects_lookup;
+mod eval_reference_layouts;
 mod entry_locals;
 mod expr;
 mod fibers;

@@ -613,6 +613,14 @@ value's tag there. Native writeback rebuilds the caller's boxed value and marks 
 including a change between integer zero and null. Ordinary reference flags0/1 retain their
 existing storage policy.
 
+Before materializing an eval scope, visible ref-bound locals are checked for unboxed
+indexed-array element layouts in both their logical type and preserved frame type. A container
+conversion can change the logical view while another native alias still expects the original
+element representation. Such aliases receive an explicit lowering refusal; a top-level PHP
+array tag is insufficient proof that a normalized replacement has compatible elements.
+Union members and nested indexed views are checked, while already boxed Mixed aliases keep
+their supported path. Literal scope barriers restrict this check to their actual write names.
+
 Signature-unknown descriptor calls widen fresh, promotable caller locals to boxed `Mixed`
 before making their reference markers, including arguments of runtime-named methods. Existing
 shared aliases keep their physical layout. The selected invoker checks that layout before

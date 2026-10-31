@@ -594,10 +594,12 @@ pub(super) fn emit_builtin_call_value(
     if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, None);
             ctx.apply_eval_barrier();
         } else if let Some(write_names) = eval_literal
             .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
         {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, Some(&write_names));
             ctx.apply_eval_scope_barrier(&write_names);
         }
     }

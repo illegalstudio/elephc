@@ -1260,6 +1260,13 @@ updates, but eval `fclose()` still closes only eval-managed streams. Native loca
 synchronized into eval remain retained until the next synchronization or context
 release, which can delay last-owner resource retirement.
 
+Materializing an eval scope refuses a visible native reference with unboxed indexed-array
+elements, such as an alias of an `array<int>` property or parameter. Normalizing those elements
+would invalidate the native layout shared by other aliases, so compilation reports
+`Unsupported eval: native reference $name has unboxed array elements`. Already boxed whole-local
+array aliases remain supported. For a literal fragment using scope helpers, the check applies
+only to the names that fragment writes; unrelated native aliases do not trigger it.
+
 Dynamic fragments and literal fragments outside the current AOT eligibility
 rules execute through the `elephc_magician` interpreter bridge. Eligible
 literal fragments instead use the normal AST -> EIR -> native codegen pipeline,
