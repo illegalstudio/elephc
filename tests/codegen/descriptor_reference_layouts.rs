@@ -136,6 +136,38 @@ unset($alias, $holder, $array, $object, $writer, $method);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Unknown descriptor calls adapt boxed object references only after a runtime class match.
+#[test]
+fn test_unknown_descriptor_named_object_reference_validates_runtime_class() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeObjectReferenceValue {
+    public function __construct(public string $name) {}
+}
+class RuntimeObjectReferenceWrong {}
+function runtimeObjectReferenceLeft(RuntimeObjectReferenceValue &$value): void {
+    echo 'accepted:', $value->name, '|';
+    $value = new RuntimeObjectReferenceValue('left');
+}
+function runtimeObjectReferenceRight(RuntimeObjectReferenceValue &$value): void {
+    echo 'accepted:', $value->name, '|';
+    $value = new RuntimeObjectReferenceValue('right');
+}
+$target = $argc > 0 ? 'runtimeObjectReferenceLeft' : 'runtimeObjectReferenceRight';
+$value = new RuntimeObjectReferenceValue('start');
+$target($value); echo 'changed:', $value->name, '|';
+$wrong = new RuntimeObjectReferenceWrong();
+try { $target($wrong); echo 'unexpected'; }
+catch (Error $error) { echo $error->getMessage(), ':wrong'; unset($error); }
+unset($wrong, $value, $target);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "accepted:start|changed:left|Unsupported reference argument: caller storage does not match the selected parameter layout:wrong",
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A boxed runtime key preserves packed-marker owners on refusal and valid scalar writeback.
 #[test]
 fn test_unknown_descriptor_nullable_reference_mixed_key_write_keeps_destination_owner() {

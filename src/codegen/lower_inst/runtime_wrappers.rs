@@ -48,6 +48,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
             ctx.module, None, sig,
         );
         let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+            module: ctx.module,
             label: &label,
             sig,
             captures: &[],
@@ -71,6 +72,7 @@ pub(super) fn emit_runtime_builtin_invoker_inline(
         ctx.module, None, sig,
     );
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        module: ctx.module,
         label: &label,
         sig,
         captures: &[],
@@ -128,6 +130,7 @@ pub(super) fn emit_runtime_callable_invoker_in_class(
     }
     let label = ctx.next_global_label("callable_invoker");
     let invoker = super::super::runtime_callable_invoker::RuntimeCallableInvoker {
+        module: ctx.module,
         label: &label,
         sig,
         captures,

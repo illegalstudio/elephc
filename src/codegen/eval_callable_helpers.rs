@@ -781,6 +781,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         sig,
     );
     let invoker = RuntimeCallableInvoker {
+        module,
         label: &label,
         sig,
         captures,

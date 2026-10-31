@@ -11286,11 +11286,13 @@ $iter = [0];
 $iterFirst = native_eval_ref_iterable_heap($iter);
 $box = new NativeEvalRefBox("start");
 $objectFirst = native_eval_ref_object_heap($box);
-native_eval_ref_object_heap(box: $box);
-return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $box->name;');
+$objectNamed = native_eval_ref_object_heap(box: $box);
+$objectCallable = native_eval_ref_object_heap(...);
+$objectDynamic = $objectCallable($box);
+return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $objectNamed . ":" . $objectDynamic . ":" . $box->name;');
 "#,
     );
-    assert_eq!(out, "array:A:B:iter:R:start!:start!!");
+    assert_eq!(out, "array:A:B:iter:R:start!:start!!:start!!!:start!!!");
 }
 
 /// Eval keeps an object reference alias when an AOT function changes the value type.

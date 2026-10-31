@@ -44,6 +44,8 @@ mod tagged_args;
 pub(crate) use string_return::function_returns_owned_string;
 pub(super) use string_return::method_returns_owned_string;
 
+use std::collections::HashMap;
+
 use public_args::InvokerParamShape;
 
 use argument_owners::InvokerArgumentOwners;
@@ -65,6 +67,8 @@ use crate::codegen::{
 use crate::codegen_support::try_handlers::{
     EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
+use crate::ir::Module;
+use crate::names::php_symbol_key;
 use crate::types::{FunctionSig, PhpType};
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
@@ -118,6 +122,7 @@ fn emit_invoker_callee_saved_restores(emitter: &mut Emitter) {
 
 /// Runtime invoker metadata emitted beside callable descriptors.
 pub(super) struct RuntimeCallableInvoker<'a> {
+    pub(super) module: &'a Module,
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
@@ -152,6 +157,8 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
+    /// Runtime class/interface identities used to validate boxed object references.
+    named_object_targets: HashMap<String, (u64, i64)>,
 }
 
 impl InvokerEmitContext {
@@ -174,7 +181,25 @@ impl InvokerEmitContext {
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
+            named_object_targets: HashMap::new(),
         }
+    }
+
+    /// Registers module class/interface identities for named object reference guards.
+    fn register_named_object_targets(&mut self, module: &Module) {
+        self.named_object_targets.extend(module.class_infos.iter().map(|(name, info)| {
+            (php_symbol_key(name.trim_start_matches('\\')), (info.class_id, 0))
+        }));
+        self.named_object_targets.extend(module.interface_infos.iter().map(|(name, info)| {
+            (php_symbol_key(name.trim_start_matches('\\')), (info.interface_id, 1))
+        }));
+    }
+
+    /// Resolves one named object target into the runtime metadata matcher ABI.
+    fn named_object_target(&self, class_name: &str) -> Option<(u64, i64)> {
+        self.named_object_targets
+            .get(&php_symbol_key(class_name.trim_start_matches('\\')))
+            .copied()
     }
 
     /// Returns the resolved default for one parameter index, if it was materializable.
@@ -250,6 +275,7 @@ fn emit_runtime_callable_invoker_impl(
         invoker.defaults.to_vec(),
         emitter.target,
     );
+    ctx.register_named_object_targets(invoker.module);
     ctx.mbstring_operation = invoker.mbstring_operation;
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
 
@@ -1417,6 +1443,7 @@ fn push_invoker_ref_storage_address(
         abi::emit_jump(emitter, &done_label);
     }
     emit_invoker_ref_heap_layout_guard(storage_reg, source_tag_reg, false, emitter, ctx);
+    emit_boxed_mixed_object_ref_guard(storage_reg, source_tag_reg, target_ty, emitter, ctx);
     abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #8", result_reg, result_reg)), // address the mutable payload inside the Mixed cell
@@ -1441,9 +1468,66 @@ fn boxed_mixed_ref_target_has_incompatible_layout(target_ty: Option<&PhpType>) -
             !matches!(key.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 || !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         }
-        Some(PhpType::Object(class_name)) => !class_name.is_empty(),
         _ => false,
     }
+}
+
+/// Validates the object payload and named class/interface before exposing a boxed payload slot.
+fn emit_boxed_mixed_object_ref_guard(
+    storage_reg: &str,
+    source_tag_reg: &str,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    let Some(PhpType::Object(class_name)) = target_ty.map(PhpType::codegen_repr) else {
+        return;
+    };
+    let compatible = ctx.next_label("invoker_ref_object_compatible");
+    let incompatible = ctx.next_label("invoker_ref_object_incompatible");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_from_address(emitter, result, storage_reg, 0);
+    abi::emit_load_from_address(emitter, result, result, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #6");                                  // a boxed object uses Mixed tag six
+            emitter.instruction(&format!("b.ne {incompatible}"));               // reject non-object payloads before publishing their slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 6");                                  // a boxed object uses Mixed tag six
+            emitter.instruction(&format!("jne {incompatible}"));                // reject non-object payloads before publishing their slot
+        }
+    }
+    if class_name.is_empty() {
+        abi::emit_jump(emitter, &compatible);
+    } else if let Some((target_id, target_kind)) = ctx.named_object_target(&class_name) {
+        abi::emit_push_reg_pair(emitter, storage_reg, source_tag_reg);
+        let object_arg = abi::int_arg_reg_name(emitter.target, 0);
+        abi::emit_load_from_address(emitter, object_arg, storage_reg, 0);
+        abi::emit_load_from_address(emitter, object_arg, object_arg, 8);
+        abi::emit_load_int_immediate(
+            emitter,
+            abi::int_arg_reg_name(emitter.target, 1),
+            target_id as i64,
+        );
+        abi::emit_load_int_immediate(
+            emitter,
+            abi::int_arg_reg_name(emitter.target, 2),
+            target_kind,
+        );
+        abi::emit_call_label(emitter, "__rt_exception_matches");
+        abi::emit_pop_reg_pair(emitter, storage_reg, source_tag_reg);
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("cbnz x0, {compatible}")), // accept matching classes and implemented interfaces
+            Arch::X86_64 => {
+                emitter.instruction("test rax, rax");                           // matcher returns nonzero when the object satisfies the target
+                emitter.instruction(&format!("jne {compatible}"));              // accept matching classes and implemented interfaces
+            }
+        }
+    }
+    emitter.label(&incompatible);
+    abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+    emitter.label(&compatible);
 }
 
 /// Distinguishes boxed handles from raw iterable pointers before adapting legacy source tag7.
@@ -3752,7 +3836,9 @@ mod tests {
             deprecation: None,
             is_generator: false,
         };
+        let module = Module::new(Target::parse("linux-x86_64").unwrap());
         let invoker = RuntimeCallableInvoker {
+            module: &module,
             label: "owned_invoker",
             sig: &sig,
             captures: &[],
@@ -3908,6 +3994,51 @@ mod tests {
         }
     }
 
+    /// Boxed object references validate their runtime class before publishing the payload slot.
+    #[test]
+    fn invoker_named_object_ref_markers_guard_payload_and_class_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let (storage_reg, source_tag_reg, object_tag, payload_address) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "cmp x0, #6", "add x0, x0, #8"),
+                Arch::X86_64 => ("r12", "r13", "cmp rax, 6", "add rax, 8"),
+            };
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx =
+                InvokerEmitContext::new("object_ref", owners, false, false, Vec::new(), target);
+            ctx.named_object_targets.insert("payload".to_string(), (17, 0));
+
+            push_invoker_ref_storage_address(
+                storage_reg,
+                source_tag_reg,
+                Some(&PhpType::Object("PAYLOAD".to_string())),
+                &mut emitter,
+                &mut ctx,
+            );
+
+            let assembly = emitter.output();
+            let heap_layout = assembly.find("__rt_heap_kind").unwrap();
+            let tag_guard = assembly.find(object_tag).unwrap();
+            let class_guard = assembly.find("__rt_exception_matches").unwrap();
+            let refusal = assembly.rfind("__rt_tagged_reference_argument_error").unwrap();
+            let publication = assembly.rfind(payload_address).unwrap();
+            assert!(
+                heap_layout < tag_guard
+                    && tag_guard < class_guard
+                    && class_guard < refusal
+                    && refusal < publication,
+                "{name}: {assembly}",
+            );
+        }
+    }
+
     /// Nullable slots require matching two-word storage, while Iterable keeps a raw container slot.
     #[test]
     fn invoker_reference_layout_guards_precede_address_publication_on_every_target() {
@@ -4008,8 +4139,10 @@ mod tests {
         let target = Target::parse(target_name).unwrap();
         let mut emitter = Emitter::new(target);
         // Resolve through the shared folder so the emitted body sees exactly what codegen ships.
-        let defaults = resolve_invoker_defaults(&crate::ir::Module::new(target), None, sig);
+        let module = Module::new(target);
+        let defaults = resolve_invoker_defaults(&module, None, sig);
         let invoker = RuntimeCallableInvoker {
+            module: &module,
             label,
             sig,
             captures: &[],

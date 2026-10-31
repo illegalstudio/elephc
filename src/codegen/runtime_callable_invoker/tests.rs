@@ -178,9 +178,11 @@ fn native_argument_owners_assemble_on_all_supported_targets() {
             if emitter.target.arch == Arch::X86_64 { emitter.raw(".intel_syntax noprefix"); }
             emitter.raw(".text");
             let mut data = DataSection::new();
+            let module = crate::ir::Module::new(emitter.target);
             for catch in [false, true] {
                 let label = if catch { "__native_argument_eval_invoker" } else { "__native_argument_invoker" };
                 let invoker = RuntimeCallableInvoker {
+                    module: &module,
                     label, sig: &sig, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false,
                     owns_string_return: false, php_return_status: false, defaults: &[None],
