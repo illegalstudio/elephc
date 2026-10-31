@@ -212,8 +212,34 @@ fn lower_property_write_source(
     expr: &Expr,
     mode: Option<crate::ir_lower::stmt::PropertyDimensionFetchMode>,
 ) -> ByRefForeachPropertySource {
-    let mixed_root = mode.is_some();
     let object_value = lower_expr(ctx, object);
+    if mode.is_some()
+        && ctx.builder.value_php_type(object_value.value).codegen_repr() == PhpType::Mixed
+    {
+        let mut receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(
+            ctx, object_value, expr.span,
+        );
+        receiver.narrow_for_array(ctx, property, &[], expr.span);
+        let ty = ctx.builder.value_php_type(receiver.value.value);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value.value], None, ty,
+            Op::Borrow.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let selected = lower_property_write_source_from_value(
+            ctx, object, borrowed, property, expr, mode, true,
+        );
+        receiver.finish(ctx, expr.span);
+        return selected;
+    }
+    lower_property_write_source_from_value(ctx, object, object_value, property, expr, mode, false)
+}
+
+/// Selects the property while an optional enclosing lease owns the already guarded receiver.
+fn lower_property_write_source_from_value(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, object_value: LoweredValue,
+    property: &str, expr: &Expr,
+    mode: Option<crate::ir_lower::stmt::PropertyDimensionFetchMode>, scoped_receiver: bool,
+) -> ByRefForeachPropertySource {
+    let mixed_root = mode.is_some();
     if let Some(mode) = mode {
         crate::ir_lower::stmt::guard_property_dimension_fetch(ctx, object_value, property, expr.span, mode);
     }
@@ -230,7 +256,7 @@ fn lower_property_write_source(
             receiver: None,
         };
     }
-    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root) {
+    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root, scoped_receiver) {
         return ByRefForeachPropertySource {
             value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),
             receiver: None,
@@ -297,6 +323,7 @@ fn property_fetch_for_write_applies(
     property: &str,
     expr: &Expr,
     mixed_root: bool,
+    scoped_receiver: bool,
 ) -> bool {
     let PhpType::Object(class_name) = ctx.builder.value_php_type(object_value.value).codegen_repr()
     else {
@@ -329,7 +356,8 @@ fn property_fetch_for_write_applies(
         let ExprKind::PropertyAccess { object, .. } = &expr.kind else {
             return false;
         };
-        return receiver_is_stable_backing_storage(ctx, object);
+        return receiver_is_stable_backing_storage(ctx, object)
+            || (scoped_receiver && matches!(object.kind, ExprKind::StaticPropertyAccess { .. }));
     }
     // A by-reference `foreach` receiver no longer has to name stable storage: an unstable one
     // is held by the loop instead (see `lower_by_ref_foreach_property_source`). What still has

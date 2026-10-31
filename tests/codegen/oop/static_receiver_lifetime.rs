@@ -376,7 +376,9 @@ class C { public static ?O $o = null; }
 try { C::$o->items[0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
 try { C::$o->child->items[0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(), '|'; }
 try { C::$o->items[0][0] += (print 'rhs'); } catch (Error $error) { echo ':', $error->getMessage(); }
-"#, "rhs:Attempt to modify property \"items\" on null|rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"items\" on null");
+echo '|'; C::$o = new O(); C::$o->items = [[1]];
+C::$o->items[0][0] += (print 'rhs'); echo ':', C::$o->items[0][0]; C::$o = null;
+"#, "rhs:Attempt to modify property \"items\" on null|rhs:Attempt to modify property \"child\" on null|rhs:Attempt to modify property \"items\" on null|rhs:2");
 }
 
 /// Owned keys, dynamic names and values unwind when an intermediate static receiver is null.
