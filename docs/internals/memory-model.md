@@ -628,6 +628,9 @@ Shared hashes select shape12 marker writes before copy-on-write can consume the 
 hash owner. The write leaves the marker and hash unchanged, so both success and refusal can
 use the original header. Unique hashes avoid the preliminary lookup. The affected EIR stores
 retain full user-code effects because replacement cleanup can invoke PHP destructors or throw.
+For packed arrays with a runtime key, shape12 marker writes also validate and publish directly
+before indexed-to-hash promotion. A refusal therefore leaves the destination owner intact;
+successful integer/null writes retain the same marker and retire the full replacement box.
 
 A nullable local returned by reference with a non-null object result is checked before
 promotion to an object-payload cell. The original local name stays attached, including

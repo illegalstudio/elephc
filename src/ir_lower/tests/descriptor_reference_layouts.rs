@@ -10,6 +10,28 @@
 use crate::{codegen::platform::Target, ir::Op, types::PhpType};
 use std::path::Path;
 
+/// Runtime union keys keep the marker-write regression on ArraySetMixedKey rather than literal paths.
+#[test]
+fn nullable_reference_marker_runtime_keys_lower_to_mixed_key_writes_on_every_target() {
+    let source = r#"<?php
+function nullableMixedKeyTarget(&...$items): void {
+    $key = array_key_first($items);
+    try { $items[$key] = 'invalid'; } catch (Error $error) { echo count($items); }
+    $items[$key] = 7; $items[$key] = null;
+}
+$value = null; nullableMixedKeyTarget($value);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "nullableMixedKeyTarget").unwrap();
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ArraySetMixedKey).count(), 3,
+            "{name}: a literal-key regression would miss the consuming promotion path");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Positional and named arguments use boxed fresh locals without rebinding nullable aliases.
 #[test]
 fn unknown_descriptor_reference_markers_keep_their_actual_layout_on_every_target() {

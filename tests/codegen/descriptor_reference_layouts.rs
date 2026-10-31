@@ -10,6 +10,35 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A boxed runtime key preserves packed-marker owners on refusal and valid scalar writeback.
+#[test]
+fn test_unknown_descriptor_nullable_reference_mixed_key_write_keeps_destination_owner() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class MixedKeyNullableProperty { public ?int $value = null; }
+function mixedKeyNullableReplacement(): mixed { return 'invalid'; }
+function mixedKeyNullableWriter(MixedKeyNullableProperty $holder, &...$items): void {
+    $key = array_key_first($items); $copy = $items;
+    try { $items[$key] = mixedKeyNullableReplacement(); }
+    catch (Error $error) {
+        echo $error->getMessage(), ':', json_encode($items[$key]), ':', count($items), ':', count($copy), '|';
+        unset($error);
+    }
+    $items[$key] = 7;
+    echo json_encode($holder->value), ':', json_encode($copy[$key]), '|';
+    $items[$key] = null; echo json_encode($holder->value);
+    unset($copy, $key);
+}
+function mixedKeyNullableOther(MixedKeyNullableProperty $holder, &...$items): void { echo 'unexpected'; }
+$holder = new MixedKeyNullableProperty(); $value =& $holder->value;
+$target = $argc > 0 ? 'mixedKeyNullableWriter' : 'mixedKeyNullableOther';
+$target($holder, $value);
+unset($value, $holder, $target);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Unsupported assignment through a nullable integer reference: value must be int or null:null:1:1|7:7|null");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Unknown function names preserve positional and named reference retyping through variadics.
 #[test]
 fn test_unknown_descriptor_reference_arguments_widen_fresh_locals() {
