@@ -10,6 +10,42 @@
 use crate::{codegen::platform::Target, ir::Op, types::PhpType};
 use std::path::Path;
 
+/// Runtime Iterable dispatch distinguishes boxed fresh arguments from existing raw aliases.
+#[test]
+fn unknown_descriptor_iterable_reference_layouts_remain_explicit_on_every_target() {
+    let source = r#"<?php
+class ExplicitIterableMethods {
+    public function left(iterable &$items): void { echo count($items); }
+    public function right(iterable &$items): void { echo count($items); }
+}
+class ExplicitIterableHolder { public iterable $items = [1, 2]; }
+function explicitIterableCaller(bool $left): void {
+    $writer = new ExplicitIterableMethods(); $method = $left ? 'left' : 'right';
+    $array = [1, 2]; $object = new ArrayObject([1, 2]);
+    try { $writer->$method($array); } catch (Error $error) { echo count($array); }
+    try { $writer->$method($object); } catch (Error $error) { echo count($object); }
+    $holder = new ExplicitIterableHolder(); $alias =& $holder->items;
+    $writer->$method($alias);
+}
+explicitIterableCaller($argc > 0);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let caller = module.functions.iter().find(|function| function.name == "explicitIterableCaller").unwrap();
+        for local_name in ["array", "object"] {
+            let local = caller.locals.iter().find(|local| local.name.as_deref() == Some(local_name)).unwrap();
+            assert_eq!(local.php_type.codegen_repr(), PhpType::Mixed, "{name}: {local_name} stays boxed");
+        }
+        let alias = caller.locals.iter().find(|local| local.name.as_deref() == Some("alias")).unwrap();
+        assert_eq!(alias.php_type.codegen_repr(), PhpType::Iterable, "{name}: an existing alias keeps its raw slot");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_tagged_reference_argument_error") && assembly.contains("__rt_heap_kind"),
+            "{name}: the runtime-selected parameter must check the physical layout");
+    }
+}
+
 /// Runtime union keys keep the marker-write regression on ArraySetMixedKey rather than literal paths.
 #[test]
 fn nullable_reference_marker_runtime_keys_lower_to_mixed_key_writes_on_every_target() {

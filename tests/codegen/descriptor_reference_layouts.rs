@@ -10,6 +10,33 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Runtime Iterable references refuse boxed fresh locals but preserve existing raw Iterable aliases.
+#[test]
+fn test_unknown_descriptor_iterable_reference_layout_subset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeIterableReferenceMethods {
+    public function left(iterable &$items): void { echo 'raw:', count($items), '|'; }
+    public function right(iterable &$items): void { echo 'raw:', count($items), '|'; }
+}
+class RuntimeIterableReferenceHolder { public iterable $items = [1, 2]; }
+$writer = new RuntimeIterableReferenceMethods(); $method = $argc > 0 ? 'left' : 'right';
+$array = [1, 2];
+try { $writer->$method($array); }
+catch (Error $error) { echo $error->getMessage(), ':array:', count($array), '|'; unset($error); }
+$object = new ArrayObject([1, 2]);
+try { $writer->$method($object); }
+catch (Error $error) { echo $error->getMessage(), ':object:', count($object), '|'; unset($error); }
+$holder = new RuntimeIterableReferenceHolder(); $alias =& $holder->items;
+$writer->$method($alias);
+$holder->items = new ArrayObject([1, 2, 3]); $writer->$method($alias);
+unset($alias, $holder, $array, $object, $writer, $method);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let message = "Unsupported reference argument: caller storage does not match the selected parameter layout";
+    assert_eq!(out.stdout, format!("{message}:array:2|{message}:object:2|raw:2|raw:3|"));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A boxed runtime key preserves packed-marker owners on refusal and valid scalar writeback.
 #[test]
 fn test_unknown_descriptor_nullable_reference_mixed_key_write_keeps_destination_owner() {

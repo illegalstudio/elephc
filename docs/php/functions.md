@@ -671,6 +671,10 @@ physical storage. Fresh local arguments use boxed storage so an untyped referenc
 their value type. A selected inline `?int` reference parameter cannot alias that box and raises
 a catchable `Error`: `Unsupported reference argument: caller storage does not match the
 selected parameter layout`. Compatible existing nullable-integer aliases remain usable.
+The same refusal applies to a runtime-selected `iterable &$items` parameter when its argument
+is a fresh array or object local boxed for unknown-signature dispatch, including a runtime-named
+method call. An existing alias whose storage is already raw `Iterable` remains supported. This
+limit belongs to calls whose signature is unknown at compile time.
 When such an alias reaches a by-reference variadic parameter, writes of `int` and `null` succeed;
 other writes raise `Unsupported assignment through a nullable integer reference: value must be
 int or null` before changing the slot. These diagnostics describe compiler limits, including

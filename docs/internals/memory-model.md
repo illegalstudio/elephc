@@ -620,6 +620,10 @@ publishing an address: inline nullable integers require source shape12; a `Mixed
 requires a real box. Legacy source tag7 also describes raw `Iterable` pointers, so heap kind5
 selects a box and kinds2 through4 select raw iterable storage. A layout mismatch raises a
 catchable `Error`, rather than interpreting a box's `[low, high]` words as `[payload, tag]`.
+In particular, signature-unknown calls box fresh array/object locals too. A runtime-selected
+`Iterable` reference parameter refuses those boxes; existing raw `Iterable` aliases still pass.
+Forwarding just `box+8` would lose the PHP tag when the callee replaces the container with a
+different iterable kind, so supporting boxed callers requires a persistent adapter and retagging.
 When a variadic marker points at existing shape12 storage, indexed and named writes accept
 only actual PHP tags0 and8. Rejected replacements retire their owned payload before the error,
 and neither word of the caller's slot is modified. These refusals are compiler subset limits;
