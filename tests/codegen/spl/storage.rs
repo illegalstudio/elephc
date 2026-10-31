@@ -8,6 +8,47 @@
 //! Key details:
 //! - ArrayIterator and ArrayObject preserve insertion-order keys through Mixed keys/values storage.
 
+/// Interface erasure preserves attached SPL writes and ordinary value/reference getters.
+#[test]
+fn test_spl_nested_writes_through_array_access_interface_preserve_user_getters() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class InterfaceNestedValue implements ArrayAccess {
+    public mixed $items = [1];
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return $this->items; }
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+    public function offsetUnset(mixed $key): void {}
+}
+class InterfaceNestedReference implements ArrayAccess {
+    public mixed $items = [1];
+    public function offsetExists(mixed $key): bool { return true; }
+    public function &offsetGet(mixed $key): mixed { return $this->items; }
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+    public function offsetUnset(mixed $key): void {}
+}
+class InterfaceNestedSetter extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+}
+function interfaceNestedKey(): string { echo 'key|'; return 'x'; }
+function interfaceNestedWrite(ArrayAccess $receiver): void { $receiver[interfaceNestedKey()][] = 2; }
+$object = new ArrayObject(['x' => [1]]); interfaceNestedWrite($object);
+echo json_encode($object->getArrayCopy()), '|';
+$iterator = new ArrayIterator(['x' => [1]]); interfaceNestedWrite($iterator);
+echo json_encode($iterator->getArrayCopy()), '|';
+$setter = new InterfaceNestedSetter(['x' => [1]]); interfaceNestedWrite($setter);
+echo json_encode($setter->getArrayCopy()), '|';
+set_error_handler(function(int $severity, string $message, string $file, int $line): bool { return true; });
+$value = new InterfaceNestedValue(); interfaceNestedWrite($value);
+restore_error_handler(); echo json_encode($value->items), '|';
+$reference = new InterfaceNestedReference(); interfaceNestedWrite($reference);
+echo json_encode($reference->items);
+unset($reference, $value, $setter, $iterator, $object);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "key|{\"x\":[1,2]}|key|{\"x\":[1,2]}|key|{\"x\":[1,2]}|key|[1]|key|[1,2]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Destructors observe published nested replacements, even when throwing or retargeting the parent.
 #[test]
 fn test_spl_and_mixed_nested_overwrite_publication_survives_destructor_reentry() {

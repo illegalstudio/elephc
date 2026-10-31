@@ -69,6 +69,7 @@ mod property_values;
 mod receiver_place;
 mod runtime_calls;
 mod runtime_array_liveness;
+mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;

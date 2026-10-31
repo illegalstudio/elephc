@@ -25,6 +25,7 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::SplStorageHasAttachedWriteFetch => super::spl_storage_write_fetch::lower(ctx, inst),
         RuntimeCallTarget::WeakObjectId => {
             let receiver = expect_operand(inst, 0)?;
             ctx.load_value_to_result(receiver)?;

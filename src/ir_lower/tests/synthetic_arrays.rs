@@ -12,6 +12,34 @@ use crate::ir::Op;
 use crate::types::PhpType;
 use std::path::Path;
 
+/// Interface receivers probe the actual trusted getter before selecting attached or public lookup.
+#[test]
+fn spl_interface_write_fetch_checks_trusted_runtime_storage_on_every_target() {
+    let source = r#"<?php
+function splInterfaceWriteIr(ArrayAccess $receiver): void { $receiver['x'][] = 2; }
+$object = new ArrayObject(['x' => [1]]); splInterfaceWriteIr($object);
+$iterator = new ArrayIterator(['x' => [1]]); splInterfaceWriteIr($iterator);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, Path::new("main.php"),
+            Path::new("."), Target::parse(name).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "splInterfaceWriteIr").unwrap();
+        let probe = function.instructions.iter().find(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::SplStorageHasAttachedWriteFetch))).unwrap();
+        assert_eq!(probe.result_php_type, PhpType::Int, "{name}");
+        assert_eq!(function.value(probe.operands[0]).unwrap().php_type,
+            PhpType::Object("ArrayAccess".into()), "{name}");
+        for block in ["spl.parent.attached", "spl.parent.public", "spl.parent.selected"] {
+            assert!(function.blocks.iter().any(|candidate| candidate.name.starts_with(block)), "{name}: {block}");
+        }
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("spl_write_fetch_probe_done"), "{name}: missing trusted getter probe");
+        assert!(assembly.contains("_class_iface_method_count") && assembly.contains("_class_offsetget_forwrite_ptrs"), "{name}");
+        assert!(function.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ArrayFetchForWrite))), "{name}: missing attached fetch");
+    }
+}
+
 /// Writable SPL selectors retain raw storage while returning attached cells and respecting overrides.
 #[test]
 fn spl_write_fetch_separates_raw_storage_and_selects_only_internal_getters_on_all_targets() {

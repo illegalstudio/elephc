@@ -71,6 +71,7 @@ mod metadata_control;
 mod nested_append;
 mod nested_write_sources;
 mod nested_plain_writes;
+mod nested_spl_writes;
 mod nested_false_errors;
 mod return_coercions;
 mod repr_fixpoint;

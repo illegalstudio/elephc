@@ -741,6 +741,9 @@ fn lower_nested_parent_from_receiver(
         let receiver = ctx.box_value_as_mixed(receiver, PhpType::Mixed, Some(span));
         return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span, key_already_diagnosed);
     }
+    if let Some(parent) = super::nested_spl_writes::fetch_interface_parent(
+        ctx, receiver, index, expr, key_already_diagnosed,
+    ) { return parent; }
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         if convert_false {
             return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span, key_already_diagnosed);

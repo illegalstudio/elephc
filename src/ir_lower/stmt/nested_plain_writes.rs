@@ -198,6 +198,14 @@ pub(super) fn fetch_parent(
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
         } else { RuntimeCallTarget::ArrayFetchForWrite })),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+    finish_parent_fetch(ctx, child, receiver_owner, key_owner, span)
+}
+
+/// Protects a selected owned child before retiring the published receiver and key owners.
+pub(super) fn finish_parent_fetch(
+    ctx: &mut LoweringContext<'_, '_>, child: LoweredValue,
+    receiver_owner: Option<LocalSlotId>, key_owner: Option<LocalSlotId>, span: Span,
+) -> LoweredValue {
     let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let slot = ctx.local_slots[&selected];
     ctx.store_call_argument_local(&selected, child, PhpType::Mixed, Some(span));
