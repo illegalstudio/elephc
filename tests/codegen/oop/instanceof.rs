@@ -308,11 +308,12 @@ echo ($user instanceof $target) ? "T" : "F";
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
     assert!(
-        out.stderr
+        out.stdout
             .contains("Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies that when an invalid target raises an `Error`, both the LHS and
@@ -335,13 +336,14 @@ echo (lhs() instanceof (rhs())) ? "T" : "F";
 "#,
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
-    assert_eq!(out.stdout, "LR");
+    assert!(out.stdout.starts_with("LR"), "unexpected stdout: {}", out.stdout);
     assert!(
-        out.stderr
+        out.stdout
             .contains("Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// Tests that an uncaught null dynamic target terminates the program.
@@ -365,11 +367,12 @@ echo ($user instanceof $target) ? "T" : "F";
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
     assert!(
-        out.stderr
+        out.stdout
             .contains("Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// Tests that an uncaught invalid dynamic target terminates when the LHS is a scalar.
@@ -384,11 +387,12 @@ echo ($value instanceof $target) ? "T" : "F";
     );
     assert!(!out.success, "program unexpectedly succeeded: {}", out.stdout);
     assert!(
-        out.stderr
+        out.stdout
             .contains("Class name must be a valid object or a string"),
-        "unexpected stderr: {}",
-        out.stderr
+        "unexpected stdout: {}",
+        out.stdout
     );
+    assert_eq!(out.stderr, "");
 }
 
 /// Invalid dynamic targets raise a catchable `Error` with PHP's diagnostic message.

@@ -345,13 +345,7 @@ fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, na
     if ctx.finally_stack.is_empty() || !needs_concrete_reference_staging(ctx)
         || load_type.reference_payload_compatible(&ctx.return_php_type)
     { return false; }
-    let object_staging = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
-        && match ctx.local_type(name) {
-            PhpType::Mixed | PhpType::Object(_) => true,
-            PhpType::Union(members) => members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
-                && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)),
-            _ => false,
-        };
+    let object_staging = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_));
     // Object staging performs its throwing null/class guard before promotion. Loads and stores
     // lowered for a same-frame catch or copied finalizer use the slot's runtime representation
     // flag, so the guard-failure path reads the still-raw nullable slot while the successful path

@@ -123,9 +123,13 @@ pub(super) fn load_ref_cell_local_to_result_as(
     ty: &PhpType,
 ) -> Result<PhpType> {
     let result_ty = ty.codegen_repr();
-    // Bind/adopt/alias metadata preserves the physical cell ABI even when eval widens the
-    // logical frame slot. Conflicting bindings conservatively fall back to that final slot type.
-    let ty = ctx.ref_cell_payload_type(slot)?;
+    // Incoming references and externally rebound aliases already carry their ABI view.
+    // A frame-owned Mixed promotion needs decoding before applying a narrower logical view.
+    let ty = if ctx.owns_mixed_ref_cell_payload(slot) {
+        PhpType::Mixed
+    } else {
+        result_ty.clone()
+    };
     reject_multiword_ref_param_local(&ty, "load")?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);

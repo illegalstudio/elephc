@@ -573,6 +573,11 @@ impl<'a> FunctionContext<'a> {
         self.local_analysis.ever_stores_ref_cell_pointer(slot)
     }
 
+    /// Returns whether this frame exclusively promotes the slot into an owned boxed cell.
+    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
+        self.local_analysis.owns_mixed_ref_cell_payload(slot)
+    }
+
     /// Returns whether this deferred release may execute while the slot stores a ref-cell pointer.
     pub(super) fn release_local_slot_may_observe_ref_cell(&self, inst: InstId) -> bool {
         self.local_analysis.release_may_observe_ref_cell(inst)
@@ -908,7 +913,22 @@ impl<'a> FunctionContext<'a> {
     fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let storage_ty = self.local_php_type(slot)?;
         let payload_ty = self.ref_cell_payload_type(slot)?;
-        reject_multiword_ref_cell_local(&payload_ty, "load")?;
+        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
+        super::lower_inst::coerce_loaded_local_to_result_type(
+            self,
+            &payload_ty,
+            &storage_ty,
+        )?;
+        Ok(storage_ty)
+    }
+
+    /// Loads a reference cell's physical payload without coercing it to the logical slot type.
+    pub(super) fn load_ref_cell_payload_to_result(
+        &mut self,
+        slot: LocalSlotId,
+        payload_ty: &PhpType,
+    ) -> Result<()> {
+        reject_multiword_ref_cell_local(payload_ty, "load")?;
         let offset = self.local_offset(slot)?;
         let pointer_reg = abi::symbol_scratch_reg(self.emitter);
         abi::load_at_offset(self.emitter, pointer_reg, offset);
@@ -934,12 +954,7 @@ impl<'a> FunctionContext<'a> {
                 abi::emit_load_from_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
             }
         }
-        super::lower_inst::coerce_loaded_local_to_result_type(
-            self,
-            &payload_ty,
-            &storage_ty,
-        )?;
-        Ok(storage_ty)
+        Ok(())
     }
 
     /// Stores the current result register(s) into the SSA value's home.
@@ -1518,7 +1533,7 @@ impl<'a> FunctionContext<'a> {
     }
 
     /// Stores the current result register(s) through a local ref-cell pointer slot.
-    fn store_current_result_to_ref_cell_local(
+    pub(super) fn store_current_result_to_ref_cell_local(
         &mut self,
         slot: LocalSlotId,
         target_ty: &PhpType,

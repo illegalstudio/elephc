@@ -15,7 +15,7 @@ fn nullable_object_reference_return_switch_siblings_promote_on_every_target() {
 class SiblingReferenceNode {}
 class SiblingReferenceHolder {
     public ?SiblingReferenceNode $node = null;
-    public ?SiblingReferenceNode $fallback = null;
+    public mixed $fallback = null;
 }
 
 function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): ?SiblingReferenceNode {
@@ -91,9 +91,9 @@ function &widenedReferenceString(WidenedReferenceHolder $holder, bool $first): s
 #[test]
 fn reference_return_container_conversions_acquire_their_input_on_every_target() {
     let source = r#"<?php
-function &uniqueReferenceContainerIr(): array<mixed> { array<int> $items = [1, 2]; return $items; }
-function &sharedReferenceContainerIr(array<int> $input): array<mixed> { array<int> $items = $input; return $items; }
-function &emptyReferenceHashIr(): array<string, int> { array<int> $items = []; return $items; }
+function &uniqueReferenceContainerIr(): array<mixed> { $items = [1, 2]; return $items; }
+function &sharedReferenceContainerIr(array<int> $input): array<mixed> { $items = $input; return $items; }
+function &emptyReferenceHashIr(): array<string, int> { $items = []; return $items; }
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),

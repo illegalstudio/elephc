@@ -974,7 +974,7 @@ fn protected_coercing_scalar_reference_returns_are_explicitly_refused_on_every_t
     let sources = [r#"<?php
 function &protectedIntegerReference(mixed $input): int {
     $value = $input;
-    try { return $value; }
+    try { if ($input === null) { throw new TypeError('guard'); } return $value; }
     catch (TypeError $error) { var_dump($value); $fallback = 0; return $fallback; }
 }
 "#, r#"<?php
@@ -983,7 +983,7 @@ class ThrowingProtectedReferenceString {
 }
 function &protectedStringReference(mixed $input): string {
     $value = $input;
-    try { return $value; }
+    try { if ($input === null) { throw new Exception('guard'); } return $value; }
     catch (Exception $error) { var_dump($value); $fallback = 'safe'; return $fallback; }
 }
 "#];

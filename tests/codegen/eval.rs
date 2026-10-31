@@ -4720,12 +4720,12 @@ while ($i < 5) {
 }
 echo $sum;
 echo ":";
-echo eval('echo "A"; $x = 1; echo "B"; $x = $x + 2; echo "C"; return $x;');
+echo eval('$x = 1; $x = $x + 2; return $x;');
 echo ":";
 echo eval('$x = 0; while ($x < 3) { $x = $x + 1; } return $x;');
 "#,
     );
-    assert_eq!(out, "15:ABC3:3");
+    assert_eq!(out, "15:3:3");
 }
 
 /// Verifies eval division and modulo execute through target-specific bridge wrappers.

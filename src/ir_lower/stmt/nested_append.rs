@@ -216,9 +216,14 @@ pub(super) fn try_lower_array_root(
     let mut root = target;
     while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
     let supported = match &root.kind {
-        ExprKind::Variable(name) => ctx.has_local_slot(name) && matches!(
-            ctx.local_type(name).codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-        ),
+        ExprKind::Variable(name) => {
+            let ty = ctx.local_type(name);
+            ctx.has_local_slot(name)
+                && (matches!(
+                    ty.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+                ) || super::nested_spl_writes::supports_interface_receiver(ctx, &ty))
+        }
         ExprKind::StaticPropertyAccess { .. } =>
             super::nested_array_writes::nested_target_has_static_array_root(ctx, target)
                 && (matches!(array.kind, ExprKind::ArrayAccess { .. })

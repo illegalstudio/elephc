@@ -573,7 +573,7 @@ final class XMLParser {
             } elseif ($kind === 2) {
                 $this->__elephc_on_end($raw);
             } elseif ($kind === 3) {
-                $this->__elephc_on_characters(elephc_xml_parser_event_string($raw, 0));
+                $this->__elephc_on_characters($raw, elephc_xml_parser_event_string($raw, 0));
             } elseif ($kind === 4) {
                 $this->__elephc_on_pi($raw);
             } elseif ($kind === 5) {
@@ -682,7 +682,7 @@ final class XMLParser {
         $this->__elephc_level--;
     }
 
-    private function __elephc_on_characters(string $data): void {
+    private function __elephc_on_characters(int $raw, string $data): void {
         if (!$this->__elephc_cdata_installed) {
             if ($this->__elephc_default_installed) {
                 $this->__elephc_call_default($data);
@@ -696,7 +696,6 @@ final class XMLParser {
         if (!$this->__elephc_collecting) {
             return;
         }
-        $raw = $this->__elephc_handle;
         $skipWhite = elephc_xml_parser_get_option($raw, 4) === 1;
         $doprint = false;
         if ($skipWhite) {
@@ -804,7 +803,7 @@ final class XMLParser {
         if ($this->__elephc_default_installed && !($predefined && $this->__elephc_cdata_installed)) {
             $this->__elephc_call_default("&" . $name . ";");
         } elseif ($this->__elephc_cdata_installed && $expandable) {
-            $this->__elephc_on_characters(elephc_xml_parser_event_string($raw, 1));
+            $this->__elephc_on_characters($raw, elephc_xml_parser_event_string($raw, 1));
         }
         return true;
     }

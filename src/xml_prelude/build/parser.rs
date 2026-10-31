@@ -786,7 +786,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                                 s_expr(e_method_call(e_this(), "__elephc_on_end", vec![e_var("raw")])),
                             ]),
                             (e_binop(e_var("kind"), BinOp::StrictEq, e_int(3)), vec![
-                                s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(0)])])),
+                                s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_var("raw"), e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(0)])])),
                             ]),
                             (e_binop(e_var("kind"), BinOp::StrictEq, e_int(4)), vec![
                                 s_expr(e_method_call(e_this(), "__elephc_on_pi", vec![e_var("raw")])),
@@ -999,6 +999,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
         .method(
             method("__elephc_on_characters")
                 .private()
+                .param("raw", TypeExpr::Int)
                 .param("data", TypeExpr::Str)
                 .returns(TypeExpr::Void)
                 .body(vec![
@@ -1035,7 +1036,6 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("raw", e_this_prop("__elephc_handle")),
                     s_assign(
                         "skipWhite",
                         e_binop(
@@ -1254,7 +1254,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         ],
                         vec![
                         (e_binop(e_this_prop("__elephc_cdata_installed"), BinOp::And, e_var("expandable")), vec![
-                            s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(1)])])),
+                            s_expr(e_method_call(e_this(), "__elephc_on_characters", vec![e_var("raw"), e_call("elephc_xml_parser_event_string", vec![e_var("raw"), e_int(1)])])),
                         ]),
                     ],
                         None,

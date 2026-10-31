@@ -518,7 +518,7 @@ fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     match target {
         InstanceOfTarget::Name(_) => Effect::PURE,
         InstanceOfTarget::Generic(_) => Effect::PURE,
-        InstanceOfTarget::Expr(expr) => expr_effect(expr),
+        InstanceOfTarget::Expr(expr) => expr_effect(expr).with_may_throw(),
     }
 }
 

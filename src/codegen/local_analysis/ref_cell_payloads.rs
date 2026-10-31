@@ -11,6 +11,38 @@
 
 use super::*;
 
+/// Finds exclusively local Mixed promotions without inferring layout from a widened alias slot.
+pub(super) fn owned_mixed_slots(function: &Function) -> HashSet<LocalSlotId> {
+    let mut candidates = HashSet::new();
+    let mut external = initially_ref_cell_slots(function);
+    for inst in &function.instructions {
+        let Some(slot) =
+            ref_cell_target_slot(function, inst.op, inst.immediate.as_ref(), &inst.operands)
+        else {
+            continue;
+        };
+        match (inst.op, inst.immediate.as_ref()) {
+            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
+                if function.locals.get(second.as_raw() as usize).is_some_and(|owner| {
+                    owner.kind == crate::ir::LocalKind::RefCell
+                        && owner.php_type.codegen_repr() == PhpType::Mixed
+                }) {
+                    candidates.insert(slot);
+                } else {
+                    external.insert(slot);
+                }
+            }
+            // Capturing an existing local cell adds an owner without changing its payload ABI.
+            (Op::ClosureCapture, _) => {}
+            _ => {
+                external.insert(slot);
+            }
+        }
+    }
+    candidates.retain(|slot| !external.contains(slot));
+    candidates
+}
+
 /// Finds slots whose every possible reference binding uses one compatible physical payload type.
 pub(super) fn stable_payload_types(function: &Function) -> HashMap<LocalSlotId, PhpType> {
     let mut candidates = HashMap::new();
@@ -27,18 +59,37 @@ pub(super) fn stable_payload_types(function: &Function) -> HashMap<LocalSlotId, 
         else {
             continue;
         };
-        // Capturing an existing cell adds an owner without changing its payload ABI. Iterator
-        // bindings expose external element storage, but their void instruction metadata does not
-        // describe that storage's payload type, so they retain the conservative local fallback.
-        if matches!(inst.op, Op::ClosureCapture | Op::IterCurrentValueRef) {
-            continue;
+        let payload_ty = match (inst.op, inst.immediate.as_ref()) {
+            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
+                function
+                    .locals
+                    .get(second.as_raw() as usize)
+                    .map(|owner| owner.php_type.clone())
+            }
+            (Op::AliasLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
+                if conflicts.contains(second) {
+                    conflicts.insert(slot);
+                    candidates.remove(&slot);
+                    None
+                } else {
+                    candidates
+                        .get(second)
+                        .cloned()
+                        .or_else(|| Some(inst.result_php_type.clone()))
+                }
+            }
+            (Op::BindRefCellPtr | Op::AdoptRefCellPtr, _) => {
+                Some(inst.result_php_type.clone())
+            }
+            // Capturing an existing cell adds an owner without changing its payload ABI. Iterator
+            // bindings expose external element storage, but their void instruction metadata does
+            // not describe that storage's payload type, so they retain the conservative fallback.
+            (Op::ClosureCapture | Op::IterCurrentValueRef, _) => None,
+            _ => None,
+        };
+        if let Some(payload_ty) = payload_ty {
+            record_payload_type(&mut candidates, &mut conflicts, slot, payload_ty);
         }
-        record_payload_type(
-            &mut candidates,
-            &mut conflicts,
-            slot,
-            inst.result_php_type.clone(),
-        );
     }
     for slot in conflicts {
         candidates.remove(&slot);

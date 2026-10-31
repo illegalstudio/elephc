@@ -197,7 +197,7 @@ mod tests {
             emit_dynamic_instanceof(&mut emitter);
             let assembly = emitter.output();
             let body = &assembly[assembly
-                .find("__rt_instanceof_invalid_target:")
+                .find("__rt_instanceof_invalid_target_new:")
                 .unwrap()..];
             assert!(body.contains("_instanceof_target_type_msg"), "{name}");
             assert!(body.contains("_spl_error_class_id"), "{name}");

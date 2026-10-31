@@ -11,15 +11,29 @@
 
 use super::*;
 
+/// Returns whether an erased interface receiver can hold an internal SPL storage object.
+pub(super) fn supports_interface_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    ty: &PhpType,
+) -> bool {
+    let PhpType::Object(name) = ty.codegen_repr() else {
+        return false;
+    };
+    ctx.interfaces.contains_key(&name)
+        && ctx.classes.keys().any(|class| {
+            crate::types::builtin_classes::spl_storage_write_fetch_owner(class, ctx.classes)
+                .is_some()
+                && ctx.type_is_or_implements_interface(class, &name)
+        })
+}
+
 /// Selects attached storage only for actual trusted SPL instances behind an interface type.
 pub(super) fn fetch_interface_parent(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, index: &Expr, expr: &Expr,
     key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
-    let PhpType::Object(name) = ctx.builder.value_php_type(receiver.value).codegen_repr() else { return None; };
-    if !ctx.interfaces.contains_key(&name) || !ctx.classes.keys().any(|class|
-        crate::types::builtin_classes::spl_storage_write_fetch_owner(class, ctx.classes).is_some()
-            && ctx.type_is_or_implements_interface(class, &name)) {
+    let receiver_ty = ctx.builder.value_php_type(receiver.value);
+    if !supports_interface_receiver(ctx, &receiver_ty) {
         return None;
     }
     let span = expr.span;

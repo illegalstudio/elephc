@@ -77,7 +77,7 @@ pub(super) fn emit_dynamic_target_metadata(
             ctx.load_value_to_reg(target, abi::int_result_reg(ctx.emitter))?;
             emit_mixed_target_metadata(ctx, false_label);
         }
-        _ => emit_invalid_dynamic_target_fatal(ctx),
+        _ => emit_invalid_dynamic_target_error(ctx),
     }
     Ok(())
 }
@@ -106,7 +106,7 @@ pub(super) fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbnz x0, {}", ok_label));         // non-null object targets can provide runtime class metadata
-            emit_invalid_dynamic_target_fatal(ctx);
+            emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&ok_label);
             ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the target object header
             ctx.emitter.instruction("mov x1, #0");                              // object targets always resolve to class target kind
@@ -114,7 +114,7 @@ pub(super) fn emit_object_target_metadata(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // null object targets are not valid dynamic instanceof targets
             ctx.emitter.instruction(&format!("jne {}", ok_label));              // non-null object targets can provide runtime class metadata
-            emit_invalid_dynamic_target_fatal(ctx);
+            emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&ok_label);
             ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the target object header
             ctx.emitter.instruction("xor edx, edx");                            // object targets always resolve to class target kind
@@ -134,7 +134,7 @@ pub(super) fn emit_mixed_target_metadata(ctx: &mut FunctionContext<'_>, false_la
             ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve boxed string targets through class-string lookup
             ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 means the dynamic target is an object
             ctx.emitter.instruction(&format!("b.eq {}", object_label));         // resolve boxed object targets through their runtime class id
-            emit_invalid_dynamic_target_fatal(ctx);
+            emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&string_label);
             emit_lookup_string_target(ctx, false_label);
             abi::emit_jump(ctx.emitter, &done);
@@ -147,7 +147,7 @@ pub(super) fn emit_mixed_target_metadata(ctx: &mut FunctionContext<'_>, false_la
             ctx.emitter.instruction(&format!("je {}", string_label));           // resolve boxed string targets through class-string lookup
             ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 means the dynamic target is an object
             ctx.emitter.instruction(&format!("je {}", object_label));           // resolve boxed object targets through their runtime class id
-            emit_invalid_dynamic_target_fatal(ctx);
+            emit_invalid_dynamic_target_error(ctx);
             ctx.emitter.label(&string_label);
             ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed target string pointer into the lookup input register
             emit_lookup_string_target(ctx, false_label);
@@ -178,8 +178,8 @@ pub(super) fn emit_dynamic_match_call(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_exception_matches");
 }
 
-/// Emits the runtime fatal for invalid dynamic `instanceof` targets.
-pub(super) fn emit_invalid_dynamic_target_fatal(ctx: &mut FunctionContext<'_>) {
+/// Emits the catchable runtime `Error` for invalid dynamic `instanceof` targets.
+pub(super) fn emit_invalid_dynamic_target_error(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_instanceof_invalid_target");
 }
 

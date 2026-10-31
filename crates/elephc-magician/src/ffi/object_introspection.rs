@@ -13,7 +13,7 @@
 //! Key details:
 //! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
 //! - Named predicate probes fail closed as false; dynamic `instanceof` invalid
-//!   targets return -1 so generated code can raise PHP's fatal diagnostic.
+//!   targets return -1 so generated code can raise PHP's catchable `Error`.
 //! - Relation predicates prefer a dynamic object's owner over the caller context. Context-free
 //!   native values consult global eval aliases only for registered targets, then use native
 //!   class metadata directly.
@@ -363,7 +363,10 @@ unsafe fn eval_object_relation_with_target(
     let object_owner = probe.object_identity(object).ok().and_then(|identity| {
         crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
     });
-    let resolved = object_owner.or(target_owner).unwrap_or(ctx);
+    let resolved = object_owner
+        .or(target_owner)
+        .or_else(crate::context::native_frame_active_eval_context)
+        .unwrap_or(ctx);
     if let Some(context) = resolved.as_mut() {
         if context.abi_version() != ABI_VERSION {
             return Err(EvalStatus::AbiMismatch);

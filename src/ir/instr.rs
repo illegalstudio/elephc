@@ -1566,10 +1566,11 @@ impl Op {
                 | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL | E::MAY_DEOPT,
             SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
+            | MixedNumericBinop | LooseEq | LooseNotEq | PhpRelCmp
             | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            InstanceOfDynamic => E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT,
             // `++`/`--` on a string reads the operand's payload, may write the shared
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.

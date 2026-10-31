@@ -10,36 +10,69 @@
 
 use super::*;
 
-/// Accepts only the native container tag and the object's declared nominal class.
+/// Accepts only the physical payload tags and nominal or Traversable contracts.
 pub(super) fn guard_heap_replacement(
     ctx: &mut FunctionContext<'_>, ty: &PhpType, name: &str,
     pending_throw: Option<usize>, rejected: &str,
 ) {
-    let (tag, class) = match ty.codegen_repr() {
-        PhpType::Object(class) => (6, Some(class)),
+    let repr = ty.codegen_repr();
+    let (tag, class): (i64, Option<&str>) = match &repr {
+        PhpType::Object(class) => (6, Some(class.as_str())),
         PhpType::Array(_) => (4, None),
         PhpType::AssocArray { .. } => (5, None),
+        PhpType::Callable => (10, None),
+        PhpType::Iterable => (0, None),
         _ => return,
     };
     let invalid = ctx.next_label("eval_reload_invalid_heap_value");
     let accepted = ctx.next_label("eval_reload_checked_heap_value");
+    let iterable_object = ctx.next_label("eval_reload_iterable_object");
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {result}, #{tag}"));          // require the declared native heap payload tag
-            ctx.emitter.instruction(&format!("b.ne {invalid}"));                // reject an incompatible box before touching the destination
+    if repr == PhpType::Iterable {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, #4"));         // indexed arrays satisfy the physical iterable payload ABI
+                ctx.emitter.instruction(&format!("b.eq {accepted}"));          // accept the unboxed array pointer
+                ctx.emitter.instruction(&format!("cmp {result}, #5"));         // associative arrays share the raw iterable pointer ABI
+                ctx.emitter.instruction(&format!("b.eq {accepted}"));          // accept the unboxed hash pointer
+                ctx.emitter.instruction(&format!("cmp {result}, #6"));         // objects need a Traversable contract check
+                ctx.emitter.instruction(&format!("b.eq {iterable_object}"));   // validate the concrete object before replacing the cell
+                ctx.emitter.instruction(&format!("b {invalid}"));              // reject every scalar and callable tag
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, 4"));          // indexed arrays satisfy the physical iterable payload ABI
+                ctx.emitter.instruction(&format!("je {accepted}"));            // accept the unboxed array pointer
+                ctx.emitter.instruction(&format!("cmp {result}, 5"));          // associative arrays share the raw iterable pointer ABI
+                ctx.emitter.instruction(&format!("je {accepted}"));            // accept the unboxed hash pointer
+                ctx.emitter.instruction(&format!("cmp {result}, 6"));          // objects need a Traversable contract check
+                ctx.emitter.instruction(&format!("je {iterable_object}"));     // validate the concrete object before replacing the cell
+                ctx.emitter.instruction(&format!("jmp {invalid}"));            // reject every scalar and callable tag
+            }
         }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {result}, {tag}"));           // require the declared native heap payload tag
-            ctx.emitter.instruction(&format!("jne {invalid}"));                 // reject an incompatible box before touching the destination
+        ctx.emitter.label(&iterable_object);
+        super::super::type_predicates::emit_runtime_object_iterable_check(
+            ctx,
+            &accepted,
+            &invalid,
+        );
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, #{tag}"));      // require the declared native heap payload tag
+                ctx.emitter.instruction(&format!("b.ne {invalid}"));            // reject an incompatible box before touching the destination
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {result}, {tag}"));       // require the declared native heap payload tag
+                ctx.emitter.instruction(&format!("jne {invalid}"));             // reject an incompatible box before touching the destination
+            }
         }
     }
     if let Some(class) = class.filter(|class| !class.is_empty() && !class.eq_ignore_ascii_case("object")) {
-        let info = ctx.module.class_infos.iter().find(|(name, _)| name.eq_ignore_ascii_case(&class))
+        let info = ctx.module.class_infos.iter().find(|(name, _)| name.eq_ignore_ascii_case(class))
             .map(|(_, info)| (info.class_id, 0))
-            .or_else(|| ctx.module.interface_infos.iter().find(|(name, _)| name.eq_ignore_ascii_case(&class))
+            .or_else(|| ctx.module.interface_infos.iter().find(|(name, _)| name.eq_ignore_ascii_case(class))
                 .map(|(_, info)| (info.interface_id, 1)));
         if let Some((id, kind)) = info {
             abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
