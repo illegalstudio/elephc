@@ -172,6 +172,12 @@ fn lower_reference_return(
                 return;
             }
             if !ctx.is_ref_bound_local(name) {
+                if protected_reference_coercion_is_unsupported(ctx, name) {
+                    refuse_reference_return(ctx, span,
+                        "Unsupported by-reference return: coercing this local to a different \
+                         payload representation inside try/finally requires handler recovery");
+                    return;
+                }
                 if !ctx.local_is_promotable_to_ref_cell(name) {
                     refuse_reference_return(
                         ctx,
@@ -331,6 +337,19 @@ fn promote_local_to_reference_return_payload(
 /// Keeps concrete returned payloads separate from a source slot's eventual frame-wide widening.
 fn needs_concrete_reference_staging(ctx: &LoweringContext<'_, '_>) -> bool {
     !matches!(ctx.return_php_type.codegen_repr(), PhpType::Mixed | PhpType::Void | PhpType::Never)
+}
+
+/// Keeps new scalar/container coercions out of protected paths until their handlers can recover.
+fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    if ctx.finally_stack.is_empty() || !needs_concrete_reference_staging(ctx)
+        || ctx.local_type(name).reference_payload_compatible(&ctx.return_php_type)
+    { return false; }
+    // Preserve the established nullable-object staging surface and its normal finally coverage.
+    // Its existing exceptional recovery boundary is handled independently.
+    !(matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+        && matches!(ctx.local_type(name), PhpType::Union(members)
+            if members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
+                && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never))))
 }
 
 /// Returns whether a local's cell payload agrees with the declared by-reference result shape.

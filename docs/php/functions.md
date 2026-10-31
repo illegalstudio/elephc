@@ -581,6 +581,10 @@ semantics:
 - Returning a place that is neither a variable nor a property, such as an array element
   read or the result of another call. PHP returns a reference to those places; this
   lowering has no cell to transfer for them.
+- Coercing a fresh local from a different storage representation while returning it by
+  reference inside `try`/`finally`, such as a `mixed` local returned as `int` or `string`.
+  These conversions can throw before the reference exists, so their handlers need a
+  recovery path. This restriction preserves the existing nullable-object staging case.
 - Outside the native enum interface dispatch described above, capturing a reference with
   `$x = &f()` from a call the compiler cannot resolve to a by-reference return. A named
   function, a method, a static method, and a closure whose

@@ -967,3 +967,33 @@ echo $alias;
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
+
+/// Coercion failures cannot expose a new scalar reference view to a handler on any target.
+#[test]
+fn protected_coercing_scalar_reference_returns_are_explicitly_refused_on_every_target() {
+    let sources = [r#"<?php
+function &protectedIntegerReference(mixed $input): int {
+    $value = $input;
+    try { return $value; }
+    catch (TypeError $error) { var_dump($value); $fallback = 0; return $fallback; }
+}
+"#, r#"<?php
+class ThrowingProtectedReferenceString {
+    public function __toString(): string { throw new Exception('cast'); }
+}
+function &protectedStringReference(mixed $input): string {
+    $value = $input;
+    try { return $value; }
+    catch (Exception $error) { var_dump($value); $fallback = 'safe'; return $fallback; }
+}
+"#];
+    for name in TARGETS {
+        for source in sources {
+            let error = super::try_lower_source_at_for_target(source, Path::new("main.php"),
+                Path::new("."), Target::parse(name).unwrap()).unwrap_err();
+            let LoweringError::Unsupported(error) = error else { panic!("{name}: expected a source refusal"); };
+            assert!(error.message.contains("coercing this local to a different payload representation inside try/finally"),
+                "{name}: {}", error.message);
+        }
+    }
+}
