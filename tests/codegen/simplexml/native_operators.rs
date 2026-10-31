@@ -131,8 +131,10 @@ rejectNativeBitnot($xml); rejectNativeBitnot($iterator); rejectNativeBitnot($chi
         "Cannot perform bitwise not on SimpleXMLElement|Cannot perform bitwise not on SimpleXMLIterator|Cannot perform bitwise not on BitnotNativeXml|",
     );
     let aot = format!("{setup}{body}");
-    let eval_setup = setup.replace("BitnotNativeXml", "EvalBitnotNativeXml");
-    let eval_body = body.replace("rejectNativeBitnot", "rejectEvalNativeBitnot");
+    let eval_setup = setup.replace("BitnotNativeXml", "EvalBitnotNativeXml")
+        .replace("$child", "$evalChild");
+    let eval_body = body.replace("rejectNativeBitnot", "rejectEvalNativeBitnot")
+        .replace("$child", "$evalChild");
     let eval_expected = expected.replace("BitnotNativeXml", "EvalBitnotNativeXml");
     let eval = format!("{eval_setup}\n$code = $argc > 0 ? <<<'BITNOT_NATIVE'\n{eval_body}\nBITNOT_NATIVE\n : ''; eval($code);");
     assert_bundle_with(&[

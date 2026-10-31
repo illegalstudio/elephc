@@ -102,8 +102,12 @@ $value = null; nullableRetiringWrapperIr($value);
 fn unknown_descriptor_iterable_reference_layouts_remain_explicit_on_every_target() {
     let source = r#"<?php
 class ExplicitIterableMethods {
-    public function left(iterable &$items): void { echo count($items); }
-    public function right(iterable &$items): void { echo count($items); }
+    public function left(iterable &$items): void {
+        $count = 0; foreach ($items as $unused) { $count++; } echo $count;
+    }
+    public function right(iterable &$items): void {
+        $count = 0; foreach ($items as $unused) { $count++; } echo $count;
+    }
 }
 class ExplicitIterableHolder { public iterable $items = [1, 2]; }
 function explicitIterableCaller(bool $left): void {

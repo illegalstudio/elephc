@@ -114,8 +114,12 @@ unset($value, $holder, $target);
 fn test_unknown_descriptor_iterable_reference_layout_subset() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 class RuntimeIterableReferenceMethods {
-    public function left(iterable &$items): void { echo 'raw:', count($items), '|'; }
-    public function right(iterable &$items): void { echo 'raw:', count($items), '|'; }
+    public function left(iterable &$items): void {
+        $count = 0; foreach ($items as $unused) { $count++; } echo 'raw:', $count, '|';
+    }
+    public function right(iterable &$items): void {
+        $count = 0; foreach ($items as $unused) { $count++; } echo 'raw:', $count, '|';
+    }
 }
 class RuntimeIterableReferenceHolder { public iterable $items = [1, 2]; }
 $writer = new RuntimeIterableReferenceMethods(); $method = $argc > 0 ? 'left' : 'right';
@@ -219,16 +223,16 @@ unset($implementation, $interfaceTarget, $variadicTarget, $variadic, $child, $wr
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Closure object references resolve `self` and reject incompatible direct marker layouts.
+/// Closure object references reject incompatible boxed and direct marker layouts.
 #[test]
 fn test_unknown_descriptor_closure_object_reference_guards_relative_and_direct_sources() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 class RuntimeClosureReferenceOwner {
     public function __construct(public string $name) {}
     public static function callback(): callable {
-        return function(self &$value): void {
+        return function(RuntimeClosureReferenceOwner &$value): void {
             echo 'self:', $value->name, '|';
-            $value = new self('changed');
+            $value = new RuntimeClosureReferenceOwner('changed');
         };
     }
 }

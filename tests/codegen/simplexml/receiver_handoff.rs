@@ -30,6 +30,7 @@ $children = $root->children();
 $attributes = $root->attributes();
 $paths = $root->xpath('//item');
 $loaded = simplexml_load_string('<loaded/>', $class);
+if (!is_object($root)) { throw new TypeError('eval factory root'); }
 $imported = simplexml_import_dom($root, $class);
 echo (int)nativeEvalFactoryClassCheck($class, true), ':', (int)nativeEvalFactoryClassCheck($class, false), '|';
 echo get_class($child), ':', $child->getName(), '|';

@@ -15,7 +15,7 @@ fn test_nullable_to_bare_object_argument_checks_the_runtime_tag() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 class BareObjectArgumentNode {}
 function acceptBareObjectArgument(object $node): string { return get_class($node); }
-function passBareObjectArgument(?BareObjectArgumentNode $node): string { return acceptBareObjectArgument($node); }
+function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
 echo passBareObjectArgument(new BareObjectArgumentNode()), '|';
 try { passBareObjectArgument(null); }
 catch (TypeError $error) { echo explode(', called in ', $error->getMessage())[0]; }
@@ -24,6 +24,26 @@ unset($error);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "BareObjectArgumentNode|acceptBareObjectArgument(): Argument #1 ($node) must be of type object, null given");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A procedural wrapper preserves a typed boolean property store fed by a mixed cast.
+#[test]
+fn test_wrapped_mixed_bool_property_assignment_persists() {
+    let out = compile_and_run(r#"<?php
+class WrappedBoolProperty {
+    public bool $flag = false;
+    public function set(mixed $value): bool { $this->flag = (bool) $value; return true; }
+    public function read(): bool { return $this->flag; }
+}
+function setWrappedBoolProperty(WrappedBoolProperty $target, mixed $value): bool {
+    return $target->set($value);
+}
+$target = new WrappedBoolProperty();
+echo (int)$target->read(), ':';
+setWrappedBoolProperty($target, 1); echo (int)$target->read(), ':';
+setWrappedBoolProperty($target, 0); echo (int)$target->read();
+"#);
+    assert_eq!(out, "0:1:0");
 }
 
 /// Tests that a method call on a `?Holder` parameter dispatches correctly

@@ -344,11 +344,14 @@ fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, na
     if ctx.finally_stack.is_empty() || !needs_concrete_reference_staging(ctx)
         || ctx.local_type(name).reference_payload_compatible(&ctx.return_php_type)
     { return false; }
-    let nullable_object = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
-        && matches!(ctx.local_type(name), PhpType::Union(members)
-            if members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
-                && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)));
-    if !nullable_object {
+    let object_staging = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+        && match ctx.local_type(name) {
+            PhpType::Object(_) => true,
+            PhpType::Union(members) => members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
+                && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)),
+            _ => false,
+        };
+    if !object_staging {
         return true;
     }
     // The null guard runs before the source local is promoted. A same-frame catch, or a finally

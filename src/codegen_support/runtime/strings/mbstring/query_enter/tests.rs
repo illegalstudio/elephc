@@ -36,6 +36,15 @@ fn native_mbstring_query_enter_preserves_nested_ownership() {
         emit(&mut emitter);
     }
     super::super::capture_hash::tests::adapters(&mut emitter);
+    for symbol in [
+        "__rt_tagged_reference_assignment_error_new",
+        "__rt_cleanup_preserve_exception",
+        "__rt_throw_current",
+    ] {
+        emitter.label_global(symbol);
+        emitter.instruction(if target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }); // invalid marker writes are outside this ownership fixture
+    }
+    emitter.raw(&crate::codegen_support::data_section::comm_directive("_exc_value", 8, target));
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("query.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("capture_fixture.c"), include_str!("../capture_hash/native_store.c")).unwrap();

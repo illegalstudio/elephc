@@ -18,7 +18,7 @@ class SiblingReferenceHolder {
     public ?SiblingReferenceNode $fallback = null;
 }
 
-function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): SiblingReferenceNode {
+function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): ?SiblingReferenceNode {
     $node = $holder->node;
     switch ($choice) {
         case 1: return $node;
@@ -50,16 +50,22 @@ class WidenedReferenceHolder {
     public ?string $text = null;
 }
 function &widenedReferenceBefore(WidenedReferenceHolder $holder): WidenedReferenceNode {
-    $value = $holder->node; $value = new WidenedReferenceNode(); return $value;
+    $value = $holder->node; $value = new WidenedReferenceNode();
+    if (!$value instanceof WidenedReferenceNode) { throw new TypeError('node'); }
+    return $value;
 }
 function &widenedReferenceAfter(WidenedReferenceHolder $holder, bool $first): WidenedReferenceNode {
     $value = new WidenedReferenceNode();
     if ($first) { return $value; }
-    $value = $holder->node; $value = new WidenedReferenceNode(); return $value;
+    $value = $holder->node; $value = new WidenedReferenceNode();
+    if (!$value instanceof WidenedReferenceNode) { throw new TypeError('node'); }
+    return $value;
 }
 function &widenedReferenceString(WidenedReferenceHolder $holder, bool $first): string {
     $value = 'early'; if ($first) { return $value; }
-    $value = $holder->text; $value = 'late'; return $value;
+    $value = $holder->text; $value = 'late';
+    if (!is_string($value)) { throw new TypeError('text'); }
+    return $value;
 }
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

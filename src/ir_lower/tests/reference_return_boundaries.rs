@@ -1002,16 +1002,14 @@ function &protectedStringReference(mixed $input): string {
 #[test]
 fn protected_nullable_object_reference_returns_require_safe_finalizer_rebinding() {
     let sources = [r#"<?php
-class ProtectedNullableNode {}
-function &caughtNullableReference(?ProtectedNullableNode $input): ProtectedNullableNode {
-    $value = $input;
+function &caughtNullableReference(SimpleXMLElement $root): SimpleXMLElement {
+    $value = $root->missing->child;
     try { return $value; }
     catch (TypeError $error) { var_dump($value); throw $error; }
 }
 "#, r#"<?php
-class FinallyObservedNullableNode {}
-function &finallyObservedNullableReference(?FinallyObservedNullableNode $input): FinallyObservedNullableNode {
-    $value = $input;
+function &finallyObservedNullableReference(SimpleXMLElement $root): SimpleXMLElement {
+    $value = $root->missing->child;
     try { return $value; }
     finally { var_dump($value); }
 }

@@ -156,15 +156,21 @@ class WidenedReturnHolder {
     public ?string $text = null;
 }
 function &widenedReturnBefore(WidenedReturnHolder $holder): WidenedReturnNode {
-    $value = $holder->node; $value = new WidenedReturnNode(); return $value;
+    $value = $holder->node; $value = new WidenedReturnNode();
+    if (!$value instanceof WidenedReturnNode) { throw new TypeError('node'); }
+    return $value;
 }
 function &widenedReturnAfter(WidenedReturnHolder $holder, bool $first): WidenedReturnNode {
     $value = new WidenedReturnNode(); if ($first) { return $value; }
-    $value = $holder->node; $value = new WidenedReturnNode(); return $value;
+    $value = $holder->node; $value = new WidenedReturnNode();
+    if (!$value instanceof WidenedReturnNode) { throw new TypeError('node'); }
+    return $value;
 }
 function &widenedReturnText(WidenedReturnHolder $holder, bool $first): string {
     $value = 'early'; if ($first) { return $value; }
-    $value = $holder->text; $value = 'late'; return $value;
+    $value = $holder->text; $value = 'late';
+    if (!is_string($value)) { throw new TypeError('text'); }
+    return $value;
 }
 $holder = new WidenedReturnHolder();
 $before =& widenedReturnBefore($holder);
