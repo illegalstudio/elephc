@@ -12,6 +12,40 @@ use super::support::*;
 
 mod argument_ownership;
 
+/// Same-cell native writeback dirties the local or global snapshot without replacing its owner.
+#[test]
+fn native_same_cell_reference_writeback_marks_the_owning_snapshot_dirty() {
+    for through_method in [false, true] {
+        for through_global in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            let mut local = ElephcEvalScope::new();
+            let mut global = ElephcEvalScope::new();
+            let mut values = FakeOps::default();
+            let value = values.string("updated").unwrap();
+            let owner = if through_global { &mut global } else { &mut local };
+            owner.set_from_aot("text", value, crate::scope::ScopeCellOwnership::Owned);
+            owner.mark_name_clean("text");
+            if through_global {
+                assert!(context.set_global_scope(&mut global));
+                local.mark_global_alias("text");
+            }
+            let target = EvalReferenceTarget::Variable { scope: &mut local, name: "text".into() };
+            if through_method {
+                write_back_method_ref_target(&target, value, &mut context, &mut values).unwrap();
+            } else {
+                let argument = BoundMethodArg {
+                    value, ref_target: Some(target), variadic_ref_targets: Vec::new(),
+                };
+                write_back_native_callable_ref_args(&[argument], &mut context, &mut values).unwrap();
+            }
+            let owner = if through_global { &global } else { &local };
+            assert!(owner.entry("text").unwrap().flags().dirty);
+            assert_eq!(owner.visible_cell("text"), Some(value));
+            assert!(values.releases.is_empty(), "writeback must preserve the original scope owner");
+        }
+    }
+}
+
 /// Native object contracts reject assignments before an interpreted catch or later statement runs.
 #[test]
 fn native_object_snapshot_contract_is_checked_before_assignment() {

@@ -9,6 +9,38 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Native method bridges update typed aliases even when they rewrite the imported box in place.
+#[test]
+fn test_eval_native_method_reference_writeback_dirties_typed_snapshots() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class NativeDirtySnapshotBox {
+    public string $text = 'a';
+    public array $items = [1];
+    public function &textRef(): string { return $this->text; }
+    public function &itemsRef(): array { return $this->items; }
+}
+class NativeDirtySnapshotWriter {
+    public function append(string &$text, array &$items): void { $text .= 'b'; $items[] = 2; }
+    public static function appendStatic(string &$text, array &$items): void { $text .= 'c'; $items[] = 3; }
+}
+function nativeDirtySnapshotRun(string $source): void {
+    $box = new NativeDirtySnapshotBox();
+    $text = &$box->textRef();
+    $items = &$box->itemsRef();
+    $writer = new NativeDirtySnapshotWriter();
+    eval($source);
+    echo $text, ':', $box->text, ':', json_encode($items), ':', json_encode($box->items);
+    unset($text, $items, $writer, $box, $source);
+}
+$source = $argc > 0 ? '$writer->append($text, $items); NativeDirtySnapshotWriter::appendStatic($text, $items);' : '';
+nativeDirtySnapshotRun($source);
+unset($source);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "abc:abc:[1,2,3]:[1,2,3]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Rejected assignments are catchable inside eval, and unset detaches typed property aliases.
 #[test]
 fn test_eval_typed_native_aliases_reject_invalid_values_and_detach_on_unset() {

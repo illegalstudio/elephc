@@ -184,6 +184,7 @@ fn write_back_native_ref_target(
         return Err(EvalStatus::RuntimeFatal);
     };
     if visible_scope_cell(context, scope, name) == Some(value) {
+        mark_scope_binding_changed(context, scope, name)?;
         return Ok(());
     }
     let retained = values.retain(value)?;

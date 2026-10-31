@@ -300,7 +300,10 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
             let Some(scope) = (unsafe { scope.as_mut() }) else {
                 return Err(EvalStatus::RuntimeFatal);
             };
-            if visible_scope_cell(context, scope, name) == Some(value) { return Ok(()); }
+            if visible_scope_cell(context, scope, name) == Some(value) {
+                mark_scope_binding_changed(context, scope, name)?;
+                return Ok(());
+            }
             let value = values.retain(value)?;
             for replaced in set_scope_cell(
                 context,
