@@ -178,8 +178,8 @@ admitted object shape loses identity, survives the wrong request or leaks across
 The old wrapper-only demo has been deleted. The replacement example must use a real
 exported final Pippo class and constants, loaded with php -d extension=... and no PHP
 wrapper require. Update docs/beyond-php/phpext.md and CLI docs/README for new options.
-Do not edit CHANGELOG.md. No PR/merge or external review has yet been requested for
-this new phase; keep the implementation reviewable in its isolated branch.
+Do not edit CHANGELOG.md. Draft PR2185 tracks this phase, with independent Grok
+review and native-host CI running concurrently. No merge has been requested.
 
 ## Implemented runtime contract
 
@@ -260,7 +260,7 @@ and requires only extension loading on the native path. Its actual module is bui
 with the matching installed PHP 8.5.12 SDK. Clang accepts extension assembly for
 ELF x86_64, ELF aarch64 and Mach-O arm64. Real ARM64-host execution and the
 Valgrind/Apple-leaks matrix remain for the existing SDK CI matrix. No full local
-Rust suite is run. No new PR, push or external review is requested for this phase.
+Rust suite is run. PR2185 remains draft during independent Grok review and CI.
 
 ## CPU comparison example
 
@@ -272,3 +272,16 @@ small/edge inputs and independently confirm 148933 primes at the default limit.
 Five alternating real-PHP measurements per mode show the current Linux x86_64
 native module slower on this workload; no performance improvement is claimed.
 Measurements and the boxed-numeric follow-up are recorded in Code Journal.
+
+## Review and CI integration
+
+The branch merged main4843af1291 to start PR2185 CI. The only textual conflict
+was the runtime_gc test module list; both the new static-object tests and the
+upstream GMP tests remain registered.
+
+Grok round1 (delegation3c1b07aa) identified an AArch64 PIC register-clobber defect
+in the GC wrapper-owner mode query. Native SDK CI independently reproduced four
+class failures on Linux/macOS ARM64, both NTS and ZTS, while x86_64 passed. The
+mode query must materialize its symbol in the destination register so the live
+heap header in x9 survives. A focused target regression and all-host CI validate
+that correction as the independent review continues.

@@ -213,6 +213,26 @@ mod tests {
     }
 
 
+    /// Preserves the live collector cursor while a PIC mode probe resolves its symbol address.
+    #[test]
+    fn phpext_class_aarch64_root_mode_preserves_heap_header() {
+        for name in ["linux-aarch64", "macos-aarch64"] {
+            let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+            let assembly = crate::codegen_support::generate_phpext_runtime(524288, target,
+                crate::codegen_support::RuntimeFeatures::none());
+            let root = assembly.split("__rt_gc_collect_cycles_root_refcounted:\n").nth(1).unwrap();
+            let mode_probe = root.split("cbz x17, L_phpext_gc_wrapper_owner_done").next().unwrap();
+            for line in mode_probe.lines() {
+                let Some((opcode, operands)) = line.trim().split_once(' ') else { continue; };
+                if matches!(opcode, "adr" | "adrp" | "add" | "mov" | "ldr" | "ldur") {
+                    let destination = operands.split(',').next().unwrap().trim();
+                    assert!(!matches!(destination, "x9" | "w9"),
+                        "{name}: mode probe overwrites the live heap header: {line}");
+                }
+            }
+        }
+    }
+
     /// Keeps the extra root-publication entry connected to its Mach-O collector atom.
     #[test]
     fn phpext_class_root_entry_uses_shared_macos_collector_label() {

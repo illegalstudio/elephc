@@ -32,7 +32,7 @@ pub(super) fn begin(emitter: &mut Emitter) {
 pub(super) fn subtract_wrapper(emitter: &mut Emitter) {
     if !emitter.phpext_output { return; }
     let done = "L_phpext_gc_wrapper_owner_done";
-    abi::emit_load_symbol_to_reg(emitter, if emitter.target.arch == Arch::AArch64 { "x17" } else { "r11" }, MODE, 0);
+    super::gc_candidates::load(emitter, "x17", "r11", MODE);
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cbz x17, {done}"));                   // ordinary collection treats host wrappers as external owners
