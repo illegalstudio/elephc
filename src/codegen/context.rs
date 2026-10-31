@@ -573,11 +573,6 @@ impl<'a> FunctionContext<'a> {
         self.local_analysis.ever_stores_ref_cell_pointer(slot)
     }
 
-    /// Returns whether this frame exclusively promotes the slot into an owned boxed cell.
-    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
-        self.local_analysis.owns_mixed_ref_cell_payload(slot)
-    }
-
     /// Returns whether this deferred release may execute while the slot stores a ref-cell pointer.
     pub(super) fn release_local_slot_may_observe_ref_cell(&self, inst: InstId) -> bool {
         self.local_analysis.release_may_observe_ref_cell(inst)
@@ -1515,14 +1510,9 @@ impl<'a> FunctionContext<'a> {
     /// conditional `unset()`, while the caller's still-attached cell keeps the ABI shape from
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
-    fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
-        if let Some(param) = self
-            .function
-            .params
-            .get(slot.as_raw() as usize)
-            .filter(|param| param.by_ref)
-        {
-            return Ok(param.php_type.clone());
+    pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        if let Some(ty) = self.local_analysis.stable_ref_cell_payload_type(slot) {
+            return Ok(ty.clone());
         }
         self.local_php_type(slot)
     }

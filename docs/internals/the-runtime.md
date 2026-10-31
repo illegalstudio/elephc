@@ -1167,7 +1167,7 @@ elephc lowers exceptions with a small runtime layer around the libc `_setjmp` / 
 | `__rt_exception_release_owned` / `__rt_exception_release_callable` | Clear captured ownership and run its typed release behind a protected PHP callback | C ABI guard pointer | Success or pending throwable status |
 | `__rt_exception_matches` | Check whether the active exception matches a catch target by class id or interface id | `x0` = exception object, `x1` = target id, `x2` = 0 for class / 1 for interface | `x0` = 1 if it matches, 0 otherwise |
 | `__rt_instanceof_lookup` | Resolve a dynamic class-string `instanceof` target through emitted case-insensitive class/interface metadata | `x1`/`x2` = target string | `x0` = found flag, `x1` = target id, `x2` = 0 class / 1 interface |
-| `__rt_instanceof_invalid_target` | Abort when a dynamic `instanceof` target is neither a string nor an object | — | does not return |
+| `__rt_instanceof_invalid_target` | Construct and throw an `Error` when a dynamic `instanceof` target is neither a string nor an object | none | does not return normally |
 | `__rt_class_implements_interface` | Test class metadata against an interface id for dynamic class-string checks without an object instance | `x0` = class id, `x1` = interface id | `x0` = 1 if implemented, 0 otherwise |
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
@@ -1888,7 +1888,7 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg`: runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_resource_id_prefix` — prefix used by resource display helpers

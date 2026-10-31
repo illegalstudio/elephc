@@ -29048,7 +29048,7 @@ echo $box instanceof $target ? "bad" : "bad";
 "#,
     );
     assert!(
-        err.contains("Fatal error: Class name must be a valid object or a string"),
+        err.contains("Class name must be a valid object or a string"),
         "{err}"
     );
 }
@@ -29065,7 +29065,7 @@ echo $value instanceof $target ? "bad" : "bad";
 "#,
     );
     assert!(
-        err.contains("Fatal error: Class name must be a valid object or a string"),
+        err.contains("Class name must be a valid object or a string"),
         "{err}"
     );
 }

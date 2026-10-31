@@ -14,7 +14,7 @@
 //! - `CatchBind` produces an owned SSA value; its following storage opcode determines
 //!   which local lifecycle, if any, participates in cleanup (issue #448).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ir::{
     BlockId, Function, Immediate, InstId, LocalSlotId, Op, Terminator, ValueDef, ValueId,
@@ -31,7 +31,7 @@ pub(super) struct LocalSlotAnalysis {
     ref_cell_slots_before_inst: HashSet<(InstId, LocalSlotId)>,
     release_ops_with_possible_ref_cell: HashSet<InstId>,
     owned_parameter_slots: HashSet<LocalSlotId>,
-    owned_mixed_ref_cell_slots: HashSet<LocalSlotId>,
+    stable_ref_cell_payload_types: HashMap<LocalSlotId, PhpType>,
 }
 
 impl LocalSlotAnalysis {
@@ -84,7 +84,7 @@ impl LocalSlotAnalysis {
             &ever_ref_cell_slots,
         );
         let dynamic_ref_cell_slots = dynamic_ref_cell_slots(function, &ever_ref_cell_slots);
-        let owned_mixed_ref_cell_slots = ref_cell_payloads::owned_mixed_slots(function);
+        let stable_ref_cell_payload_types = ref_cell_payloads::stable_payload_types(function);
         Self {
             stored_slots,
             ever_ref_cell_slots,
@@ -92,7 +92,7 @@ impl LocalSlotAnalysis {
             ref_cell_slots_before_inst,
             release_ops_with_possible_ref_cell,
             owned_parameter_slots,
-            owned_mixed_ref_cell_slots,
+            stable_ref_cell_payload_types,
         }
     }
 
@@ -131,9 +131,9 @@ impl LocalSlotAnalysis {
         self.owned_parameter_slots.contains(&slot)
     }
 
-    /// Identifies cells allocated by this frame with a boxed payload and no external rebinding.
-    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
-        self.owned_mixed_ref_cell_slots.contains(&slot)
+    /// Returns the stable physical payload type shared by every reference binding of this slot.
+    pub(super) fn stable_ref_cell_payload_type(&self, slot: LocalSlotId) -> Option<&PhpType> {
+        self.stable_ref_cell_payload_types.get(&slot)
     }
 }
 
@@ -691,6 +691,129 @@ mod tests {
         assert!(analysis.ever_stores_ref_cell_pointer(slot));
         assert!(!analysis.has_dynamic_ref_cell_state(slot));
         assert!(!analysis.owns_parameter_slot(slot));
+        assert_eq!(analysis.stable_ref_cell_payload_type(slot), Some(&PhpType::Mixed));
+    }
+
+    /// Concrete incoming reference cells retain their raw payload ABI.
+    #[test]
+    fn concrete_by_ref_parameter_is_not_treated_as_mixed_payload_storage() {
+        let mut function = Function::new(
+            "concrete_by_ref_parameter".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Object),
+            php_type: PhpType::Object("ReferenceValue".to_string()),
+            by_ref: true,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("ReferenceValue".to_string()),
+            LocalKind::PhpLocal,
+        );
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(
+            analysis.stable_ref_cell_payload_type(slot),
+            Some(&PhpType::Object("ReferenceValue".to_string()))
+        );
+    }
+
+    /// Rebinding an incoming Mixed reference adopts the external cell's payload ABI.
+    #[test]
+    fn rebound_mixed_by_ref_parameter_is_not_treated_as_stable_mixed_payload_storage() {
+        let mut function = Function::new(
+            "rebound_mixed_by_ref_parameter".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let source = function.add_local(
+            Some("source".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("ReferenceValue".to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot,
+                    second: source,
+                }),
+                IrType::Void,
+                PhpType::Object("ReferenceValue".to_string()),
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(analysis.stable_ref_cell_payload_type(slot), None);
+    }
+
+    /// A concrete alias keeps its cell ABI after eval widens the target's frame slot to Mixed.
+    #[test]
+    fn widened_local_alias_preserves_concrete_ref_cell_payload_type() {
+        let mut function = Function::new(
+            "widened_local_alias".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let target = function.add_local(
+            Some("target".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let source = function.add_local(
+            Some("source".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: target,
+                    second: source,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
     }
 
     /// Verifies AArch64 cleanup guards skip raw release when the runtime slot is a cell.

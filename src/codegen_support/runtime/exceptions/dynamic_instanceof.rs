@@ -8,9 +8,13 @@
 //! Key details:
 //! - Exception matching and unwinding must keep handler-stack, call-frame cleanup, and class metadata invariants aligned.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
+use crate::codegen_support::runtime::reference_cells;
+
+/// PHP's message for an invalid dynamic `instanceof` target.
+const INVALID_TARGET_MESSAGE_LEN: i64 = 45;
 
 /// Emits the `__rt_instanceof_lookup`, `__rt_instanceof_lookup_no`, and
 /// `__rt_instanceof_invalid_target` runtime helpers for dynamic instanceof.
@@ -27,9 +31,19 @@ use crate::codegen_support::abi;
 pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_dynamic_instanceof_linux_x86_64(emitter);
-        return;
+    } else {
+        emit_dynamic_instanceof_aarch64(emitter);
     }
+    reference_cells::emit_reference_escape_error(
+        emitter,
+        "__rt_instanceof_invalid_target",
+        "_instanceof_target_type_msg",
+        INVALID_TARGET_MESSAGE_LEN,
+    );
+}
 
+/// Emits the dynamic `instanceof` target lookup for AArch64.
+fn emit_dynamic_instanceof_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: dynamic_instanceof ---");
     emitter.label_global("__rt_instanceof_lookup");
@@ -90,20 +104,10 @@ pub fn emit_dynamic_instanceof(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // clear the target id result on failed lookup
     emitter.instruction("mov x2, #0");                                          // clear the target kind result on failed lookup
     emitter.instruction("ret");                                                 // return lookup failure
-
-    emitter.blank();
-    emitter.label_global("__rt_instanceof_invalid_target");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
-    abi::emit_symbol_address(emitter, "x1", "_instanceof_target_type_msg");     // load the page containing the dynamic-target TypeError message
-    emitter.instruction("mov x2, #59");                                         // pass the dynamic-target TypeError message length to write()
-    emitter.instruction("mov x0, #2");                                          // fd = stderr for the dynamic instanceof TypeError
-    emitter.syscall(4);
-    emitter.instruction("mov x0, #1");                                          // exit status 1 indicates abnormal termination
-    emitter.syscall(1);
 }
 
-/// Emits the `__rt_instanceof_lookup` and `__rt_instanceof_invalid_target` helpers
-/// for Linux x86_64 (System V ABI). Performs case-insensitive string comparison against
+/// Emits the `__rt_instanceof_lookup` helper for Linux x86_64 (System V ABI).
+/// Performs case-insensitive string comparison against
 /// `_instanceof_target_entries` metadata table.
 ///
 /// Input registers: rdi = string pointer, rsi = string length
@@ -172,16 +176,32 @@ fn emit_dynamic_instanceof_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // clear the target id result on failed lookup
     emitter.instruction("xor edx, edx");                                        // clear the target kind result on failed lookup
     emitter.instruction("ret");                                                 // return lookup failure
+}
 
-    emitter.blank();
-    emitter.label_global("__rt_instanceof_invalid_target");
-    if emitter.phpext_output { abi::emit_cdylib_exit_escape(emitter); }
-    abi::emit_symbol_address(emitter, "rsi", "_instanceof_target_type_msg");    // point write() at the dynamic-target TypeError message
-    emitter.instruction("mov edx, 59");                                         // pass the dynamic-target TypeError message length to write()
-    emitter.instruction("mov edi, 2");                                          // fd = stderr for the dynamic instanceof TypeError
-    emitter.instruction("mov eax, 1");                                          // Linux syscall 1 = write
-    emitter.instruction("syscall");                                             // emit the dynamic instanceof TypeError diagnostic
-    emitter.instruction("mov edi, 1");                                          // exit status 1 indicates abnormal termination
-    emitter.instruction("mov eax, 231");                                        // Linux syscall 231 = exit_group
-    emitter.instruction("syscall");                                             // terminate after the dynamic instanceof TypeError
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Invalid targets construct and throw a catchable `Error` on every supported ABI.
+    #[test]
+    fn invalid_dynamic_instanceof_targets_throw_errors() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_dynamic_instanceof(&mut emitter);
+            let assembly = emitter.output();
+            let body = &assembly[assembly
+                .find("__rt_instanceof_invalid_target:")
+                .unwrap()..];
+            assert!(body.contains("_instanceof_target_type_msg"), "{name}");
+            assert!(body.contains("_spl_error_class_id"), "{name}");
+            assert!(body.contains("__rt_throw_current"), "{name}");
+        }
+    }
 }

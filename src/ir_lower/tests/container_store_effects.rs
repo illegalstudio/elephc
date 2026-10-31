@@ -45,9 +45,12 @@ echo count($indexed), count($hashed), count($dynamic);
         }).unwrap();
         assert!(!call.effects.intersects(callback_effects), "{name}: {:?}", call.effects);
     }
-    let function = module.functions.iter().find(|function| function.name == "callbackCapableWriter").unwrap();
-    let store = function.instructions.iter().find(|inst|
-        matches!(inst.op, Op::ArraySet | Op::HashSet | Op::ArraySetMixedKey)).unwrap();
-    assert!(store.effects.contains(Effects::MAY_THROW | Effects::ALLOC_CONCAT | Effects::MAY_WARN),
-        "unproven stores must retain callback and nullable-reference refusal effects");
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let call = main.instructions.iter().find(|inst| inst.op == Op::Call && match inst.immediate {
+        Some(Immediate::Data(id)) => module.data.function_names.get(id.as_raw() as usize)
+            .is_some_and(|candidate| candidate == "callbackCapableWriter"),
+        _ => false,
+    }).unwrap();
+    assert!(call.effects.contains(Effects::MAY_THROW | Effects::ALLOC_CONCAT | Effects::MAY_WARN),
+        "unproven stores must retain callback and nullable-reference refusal effects in summaries");
 }

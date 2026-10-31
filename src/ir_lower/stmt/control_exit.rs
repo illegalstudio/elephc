@@ -347,7 +347,7 @@ fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, na
     { return false; }
     let object_staging = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
         && match ctx.local_type(name) {
-            PhpType::Object(_) => true,
+            PhpType::Mixed | PhpType::Object(_) => true,
             PhpType::Union(members) => members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
                 && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)),
             _ => false,

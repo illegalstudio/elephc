@@ -26,13 +26,19 @@ function nativeHashCapture(array<string, int> &$items, string $source): void {
 $items = ["value" => 1]; nativeHashCapture($items, $argc > 0 ? '$items["value"] = 2;' : '');
 "#),
         ("hash_property", r#"<?php
-class NativeHashProperty { public array<string, int> $items = ["value" => 1]; }
-$holder = new NativeHashProperty(); $items =& $holder->items;
+class NativeHashProperty {
+    public array<string, int> $items = ["value" => 1];
+    public function &itemsRef(): array { return $this->items; }
+}
+$holder = new NativeHashProperty(); $items =& $holder->itemsRef();
 $source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
 "#),
         ("hash_static", r#"<?php
-class NativeHashStaticProperty { public static array<string, int> $items = ["value" => 1]; }
-$items =& NativeHashStaticProperty::$items;
+class NativeHashStaticProperty {
+    public static array<string, int> $items = ["value" => 1];
+    public static function &itemsRef(): array { return self::$items; }
+}
+$items =& NativeHashStaticProperty::itemsRef();
 $source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
 "#),
         ("parameter", r#"<?php
@@ -46,18 +52,27 @@ function nativeArrayCapture(array<int> &$items, string $source): void {
 $items = [1]; nativeArrayCapture($items, $argc > 0 ? '$items[0] = 2;' : '');
 "#),
         ("property", r#"<?php
-class NativeArrayProperty { public array<int> $items = [1]; }
-$holder = new NativeArrayProperty(); $items =& $holder->items;
+class NativeArrayProperty {
+    public array<int> $items = [1];
+    public function &itemsRef(): array { return $this->items; }
+}
+$holder = new NativeArrayProperty(); $items =& $holder->itemsRef();
 $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
 "#),
         ("static", r#"<?php
-class NativeArrayStaticProperty { public static array<int> $items = [1]; }
-$items =& NativeArrayStaticProperty::$items;
+class NativeArrayStaticProperty {
+    public static array<int> $items = [1];
+    public static function &itemsRef(): array { return self::$items; }
+}
+$items =& NativeArrayStaticProperty::itemsRef();
 $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
 "#),
         ("nullable_property", r#"<?php
-class NativeNullableArrayProperty { public ?array<int> $items = null; }
-$holder = new NativeNullableArrayProperty(); $holder->items = [1]; $items =& $holder->items;
+class NativeNullableArrayProperty {
+    public ?array<int> $items = null;
+    public function &itemsRef(): ?array { return $this->items; }
+}
+$holder = new NativeNullableArrayProperty(); $holder->items = [1]; $items =& $holder->itemsRef();
 $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
 "#),
         ("foreach", r#"<?php

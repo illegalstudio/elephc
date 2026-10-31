@@ -935,7 +935,7 @@ pub(crate) fn emit_runtime_data_fixed(
         symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
         message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
     ));
-    out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
+    out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Class name must be a valid object or a string\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
     out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");

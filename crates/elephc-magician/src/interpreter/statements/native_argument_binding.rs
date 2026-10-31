@@ -62,7 +62,9 @@ pub(super) fn bind_native_callable_bound_args_with_mode(
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if signature.param_names().len() == signature.param_count() {
+    if signature.has_explicit_shape()
+        || signature.param_names().len() == signature.param_count()
+    {
         bind_native_signature_args(&signature, args, by_ref_mode, context, values)
     } else {
         positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)

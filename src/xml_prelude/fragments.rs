@@ -696,8 +696,10 @@ final class XMLParser {
         if (!$this->__elephc_collecting) {
             return;
         }
+        $raw = $this->__elephc_handle;
+        $skipWhite = elephc_xml_parser_get_option($raw, 4) === 1;
         $doprint = false;
-        if (elephc_xml_parser_get_option($this->__elephc_handle, 4) === 1) {
+        if ($skipWhite) {
             $length = strlen($data);
             for ($i = 0; $i < $length; $i++) {
                 $byte = $data[$i];
@@ -707,7 +709,7 @@ final class XMLParser {
                 }
             }
         }
-        $keep = $doprint || elephc_xml_parser_get_option($this->__elephc_handle, 4) !== 1;
+        $keep = $doprint || !$skipWhite;
         if ($this->__elephc_lastwasopen) {
             $index = $this->__elephc_ctag_index;
             $entry = $this->__elephc_struct_values[$index];
