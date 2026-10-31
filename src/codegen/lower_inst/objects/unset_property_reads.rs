@@ -109,7 +109,9 @@ fn read_dynamic(
             "Unsupported unset(): missing opaque property requires a raw storage fetch");
     } else {
         let hash = hash.expect("dynamic storage checked above");
-        emit_dynamic_property_creation_deprecation(ctx, class, hash, 16, 0)?;
+        emit_dynamic_property_creation_deprecation(
+            ctx, class, hash, 16, 0, inst.span.map_or(0, |span| span.line),
+        )?;
         create_null(ctx, hash);
     }
     abi::emit_jump(ctx.emitter, &done);

@@ -9,6 +9,7 @@
 //! - Fresh results cannot alias operands; strict identity never invokes these handlers.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 
 /// Distinguishes possible PHP objects from scalar unions that merely use boxed storage.
 pub(super) fn can_contain_object(ty: &PhpType) -> bool {

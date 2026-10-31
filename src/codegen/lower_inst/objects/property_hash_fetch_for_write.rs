@@ -28,7 +28,9 @@ pub(in crate::codegen::lower_inst) fn lower_property_hash_fetch_for_write(
     ctx.load_string_value_to_regs(name, ptr, len)?;
     abi::emit_store_to_sp(ctx.emitter, ptr, 32);
     abi::emit_store_to_sp(ctx.emitter, len, 40);
-    emit_dynamic_property_creation_deprecation(ctx, &class, offset, 24, 32)?;
+    emit_dynamic_property_creation_deprecation(
+        ctx, &class, offset, 24, 32, inst.span.map_or(0, |span| span.line),
+    )?;
     // The warning handler may replace the hash, so select it only after the diagnostic.
     abi::emit_load_temporary_stack_slot(ctx.emitter, scratch, 24);
     abi::emit_load_from_address(ctx.emitter, second, scratch, offset);

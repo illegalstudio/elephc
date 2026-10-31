@@ -1117,7 +1117,7 @@ fn emit_aarch64_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare method names with PHP case-insensitive rules
     let target_label = method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        abi::emit_branch_if_zero_wide(emitter, "x0", target_label);              // dispatch to the method body when the names match
+        abi::emit_branch_if_zero_wide(emitter, "x0", &target_label);             // dispatch to the method body when the names match
         return;
     }
     let miss_label = method_access_miss_label(module, slot);
@@ -1192,7 +1192,7 @@ fn emit_aarch64_static_method_name_compare(
     emitter.instruction("bl __rt_strcasecmp");                                  // compare static method names with PHP case-insensitive rules
     let target_label = static_method_body_label(module, slot);
     if matches!(slot.visibility, Visibility::Public) {
-        abi::emit_branch_if_zero_wide(emitter, "x0", target_label);              // dispatch to the static method body when the names match
+        abi::emit_branch_if_zero_wide(emitter, "x0", &target_label);             // dispatch to the static method body when the names match
         return;
     }
     let miss_label = static_method_access_miss_label(module, slot);
