@@ -203,6 +203,7 @@ pub(crate) struct LoweringSnapshot {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    reference_marker_array_locals: HashSet<String>,
     borrowed_element_ref_locals: HashSet<String>,
     ref_cell_owner_locals: HashMap<String, LocalSlotId>,
     foreach_int_key_locals: HashSet<String>,
@@ -441,6 +442,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
     fiber_start_sigs: HashMap<String, FunctionSig>,
     ref_bound_locals: HashSet<String>,
+    /// Array locals that may contain invoker reference markers, including copies of a
+    /// by-reference variadic collector. Their string-key writes must use the storage-aware
+    /// writer instead of consuming the container through indexed-to-hash promotion.
+    reference_marker_array_locals: HashSet<String>,
     /// Reference-bound locals whose cell address points INSIDE another allocation, currently
     /// an indexed-array element slot. `__rt_reference_cell_owner` deliberately answers zero for
     /// such an address, so the alias can never transfer an owner and must not escape the frame
@@ -652,6 +657,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: HashMap::new(),
             fiber_start_sigs: HashMap::new(),
             ref_bound_locals: HashSet::new(),
+            reference_marker_array_locals: HashSet::new(),
             borrowed_element_ref_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
@@ -732,6 +738,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             reflection_arg_array_locals: self.reflection_arg_array_locals.clone(),
             fiber_start_sigs: self.fiber_start_sigs.clone(),
             ref_bound_locals: self.ref_bound_locals.clone(),
+            reference_marker_array_locals: self.reference_marker_array_locals.clone(),
             borrowed_element_ref_locals: self.borrowed_element_ref_locals.clone(),
             ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
             foreach_int_key_locals: self.foreach_int_key_locals.clone(),
@@ -844,6 +851,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.reflection_arg_array_locals = snapshot.reflection_arg_array_locals;
         self.fiber_start_sigs = snapshot.fiber_start_sigs;
         self.ref_bound_locals = snapshot.ref_bound_locals;
+        self.reference_marker_array_locals = snapshot.reference_marker_array_locals;
         self.borrowed_element_ref_locals = snapshot.borrowed_element_ref_locals;
         self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
         self.foreach_int_key_locals = snapshot.foreach_int_key_locals;
@@ -1484,6 +1492,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn unmark_ref_bound_local(&mut self, name: &str) {
         self.ref_bound_locals.remove(name);
         self.borrowed_element_ref_locals.remove(name);
+    }
+
+    /// Records that an array local can carry invoker reference-marker cells.
+    pub(crate) fn mark_reference_marker_array_local(&mut self, name: &str) {
+        self.reference_marker_array_locals.insert(name.to_string());
+    }
+
+    /// Clears the marker-container fact after the local is replaced or unset.
+    pub(crate) fn clear_reference_marker_array_local(&mut self, name: &str) {
+        self.reference_marker_array_locals.remove(name);
+    }
+
+    /// Returns whether storage-aware writes are required to preserve reference-marker cells.
+    pub(crate) fn local_may_contain_reference_markers(&self, name: &str) -> bool {
+        self.reference_marker_array_locals.contains(name)
+    }
+
+    /// Captures marker-container facts at a control-flow split.
+    pub(crate) fn reference_marker_array_locals_snapshot(&self) -> HashSet<String> {
+        self.reference_marker_array_locals.clone()
+    }
+
+    /// Restores marker-container facts for one control-flow arm.
+    pub(crate) fn restore_reference_marker_array_locals(&mut self, markers: HashSet<String>) {
+        self.reference_marker_array_locals = markers;
+    }
+
+    /// Unions marker-container facts from another reachable control-flow arm.
+    pub(crate) fn merge_reference_marker_array_locals(&mut self, markers: &HashSet<String>) {
+        self.reference_marker_array_locals.extend(markers.iter().cloned());
     }
 
     /// Records that a local aliases an interior address borrowed from a live container.
@@ -3108,6 +3146,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         );
         self.unmark_ref_bound_local(name);
+        self.clear_reference_marker_array_local(name);
         if detaches_reference {
             // UnsetLocal clears promotion state, but its null sentinel is not an inert raw
             // string pointer. Zero the old storage without widening the capture's payload ABI.

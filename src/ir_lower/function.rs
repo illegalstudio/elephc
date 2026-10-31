@@ -1789,6 +1789,11 @@ fn lower_body_into_function(
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    let reference_variadic = function.signature.as_ref().and_then(|signature| {
+        let name = signature.variadic.as_ref()?;
+        let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
+        signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
+    });
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -1858,6 +1863,9 @@ fn lower_body_into_function(
         if by_ref_params.get(index).copied().unwrap_or(false) {
             ctx.mark_ref_bound_local(name);
         }
+    }
+    if let Some(name) = reference_variadic {
+        ctx.mark_reference_marker_array_local(&name);
     }
     // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and

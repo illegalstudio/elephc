@@ -83,6 +83,7 @@ fn lower_if_chain(
     // Without this, `if (..) { $r = &$a[0]; } else { $r = &$o->p; }` would take whichever arm
     // was lowered last as the answer for both.
     let split_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
+    let split_reference_marker_arrays = ctx.reference_marker_array_locals_snapshot();
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
@@ -99,12 +100,14 @@ fn lower_if_chain(
     }
 
     let then_borrowed_refs = ctx.borrowed_element_ref_locals_snapshot();
+    let then_reference_marker_arrays = ctx.reference_marker_array_locals_snapshot();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
     ctx.restore_local_types(split_types);
     ctx.restore_static_callable_locals(split_static_callables);
     ctx.restore_reflection_bindings(split_reflection);
     ctx.restore_borrowed_element_ref_locals(split_borrowed_refs);
+    ctx.restore_reference_marker_array_locals(split_reference_marker_arrays);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
             lower_if_chain(
@@ -137,9 +140,11 @@ fn lower_if_chain(
     merge_reachable |= else_reachable;
     if !else_reachable {
         ctx.restore_borrowed_element_ref_locals(HashSet::new());
+        ctx.restore_reference_marker_array_locals(HashSet::new());
     }
     if then_reachable {
         ctx.merge_borrowed_element_ref_locals(&then_borrowed_refs);
+        ctx.merge_reference_marker_array_locals(&then_reference_marker_arrays);
     }
     let else_initialized = ctx.initialized_slots_snapshot();
     ctx.restore_initialized_slots(merge_initialized_slots(

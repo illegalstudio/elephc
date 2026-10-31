@@ -286,8 +286,9 @@ fn lower_array_assign_from_value(
     } else {
         (array_value, None)
     };
-    // Concrete string keys normally select associative storage. Mixed-slot arrays use the
-    // shared writer, preserving invoker markers in aliases and copies and keeping numeric
+    // Concrete string keys normally select associative storage. Ref-bound Mixed-slot arrays and
+    // copies of by-reference variadic collectors use the shared writer, preserving invoker
+    // markers and keeping numeric
     // strings indexed. A boxed Mixed/Union index may hold either
     // an integer or a string key (foreach loop keys are always Mixed in EIR via
     // `Op::IterCurrentKey`), so it goes through `Op::ArraySetMixedKey`, whose
@@ -303,9 +304,10 @@ fn lower_array_assign_from_value(
         && !index_is_boxed_mixed_key(index_value.ir_type);
     let mixed_elements = matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed);
-    let mixed_string_key = mixed_elements && index_value.ir_type == IrType::Str;
+    let reference_string_key = mixed_elements && index_value.ir_type == IrType::Str
+        && (ctx.is_ref_bound_local(array) || ctx.local_may_contain_reference_markers(array));
     if op == Op::ArraySet && (index_value.ir_type == IrType::Str || empty_sparse_key)
-        && !mixed_string_key
+        && !reference_string_key
     {
         lower_array_key_hash_promotion(
             ctx,
