@@ -3187,7 +3187,7 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
-    ctx.emitter.instruction(&format!("cmp x12, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}"));                                    // source shape12 stores an inline nullable integer
+    ctx.emitter.instruction(&format!("cmp x12, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores an inline nullable integer
     ctx.emitter.instruction(&format!("b.eq {tagged_label}"));                   // write the replacement PHP tag into its second word
     // Release the concrete occupant this write replaces. The caller ref-cell holds a raw
     // pointer for an array, hash, object or string, and overwriting it orphans that occupant.
@@ -3293,7 +3293,7 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
-    ctx.emitter.instruction(&format!("cmp r11, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}"));                                    // source shape12 stores an inline nullable integer
+    ctx.emitter.instruction(&format!("cmp r11, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores an inline nullable integer
     ctx.emitter.instruction(&format!("je {tagged_label}"));                     // write the replacement PHP tag into its second word
     // See the AArch64 arm: release the replaced concrete occupant, range-checked so a
     // `.rodata` string the ownership analysis must not free is skipped.

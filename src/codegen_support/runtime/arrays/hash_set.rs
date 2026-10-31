@@ -276,7 +276,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_done");                                // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw");
-    emitter.instruction(&format!("cmp x15, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}"));                                        // source shape12 stores a nullable integer payload and tag
+    emitter.instruction(&format!("cmp x15, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged");         // decode boxed replacements before publishing both words
     emitter.instruction("ldr x14, [x14, #8]");                                  // load the concrete caller-storage address
     emitter.instruction("ldr x0, [x14]");                                       // retain the previous low payload for optional release
@@ -624,7 +624,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw_x");
-    emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}"));                                         // source shape12 stores a nullable integer payload and tag
+    emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
     emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x");         // decode boxed replacements before publishing both words
     emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the concrete caller-storage address
     emitter.instruction("mov rax, QWORD PTR [r14]");                            // retain the previous low payload for optional release
