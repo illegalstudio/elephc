@@ -58,7 +58,7 @@ use property_write_receivers::{prepare_property_write_receiver, finish_property_
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,
-    push_native_frame_called_class_override,
+    push_native_frame_called_class_override, push_native_frame_context,
 };
 
 use abstract_requirements::*;

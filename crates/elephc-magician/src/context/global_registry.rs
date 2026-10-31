@@ -39,6 +39,13 @@ pub(crate) fn push_native_frame_called_class_override(
     NativeFrameCalledClassOverrideGuard
 }
 
+/// Keeps an interpreter context active across a native call without changing class resolution.
+pub(crate) fn push_native_frame_context(
+    context: *mut ElephcEvalContext,
+) -> NativeFrameCalledClassOverrideGuard {
+    push_native_frame_called_class_override(context, "", "")
+}
+
 impl Drop for NativeFrameCalledClassOverrideGuard {
     /// Removes the most recent native-frame called-class override.
     fn drop(&mut self) {
@@ -123,6 +130,33 @@ pub(crate) fn native_frame_active_eval_context() -> Option<*mut ElephcEvalContex
     NATIVE_FRAME_CALLED_CLASS_OVERRIDES.with(|overrides| {
         overrides.borrow().last().map(|entry| entry.context).filter(|context| !context.is_null())
     })
+}
+
+#[cfg(test)]
+mod active_context_tests {
+    use super::*;
+
+    /// Nested global calls restore their caller's context without masking called-class metadata.
+    #[test]
+    fn context_only_native_frames_preserve_class_overrides_and_restore_context() {
+        let mut outer = ElephcEvalContext::new();
+        let mut inner = ElephcEvalContext::new();
+        let outer_ptr = &mut outer as *mut ElephcEvalContext;
+        let inner_ptr = &mut inner as *mut ElephcEvalContext;
+        {
+            let _method = push_native_frame_called_class_override(outer_ptr, "Parent", "Child");
+            assert_eq!(native_frame_active_eval_context(), Some(outer_ptr));
+            {
+                let _function = push_native_frame_context(inner_ptr);
+                assert_eq!(native_frame_active_eval_context(), Some(inner_ptr));
+                assert_eq!(native_frame_called_class_override_for_frame("Parent"), Some("Child".into()));
+                assert_eq!(native_frame_called_class_override_context("Parent"), Some((outer_ptr, "Child".into())));
+                assert_eq!(native_frame_called_class_override_for_frame(""), None);
+            }
+            assert_eq!(native_frame_active_eval_context(), Some(outer_ptr));
+        }
+        assert_eq!(native_frame_active_eval_context(), None);
+    }
 }
 
 #[cfg(not(test))]

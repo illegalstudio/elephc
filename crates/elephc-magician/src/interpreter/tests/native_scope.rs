@@ -71,6 +71,33 @@ fn execute_program_calls_registered_native_function() {
     assert_eq!(result, expected);
 }
 
+/// A global native factory can recover its interpreter context across ordinary helper frames.
+#[test]
+fn native_global_call_exposes_and_retires_its_active_context() {
+    /// Returns the result only while the global native call exposes the expected context.
+    unsafe extern "C" fn probe(
+        descriptor: *mut std::ffi::c_void,
+        _args: *mut RuntimeCell,
+        _invocation_scope: i64,
+    ) -> *mut RuntimeCell {
+        let (expected_context, result) = unsafe {
+            &*(descriptor as *const (*mut ElephcEvalContext, *mut RuntimeCell))
+        };
+        assert_eq!(crate::context::native_frame_active_eval_context(), Some(*expected_context));
+        *result
+    }
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let expected = values.int(42).unwrap();
+    let mut descriptor = (&mut context as *mut ElephcEvalContext, expected.as_ptr());
+    let native = NativeFunction::new(std::ptr::from_mut(&mut descriptor).cast(), probe, 0);
+    assert!(context.define_native_function("native_context_probe", native).is_ok());
+    let program = parse_fragment(b"return native_context_probe();").unwrap();
+    assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap(), expected);
+    assert_eq!(crate::context::native_frame_active_eval_context(), None);
+}
+
 /// Verifies registered native AOT function return types are enforced after dispatch.
 #[test]
 fn execute_program_checks_registered_native_function_return_type() {

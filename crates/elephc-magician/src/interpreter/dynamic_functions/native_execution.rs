@@ -16,6 +16,7 @@
 //!   the order the invoker's container validation requires.
 
 use super::*;
+use crate::context::push_native_frame_context;
 
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
 pub(in crate::interpreter) fn eval_native_function(
@@ -38,6 +39,7 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let _native_context = push_native_frame_context(context);
     let result = invoke_native_function_with_staged_args(&function, &bound_args, context, values);
     finish_eval_argument_values(result, bound_args.values, context, values)
 }

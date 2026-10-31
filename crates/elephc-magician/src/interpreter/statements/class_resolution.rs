@@ -512,8 +512,10 @@ pub(super) fn eval_native_method_call_with_scope(
     if let Some(called_class) = called_class_scope {
         context.push_called_class_scope(called_class.to_string());
     }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let _native_context = match called_class_scope {
+        Some(called_class) => push_native_frame_called_class_override(context, scope, called_class),
+        None => push_native_frame_context(context),
+    };
     let result = values.method_call(object, method_name, evaluated_args);
     if called_class_scope.is_some() {
         context.pop_called_class_scope();
@@ -536,8 +538,10 @@ pub(super) fn eval_native_static_method_call_with_scope(
     if let Some(called_class) = called_class_scope {
         context.push_called_class_scope(called_class.to_string());
     }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let _native_context = match called_class_scope {
+        Some(called_class) => push_native_frame_called_class_override(context, scope, called_class),
+        None => push_native_frame_context(context),
+    };
     let result = values.static_method_call(class_name, method_name, evaluated_args);
     if called_class_scope.is_some() {
         context.pop_called_class_scope();
