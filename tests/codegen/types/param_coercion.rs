@@ -115,3 +115,18 @@ fn test_coercive_binding_applies_to_named_arguments() {
     );
     assert_eq!(out, "4.5|7");
 }
+
+/// PHP's union coercion prefers `int` over `string`, regardless of declaration order.
+#[test]
+fn test_union_scalar_coercion_prefers_php_order() {
+    let out = compile_and_run(
+        r#"<?php
+        function describe(int|string $value): string {
+            return gettype($value) . ":" . $value;
+        }
+        echo describe(true), "\n";
+        echo describe(1.0), "\n";
+        "#,
+    );
+    assert_eq!(out, "integer:1\ninteger:1\n");
+}

@@ -2,7 +2,7 @@
 title: "ctype_alnum()"
 description: "Checks if all characters in the string are alphanumeric."
 sidebar:
-  order: 1025
+  order: 1026
 ---
 
 ## ctype_alnum()

@@ -2,7 +2,7 @@
 title: "session_create_id()"
 description: "Generates a new session id, optionally with a prefix."
 sidebar:
-  order: 1062
+  order: 1063
 ---
 
 ## session_create_id()

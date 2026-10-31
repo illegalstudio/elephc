@@ -2,7 +2,7 @@
 title: "xmlwriter_start_dtd_attlist() - internals"
 description: "Compiler internals for xmlwriter_start_dtd_attlist(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1128
+  order: 1129
 ---
 
 ## `xmlwriter_start_dtd_attlist()` - internals

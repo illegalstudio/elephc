@@ -210,3 +210,60 @@ fn fileinfo_native_blocked_file_does_not_block_other_handles() {
         assert_eq!((freed, flags, value.to_bytes()), (1, 1, b"us-ascii".as_slice()));
     }
 }
+
+/// A hostile database cannot grow the warning queue without bound.
+#[test]
+fn fileinfo_warning_queue_is_bounded() {
+    clear_warnings();
+    for _ in 0..(MAX_WARNINGS + 1) {
+        unsafe { elephc_libmagic_warn(c"warning".as_ptr()); }
+    }
+    assert_eq!(elephc_fileinfo_warnings_pending(), MAX_WARNINGS as i64);
+    assert_eq!(elephc_fileinfo_warnings_suppressed(), 1);
+    clear_warnings();
+    assert_eq!(elephc_fileinfo_warnings_pending(), 0);
+    assert_eq!(elephc_fileinfo_warnings_suppressed(), 0);
+}
+
+/// open_basedir compares resolved paths, honours directory boundaries and multiple roots, and
+/// rejects symlink targets, `..` escapes and sibling prefixes while allowing nonexistent leaves
+/// inside an allowed root.
+#[test]
+fn fileinfo_open_basedir_paths() {
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let root = std::env::temp_dir().join(format!(
+        "elephc_fileinfo_basedir_{}_{nanos}", std::process::id()
+    ));
+    let sibling = root.with_file_name(format!("{}_sibling", root.file_name().unwrap().to_string_lossy()));
+    let outside = root.with_file_name(format!("{}_outside", root.file_name().unwrap().to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&outside);
+    std::fs::create_dir(&root).unwrap();
+    let inside = root.join("inside.magic");
+    std::fs::write(&inside, b"0 string x test\n").unwrap();
+    std::fs::write(&outside, b"0 string x test\n").unwrap();
+    let link = root.join("link.magic");
+    symlink(&outside, &link).unwrap();
+    let roots = CString::new(root.to_str().unwrap()).unwrap();
+    let allowed = |path: &Path, roots: &CStr| {
+        let path = CString::new(path.to_str().unwrap()).unwrap();
+        unsafe { elephc_fileinfo_path_allowed(path.as_ptr(), roots.as_ptr()) == 1 }
+    };
+    assert!(allowed(&inside, &roots));
+    assert!(allowed(&root.join("missing.magic"), &roots));
+    assert!(!allowed(&outside, &roots));
+    assert!(!allowed(&link, &roots));
+    assert!(!allowed(&sibling, &roots));
+    assert!(!allowed(&root.join("..").join(outside.file_name().unwrap()), &roots));
+    let multiple = CString::new(format!("{}:{}", root.display(), outside.parent().unwrap().display())).unwrap();
+    assert!(allowed(&outside, &multiple));
+    assert!(unsafe {
+        elephc_fileinfo_path_allowed(c"/etc/hosts".as_ptr(), c"/".as_ptr()) == 1
+    });
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_file(&outside);
+}

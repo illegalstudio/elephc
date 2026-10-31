@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/fileinfo_prelude/build.rs`:156](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs#L156) (`finfo_close`)
+- **Lowering**: [`src/fileinfo_prelude/build.rs`:223](https://github.com/illegalstudio/elephc/blob/main/src/fileinfo_prelude/build.rs#L223) (`finfo_close`)
 - **Function symbol**: `finfo_close()`
 
 

@@ -176,6 +176,12 @@ pub(super) fn builtin_reflection_owner_class(
             false_bool(),
         ));
         properties.push(builtin_property(
+            "__has_tentative_return_type",
+            Visibility::Private,
+            Some(bool_type()),
+            false_bool(),
+        ));
+        properties.push(builtin_property(
             "__required_parameter_count",
             Visibility::Private,
             Some(TypeExpr::Int),
@@ -195,7 +201,7 @@ pub(super) fn builtin_reflection_owner_class(
             "hasReturnType",
             "__has_return_type",
         ));
-        methods.push(builtin_reflection_class_mixed_method("getReturnType", "__type"));
+        methods.push(builtin_reflection_declared_type_getter());
         methods.push(builtin_reflection_constant_false_bool_method("isClosure"));
         methods.push(builtin_reflection_class_bool_method(
             "isDeprecated",
@@ -212,12 +218,12 @@ pub(super) fn builtin_reflection_owner_class(
             "isGenerator",
             "__is_generator",
         ));
-        methods.push(builtin_reflection_constant_false_bool_method(
+        methods.push(builtin_reflection_slot_getter(
             "hasTentativeReturnType",
+            "__has_tentative_return_type",
+            bool_type(),
         ));
-        methods.push(builtin_reflection_constant_null_mixed_method(
-            "getTentativeReturnType",
-        ));
+        methods.push(builtin_reflection_tentative_type_getter());
         methods.push(builtin_reflection_function_method_is_variadic_method());
         methods.push(builtin_reflection_class_string_method(
             "__toString",

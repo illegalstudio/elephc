@@ -64,7 +64,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
-        ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
+        ("libmagic", 11) => Some(BuiltInRecipe::Libmagic),
         ("libxml2", 1) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
         _ => None,

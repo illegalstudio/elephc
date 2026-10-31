@@ -2,7 +2,7 @@
 title: "session_id() - internals"
 description: "Compiler internals for session_id(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1068
+  order: 1069
 ---
 
 ## `session_id()` - internals

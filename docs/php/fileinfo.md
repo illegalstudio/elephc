@@ -41,8 +41,8 @@ stream context. The context argument of `finfo_buffer()` has no effect, as in PH
 Directories return `directory`.
 
 Wrapper names may be built at runtime. File queries support `data://`, local
-`file://` URLs, Phar URLs, standard-input and temporary `php://`
-streams, and `php://filter` read chains.
+`file://` URLs, Phar URLs, read-only `zip://archive#entry` URLs, standard-input
+and temporary `php://` streams, and `php://filter` read chains.
 Read filters inspect the transformed bytes, including nested wrapper resources.
 Like PHP 8.5, file queries identify a wrapper only after stream stat succeeds.
 Direct network URLs still perform their request with the stream context, then
@@ -69,7 +69,16 @@ error handler is not reentered for diagnostics emitted while an exception is pen
 `finfo_open(int $flags = FILEINFO_NONE, ?string $magic_database = null)` returns a
 `finfo` object or `false`. `new finfo(...)` throws an exception when database
 initialization fails. Null or empty database names select the embedded default;
-custom text and compiled magic databases are accepted.
+custom text and compiled magic databases are accepted. When a successful load
+emits diagnostics, `finfo_open()` replays them as warnings and returns the
+object, while `new finfo()` throws the first diagnostic as an exception. A
+user error handler that throws during replay propagates its exception.
+
+When the build sets `open_basedir`, a custom database must resolve inside one of
+its roots. The check follows symlinks, folds `..`, honours directory boundaries,
+and accepts multiple colon-separated roots. A rejected path produces PHP's
+`open_basedir restriction in effect` warning for `finfo_open()` or exception for
+`new finfo()` before the database is opened.
 
 `$info->set_flags($flags)` and `finfo_set_flags($info, $flags)` change persistent
 options. A nonzero flags argument on an individual query temporarily replaces
@@ -83,6 +92,23 @@ context emit `E_DEPRECATED`; older profiles retain their original behavior. Clon
 refused. Content descriptions and the set of recognized file formats follow the
 pinned upstream libmagic database, which can differ from the database bundled by
 a particular PHP release.
+
+## Compliance
+
+PHP 8.5.10's complete `ext/fileinfo/tests` corpus is committed under
+`tests/php_src/fileinfo/`, and each fixture is generated into an ordinary Rust `#[test]` with its PHP source and
+assertion inline in `tests/codegen/fileinfo_php_src_cases.rs`. All **62** fixtures
+run through the compiler's own codegen harness,
+including the zip-stream fixture and the `intl` locale-reset fixture; the latter
+uses the minimal locale surface (`setlocale`, `nl_langinfo(CODESET)`) injected by
+the compiler.
+
+```bash
+cargo test --test codegen_tests php_src_fileinfo
+```
+
+`scripts/php-src-fileinfo.py` remains available to compare a newer php-src
+checkout against the same corpus without changing the committed tests.
 
 <!-- elephc:generated:symbols:begin -->
 

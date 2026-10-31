@@ -394,7 +394,7 @@ restore_error_handler();
 echo $f->buffer("hello"), "\n";
 "#);
     assert!(out.success, "fileinfo program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "2\nfile\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
+    assert_eq!(out.stdout, "2\nfile\n2\n2\n2\ndatabase\nwarning\ntext/plain\n", "{}", out.stderr);
     let mut failures = Vec::new();
     if !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
         eprintln!("Fileinfo warning assembly:\n{asm}");
@@ -455,4 +455,23 @@ echo "|", (new ReflectionFunction("finfo_close"))->isDeprecated() ? "deprecated"
         "text/plain|text/plain|8192|text/plain|8192|text/plain|8192|closed|deprecated");
     assert_eq!(compile_and_run_with_php_version(source, elephc::php_version::PhpVersion::Php84),
         "text/plain|text/plain|text/plain|text/plain|closed|current");
+}
+
+/// PCRE2 receives the original subject length, so a trailing byte cannot be dropped and turn
+/// a non-matching regex rule into a match.
+#[test]
+fn test_fileinfo_regex_subject_length_matches_php() {
+    if fileinfo_native::skip("test_fileinfo_regex_subject_length_matches_php") { return; }
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents(__DIR__ . "/slow.magic", "0 regex (a+)+$ slow\n");
+$f = finfo_open(0, __DIR__ . "/slow.magic");
+echo finfo_buffer($f, str_repeat("a", 30) . "b"), "\n";
+echo finfo_buffer($f, "aaa"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ASCII text, with no line terminators\nslow, ASCII text, with no line terminators\n"
+    );
 }

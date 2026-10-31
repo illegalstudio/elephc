@@ -21,7 +21,7 @@ pub(super) fn failure(reason: Expr) -> Vec<Stmt> {
     let mut message = e_binop(e_var("_function"), BinOp::Concat, e_str("("));
     message = e_binop(message, BinOp::Concat, e_var("filename"));
     message = e_binop(message, BinOp::Concat, e_str("): Failed to open stream: "));
-    vec![s_if(e_var("_report_errors"), vec![s_expr(e_call("__elephc_builtin_warning", vec![e_binop(message, BinOp::Concat, reason)]))], vec![], None), s_return(e_bool(false))]
+    vec![s_if(e_var("_report_errors"), vec![super::build::warning(e_binop(message, BinOp::Concat, reason))], vec![], None), s_return(e_bool(false))]
 }
 
 /// Decodes a data URL into bytes for the runtime stream reader.

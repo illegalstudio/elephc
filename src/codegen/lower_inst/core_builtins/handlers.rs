@@ -474,20 +474,21 @@ fn emit_default_user_error(
     internal_category: Option<&[u8]>,
 ) -> Result<()> {
     let skip_output = ctx.next_label("trigger_error_skip_output");
+    let html = crate::codegen_support::html_errors_enabled();
     load_integer_operand(ctx, level)?;
     let level_reg = abi::nested_call_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, level_reg, abi::int_result_reg(ctx.emitter));
     let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, mask_reg, "_php_error_reporting", 0);
     emit_branch_if_no_mask_overlap(ctx, mask_reg, level_reg, &skip_output);
-    if let Some(category) = internal_category { emit_user_error_fragment(ctx, category); }
-    else { emit_user_error_category(ctx, level_reg); }
+    if let Some(category) = internal_category { emit_user_error_category_bytes(ctx, category, html); }
+    else { emit_user_error_category(ctx, level_reg, html); }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.load_string_value_to_regs(message, "x1", "x2")?,
         Arch::X86_64 => ctx.load_string_value_to_regs(message, "rdi", "rsi")?,
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_write");
-    emit_user_error_fragment(ctx, b" in ");
+    emit_user_error_fragment(ctx, if html { b" in <b>" as &[u8] } else { b" in " });
     match site {
         TriggerSite::Operands { file, .. } => match ctx.emitter.target.arch {
             Arch::AArch64 => ctx.load_string_value_to_regs(file, "x1", "x2")?,
@@ -511,7 +512,7 @@ fn emit_default_user_error(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_write");
-    emit_user_error_fragment(ctx, b" on line ");
+    emit_user_error_fragment(ctx, if html { b"</b> on line <b>" as &[u8] } else { b" on line " });
     match site {
         TriggerSite::Operands { line, .. } => load_integer_operand(ctx, line)?,
         TriggerSite::Caller => {
@@ -532,7 +533,7 @@ fn emit_default_user_error(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_write");
-    emit_user_error_fragment(ctx, b"\n");
+    emit_user_error_fragment(ctx, if html { b"</b><br />\n" as &[u8] } else { b"\n" });
     ctx.emitter.label(&skip_output);
     load_integer_operand(ctx, level)?;
     let level_reg = abi::int_result_reg(ctx.emitter);
@@ -541,8 +542,24 @@ fn emit_default_user_error(
     Ok(())
 }
 
+/// Writes one diagnostic category, using PHP's HTML markup when `html_errors` is on.
+fn emit_user_error_category_bytes(ctx: &mut FunctionContext<'_>, category: &[u8], html: bool) {
+    let bytes = if html {
+        match category {
+            b"\nFatal error: " | b"Fatal error: " => b"<br />\n<b>Fatal error</b>:  " as &[u8],
+            b"\nWarning: " | b"Warning: " => b"<br />\n<b>Warning</b>:  " as &[u8],
+            b"\nDeprecated: " | b"Deprecated: " => b"<br />\n<b>Deprecated</b>:  " as &[u8],
+            b"\nNotice: " | b"Notice: " => b"<br />\n<b>Notice</b>:  " as &[u8],
+            _ => category,
+        }
+    } else {
+        category
+    };
+    emit_user_error_fragment(ctx, bytes);
+}
+
 /// Writes the PHP diagnostic category selected by one validated user-error level.
-fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
+fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str, html: bool) {
     let warning = ctx.next_label("trigger_error_category_warning");
     let deprecated = ctx.next_label("trigger_error_category_deprecated");
     let notice = ctx.next_label("trigger_error_category_notice");
@@ -559,7 +576,7 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
             ctx.emitter.instruction(&format!("jne {warning}"));                 // inspect the remaining nonfatal categories
         }
     }
-    emit_user_error_fragment(ctx, b"Fatal error: ");
+    emit_user_error_category_bytes(ctx, b"Fatal error: ", html);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&warning);
     match ctx.emitter.target.arch {
@@ -574,7 +591,7 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
             ctx.emitter.instruction(&format!("jne {deprecated}"));              // inspect deprecation and notice categories next
         }
     }
-    emit_user_error_fragment(ctx, b"Warning: ");
+    emit_user_error_category_bytes(ctx, b"Warning: ", html);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&deprecated);
     match ctx.emitter.target.arch {
@@ -589,10 +606,10 @@ fn emit_user_error_category(ctx: &mut FunctionContext<'_>, level_reg: &str) {
             ctx.emitter.instruction(&format!("jne {notice}"));                  // the only remaining validated level is E_USER_NOTICE
         }
     }
-    emit_user_error_fragment(ctx, b"Deprecated: ");
+    emit_user_error_category_bytes(ctx, b"Deprecated: ", html);
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&notice);
-    emit_user_error_fragment(ctx, b"Notice: ");
+    emit_user_error_category_bytes(ctx, b"Notice: ", html);
     ctx.emitter.label(&done);
 }
 

@@ -81,6 +81,12 @@ pub(in crate::interpreter) fn eval_builtin_get_loaded_extensions(
 /// (`eval_xml_bridge_linked`), the same condition `extension_loaded('xml')` answers through
 /// `eval_extension_is_loaded_in`, mirroring the native side where the link manifest lists
 /// both names for a program that links `elephc_xml`.
+/// Returns the core extension names for eval `phpinfo()` without allocating runtime values.
+pub(in crate::interpreter) fn eval_loaded_extension_names() -> Vec<String> {
+    CORE_LOADED_EXTENSIONS.iter().map(|name| (*name).to_string()).collect()
+}
+
+/// Returns the effective loaded-extension list for eval `get_loaded_extensions()`.
 pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     zend_extensions: bool,
     context: &ElephcEvalContext,

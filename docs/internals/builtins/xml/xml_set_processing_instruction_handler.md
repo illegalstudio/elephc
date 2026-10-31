@@ -2,7 +2,7 @@
 title: "xml_set_processing_instruction_handler() - internals"
 description: "Compiler internals for xml_set_processing_instruction_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1102
+  order: 1103
 ---
 
 ## `xml_set_processing_instruction_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/xml/xml_set_processing_instruction_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/xml/xml_set_processing_instruction_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

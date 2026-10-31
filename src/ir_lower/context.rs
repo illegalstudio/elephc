@@ -5173,6 +5173,15 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         self.builder.value_php_type(value)
     }
 
+    /// Reads a constant integer operand so builtins can select a compile-time shape.
+    fn constant_i64(&self, value: ValueId) -> Option<i64> {
+        let instruction = self.builder.value_defining_instruction(value)?;
+        match (instruction.op, &instruction.immediate) {
+            (crate::ir::Op::ConstI64, Some(crate::ir::Immediate::I64(value))) => Some(*value),
+            _ => None,
+        }
+    }
+
     /// Reports whether one of the program's declared classes is the named internal class.
     fn has_class(&self, name: &str) -> bool {
         self.classes

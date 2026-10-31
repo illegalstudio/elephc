@@ -196,7 +196,18 @@ pub(super) fn lower_mixed_method_call(
         builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        // The receiver is a real object whose runtime class has no matching candidate.
+        // PHP reports `Call to undefined method <runtime class>::method()`.
+        super::runtime_class_messages::emit_runtime_class_name_to_string_result(
+            ctx, receiver_reg, "object",
+        );
+        super::runtime_class_messages::emit_concat_static_prefix(
+            ctx, "Call to undefined method ",
+        );
+        super::runtime_class_messages::emit_concat_static_suffix(
+            ctx, &format!("::{method_name}()"),
+        );
+        super::exceptions::emit_error_from_string_result(ctx);
     }
 
     ctx.emitter.label(&non_object_label);

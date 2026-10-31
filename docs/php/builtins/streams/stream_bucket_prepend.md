@@ -2,7 +2,7 @@
 title: "stream_bucket_prepend()"
 description: "Prepends a bucket to the brigade."
 sidebar:
-  order: 856
+  order: 857
 ---
 
 ## stream_bucket_prepend()

@@ -382,6 +382,8 @@ impl Checker {
                             decl.span,
                             &format!("Function '{}' parameter ${}", name, decl.params[i]),
                         )?;
+                        let declared_ty = crate::fileinfo_prelude::abi::widened_function_param(name, i)
+                            .unwrap_or(declared_ty);
                         // `validate_callable_spread_elements` above has already established that
                         // this spread is eligible for runtime descriptor validation. Only that
                         // projected Mixed value may be unboxed into a declared Callable slot, and
@@ -465,7 +467,8 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )
                     })
-                    .transpose()?;
+                    .transpose()?
+                    .map(|ty| crate::fileinfo_prelude::abi::widened_function_param(name, arg_idx).unwrap_or(ty));
                 if supplied_reference {
                     // The callee holds a reference to this local from here on, and it can
                     // escape, so the local is never kill/retype eligible in this body.

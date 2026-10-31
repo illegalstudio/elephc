@@ -707,3 +707,68 @@ echo "[", sprintf($f, null), "]";
     );
     assert_eq!(out, "[][][0][0][]");
 }
+
+/// `pack()` emits PHP's exact byte order for hex, integer, and padded string formats.
+#[test]
+fn test_pack_binary_formats() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(pack("H*", "fffe000000099999")), "\n";
+echo bin2hex(pack("C*", 1, 2, 255)), "\n";
+echo bin2hex(pack("n", 0x1234)), "\n";
+echo bin2hex(pack("V", 0x12345678)), "\n";
+echo bin2hex(pack("s", 0x1234)), "\n";
+echo bin2hex(pack("S", 0x1234)), "\n";
+echo bin2hex(pack("n", 0x1234)), "\n";
+echo bin2hex(pack("l", 0x12345678)), "\n";
+echo bin2hex(pack("L", 0x12345678)), "\n";
+echo bin2hex(pack("N", 0x12345678)), "\n";
+echo bin2hex(pack("q", 0x0102030405060708)), "\n";
+echo bin2hex(pack("J", 0x0102030405060708)), "\n";
+echo bin2hex(pack("P", 0x0102030405060708)), "\n";
+echo bin2hex(pack("a4", "hi")), "\n";
+echo bin2hex(pack("Z3", "abcd")), "\n";
+echo bin2hex(pack("Z*", "abc")), "\n";
+echo bin2hex(pack("i", 0x12345678)), "\n";
+echo bin2hex(pack("I", 0x12345678)), "\n";
+"#,
+    );
+    assert_eq!(out, "fffe000000099999\n0102ff\n1234\n78563412\n3412\n3412\n1234\n78563412\n78563412\n12345678\n0807060504030201\n0102030405060708\n0807060504030201\n68690000\n616200\n61626300\n78563412\n78563412\n");
+}
+
+/// `pack()` distinguishes an explicit zero count from an omitted one, backs up with `X`, and
+/// raises PHP's missing-argument ValueErrors.
+#[test]
+fn test_pack_zero_count_backup_and_missing_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function(int $errno, string $msg): bool { echo "W:", $msg, "\n"; return true; });
+echo "empty:", bin2hex(pack("C0")), "|", bin2hex(pack("C*")), "\n";
+echo "x:", bin2hex(pack("C2X", 1, 2)), "|", bin2hex(pack("C2X0", 1, 2)), "\n";
+echo "xstar:", bin2hex(pack("C2X*", 1, 2)), "\n";
+foreach (["C", "C2", "a0", "H*"] as $f) {
+    try { pack($f); }
+    catch (Throwable $e) { echo $f, ":", $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "empty:|\nx:01|0102\nxstar:W:pack(): Type X: '*' ignored\n01\nC:Type C: too few arguments\nC2:Type C: too few arguments\na0:Type a: not enough arguments\nH*:Type H: not enough arguments\n"
+    );
+}
+
+/// `pack()` emits IEEE-754 single and double bytes in machine and explicit byte order.
+#[test]
+fn test_pack_float_formats() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(pack("f", 1.5)), "|", bin2hex(pack("d", 1.5)), "|", bin2hex(pack("G", 1.5)), "|", bin2hex(pack("g", -0.1)), "|", bin2hex(pack("e", 0.0)), "\n";
+echo bin2hex(pack("f2", 1.5, -0.1)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0000c03f|000000000000f83f|3fc00000|cdccccbd|0000000000000000\n0000c03fcdccccbd\n"
+    );
+}

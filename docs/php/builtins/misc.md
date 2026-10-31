@@ -91,6 +91,7 @@ sidebar:
 | [`pcntl_wtermsig()`](./misc/pcntl_wtermsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`php_sapi_name()`](./misc/php_sapi_name.md) | `(): string` | `string` | ✓ | - |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
+| [`phpinfo()`](./misc/phpinfo.md) | `(int $flags = 4294967295): bool` | `bool` | ✓ | ✓ |
 | [`phpversion()`](./misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_setpgid()`](./misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |

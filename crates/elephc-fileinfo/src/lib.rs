@@ -12,11 +12,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::ffi::{c_char, c_int, c_void, CStr, CString, OsStr};
+use std::ffi::{c_char, c_int, c_void, CStr, CString, OsStr, OsString};
+use std::fs;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 extern "C" {
@@ -70,6 +72,84 @@ thread_local! {
     static SUCCESS: RefCell<bool> = const { RefCell::new(false) };
     static OPEN_FAILURE: RefCell<bool> = const { RefCell::new(false) };
     static READS: RefCell<Reads> = RefCell::new(Reads::default());
+    static WARNINGS: RefCell<std::collections::VecDeque<CString>> =
+        RefCell::new(std::collections::VecDeque::new());
+    static WARNING_RESULT: RefCell<CString> = RefCell::new(CString::default());
+    static WARNINGS_SUPPRESSED: RefCell<bool> = const { RefCell::new(false) };
+}
+
+/// Upper bound on queued libmagic diagnostics for one operation.
+///
+/// PHP itself keeps emitting every warning, but a hostile text magic database can produce
+/// an unbounded stream before the prelude replays it. The cap keeps the bridge's memory
+/// bounded and reports that output was truncated.
+const MAX_WARNINGS: usize = 4096;
+
+/// Receives one formatted libmagic diagnostic for the calling thread.
+///
+/// libmagic calls this through the recipe's patched warning sink. The queue is drained by the
+/// PHP prelude with `__elephc_builtin_warning`, which reproduces `php_error_docref` framing.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_libmagic_warn(message: *const c_char) {
+    guard(|| {
+        if message.is_null() { return; }
+        let text = CStr::from_ptr(message).to_owned();
+        WARNINGS.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            if queue.len() < MAX_WARNINGS {
+                queue.push_back(text);
+            } else {
+                WARNINGS_SUPPRESSED.with(|flag| *flag.borrow_mut() = true);
+            }
+        });
+    });
+}
+
+/// Discards diagnostics left by an operation whose caller never drained them.
+fn clear_warnings() {
+    WARNINGS.with(|queue| queue.borrow_mut().clear());
+    WARNINGS_SUPPRESSED.with(|flag| *flag.borrow_mut() = false);
+}
+
+/// Reports whether the calling thread hit `MAX_WARNINGS` for its last operation.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_warnings_suppressed() -> i64 {
+    guard(|| WARNINGS_SUPPRESSED.with(|flag| i64::from(*flag.borrow())))
+}
+
+/// Discards the calling thread's queued libmagic diagnostics.
+///
+/// A constructor that converts the first successful-load warning into an exception must not
+/// leave the rest for the next unrelated query to replay.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_clear_warnings() {
+    clear_warnings();
+}
+
+/// Reports how many libmagic diagnostics the calling thread has not consumed.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_warnings_pending() -> i64 {
+    guard(|| WARNINGS.with(|queue| queue.borrow().len() as i64))
+}
+
+/// Borrows the oldest libmagic diagnostic without consuming it.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_warning_first() -> *const c_char {
+    guard(|| WARNING_RESULT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        *slot = WARNINGS.with(|queue| queue.borrow().front().cloned()).unwrap_or_default();
+        slot.as_ptr()
+    }))
+}
+
+/// Pops the oldest libmagic diagnostic into thread-local storage and returns it.
+#[no_mangle]
+pub extern "C" fn elephc_fileinfo_warning_take() -> *const c_char {
+    guard(|| WARNING_RESULT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        *slot = WARNINGS.with(|queue| queue.borrow_mut().pop_front()).unwrap_or_default();
+        slot.as_ptr()
+    }))
 }
 
 /// Copies a native string before libmagic can invalidate its backing storage.
@@ -98,6 +178,10 @@ fn directory_mode(mode: u32) -> bool { mode & 0o040000 != 0 }
 #[no_mangle]
 pub unsafe extern "C" fn elephc_fileinfo_open(flags: i64, path: *const c_char) -> i64 {
     guard(|| {
+        // Keep the strong warning sink in the same linked CGU as the public open entry:
+        // GNU ld does not replace an already-seen weak archive definition.
+        std::hint::black_box(elephc_libmagic_warn as *const ());
+        clear_warnings();
         let path = match expand_database(path) {
             Ok(path) => path,
             Err(error) => { outcome(None, CString::new(error.to_string()).unwrap_or_default()); return 0; }
@@ -143,6 +227,115 @@ unsafe fn expand_database(path: *const c_char) -> std::io::Result<CString> {
     Ok(CString::new(normalized.as_os_str().as_bytes()).unwrap_or_default())
 }
 
+/// Resolves a magic database name exactly like PHP's CWD_EXPAND, including dot components.
+///
+/// Diagnostics and the native loader both use the normalized path, so a relative name with
+/// `.`/`..` segments reports the path PHP would have opened.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_fileinfo_resolve_database(path: *const c_char) -> *const c_char {
+    guard(|| {
+        let resolved = expand_database(path).unwrap_or_default();
+        RESULT.with(|slot| {
+            *slot.borrow_mut() = resolved;
+            slot.borrow().as_ptr()
+        })
+    })
+}
+
+/// Normalizes a path lexically, dropping `.` and folding `..` against preceding components.
+fn lexical_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Resolves the longest existing prefix of `path`, then appends the remaining components.
+///
+/// PHP's `expand_filepath` checks symlinks along the existing portion, so `/tmp/link/../x`
+/// and a symlinked parent both compare as their real targets. A nonexistent suffix is kept
+/// lexically, which is what keeps a nonexistent path under an allowed root allowed.
+fn resolve_basedir_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return canonical;
+    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut existing = absolute.as_path();
+    let mut suffix: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(canonical) = fs::canonicalize(existing) {
+            let mut resolved = canonical;
+            for component in suffix.iter().rev() {
+                resolved.push(component);
+            }
+            return lexical_path(&resolved);
+        }
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        suffix.push(name.to_os_string());
+        let Some(parent) = existing.parent() else {
+            break;
+        };
+        existing = parent;
+    }
+    lexical_path(&absolute)
+}
+
+/// Reports whether `resolved` is one of `roots` or lives beneath one.
+fn within_basedir_root(resolved: &Path, root: &Path) -> bool {
+    if resolved == root {
+        return true;
+    }
+    // A filesystem root already ends in a separator; appending another would never match.
+    let mut prefix = root.to_path_buf();
+    if !prefix.as_os_str().as_bytes().ends_with(b"/") {
+        prefix.push("");
+    }
+    resolved.starts_with(prefix)
+}
+
+/// Reports whether a magic database path passes PHP's `open_basedir` confinement.
+///
+/// `roots` is the configured `open_basedir` spelling, a colon-separated list on every supported
+/// Unix target. The caller only invokes this when the setting is nonempty and the path is not
+/// null or empty, mirroring `php_check_open_basedir`'s call site in ext/fileinfo.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_fileinfo_path_allowed(
+    path: *const c_char,
+    roots: *const c_char,
+) -> i64 {
+    guard(|| {
+        if path.is_null() || roots.is_null() {
+            return 1;
+        }
+        let path = Path::new(OsStr::from_bytes(CStr::from_ptr(path).to_bytes()));
+        let resolved = resolve_basedir_path(path);
+        let roots = CStr::from_ptr(roots).to_bytes();
+        let allowed = roots
+            .split(|byte| *byte == b':')
+            .filter(|root| !root.is_empty())
+            .any(|root| {
+                let root = Path::new(OsStr::from_bytes(root));
+                within_basedir_root(&resolved, &resolve_basedir_path(root))
+            });
+        i64::from(allowed)
+    })
+}
+
 /// Releases an owned handle; an already released handle is harmless.
 #[no_mangle]
 pub extern "C" fn elephc_fileinfo_free(handle: i64) -> i64 {
@@ -175,6 +368,7 @@ pub extern "C" fn elephc_fileinfo_get_flags(handle: i64) -> i64 {
 
 /// Queries bytes or a local filename, restoring per-call flags after success or failure.
 unsafe fn query(handle: i64, data: *const c_char, length: i64, flags: i64, file: bool) {
+    clear_warnings();
     let Some(owner) = instance(handle) else {
         outcome(None, CString::new("Invalid finfo object").unwrap());
         return;

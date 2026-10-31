@@ -2,7 +2,7 @@
 title: "__elephc_zval_pack() - internals"
 description: "Compiler internals for __elephc_zval_pack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1264
+  order: 1265
 ---
 
 ## `__elephc_zval_pack()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/__elephc_zval_pack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/__elephc_zval_pack.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

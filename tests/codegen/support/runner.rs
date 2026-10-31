@@ -437,6 +437,17 @@ fn lock_bridge_staticlib_build() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Waits briefly for a concurrent nextest process to finish writing one bridge archive.
+fn wait_for_bridge_archive(path: &Path) -> bool {
+    for _ in 0..100 {
+        if path.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
 /// Builds any requested bridge staticlibs missing from the debug target directory.
 fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Path) {
     let _guard = lock_bridge_staticlib_build();
@@ -523,6 +534,18 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
             "failed to build bridge staticlib {}",
             bridge.package
         );
+        // nextest runs each test in its own process, so a sibling process may be
+        // rewriting the shared archive between this build and this check. Wait for the
+        // other writer to finish; a second build repairs a genuinely stale artifact.
+        if !wait_for_bridge_archive(&archive_path) {
+            let retry = Command::new("cargo")
+                .args(["build", "-p", bridge.package])
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .status();
+            if retry.is_ok_and(|status| status.success()) {
+                let _ = wait_for_bridge_archive(&archive_path);
+            }
+        }
         assert!(
             archive_path.exists(),
             "bridge staticlib {} was built but {} is still missing",

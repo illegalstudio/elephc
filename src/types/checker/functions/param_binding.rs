@@ -65,8 +65,36 @@ impl Checker {
         if !by_ref && *expected == PhpType::Void && actual.codegen_repr() == PhpType::Mixed {
             return Ok(());
         }
+        // `declare(strict_types=1)` performs no scalar coercion, including the
+        // `string|false` / `int|false` unions a weak call site would cast.
+        if self.strict_types
+            && is_scalar_union(actual)
+            && !Self::types_compatible(expected, actual)
+        {
+            return Err(Self::binding_mismatch_error(
+                expected,
+                actual,
+                arg.span,
+                context,
+                "`declare(strict_types=1)` is active in this file, so PHP throws a TypeError here",
+            ));
+        }
 
-        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+        // A union can accept the value at runtime only through the rewrite below; an
+        // early `type_accepts` return would leave the raw scalar in `Mixed` storage.
+        let classified = classify_param_binding(expected, actual, arg);
+        let requires_binding = matches!(
+            classified,
+            ParamBinding::Cast(_)
+                | ParamBinding::Const(_)
+                | ParamBinding::Callable(_)
+                | ParamBinding::Deprecated(_)
+                | ParamBinding::TypeError(_)
+                | ParamBinding::NeedsRuntimeCheck(_)
+        );
+        if !requires_binding
+            && (Self::types_compatible(expected, actual) || self.type_accepts(expected, actual))
+        {
             return Ok(());
         }
         if by_ref && matches!(expected, PhpType::Object(_))
@@ -89,7 +117,7 @@ impl Checker {
             }
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
-        match classify_param_binding(expected, actual, arg) {
+        match classified {
             ParamBinding::Identity | ParamBinding::Cast(_) | ParamBinding::Const(_) => Ok(()),
             ParamBinding::Callable(target) => {
                 let sig = self
@@ -241,4 +269,16 @@ impl Checker {
             self.callable_param_sigs.insert(key, sig);
         }
     }
+}
+
+/// Returns true when a type is a union of scalar members only.
+fn is_scalar_union(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Union(members) if members.iter().all(|member| matches!(
+            member,
+            PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False
+                | PhpType::Void | PhpType::Never
+        ))
+    )
 }

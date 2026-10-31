@@ -182,6 +182,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // `PHP_SAPI`, `phpversion()`), which is baked far below this function's parameter list — in
     // `codegen_support::prescan::collect_constants` and in the `phpversion()` const-fold.
     codegen::set_compile_profile(php_version, web);
+    codegen::set_compile_target(target);
     codegen::set_ini_overrides(ini_overrides.clone());
     crate::superglobals::set_compiling_for_web(web);
     crate::strict_php::set_enabled(strict_php);
@@ -592,6 +593,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         )
     };
     timings.record_since("fileinfo-prelude", phase_started);
+    crate::progress::phase("pack-prelude");
+    let phase_started = Instant::now();
+    let pack_used = crate::pack_prelude::program_uses_pack(&ast);
+    let ast = crate::pack_prelude::inject_if_used(ast, pack_used);
+    let locale_used = crate::locale_prelude::program_uses_locale(&ast);
+    let ast = crate::locale_prelude::inject_if_used(ast, locale_used);
+    timings.record_since("pack-prelude", phase_started);
     // Inject the Termwind-facing DOM HTML subset only when the program names a
     // DOM class, so other binaries never carry the HTML walker. This is an
     // interim prelude (choice B vs draft PR #654's native libxml stack).

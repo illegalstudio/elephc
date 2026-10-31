@@ -3648,3 +3648,12 @@ fn test_standalone_null_return_requirements() {
         assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
     }
 }
+
+/// Strict files do not apply the weak `string|false` / `int|false` union cast.
+#[test]
+fn test_error_strict_types_rejects_scalar_union_binding() {
+    expect_error(
+        "<?php declare(strict_types=1); function want(string $s): void {} function maybe(): string|false { return false; } want(maybe());",
+        "`declare(strict_types=1)` is active in this file",
+    );
+}
