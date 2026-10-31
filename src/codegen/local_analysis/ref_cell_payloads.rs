@@ -44,7 +44,10 @@ pub(super) fn owned_mixed_slots(function: &Function) -> HashSet<LocalSlotId> {
 }
 
 /// Finds slots whose every possible reference binding uses one compatible physical payload type.
-pub(super) fn stable_payload_types(function: &Function) -> HashMap<LocalSlotId, PhpType> {
+pub(super) fn stable_payload_types(
+    function: &Function,
+    definite_ref_cell_slots_before_inst: &HashSet<(InstId, LocalSlotId)>,
+) -> HashMap<LocalSlotId, PhpType> {
     let mut candidates = HashMap::new();
     let mut conflicts = HashSet::new();
     for (index, param) in function.params.iter().enumerate().filter(|(_, param)| param.by_ref) {
@@ -53,17 +56,28 @@ pub(super) fn stable_payload_types(function: &Function) -> HashMap<LocalSlotId, 
             record_payload_type(&mut candidates, &mut conflicts, slot, param.php_type.clone());
         }
     }
-    for inst in &function.instructions {
+    for (index, inst) in function.instructions.iter().enumerate() {
         let Some(slot) =
             ref_cell_target_slot(function, inst.op, inst.immediate.as_ref(), &inst.operands)
         else {
             continue;
         };
         let payload_ty = match (inst.op, inst.immediate.as_ref()) {
-            // Local promotions are emitted from the slot's final frame type, so the ordinary
-            // local fallback is authoritative. They are also idempotent after an external cell
-            // was adopted, and therefore must not conflict with that cell's narrower payload ABI.
-            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { .. })) => None,
+            // A promotion allocates from the owner slot only when the target can still be raw.
+            // Once every incoming path already stores a cell, it is idempotent and must not
+            // conflict with a narrower payload ABI established by an external binding.
+            (
+                Op::PromoteLocalRefCell,
+                Some(Immediate::LocalSlotPair { second, .. }),
+            ) => (!definite_ref_cell_slots_before_inst
+                .contains(&(InstId::from_raw(index as u32), slot)))
+                .then(|| {
+                    function
+                        .locals
+                        .get(second.as_raw() as usize)
+                        .map(|owner| owner.php_type.clone())
+                })
+                .flatten(),
             (Op::AliasLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
                 if conflicts.contains(second) {
                     conflicts.insert(slot);
