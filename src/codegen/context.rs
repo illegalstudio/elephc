@@ -130,6 +130,15 @@ impl<'a> FunctionContext<'a> {
             .map_or(-1, |class| class.class_id as i64)
     }
 
+    /// Returns the lexical class id encoded for the shared descriptor-invoker ABI.
+    ///
+    /// Every callback scope word carries the private warning bits below the weak/strict profile;
+    /// array/regex callback helpers pass this encoded form and the invoker shifts it back before
+    /// forwarding the class id to the callee.
+    pub(super) fn callable_callback_scope(&self) -> i64 {
+        self.lexical_class_id() << 2
+    }
+
     /// Packs source strictness and the by-reference warning request into the invocation-scope
     /// word. Weak calls keep legacy class ids and global -1; strict calls use -scope-3. Both
     /// values are shifted above the two private profile bits.

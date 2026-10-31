@@ -339,6 +339,16 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Mirror `pipeline::compile`: filter reachability is decided before any other prelude is
+    // injected. Later preludes contain introspection that must not be mistaken for user filter
+    // usage, or unrelated binaries acquire the filter bridge.
+    let overrides = TEST_INI_OVERRIDES.with(|slot| slot.borrow().clone());
+    let resolved = elephc::filter_prelude::inject_if_used_with_ini_and_initializer(
+        resolved,
+        &overrides,
+        false,
+        &mut prelude_inventory,
+    );
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
@@ -373,13 +383,6 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
-    let overrides = TEST_INI_OVERRIDES.with(|slot| slot.borrow().clone());
-    let resolved = elephc::filter_prelude::inject_if_used_with_ini_and_initializer(
-        resolved,
-        &overrides,
-        false,
-        &mut prelude_inventory,
-    );
     let resolved = elephc::parse_str_prelude::inject_if_used(
         resolved,
         &overrides,

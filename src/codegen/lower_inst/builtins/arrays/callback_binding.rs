@@ -129,7 +129,7 @@ pub(super) fn adapt_direct_callback_visible_args(
         capture_types: Vec::new(),
         descriptor_prefix_types: Vec::new(),
         descriptor_return_type: None,
-        invocation_scope_class_id: ctx.lexical_class_id(),
+        invocation_scope_class_id: ctx.callable_callback_scope(),
     };
     // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`.
     let scope = ctx.emitter.begin_out_of_line();

@@ -306,6 +306,20 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
+    // Inject the filter surface FIRST, while the AST is still the user program. Later prelude
+    // declarations contain their own introspection (`PDO` calls `is_callable()`/`get_class()`),
+    // and scanning those would mistake an injected extension for user filter reachability and
+    // retain this bridge (plus every method it dynamically dispatches) in unrelated binaries.
+    // The filter initializer is a top-level statement, so prepending it before the other
+    // declaration-only preludes does not change startup order for the user program.
+    crate::progress::phase("filter-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::filter_prelude::inject_if_used_with_ini(
+        ast,
+        &ini_overrides,
+        &mut prelude_inventory,
+    );
+    timings.record_since("filter-prelude", phase_started);
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
     // a program that reaches curl only dynamically, and declaration-reachability would then
@@ -530,7 +544,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &mut prelude_inventory,
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
-    let ast = crate::filter_prelude::inject_if_used_with_ini(ast, &ini_overrides, &mut prelude_inventory);
     let ast = crate::parse_str_prelude::inject_if_used(ast, &ini_overrides, &mut prelude_inventory);
     let ast = crate::locale_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);

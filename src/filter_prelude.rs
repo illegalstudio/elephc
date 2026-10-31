@@ -105,11 +105,10 @@ pub(crate) fn filter_declarations(config: request::FilterDefault, initialize: bo
         declarations.extend(surface::declarations());
         declarations.extend(input::declarations());
         declarations.extend(request::declarations(&config));
-        if initialize {
-            declarations.push(crate::synthetic_class::s_expr(crate::synthetic_class::e_call(
-                "__elephc_filter_initialize_request",
-                vec![],
-            )));
+        if initialize && config.name != request::FilterDefault::default().name {
+            declarations.push(crate::synthetic_class::s_expr(
+                crate::synthetic_class::e_call("__elephc_filter_initialize_request", vec![]),
+            ));
         }
         declarations
     })
