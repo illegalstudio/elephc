@@ -31,7 +31,8 @@ pub(super) fn reflection_function_metadata(
     };
     let reflected_name = function.name.trim_start_matches('\\').to_string();
     let required_parameter_count = reflection_required_parameter_count(signature);
-    let type_metadata = reflection_return_type_metadata(signature);
+    let type_metadata = reflection_owner_return_type_metadata(&reflected_name)
+        .or_else(|| reflection_return_type_metadata(signature));
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: reflected_name.clone(),
         attr_names: function.attribute_names.clone(),
@@ -77,7 +78,8 @@ pub(super) fn reflection_builtin_function_metadata(
             })
         });
     let required_parameter_count = reflection_required_parameter_count(signature);
-    let type_metadata = reflection_return_type_metadata(signature);
+    let type_metadata = reflection_owner_return_type_metadata(function_name)
+        .or_else(|| reflection_return_type_metadata(signature));
     let declaring_function = ReflectionDeclaringFunctionMember::Function {
         name: function_name.to_string(),
         attr_names: Vec::new(),

@@ -46,10 +46,30 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
-                // Not relaxed for `int|float`: `exit status for PHP type Mixed` is what the
-                // backend answers for any boxed status, so the checker keeps the clearer word.
-                if ty != PhpType::Int {
-                    return Err(CompileError::new(span, "exit() argument must be integer"));
+                // PHP prints a string status verbatim before terminating; integer statuses
+                // become the process exit code. A declared `int|string` union dispatches at
+                // runtime, so the checker accepts it and codegen selects the branch by tag.
+                // Weak mode also coerces bool, null and float statuses; strict mode keeps only
+                // the identity-compatible int/string pair.
+                let scalar_or_union = if checker.strict_types {
+                    matches!(ty, PhpType::Int | PhpType::Str)
+                        || matches!(
+                            &ty,
+                            PhpType::Union(members)
+                                if !members.is_empty()
+                                    && members.iter().all(|member| matches!(member, PhpType::Int | PhpType::Str))
+                        )
+                } else {
+                    matches!(ty, PhpType::Int | PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Void)
+                        || matches!(
+                            &ty,
+                            PhpType::Union(members)
+                                if !members.is_empty()
+                                    && members.iter().all(|member| matches!(member, PhpType::Int | PhpType::Str))
+                        )
+                };
+                if !scalar_or_union {
+                    return Err(CompileError::new(span, "exit() argument must be integer or string"));
                 }
             }
             Ok(PhpType::Void)

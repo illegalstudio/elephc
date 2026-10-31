@@ -69,6 +69,7 @@ fn merge_type(current: &mut Option<Type>, next: Type) {
 /// Tests a structural generic type without coercing array elements or mutating their storage.
 pub(in crate::interpreter) fn generic_value_accepts(ty: &Type, value: RuntimeCellHandle, context: &ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<bool, EvalStatus> {
     match ty {
+        Type::Atom(name) if name == "true" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && values.truthy(value)?),
         Type::Atom(name) if name == "false" => Ok(values.type_tag(value)? == EVAL_TAG_BOOL && !values.truthy(value)?),
         Type::Apply(name, args) if name == "array" => {
             let tag = values.type_tag(value)?;

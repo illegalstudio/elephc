@@ -25,10 +25,10 @@ fn missing_stat() -> Vec<Stmt> {
                 e_call("elephc_runtime_stream_stat_name", vec![e_var("_stat_class")]),
                 e_call("elephc_runtime_stream_stat_name_length", vec![e_var("_stat_class")]),
             ])),
-            s_expr(e_call("__elephc_builtin_warning", vec![e_binop(
+            super::build::warning(e_binop(
                 e_binop(e_var("_function"), BinOp::Concat, e_str("(): ")), BinOp::Concat,
                 e_binop(e_var("_stat_name"), BinOp::Concat, e_str("::stream_stat is not implemented!")),
-            )])),
+            )),
             s_return(e_bool(false)),
         ], vec![], None),
     ]
@@ -102,10 +102,10 @@ pub(super) fn prepare_method() -> MethodBuilder {
         s_try(vec![
             s_assign("_attached", e_call("stream_filter_append", vec![e_var("_stage_stream"), e_var("name"), e_ternary(e_var("write"), e_const("STREAM_FILTER_WRITE"), e_const("STREAM_FILTER_READ"))])),
             s_if(eq(e_var("_attached"), e_bool(false)), vec![
-                s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to locate filter \"")),
-                    BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str("\"")))])),
-                s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to create filter (")),
-                    BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str(")")))])),
+                super::build::warning(e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to locate filter \"")),
+                    BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str("\"")))),
+                super::build::warning(e_binop(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Unable to create filter (")),
+                    BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str(")")))),
                 s_return(e_null()),
             ], vec![], None),
             s_assign("_transferred", e_bool(true)), s_return(e_ternary(e_var("write"), e_array(vec![e_var("_stage_stream")]), e_var("_stage_stream"))),

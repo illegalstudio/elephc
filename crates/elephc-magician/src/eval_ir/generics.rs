@@ -69,6 +69,7 @@ pub(crate) fn parameter_type(ty: &Type) -> EvalParameterType {
         Type::Atom(name) => {
             let variant = match name.as_str() {
                 "false" => EvalParameterTypeVariant::Generic(Type::atom("false")),
+                "true" => EvalParameterTypeVariant::Generic(Type::atom("true")),
                 "array" => EvalParameterTypeVariant::Array, "bool" => EvalParameterTypeVariant::Bool,
                 "callable" => EvalParameterTypeVariant::Callable, "float" => EvalParameterTypeVariant::Float,
                 "int" => EvalParameterTypeVariant::Int, "iterable" => EvalParameterTypeVariant::Iterable,

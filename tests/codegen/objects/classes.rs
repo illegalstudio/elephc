@@ -1478,3 +1478,104 @@ echo $c->chained(), "\n";
         )
     );
 }
+
+/// A subclass override satisfies a method statically missing on the base class, and the
+/// runtime class id picks the correct implementation for each descendant.
+#[test]
+fn test_subclass_override_dispatches_from_base_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { $this->hook(); } }
+class Child extends Base { public function hook(): void { echo "child\n"; } }
+class Other extends Base { public function hook(): void { echo "other\n"; } }
+(new Child())->run();
+(new Other())->run();
+try { (new Base())->run(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "child\nother\nCall to undefined method Base::hook()\n"
+    );
+}
+
+/// `instanceof` narrows an interface receiver to the implementing class in the checker, but
+/// lowering still sees the declared interface type. A method missing from the interface must
+/// dispatch on the runtime class instead of raising "undefined method".
+#[test]
+fn test_instanceof_interface_narrowing_dispatches_on_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface Shape {}
+final class Square implements Shape {
+    public function area(): int { return 16; }
+}
+final class Circle implements Shape {
+    public function area(): int { return 12; }
+}
+function area(Shape $shape): int {
+    if ($shape instanceof Square) { return $shape->area(); }
+    if ($shape instanceof Circle) { return $shape->area(); }
+    return 0;
+}
+echo area(new Square()), "\n", area(new Circle()), "\n";
+"#,
+    );
+    assert_eq!(out, "16\n12\n");
+}
+
+/// A private descendant method is not reachable from an ancestor's scope: PHP routes the
+/// call to `__call` when one exists and raises a catchable `Error` otherwise.
+#[test]
+fn test_private_descendant_method_is_not_dispatched_from_base() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { $this->hook(); } }
+class Child extends Base { private function hook(): void { echo "child-private\n"; } }
+try {
+    (new Child())->run();
+} catch (Error $error) {
+    echo get_class($error), ":", str_contains($error->getMessage(), "hook") ? "hook" : "other", "\n";
+}
+"#,
+    );
+    assert_eq!(out, "Error:hook\n");
+}
+
+/// A descendant `__call` receives the original method name and arguments for a method
+/// statically missing on the base class.
+#[test]
+fn test_descendant_call_dispatches_from_base_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { $this->hook(1, "x"); $this->named(a: 2, b: "y"); } }
+class Child extends Base {
+    public function __call(string $name, array $args): mixed {
+        if ($name === "named") {
+            echo $name, ":", $args["a"], $args["b"], "\n";
+        } else {
+            echo $name, ":", count($args), ":", $args[0], $args[1], "\n";
+        }
+        return null;
+    }
+}
+(new Child())->run();
+"#,
+    );
+    assert_eq!(out, "hook:2:1x\nnamed:2y\n");
+}
+
+/// A descendant `__call` does not intercept an inherited method that actually exists.
+#[test]
+fn test_inherited_method_ignores_descendant_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { echo "run\n"; } }
+class Child extends Base {
+    public function __call(string $name, array $args): mixed { echo "call:", $name, "\n"; return null; }
+}
+(new Child())->run();
+"#,
+    );
+    assert_eq!(out, "run\n");
+}

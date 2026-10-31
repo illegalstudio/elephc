@@ -88,6 +88,14 @@ pub(crate) const CURL_SETOPT_UNSUPPORTED_SUFFIX: &str =
     " is not supported by this build\n";
 
 pub(crate) const OB_WARN_BAD_CALLBACK_PREFIX: &str = "Warning: ob_start(): function \"";
+/// PHP 8.5's warning when a NAN exit status is coerced to a string.
+pub(crate) const NAN_STRING_COERCION_WARNING: &str =
+    "Warning: unexpected NAN value was coerced to string";
+
+/// `exit(null)` / `die(null)` weak-mode deprecation line.
+pub(crate) const EXIT_NULL_DEPRECATION: &str =
+    "Deprecated: exit(): Passing null to parameter #1 ($status) of type string|int is deprecated";
+
 /// ob_start() invalid-callback warning suffix.
 pub(crate) const OB_WARN_BAD_CALLBACK_SUFFIX: &str =
     "\" not found or invalid function name\n";

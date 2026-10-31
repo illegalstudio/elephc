@@ -496,6 +496,16 @@ pub fn check_arity(name: &str, arg_count: usize, span: Span) -> Result<(), Compi
         return Ok(());
     }
 
+    // PHP names the received count only in its `expects at most` wording. Keep that form for
+    // `phpinfo()`, whose argument check is user-visible in the migration corpus, while the
+    // rest of the catalog keeps elephc's established "takes …" diagnostics.
+    if name == "phpinfo" && max == Some(1) && arg_count > 1 {
+        return Err(CompileError::new(
+            span,
+            &format!("phpinfo() expects at most 1 argument, {arg_count} given"),
+        ));
+    }
+
     // Use a custom verbatim message if the spec provides one; otherwise derive
     // the standard "<name>() takes …" phrasing from the enforced arity bounds.
     if let Some(msg) = lookup(name).and_then(|def| def.spec.arity_error) {

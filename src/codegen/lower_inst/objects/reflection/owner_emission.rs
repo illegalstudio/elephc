@@ -322,6 +322,14 @@ pub(super) fn emit_reflection_owner_metadata(
         let is_internal =
             reflection_function_or_method_is_internal(ctx, &owner_class_name, metadata);
         let reflected_name = metadata.reflected_name.as_deref().unwrap_or("");
+        let tentative_return = owner_class_name == "ReflectionMethod"
+            && is_internal
+            && metadata.parent_class_name.as_deref().is_some_and(|class| {
+                elephc_builtin_contract::reflection_methods::has_tentative_return(
+                    class,
+                    reflected_name,
+                )
+            });
         let rendered = if let Some(rendered) = metadata.rendered_to_string.clone() {
             rendered
         } else if owner_class_name == "ReflectionMethod" {
@@ -375,7 +383,13 @@ pub(super) fn emit_reflection_owner_metadata(
             ctx,
             class_name,
             "__has_return_type",
-            metadata.type_metadata.is_some(),
+            metadata.type_metadata.is_some() && !tentative_return,
+        )?;
+        emit_reflection_owner_bool_property(
+            ctx,
+            class_name,
+            "__has_tentative_return_type",
+            tentative_return,
         )?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
         emit_reflection_owner_bool_property(

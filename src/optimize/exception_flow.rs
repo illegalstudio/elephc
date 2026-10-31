@@ -77,6 +77,8 @@ pub(super) struct ExceptionFlowAnalysis {
     instance_method_throws: HashMap<String, ThrownTypes>,
     /// Declared object references can reject a cell retyped by an earlier call at entry.
     function_object_ref_checks: HashSet<String>,
+    /// Declared scalar parameters can reject a union-valued argument at the call boundary.
+    function_scalar_guard_checks: HashSet<String>,
     static_method_object_ref_checks: HashMap<String, bool>,
     instance_method_object_ref_checks: HashMap<String, bool>,
     /// Class property initialization can raise Error independently of constructor argument omission.
@@ -192,6 +194,21 @@ pub(super) fn active_catch_reachability(
                     .collect()
             })
     })
+}
+
+/// Reports whether a declared scalar parameter can reject an argument at the call boundary.
+///
+/// The callee body's own throws do not include the caller-side `strict_types` guard, so the
+/// exception-flow summary has to keep a `TypeError` catch reachable for these calls.
+fn declared_scalar_parameter_can_throw(signature: &FunctionSig) -> bool {
+    signature
+        .params
+        .iter()
+        .enumerate()
+        .any(|(index, (_, ty))| {
+            signature.declared_params.get(index).copied().unwrap_or(false)
+                && crate::types::param_binding::strict_scalar_declaration(ty)
+        })
 }
 
 /// Computes escaping types for one statement with no enclosing caught-variable binding.
@@ -313,6 +330,14 @@ impl ExceptionFlowAnalysis {
                     .collect()
             })
             .unwrap_or_default();
+        let mut function_scalar_guard_checks = type_metadata
+            .map(|(functions, _, _)| {
+                functions.iter()
+                    .filter(|(_, signature)| declared_scalar_parameter_can_throw(signature))
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut static_method_object_ref_checks = type_metadata
             .map(|(_, classes, _)| {
                 classes.iter()
@@ -346,6 +371,10 @@ impl ExceptionFlowAnalysis {
                 &mut function_object_ref_checks,
                 &mut static_method_object_ref_checks,
                 &mut instance_method_object_ref_checks,
+            );
+            callables::collect_scalar_parameter_entry_checks(
+                program,
+                &mut function_scalar_guard_checks,
             );
         }
         let static_method_returns = type_metadata
@@ -409,6 +438,7 @@ impl ExceptionFlowAnalysis {
             static_method_throws: empty_summaries(static_method_bodies.keys()),
             instance_method_throws: empty_summaries(instance_method_bodies.keys()),
             function_object_ref_checks,
+            function_scalar_guard_checks,
             static_method_object_ref_checks,
             instance_method_object_ref_checks,
             function_error_defaults: type_metadata.map(|(functions, _, _)| functions.iter()
@@ -897,6 +927,11 @@ impl ExceptionFlowAnalysis {
                 if self.function_object_ref_checks.contains(name)
                     && !all_arguments_are_fresh_objects(args)
                 {
+                    thrown = thrown.combined(ThrownTypes::exact("TypeError"));
+                }
+                if self.function_scalar_guard_checks.contains(name) {
+                    // A union-valued argument can reach the call's runtime binding guard even
+                    // though the callee body never throws; a catch for it stays reachable.
                     thrown = thrown.combined(ThrownTypes::exact("TypeError"));
                 }
                 if self.function_unresolved_defaults.contains(name)

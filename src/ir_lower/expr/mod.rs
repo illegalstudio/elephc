@@ -115,6 +115,7 @@ use reference_returns::{
 };
 mod property_fetch_for_write;
 mod method_calls;
+pub(crate) use method_calls::clear_descendant_cache;
 mod closure_binding;
 mod member_receivers;
 mod enum_interface_calls;

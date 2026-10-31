@@ -2065,7 +2065,8 @@ mod tests {
                 LinkItem::StaticArchive { .. }
                 | LinkItem::NamedLibrary { .. }
                 | LinkItem::SearchPath(_)
-                | LinkItem::Framework(_) => None,
+                | LinkItem::Framework(_)
+                | LinkItem::UndefinedSymbol { .. } => None,
             })
             .collect();
 

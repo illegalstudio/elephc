@@ -3,3 +3,4 @@ schema = 1
 
 [native.dependencies]
 libmagic = "5.46"
+pcre2 = "10.47"

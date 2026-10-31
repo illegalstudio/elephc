@@ -8,6 +8,162 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+use crate::ir_lower::stmt::lower_throw_access_error_expr_as;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+thread_local! {
+    /// Ancestor/method descendant searches already answered for this lowering run.
+    ///
+    /// The class set is fixed for a whole program, so a repeated statically-missing call site
+    /// would otherwise walk every descendant chain again. Cleared by `lower_program`.
+    static DESCENDANT_CACHE: RefCell<HashMap<(String, String), bool>> = RefCell::new(HashMap::new());
+}
+
+/// Clears the per-program descendant-dispatch cache.
+pub(crate) fn clear_descendant_cache() {
+    DESCENDANT_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Returns a cached descendant answer, computing and storing it on a miss.
+fn cached_descendant_answer(
+    ancestor: &str,
+    method: &str,
+    compute: impl FnOnce() -> bool,
+) -> bool {
+    let key = (
+        ancestor.trim_start_matches('\\').to_ascii_lowercase(),
+        method.to_ascii_lowercase(),
+    );
+    if let Some(answer) = DESCENDANT_CACHE.with(|cache| cache.borrow().get(&key).copied()) {
+        return answer;
+    }
+    let answer = compute();
+    DESCENDANT_CACHE.with(|cache| {
+        cache.borrow_mut().insert(key, answer);
+    });
+    answer
+}
+
+/// Synthesizes `__call(string $name, array $arguments)` when only a descendant declares it.
+fn synthesized_magic_call_args(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    args: &[Expr],
+    span: Span,
+) -> Option<Vec<Expr>> {
+    if method_signature(ctx, object, method).is_some() {
+        return None;
+    }
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    if !descendant_provides_call(ctx, class_name.trim_start_matches('\\')) {
+        return None;
+    }
+    // Preserve positional, named and spread argument semantics in the forwarded array.
+    let entries = args
+        .iter()
+        .map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, value } => crate::parser::ast::ArrayEntry::Keyed(
+                Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                (**value).clone(),
+            ),
+            ExprKind::Spread(inner) => crate::parser::ast::ArrayEntry::Spread((**inner).clone()),
+            _ => crate::parser::ast::ArrayEntry::Value(arg.clone()),
+        })
+        .collect();
+    Some(vec![
+        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
+        Expr::new(ExprKind::ArrayLiteralMixed(entries), span),
+    ])
+}
+
+/// Reports whether `type_name` is `ancestor` or reaches it through `extends`/`implements`.
+///
+/// PHP's class ancestry has two edges: a class's `parent` and the interfaces it implements
+/// (directly or through a parent class). Interface `extends` is a third, resolved by
+/// [`interface_extends`]. Missing the `implements` edge makes a call through an interface
+/// receiver look like an undefined method even when a descendant supplies it.
+fn descends_from(ctx: &LoweringContext<'_, '_>, type_name: &str, ancestor: &str) -> bool {
+    let ancestor_key = crate::names::php_symbol_key(ancestor.trim_start_matches('\\'));
+    let mut current = Some(type_name.trim_start_matches('\\'));
+    let mut visited = std::collections::HashSet::new();
+    while let Some(class_name) = current {
+        if !visited.insert(class_name) {
+            return false;
+        }
+        if crate::names::php_symbol_key(class_name) == ancestor_key {
+            return true;
+        }
+        let Some(info) = ctx.classes.get(class_name) else {
+            return false;
+        };
+        if info
+            .interfaces
+            .iter()
+            .any(|implemented| interface_extends(ctx, implemented, &ancestor_key))
+        {
+            return true;
+        }
+        current = info
+            .parent
+            .as_deref()
+            .map(|parent| parent.trim_start_matches('\\'));
+    }
+    false
+}
+
+/// Reports whether `interface_name` is `ancestor_key` or extends it transitively.
+fn interface_extends(
+    ctx: &LoweringContext<'_, '_>,
+    interface_name: &str,
+    ancestor_key: &str,
+) -> bool {
+    let interface_name = interface_name.trim_start_matches('\\');
+    if crate::names::php_symbol_key(interface_name) == ancestor_key {
+        return true;
+    }
+    let Some(info) = ctx.interfaces.get(interface_name) else {
+        return false;
+    };
+    info.parents
+        .iter()
+        .any(|parent| interface_extends(ctx, parent, ancestor_key))
+}
+
+/// Reports whether a descendant of `ancestor` declares `__call`.
+fn descendant_provides_call(ctx: &LoweringContext<'_, '_>, ancestor: &str) -> bool {
+    cached_descendant_answer(ancestor, "__call", || {
+        let ancestor = ancestor.trim_start_matches('\\');
+        ctx.classes.iter().any(|(name, info)| {
+            info.methods.contains_key("__call") && descends_from(ctx, name, ancestor)
+        })
+    })
+}
+
+/// Reports whether a descendant of `ancestor` supplies `method` (or inherits `__call`).
+fn descendant_provides_method(ctx: &LoweringContext<'_, '_>, ancestor: &str, method: &str) -> bool {
+    cached_descendant_answer(ancestor, method, || {
+        let ancestor = ancestor.trim_start_matches('\\');
+        let method_key = crate::names::php_symbol_key(method);
+        ctx.classes.iter().any(|(name, info)| {
+            if !info.methods.contains_key(&method_key) {
+                return false;
+            }
+            // A private descendant method is not visible from the ancestor's scope: PHP routes
+            // the call to `__call` when one exists and raises `Error` otherwise.
+            if info
+                .method_visibilities
+                .get(&method_key)
+                .is_some_and(|visibility| *visibility == crate::parser::ast::Visibility::Private)
+            {
+                return false;
+            }
+            descends_from(ctx, name, ancestor)
+        })
+    })
+}
 
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
@@ -41,7 +197,7 @@ pub(super) fn lower_method_call(
         None
     };
     let object_expr = object;
-    let object = lower_member_receiver(ctx, object_expr, expr);
+    let mut object = lower_member_receiver(ctx, object_expr, expr);
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
@@ -151,14 +307,45 @@ pub(super) fn lower_method_call(
         return call;
     }
     let magic_args;
+    let synthesized_call_args;
     let (dispatch_method, args) = if let Some(args) =
         magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
     {
         magic_args = args;
         ("__call", magic_args.as_slice())
+    } else if let Some(args) =
+        synthesized_magic_call_args(ctx, object.value, method, args, object_expr.span)
+    {
+        synthesized_call_args = args;
+        ("__call", synthesized_call_args.as_slice())
     } else {
         (method, args)
     };
+    if method_signature(ctx, object.value, dispatch_method).is_none() {
+        if let Some((class_name, _)) = singular_object_class(&ctx.builder.value_php_type(object.value)) {
+            let class_name = class_name.trim_start_matches('\\');
+            if descendant_provides_method(ctx, class_name, dispatch_method) {
+                // PHP dispatches the call on the RUNTIME class. Boxing the statically known
+                // receiver routes it through the existing class-id candidate dispatch, which
+                // selects the subclass override (or `__call`) without a compile-time error.
+                object = ctx.box_value_as_mixed(object, PhpType::Mixed, Some(expr.span));
+            } else {
+                let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
+                // PHP evaluates the receiver and every argument before raising the runtime Error.
+                let arg_values = lower_args_with_signature(ctx, None, args);
+                release_owned_call_arg_temporaries(
+                    ctx,
+                    &arg_values,
+                    None,
+                    &ReturnArgAlias::None,
+                    expr.span,
+                );
+                release_owning_receiver_temporary(ctx, object, expr.span);
+                let message = format!("Call to undefined method {}::{}()", class_name, dispatch_method);
+                return lower_throw_access_error_expr_as(ctx, &message, expr.span, result_type);
+            }
+        }
+    }
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
@@ -272,9 +459,21 @@ pub(super) fn magic_call_dispatch_args(
     };
     let normalized = class_name.trim_start_matches('\\');
     class_method_signature(ctx, normalized, &php_symbol_key("__call"))?;
+    // Preserve positional, named and spread argument semantics in the forwarded array.
+    let entries = args
+        .iter()
+        .map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, value } => crate::parser::ast::ArrayEntry::Keyed(
+                Expr::new(ExprKind::StringLiteral(name.clone()), arg.span),
+                (**value).clone(),
+            ),
+            ExprKind::Spread(inner) => crate::parser::ast::ArrayEntry::Spread((**inner).clone()),
+            _ => crate::parser::ast::ArrayEntry::Value(arg.clone()),
+        })
+        .collect();
     Some(vec![
         Expr::new(ExprKind::StringLiteral(method.to_string()), span),
-        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
+        Expr::new(ExprKind::ArrayLiteralMixed(entries), span),
     ])
 }
 

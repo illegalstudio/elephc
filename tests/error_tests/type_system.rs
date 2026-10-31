@@ -3705,3 +3705,13 @@ fn test_standalone_null_return_requirements() {
         assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
     }
 }
+
+/// Strict files compare a definite scalar against union members by identity, without the
+/// weak-mode coercion that would turn `true` into `1` or `"1"`.
+#[test]
+fn test_error_strict_types_rejects_union_scalar_binding() {
+    expect_error(
+        "<?php declare(strict_types=1); function want(int|string $value): void {} want(true);",
+        "`declare(strict_types=1)` is active in this file",
+    );
+}

@@ -495,9 +495,11 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     // A by-reference parameter must receive the caller's storage, not a converted temporary,
     // so declared-parameter scalar binding never applies to one. The checker keeps those on
     // the strict path for the same reason.
+    let value = guard_strict_union_argument(ctx, sig, index, value, arg);
     let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
         && !sig.ref_params.get(index).copied().unwrap_or(false);
-    let param_ty = param_ty.codegen_repr();
+    let declared_param_ty = param_ty.clone();
+    let param_ty = declared_param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
@@ -518,8 +520,8 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
-        if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
-            return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
+        if let Some(casted) = apply_declared_scalar_cast(ctx, &declared_param_ty, value, Some(arg.span)) {
+            return casted;
         }
     }
     value
@@ -539,6 +541,28 @@ fn argument_static_type(
             (!matches!(ty.codegen_repr(), PhpType::Mixed)).then_some(ty)
         }
         _ => super::ref_place_args::static_place_type(ctx, arg),
+    }
+}
+
+/// Applies a declared-parameter scalar cast and restores the storage shape the callee expects.
+///
+/// A union parameter lowers to a boxed `Mixed` slot, so the casted scalar must be boxed again
+/// before it crosses the ABI boundary.
+fn apply_declared_scalar_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    declared: &PhpType,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> Option<LoweredValue> {
+    // Preserve the logical type: `False` and `Bool` share `codegen_repr`, but a `false`
+    // literal is already an exact member of a `string|false` union and must not be cast.
+    let source = ctx.builder.value_php_type(value.value);
+    let cast = crate::types::param_binding::scalar_param_cast(declared, &source)?;
+    let casted = apply_scalar_param_cast(ctx, cast, value, span);
+    if declared.codegen_repr() == PhpType::Mixed {
+        Some(coerce_value_for_temp(ctx, casted, &PhpType::Mixed, span.unwrap_or_else(crate::span::Span::dummy)))
+    } else {
+        Some(casted)
     }
 }
 
@@ -762,6 +786,255 @@ fn guard_union_object_param(
     result
 }
 
+/// Guards a union-typed argument bound to a scalar parameter under `strict_types`.
+///
+/// PHP accepts the call when a union member can satisfy the declaration and raises `TypeError`
+/// only if the runtime value is one of the rejected members. The checker therefore accepts a
+/// partially-compatible union; this guard is the runtime half, throwing before the weak-mode
+/// cast below would silently turn the rejected member into a scalar.
+fn guard_strict_union_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    value: LoweredValue,
+    arg: &Expr,
+) -> LoweredValue {
+    if !crate::source::current_strict_types()
+        || !sig.declared_params.get(index).copied().unwrap_or(false)
+        || sig.ref_params.get(index).copied().unwrap_or(false)
+    {
+        return value;
+    }
+    let Some((param_name, runtime_declared)) = sig.params.get(index) else {
+        return value;
+    };
+    // A prelude function widens a declared scalar to `Mixed` so its body can raise PHP's own
+    // TypeError. The declaration is still authoritative for the caller-side strict guard, and
+    // it survives in `param_type_exprs`.
+    let widened = *runtime_declared == PhpType::Mixed;
+    let declared = if widened {
+        let Some(annotation) = sig.param_type_exprs.get(index).and_then(|expr| expr.as_ref()) else {
+            return value;
+        };
+        let Some(declared) = declared_scalar_from_type_expr(annotation) else {
+            return value;
+        };
+        declared
+    } else {
+        runtime_declared.clone()
+    };
+    if !crate::types::param_binding::strict_scalar_declaration(&declared) {
+        return value;
+    }
+    let source = ctx.builder.value_php_type(value.value);
+    let (accepted, rejected) = match source {
+        PhpType::Union(members) => {
+            let accepted: Vec<PhpType> = members
+                .iter()
+                .filter(|member| crate::types::param_binding::strict_member_accepts(&declared, member))
+                .cloned()
+                .collect();
+            // A fully accepted union needs no guard, and one with no accepted member is a
+            // definite compile-time error the checker already reported before lowering.
+            if accepted.is_empty() || accepted.len() == members.len() {
+                return value;
+            }
+            let rejected = members
+                .iter()
+                .find(|member| !crate::types::param_binding::strict_member_accepts(&declared, member))
+                .cloned();
+            (accepted, rejected)
+        }
+        // A widened prelude slot receives `mixed` from a dynamic call: the declaration still
+        // fixes the accepted runtime shapes, so the guard must run instead of letting the
+        // prelude's weak coercion accept the value.
+        PhpType::Mixed if widened => {
+            let accepted = strict_accepted_scalar_members(&declared);
+            if accepted.is_empty() {
+                return value;
+            }
+            (accepted, None)
+        }
+        _ => return value,
+    };
+    let accepted_block = ctx.builder.create_named_block("strict.arg.accepted", Vec::new());
+    let rejected_block = ctx.builder.create_named_block("strict.arg.rejected", Vec::new());
+    for (position, member) in accepted.iter().enumerate() {
+        let test = strict_member_predicate(ctx, value.value, member, arg.span);
+        let next = if position + 1 == accepted.len() {
+            rejected_block
+        } else {
+            ctx.builder.create_named_block("strict.arg.next", Vec::new())
+        };
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: test,
+            then_target: accepted_block,
+            then_args: Vec::new(),
+            else_target: next,
+            else_args: Vec::new(),
+        });
+        if position + 1 < accepted.len() {
+            ctx.builder.position_at_end(next);
+        }
+    }
+    ctx.builder.position_at_end(rejected_block);
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+    }
+    let callable = ctx.call_description.as_deref().unwrap_or("call");
+    let expected_name = crate::types::diagnostic_names::php_type_name(&declared);
+    let given = rejected
+        .as_ref()
+        .map(crate::types::diagnostic_names::php_type_name)
+        .unwrap_or_else(|| "mixed".to_string());
+    let message = Expr::new(
+        ExprKind::StringLiteral(format!(
+            "{}(): Argument #{} (${}) must be of type {}, {} given, called in {} on line {}",
+            callable,
+            index + 1,
+            param_name,
+            expected_name,
+            given,
+            ctx.source_path().unwrap_or("unknown"),
+            arg.span.line
+        )),
+        arg.span,
+    );
+    let exception = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::NewObject {
+                class_name: Name::unqualified("TypeError"),
+                args: vec![message],
+            },
+            arg.span,
+        ),
+    );
+    ctx.builder.terminate(Terminator::Throw {
+        value: exception.value,
+    });
+    ctx.builder.position_at_end(accepted_block);
+    value
+}
+
+/// Flattens a scalar declaration into the runtime members its guard accepts.
+fn strict_accepted_scalar_members(declared: &PhpType) -> Vec<PhpType> {
+    match declared {
+        PhpType::Union(members) => members
+            .iter()
+            .flat_map(strict_accepted_scalar_members)
+            .fold(Vec::new(), |mut unique, member| {
+                if !unique.contains(&member) {
+                    unique.push(member);
+                }
+                unique
+            }),
+        other => vec![other.clone()],
+    }
+}
+
+/// Recovers a scalar declaration from a prelude parameter's preserved type annotation.
+///
+/// Only the shapes PHP uses for scalar parameters are accepted; `mixed`, classes, arrays, and
+/// callables answer `None` so their ordinary runtime guards stay in charge.
+fn declared_scalar_from_type_expr(annotation: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    use crate::parser::ast::TypeExpr;
+    Some(match annotation {
+        TypeExpr::Int => PhpType::Int,
+        TypeExpr::Float => PhpType::Float,
+        TypeExpr::Str => PhpType::Str,
+        TypeExpr::Bool => PhpType::Bool,
+        TypeExpr::False => PhpType::False,
+        TypeExpr::Void => PhpType::Void,
+        TypeExpr::Nullable(inner) => {
+            PhpType::Union(vec![declared_scalar_from_type_expr(inner)?, PhpType::Void])
+        }
+        TypeExpr::Union(members) => PhpType::Union(
+            members
+                .iter()
+                .map(declared_scalar_from_type_expr)
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        TypeExpr::Named(name)
+            if matches!(
+                name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+                "int" | "float" | "string" | "bool" | "false" | "null"
+            ) =>
+        {
+            match name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str() {
+                "int" => PhpType::Int,
+                "float" => PhpType::Float,
+                "string" => PhpType::Str,
+                "bool" => PhpType::Bool,
+                "false" => PhpType::False,
+                _ => PhpType::Void,
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// Builds the runtime predicate for one accepted scalar union member.
+///
+/// `false` needs an identity test because `TypePredicate::Bool` would also accept `true`.
+fn strict_member_predicate(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+    member: &PhpType,
+    span: Span,
+) -> crate::ir::ValueId {
+    let predicate = match member {
+        PhpType::Int => Some(crate::ir::PhpTypePredicate::Int),
+        PhpType::Float => Some(crate::ir::PhpTypePredicate::Float),
+        PhpType::Str => Some(crate::ir::PhpTypePredicate::String),
+        PhpType::Bool => Some(crate::ir::PhpTypePredicate::Bool),
+        _ => None,
+    };
+    if let Some(predicate) = predicate {
+        return ctx
+            .emit_value(
+                Op::TypePredicate,
+                vec![value],
+                Some(Immediate::TypePredicate(predicate)),
+                PhpType::Bool,
+                Op::TypePredicate.default_effects(),
+                Some(span),
+            )
+            .value;
+    }
+    if matches!(member, PhpType::Void | PhpType::Never) {
+        return ctx
+            .emit_value(
+                Op::IsNull,
+                vec![value],
+                None,
+                PhpType::Bool,
+                Op::IsNull.default_effects(),
+                Some(span),
+            )
+            .value;
+    }
+    // The remaining scalar identity is the literal `false`; strict equality distinguishes it
+    // from `true` without a dedicated predicate.
+    let false_value = ctx.emit_value(
+        Op::ConstBool,
+        Vec::new(),
+        Some(Immediate::Bool(false)),
+        PhpType::Bool,
+        Op::ConstBool.default_effects(),
+        Some(span),
+    );
+    ctx.emit_value(
+        Op::StrictEq,
+        vec![value, false_value.value],
+        None,
+        PhpType::Bool,
+        Op::StrictEq.default_effects(),
+        Some(span),
+    )
+    .value
+}
+
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
 ///
 /// The conversion is the one elephc emits for the equivalent explicit cast, which is why the
@@ -776,8 +1049,10 @@ fn apply_scalar_param_cast(
     match cast {
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
-        // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
+        CastType::Int => coerce_to_int_at_span(ctx, value, span),
+        CastType::Float => coerce_to_float_at_span(ctx, value, span),
+        // Array/object casts are never reported by the parameter-binding classifier.
+        CastType::Array | CastType::Object => value,
     }
 }
 
@@ -818,8 +1093,21 @@ pub(super) fn coerce_operands_to_params(
             continue;
         };
         let value = operands[index];
+        let guarded = guard_strict_union_argument(
+            ctx,
+            sig,
+            index,
+            LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            },
+            &Expr::new(ExprKind::Null, Span::dummy()),
+        );
+        operands[index] = guarded.value;
+        let value = guarded.value;
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
-        let param_ty = param_ty.codegen_repr();
+        let declared_param_ty = param_ty.clone();
+        let param_ty = declared_param_ty.codegen_repr();
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
@@ -863,14 +1151,11 @@ pub(super) fn coerce_operands_to_params(
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
             // and only reordered afterwards.
-            if let Some(cast) =
-                crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty)
-            {
-                let lowered = LoweredValue {
-                    value,
-                    ir_type: ctx.builder.value_type(value),
-                };
-                let coerced = apply_scalar_param_cast(ctx, cast, lowered, None);
+            let lowered = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            if let Some(coerced) = apply_declared_scalar_cast(ctx, &declared_param_ty, lowered, None) {
                 operands[index] =
                     root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
             }
@@ -904,7 +1189,11 @@ fn operand_needs_param_coercion(
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (sig.declared_params.get(index).copied().unwrap_or(false)
-            && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
+            && crate::types::param_binding::scalar_param_cast(
+                sig.params.get(index).map(|(_, ty)| ty).unwrap_or(&param_ty),
+                &operand_ty,
+            )
+            .is_some())
 }
 
 /// Normalizes concrete local arrays to the storage required by their by-reference parameter.

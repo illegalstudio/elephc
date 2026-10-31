@@ -321,6 +321,11 @@ pub trait BuiltinLoweringContext {
     /// Returns the PHP type metadata attached to an existing SSA operand.
     fn value_php_type(&self, value: ValueId) -> PhpType;
 
+    /// Returns a compile-time integer operand, when the callee's lowering can use it.
+    fn constant_i64(&self, _value: ValueId) -> Option<i64> {
+        None
+    }
+
     /// Reports whether the compiled program declares the named internal class.
     ///
     /// Builtin hooks use this before selecting a prelude helper that only exists when

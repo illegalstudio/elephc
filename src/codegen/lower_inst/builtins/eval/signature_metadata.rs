@@ -161,12 +161,21 @@ pub(super) fn eval_native_callable_param_type_specs(signature: &FunctionSig) -> 
             {
                 return None;
             }
-            signature
+            if let Some(type_expr) = signature
                 .param_type_exprs
                 .get(index)
                 .and_then(Option::as_ref)
-                .and_then(eval_native_type_expr_spec)
-                .or_else(|| eval_native_php_type_spec(php_type, false))
+            {
+                return eval_native_type_expr_spec(type_expr);
+            }
+            // A source-untyped parameter occupies a boxed ABI slot, which
+            // `eir_runtime_metadata_signature` marks as declared for the invoker. It has no
+            // PHP type; only a genuinely retained type expression or a concrete inferred
+            // type can answer one.
+            if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                return None;
+            }
+            eval_native_php_type_spec(php_type, false)
         })
         .collect()
 }

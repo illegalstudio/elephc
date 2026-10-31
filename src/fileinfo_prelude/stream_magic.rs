@@ -30,7 +30,7 @@ fn missing_stat() -> Vec<Stmt> {
     vec![
         s_assign("_stat_class", e_call("elephc_runtime_stream_missing_stat_class", vec![e_call("get_resource_id", vec![e_var("stream")])])),
         s_if(e_not(e_call("__elephc_ptr_is_null", vec![e_var("_stat_class")])), vec![
-            s_expr(e_call("__elephc_builtin_warning", vec![message(e_binop(class_name("_stat_class"), BinOp::Concat, e_str("::stream_stat is not implemented!")))])),
+            super::build::warning(message(e_binop(class_name("_stat_class"), BinOp::Concat, e_str("::stream_stat is not implemented!")))),
         ], vec![], None),
     ]
 }
@@ -51,7 +51,7 @@ pub(super) fn stat_method() -> MethodBuilder {
     body.extend([
         s_if(e_binop(e_not(e_var("_stat_ok")), BinOp::And,
             e_binop(e_binop(e_call("elephc_fileinfo_get_flags", vec![e_this_prop("__elephc_handle")]), BinOp::BitAnd, e_int(512)), BinOp::NotEq, e_int(0))), vec![
-            s_expr(e_call("__elephc_builtin_warning", vec![message(e_str("Failed identify data 0:cannot stat `(null)'"))])),
+            super::build::warning(message(e_str("Failed identify data 0:cannot stat `(null)'"))),
             s_return(e_bool(false)),
         ], vec![], None),
         s_return(e_bool(true)),
@@ -74,7 +74,7 @@ pub(super) fn cast_method() -> MethodBuilder {
         let mut failure = if status == 2 {
             vec![s_expr(e_call("elephc_runtime_stream_exception_warning", vec![e_binop(e_str("Warning: "), BinOp::Concat,
                 e_binop(diagnostic, BinOp::Concat, e_str("\n")))]))]
-        } else { vec![s_expr(e_call("__elephc_builtin_warning", vec![diagnostic]))] };
+        } else { vec![super::build::warning(diagnostic)] };
         if status == 2 {
             failure.push(s_throw(e_new_fq("TypeError", vec![message(e_str("supplied argument is not a valid stream resource"))])));
         }

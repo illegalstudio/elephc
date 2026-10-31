@@ -210,6 +210,13 @@ impl Checker {
                         ));
                     }
                 }
+                self.require_strict_prelude_constructor_args(
+                    &effective_sig,
+                    &normalized_args,
+                    env,
+                    class_name.as_str(),
+                    expr.span,
+                )?;
                 self.check_user_declared_call(
                     &effective_sig,
                     args,
@@ -255,6 +262,50 @@ impl Checker {
             }
         }
         Ok(PhpType::Object(class_name))
+    }
+
+    /// Applies PHP's strict parameter comparison to a widened prelude constructor.
+    ///
+    /// `finfo::__construct` stores `$flags` and `$magic_database` in boxed ABI slots so the
+    /// prelude can reproduce PHP's own coercion and TypeError paths. The call still binds
+    /// against the declared types, which is what `declare(strict_types=1)` compares.
+    fn require_strict_prelude_constructor_args(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        env: &TypeEnv,
+        class_name: &str,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        if !self.strict_types {
+            return Ok(());
+        }
+        for (index, arg) in args.iter().enumerate() {
+            if crate::fileinfo_prelude::abi::widened_method_param(
+                class_name, "__construct", index,
+            )
+            .is_none()
+            {
+                continue;
+            }
+            let Some(annotation) = sig.param_type_exprs.get(index).and_then(|expr| expr.as_ref())
+            else {
+                continue;
+            };
+            let declared = self.resolve_declared_param_type_hint(
+                annotation,
+                span,
+                &format!("Constructor '{}::__construct'", class_name),
+            )?;
+            let actual = self.infer_type(arg, env)?;
+            self.require_strict_types_param_binding(
+                &declared,
+                &actual,
+                arg.span,
+                &format!("Constructor '{}::__construct'", class_name),
+            )?;
+        }
+        Ok(())
     }
 
     /// Infers constructor arguments for a class that may have been declared by a prior eval call.

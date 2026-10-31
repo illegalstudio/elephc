@@ -35,6 +35,7 @@ mod opcache_get_status;
 mod opcache_reset;
 mod passthru;
 mod php_uname;
+mod phpinfo;
 mod phpversion;
 mod putenv;
 mod shell_exec;
@@ -63,6 +64,7 @@ pub(in crate::interpreter) use opcache_get_status::*;
 pub(in crate::interpreter) use opcache_reset::*;
 pub(in crate::interpreter) use passthru::*;
 pub(in crate::interpreter) use php_uname::*;
+pub(in crate::interpreter) use phpinfo::*;
 pub(in crate::interpreter) use phpversion::*;
 pub(in crate::interpreter) use putenv::*;
 pub(in crate::interpreter) use shell_exec::*;
@@ -100,6 +102,7 @@ pub(in crate::interpreter) fn eval_builtin_network_env_call(
         "long2ip" => eval_builtin_long2ip(args, context, scope, values),
         "php_uname" => eval_builtin_php_uname(args, context, scope, values),
         "phpversion" => eval_builtin_phpversion(args, context, scope, values),
+        "phpinfo" => eval_builtin_phpinfo(args, context, scope, values),
         "putenv" => eval_builtin_putenv(args, context, scope, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
@@ -231,6 +234,10 @@ pub(in crate::interpreter) fn eval_network_env_values_result(
         "phpversion" => match evaluated_args {
             [] => eval_phpversion_result(values),
             [extension] => eval_phpversion_extension_result(*extension, values),
+            _ => Err(EvalStatus::RuntimeFatal),
+        },
+        "phpinfo" => match evaluated_args {
+            [] | [_] => eval_phpinfo_result(values),
             _ => Err(EvalStatus::RuntimeFatal),
         },
         "putenv" => {

@@ -306,6 +306,14 @@ fn append_link_inputs(args: &mut Vec<OsString>, plan: &LinkPlan, platform: Platf
             LinkItem::NamedLibrary { name, .. } if name != "System" => {
                 args.push(OsString::from(format!("-l{name}")));
             }
+            LinkItem::UndefinedSymbol { name, .. } => {
+                args.push(OsString::from("-u"));
+                args.push(OsString::from(if platform == Platform::MacOS {
+                    format!("_{name}")
+                } else {
+                    name.clone()
+                }));
+            }
             LinkItem::NamedLibrary { .. }
             | LinkItem::SearchPath(_)
             | LinkItem::Framework(_) => {}
@@ -327,6 +335,7 @@ fn has_link_inputs(plan: &LinkPlan) -> bool {
     plan.items().iter().any(|item| match item {
         LinkItem::StaticArchive { .. } => true,
         LinkItem::NamedLibrary { name, .. } => name != "System",
+        LinkItem::UndefinedSymbol { .. } => true,
         LinkItem::SearchPath(_) | LinkItem::Framework(_) => false,
     })
 }
