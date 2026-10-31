@@ -1845,6 +1845,8 @@ fn lower_body_into_function(
             && property_initializers.is_none() && !body.is_empty()
             && !crate::ir_lower::body_contains_eval_call(body)
     };
+    ctx.eval_reference_snapshots = crate::ir_lower::body_contains_eval_call(body)
+        || eval_scope_reads.is_some() || property_initializers.is_some();
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {

@@ -7,6 +7,36 @@
 //! Key details:
 //! - A shared string/int/float property cell cannot be widened to Mixed behind its aliases.
 
+/// Programs without eval retain concrete array and hash access through whole-local aliases.
+#[test]
+fn ordinary_array_aliases_keep_typed_reference_payloads_on_every_target() {
+    let source = r#"<?php
+function ordinaryArrayAliasLayout(bool $run): void {
+    $items = [1, 2]; $alias =& $items; $alias[0] = 4;
+    $mapping = ['key' => 1]; $named =& $mapping; $named['key'] = 5;
+    $maybe = $run ? 1 : null; $number =& $maybe;
+    echo $items[0], $mapping['key'], $number;
+}
+ordinaryArrayAliasLayout($argc > 0);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "ordinaryArrayAliasLayout").unwrap();
+        for name in ["items", "alias", "mapping", "named"] {
+            let local = function.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
+            assert!(matches!(local.php_type.codegen_repr(), crate::types::PhpType::Array(_)
+                | crate::types::PhpType::AssocArray { .. }), "{target}: {name} lost its typed array access");
+        }
+        for name in ["maybe", "number"] {
+            let local = function.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
+            assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::TaggedScalar,
+                "{target}: {name} lost its nullable scalar payload");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every backend checks native object snapshots and can detach their explicit lease on unset.
 #[test]
 fn dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target() {

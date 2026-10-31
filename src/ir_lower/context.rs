@@ -327,6 +327,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Whole-body proof that an instance method cannot widen its immutable this slot.
     /// Set before body lowering and preserved across speculative snapshots.
     pub(crate) this_storage_stays_concrete: bool,
+    /// Whole-body eval prescan, so aliases created before the first barrier use reloadable cells.
+    pub(crate) eval_reference_snapshots: bool,
     /// Raw offset receiver reads checked against final frame storage before replay.
     pub(crate) string_offset_receivers: Vec<(Span, ValueId)>,
     /// Offset sites whose final local storage requires an independent, guarded receiver.
@@ -677,6 +679,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             owned_string_cast_locals: HashSet::new(),
             provisional_borrowed_string_casts: HashSet::new(),
             this_storage_stays_concrete: false,
+            eval_reference_snapshots: false,
             append_update_cell_aliases: HashSet::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
@@ -3505,10 +3508,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
         // An existing reference can point into an object property whose payload remains raw.
         // Reboxing that shared cell here would make property reads treat a box as an object.
+        let source_repr = self.local_type(source).codegen_repr();
         if !self.is_ref_bound_local(source)
-            && matches!(self.local_type(source).codegen_repr(),
-                PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
-                    | PhpType::TaggedScalar)
+            && (matches!(source_repr, PhpType::Object(_))
+                || (self.eval_reference_snapshots && matches!(source_repr,
+                    PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::TaggedScalar)))
         {
             self.promote_local_mixed_ref_cell(source, span);
         }
