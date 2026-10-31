@@ -150,6 +150,14 @@ fn lower_reference_return(
     value_expr: Option<&Expr>,
     span: Span,
 ) {
+    // Sibling regions cannot execute this return's promotion. A handler can observe it after
+    // a throwing finally, so keep that separate recovery case out of this raw-only restoration.
+    let sibling_type = match value_expr.map(|expr| &expr.kind) {
+        Some(ExprKind::Variable(name)) if ctx.finally_stack.is_empty()
+            && !ctx.is_ref_bound_local(name) && needs_nullable_object_reference_staging(ctx, name) =>
+                Some((name.clone(), ctx.local_type(name))),
+        _ => None,
+    };
     match value_expr.map(|expr| &expr.kind) {
         Some(ExprKind::Variable(name)) => {
             if ctx.is_borrowed_element_ref_local(name) {
@@ -258,6 +266,10 @@ fn lower_reference_return(
              must return a reference",
         ),
     }
+    if let Some((name, ty)) = sibling_type {
+        ctx.set_local_logical_type(&name, ty);
+        ctx.unmark_ref_bound_local(&name);
+    }
 }
 
 /// Records an unsupported by-reference return and terminates the block without a value.
@@ -282,11 +294,7 @@ fn promote_local_to_reference_return_payload(
     name: &str,
     span: Span,
 ) {
-    let source = ctx.local_type(name);
-    if matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
-        && matches!(&source, PhpType::Union(members) if members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
-            && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)))
-    {
+    if needs_nullable_object_reference_staging(ctx, name) {
         // This local has no existing alias. Check null while its boxed tag is available,
         // then publish a typed cell and attach the original name to it. Keeping that name
         // attached lets a finally block mutate the actual returned cell, as PHP requires.
@@ -308,6 +316,14 @@ fn promote_local_to_reference_return_payload(
         return;
     }
     ctx.promote_local_ref_cell(name, Some(span));
+}
+
+/// Identifies boxed nullable object locals that require a checked concrete return cell.
+fn needs_nullable_object_reference_staging(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+        && matches!(ctx.local_type(name), PhpType::Union(members)
+            if members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
+                && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)))
 }
 
 /// Returns whether a local's cell payload agrees with the declared by-reference result shape.

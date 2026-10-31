@@ -25,6 +25,35 @@ fn opaque_fixture(source: &str) -> String {
     format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);")
 }
 
+/// A return in one switch case cannot make its sibling read a raw nullable slot as an object cell.
+#[test]
+fn test_simplexml_reference_return_switch_siblings_keep_nullable_storage() {
+    if skip_without_xml_native("test_simplexml_reference_return_switch_siblings_keep_nullable_storage") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function &switchReferenceBoundaryXml(SimpleXMLElement $root, int $choice): SimpleXMLElement {
+    $node = $root->present;
+    switch ($choice) {
+        case 1: return $node;
+        default:
+            $node = $root->missing->child;
+            var_dump($node);
+            $node = $root->changed;
+            return $node;
+    }
+}
+$root = new SimpleXMLElement('<r><present>ok</present><changed>later</changed></r>');
+$first =& switchReferenceBoundaryXml($root, $argc > 0 ? 1 : 0);
+echo $first->getName(), '|';
+$second =& switchReferenceBoundaryXml($root, $argc > 0 ? 2 : 0);
+echo $second->getName(), '|';
+$second['id'] = 'alias'; echo (string)$root->changed['id'];
+unset($first, $second, $root);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "present|NULL\nchanged|alias");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Both native class lineages and nullable reads preserve PHP results and strict heap cleanup.
 #[test]
 fn test_simplexml_review_type_boundaries_bundle() {
