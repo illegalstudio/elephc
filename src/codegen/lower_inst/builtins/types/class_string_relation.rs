@@ -1,5 +1,5 @@
 //! Purpose:
-//! Tests runtime class-string subjects against AOT inheritance metadata.
+//! Tests runtime class-string subjects against AOT and eval inheritance metadata.
 //!
 //! Called from:
 //! - The typed is_a/is_subclass_of builtin lowerer.
@@ -7,6 +7,7 @@
 //! Key details:
 //! - The source string and optional runtime flag survive every comparison call.
 //! - Candidate names include classes and interfaces, with PHP case-insensitive matching.
+//! - A versioned query follows dynamic inheritance through the compiled positive candidates.
 
 use super::*;
 
@@ -51,11 +52,31 @@ pub(super) fn lower(
         predicates::emit_value_truthiness(ctx, flag.expect("runtime flag exists"), "is_a")?;
         abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     }
-    for candidate in candidates {
-        emit_match(ctx, &candidate, &matched);
+    for candidate in &candidates {
+        emit_match(ctx, candidate, &matched);
         emit_match(ctx, &format!("\\{candidate}"), &matched);
     }
-    emit_bool_result(ctx, false);
+    if ctx.module.required_runtime_features.eval_bridge {
+        let mut related = vec![target.trim_start_matches('\\').to_string()];
+        // Dynamic classes can inherit a compiled class or interface related to the target.
+        // Include the target itself even for is_subclass_of; the ABI excludes only exact self.
+        related.extend(candidates);
+        let related = related.join("\0");
+        let (label, len) = ctx.data.add_string(related.as_bytes());
+        for index in 0..2 {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), index * 8);
+        }
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), &label);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), len as i64);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), i64::from(exclude_self));
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_class_string_relation_v1");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        if literal_flag.is_none() {
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &matched);
+        }
+    } else {
+        emit_bool_result(ctx, false);
+    }
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&matched);
     if literal_flag.is_none() {

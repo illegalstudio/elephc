@@ -21,6 +21,7 @@ echo get_class($native->item);
             std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
+        assert!(assembly.contains("__elephc_eval_class_string_relation_v1"), "{target}: missing eval subclass relation probe");
     }
 }
 

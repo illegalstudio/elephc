@@ -18,7 +18,7 @@
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
-use crate::context::{native_frame_active_eval_context, native_frame_called_class_override_context};
+use crate::context::{live_native_context_for_class, native_frame_active_eval_context, native_frame_called_class_override_context};
 use crate::errors::EvalStatus;
 use crate::interpreter;
 use crate::interpreter::RuntimeValueOps;
@@ -75,8 +75,8 @@ pub unsafe extern "C" fn __elephc_eval_try_new_object(
 ///
 /// # Safety
 /// `ctx` must be null or a valid live eval context. A null context borrows the active
-/// native-frame context. The name must be readable for `name_len` bytes; `out` may be null.
-/// Returns -1 if no active context or matching eval class exists.
+/// native-frame context or a live request owner. The name must be readable for `name_len`
+/// bytes; `out` may be null. Returns -1 if no owning context or matching eval class exists.
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_try_allocate_object_v1(
@@ -87,12 +87,13 @@ pub unsafe extern "C" fn __elephc_eval_try_allocate_object_v1(
 ) -> i32 {
     std::panic::catch_unwind(|| unsafe {
         clear_result(out);
-        let ctx = native_frame_active_eval_context().unwrap_or(ctx);
-        let Some(context) = ctx.as_mut() else { return -1; };
-        if context.abi_version() != ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
         let Ok(name) = abi_name_to_string(name_ptr, name_len) else {
             return EvalStatus::RuntimeFatal.code();
         };
+        let ctx = native_frame_active_eval_context().or_else(|| (!ctx.is_null()).then_some(ctx))
+            .or_else(|| live_native_context_for_class(&name)).unwrap_or(std::ptr::null_mut());
+        let Some(context) = ctx.as_mut() else { return -1; };
+        if context.abi_version() != ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
         context.sync_global_eval_classes();
         let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
         match interpreter::execute_context_try_allocate_object_outcome(context, &name, &mut values) {

@@ -31,6 +31,34 @@ const CLASS_RELATION_IMPLEMENTS: u64 = 0;
 const CLASS_RELATION_PARENTS: u64 = 1;
 const CLASS_RELATION_USES: u64 = 2;
 
+/// Tests an eval class string against a target and its compiled inheritance candidates.
+/// The first NUL-separated candidate is the target used by the exclude-self rule.
+///
+/// # Safety
+/// Both byte ranges must be readable UTF-8. Contexts are borrowed only on their owning thread.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_class_string_relation_v1(
+    source_ptr: *const u8, source_len: u64, candidates_ptr: *const u8,
+    candidates_len: u64, exclude_self: u64,
+) -> u64 {
+    std::panic::catch_unwind(|| unsafe {
+        let Ok(source) = abi_name_to_string(source_ptr, source_len) else { return 0; };
+        let Ok(candidates) = abi_name_to_string(candidates_ptr, candidates_len) else { return 0; };
+        let candidates = candidates.split('\0').collect::<Vec<_>>();
+        let owner = crate::context::native_frame_active_eval_context()
+            .or_else(|| crate::context::live_native_context_for_class(&source));
+        if let Some(context) = owner.and_then(|owner| owner.as_mut()) {
+            context.sync_global_eval_classes();
+            return u64::from(crate::context::native_class_string_relation(context, &source, &candidates, exclude_self != 0));
+        }
+        // A read-only query can use a metadata snapshot without registering object ownership.
+        let mut snapshot = ElephcEvalContext::new();
+        snapshot.sync_global_eval_classes();
+        u64::from(crate::context::native_class_string_relation(&snapshot, &source, &candidates, exclude_self != 0))
+    }).unwrap_or(0)
+}
+
 /// Resolves an object's owning eval context before falling back to the active caller context.
 /// Dynamic classes can use native stdClass payloads, so ownership lookup precedes class tables.
 ///

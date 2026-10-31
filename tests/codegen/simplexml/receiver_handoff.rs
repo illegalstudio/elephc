@@ -10,6 +10,42 @@
 
 use crate::support::*;
 
+/// Native callers retain eval subclass identity after returning from the declaring fragment.
+#[test]
+fn test_simplexml_eval_subclass_factories_after_eval_returns() {
+    if skip_without_xml_native("test_simplexml_eval_subclass_factories_after_eval_returns") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeEvalFactoryClassCheck(string $class, bool $allow): bool {
+    return is_a($class, 'SimpleXMLElement', $allow);
+}
+$source = $argc > 0 ? 'class ReturnedEvalFactoryXml extends SimpleXMLElement {
+    public static int $calls = 0;
+    public function __construct(string $xml, int $marker) { self::$calls++; parent::__construct($xml); }
+}' : '';
+eval($source);
+$class = 'ReturnedEvalFactoryXml';
+$root = new $class('<r id="x"><item>1</item></r>', 7);
+$child = $root->item;
+$children = $root->children();
+$attributes = $root->attributes();
+$paths = $root->xpath('//item');
+$loaded = simplexml_load_string('<loaded/>', $class);
+$imported = simplexml_import_dom($root, $class);
+echo (int)nativeEvalFactoryClassCheck($class, true), ':', (int)nativeEvalFactoryClassCheck($class, false), '|';
+echo get_class($child), ':', $child->getName(), '|';
+echo get_class($children), ':', count($children), '|';
+echo get_class($attributes), ':', count($attributes), '|';
+echo get_class($paths[0]), ':', $paths[0]->getName(), '|';
+echo get_class($loaded), ':', $loaded->getName(), '|';
+echo get_class($imported), ':', $imported->getName(), '|';
+echo ReturnedEvalFactoryXml::$calls;
+unset($root, $child, $children, $attributes, $paths, $loaded, $imported, $class, $source);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:0|ReturnedEvalFactoryXml:item|ReturnedEvalFactoryXml:1|ReturnedEvalFactoryXml:1|ReturnedEvalFactoryXml:item|ReturnedEvalFactoryXml:loaded|ReturnedEvalFactoryXml:r|1");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Eval subclass selections and factories allocate without re-entering the user constructor.
 #[test]
 fn test_simplexml_eval_subclass_constructorless_factories() {

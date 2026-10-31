@@ -9,6 +9,54 @@
 
 use super::*;
 
+thread_local! {
+    /// Stable ABI handles, removed before their owning contexts are reclaimed.
+    static LIVE_NATIVE_CONTEXTS: RefCell<Vec<*mut ElephcEvalContext>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Publishes a heap context after all initialization is complete and its address is stable.
+pub(crate) fn register_live_native_context(context: *mut ElephcEvalContext) {
+    LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow_mut().push(context));
+}
+
+/// Removes a context before any owner or callback can observe reclaimed metadata.
+pub(crate) fn unregister_live_native_context(context: *mut ElephcEvalContext) {
+    LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow_mut().retain(|entry| *entry != context));
+}
+
+/// Finds a live request owner for class-based factories called after an eval activation returns.
+///
+/// # Safety
+/// Context handles must be registered and removed on their owning thread before reclamation.
+pub(crate) unsafe fn live_native_context_for_class(name: &str) -> Option<*mut ElephcEvalContext> {
+    let contexts = LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow().clone());
+    for context in contexts {
+        let Some(owner) = (unsafe { context.as_mut() }) else { continue; };
+        if !owner.has_abi_owners() || owner.teardown_active() { continue; }
+        #[cfg(not(test))]
+        owner.sync_global_eval_classes();
+        if owner.resolve_class_like_name(name).is_some() { return Some(context); }
+    }
+    None
+}
+
+/// Tests eval class-like names against the target followed by its compiled positive candidates.
+pub(crate) fn native_class_string_relation(
+    context: &ElephcEvalContext, source: &str, candidates: &[&str], exclude_self: bool,
+) -> bool {
+    let Some(source) = context.resolve_class_like_name(source) else { return false; };
+    let Some(target) = candidates.first() else { return false; };
+    let target = context.resolve_class_like_name(target).unwrap_or_else(|| target.trim_start_matches('\\').into());
+    if exclude_self && source.eq_ignore_ascii_case(&target) { return false; }
+    let interface_parents = context.interface_parent_names(&source);
+    candidates.iter().any(|candidate| {
+        let candidate = candidate.trim_start_matches('\\');
+        source.eq_ignore_ascii_case(candidate)
+            || context.class_is_a(&source, candidate, false)
+            || interface_parents.iter().any(|parent| parent.eq_ignore_ascii_case(candidate))
+    })
+}
+
 /// Late-static override installed while eval dispatches into a generated/AOT frame.
 #[derive(Clone)]
 pub(super) struct NativeFrameCalledClassOverride {
@@ -135,6 +183,39 @@ pub(crate) fn native_frame_active_eval_context() -> Option<*mut ElephcEvalContex
 #[cfg(test)]
 mod active_context_tests {
     use super::*;
+
+    /// Factories reuse a live ABI owner and never return a handle after its final reclamation.
+    #[test]
+    fn class_factory_context_lookup_tracks_retained_abi_lifetimes() {
+        let context = crate::ffi::__elephc_eval_context_new();
+        unsafe {
+            assert!((*context).define_class(EvalClass::new("LiveFactoryContextNode", vec![], vec![])));
+            assert_eq!(live_native_context_for_class("\\livefactorycontextnode"), Some(context));
+            assert_eq!(crate::ffi::__elephc_eval_context_retain(context), 0);
+            crate::ffi::__elephc_eval_context_free(context);
+            assert_eq!(live_native_context_for_class("LiveFactoryContextNode"), Some(context));
+            crate::ffi::__elephc_eval_context_free(context);
+            assert_eq!(live_native_context_for_class("LiveFactoryContextNode"), None);
+        }
+    }
+
+    /// Compiled positive candidates include native ancestors implementing the requested interface.
+    #[test]
+    fn eval_class_string_relations_preserve_aliases_self_and_compiled_parents() {
+        let mut context = ElephcEvalContext::new();
+        assert!(context.define_class(EvalClass::with_relations("DynamicFactoryChild",
+            Some("NativeFactoryParent".into()), vec![], vec![], vec![])));
+        assert!(context.define_interface(EvalInterface::new("DynamicFactoryInterface",
+            vec!["NativeFactoryInterface".into()], vec![])));
+        assert!(context.define_class_alias("DynamicFactoryChild", "DynamicFactoryAlias"));
+        assert!(native_class_string_relation(&context, "\\dynamicfactoryalias", &["NativeFactoryParent"], false));
+        assert!(native_class_string_relation(&context, "DynamicFactoryChild", &["NativeFactoryParent"], true));
+        assert!(native_class_string_relation(&context, "DynamicFactoryChild", &["Countable", "NativeFactoryParent"], false));
+        assert!(native_class_string_relation(&context, "DynamicFactoryInterface", &["NativeFactoryInterface"], true));
+        assert!(!native_class_string_relation(&context, "DynamicFactoryAlias", &["DynamicFactoryChild"], true));
+        assert!(native_class_string_relation(&context, "DynamicFactoryAlias", &["DynamicFactoryChild"], false));
+        assert!(!native_class_string_relation(&context, "MissingFactoryClass", &["MissingFactoryClass"], false));
+    }
 
     /// Nested global calls restore their caller's context without masking called-class metadata.
     #[test]

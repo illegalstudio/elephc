@@ -29,7 +29,14 @@ pub extern "C" fn __elephc_eval_abi_version() -> u32 {
 /// Allocates a process-level eval context handle for generated code.
 #[no_mangle]
 pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
-    Box::into_raw(allocate_eval_context())
+    publish_eval_context(allocate_eval_context())
+}
+
+/// Publishes a stable ABI handle in the live request registry after context initialization.
+pub(super) fn publish_eval_context(context: Box<ElephcEvalContext>) -> *mut ElephcEvalContext {
+    let context = Box::into_raw(context);
+    crate::context::register_live_native_context(context);
+    context
 }
 
 /// Allocates an owned context so initialization can finish before publishing its ABI handle.
@@ -545,6 +552,7 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
             .release_curl_easy_private_values(&mut values);
     }
     context.unregister_dynamic_object_context();
+    crate::context::unregister_live_native_context(ctx);
     crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
     unsafe { drop(Box::from_raw(ctx)) };
 }
