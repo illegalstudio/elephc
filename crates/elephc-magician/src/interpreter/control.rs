@@ -85,7 +85,7 @@ pub(super) enum BoundNativeFunctionRefSlot {
     },
     OwnedRawWord {
         original: u64,
-        slot: Box<u64>,
+        slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
     },
 }

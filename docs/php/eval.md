@@ -296,9 +296,9 @@ global user functions support positional, named, and spread arguments inside
 eval fragments. String keys in unpacked argument arrays bind as named
 parameters. Direct calls and variable-function calls can also invoke registered
 AOT global user functions when their by-reference parameters use generated
-`mixed`/union-style boxed storage or one-word scalar raw storage (`int`, `bool`,
-or `float`), string raw storage, or one-word heap raw storage (`array`,
-`iterable`, and object/class parameters). Nullable scalar, native-only ABI
+`mixed`/union, array, object, or class boxed storage; two-word scalar raw storage
+(`int`, `bool`, or `float`); two-word string raw storage; or two-word raw heap
+storage for `iterable`. Nullable scalar, native-only ABI
 layouts, and other unsupported raw-storage by-reference free-function
 parameters remain metadata-only until the function bridge has typed
 staging/writeback for those ABI layouts.
@@ -796,9 +796,9 @@ generated/AOT free functions with positional variadic tails when the generated
 signature has no by-reference parameters. Direct, variable-function,
 first-class callable, `Closure::fromCallable()`, and `call_user_func_array()`
 paths can additionally invoke generated/AOT free functions whose by-reference
-parameters use boxed Mixed/union storage or one-word scalar raw storage
-(`int`, `bool`, or `float`), string raw storage, or one-word heap raw storage
-(`array`, `iterable`, and object/class parameters), including positional
+parameters use boxed Mixed/union, array, object, or class storage; two-word
+scalar raw storage (`int`, `bool`, or `float`); two-word string raw storage; or
+two-word raw heap storage for `iterable`, including positional
 `&...` variadic tails when the tail arguments have lvalue/ref-cell storage.
 Registered generated/AOT free-function parameter
 names, declared types, return types, by-reference and variadic flags,
@@ -1277,10 +1277,12 @@ object construction, fail at runtime with an eval fatal diagnostic.
 The fragment subset is broad but not the full elephc language surface. Eval
 retains `ReflectionFunction` closure metadata for common
 `Closure::fromCallable()` targets, including bound free functions, object
-methods, static methods, and invokable objects. Advanced native callable
-descriptors and full PHP `Closure` APIs, such as arbitrary scope mutation and
-reflection over every first-class callable shape, are still outside eval
-fragments. Runtime/AOT free-function, object-method, static-method, and
+methods, static methods, and invokable objects. Registered generated/AOT native
+callable descriptors support direct and variable calls, `call_user_func()`,
+`call_user_func_array()`, first-class callable syntax, and
+`Closure::fromCallable()`. Full PHP `Closure` APIs, such as arbitrary scope
+mutation, and reflection over every first-class callable shape are still outside
+eval fragments. Runtime/AOT free-function, object-method, static-method, and
 constructor fallback from eval
 can bind registered names, defaults, and positional variadic tails; method,
 static-method, and constructor fallback can also bind by-reference lvalue
@@ -1288,9 +1290,9 @@ metadata. Generated AOT bridge dispatch supports visibility-checked method,
 static-method, and constructor signatures whose generated ABI storage is
 scalar/string, callable descriptor, boxed Mixed/union, array/hash, iterable, or
 object, plus free-function signatures using the descriptor invoker ABI when
-by-reference parameters, if any, use boxed Mixed/union storage or raw one-word
-scalar storage (`int`, `bool`, or `float`), string raw storage, or one-word heap
-storage (`array`, `iterable`, and object/class parameters), including
+by-reference parameters, if any, use boxed Mixed/union, array, object, or class
+storage; two-word scalar raw storage (`int`, `bool`, or `float`); two-word string
+raw storage; or two-word raw heap storage for `iterable`, including
 positional `&...` variadic tail element writeback.
 Registered type specs validate nullable and union members, intersection object
 parameters, and intersection object returns before or after the generated AOT
@@ -1326,7 +1328,7 @@ by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
 metadata slices, while unsupported native-only bridge shapes and raw-storage
 by-reference free-function bridge shapes beyond the current
-Mixed/scalar/string/one-word heap slice remain metadata-only rather than
+Mixed/scalar/string/iterable slice remain metadata-only rather than
 invocable through eval.
 
 The type checker and AST optimizer conservatively treat every `eval()` call as

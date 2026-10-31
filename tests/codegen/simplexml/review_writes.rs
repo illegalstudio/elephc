@@ -72,7 +72,7 @@ $nativeReference->slot = new ArrayObject(["y" => 1]);
 $nativeReference[0]["y"] = 6;
 echo json_encode($nativeReference->slot->getArrayCopy()), "|";
 $nativeVirtual = new NativeVirtualSetDimension(["k" => ["x" => 1]]);
-try { $nativeVirtual["k"]["x"] = 9; } catch (Error $error) { echo $error->getMessage(), "|"; }
+$nativeVirtual["k"]["x"] = 9;
 echo json_encode($nativeVirtual->getArrayCopy()), "|";
 unset($view, $object, $iterator, $inherited, $virtual, $reference, $nativeReference, $nativeVirtual, $error);
 ' : '';
@@ -88,7 +88,7 @@ unset($xml, $source);
         "reference-get|Unsupported dimension write: by-reference offsetGet|",
         "reference-get|{\"y\":5}|",
         "Unsupported dimension write: by-reference offsetGet|{\"y\":6}|",
-        "Unsupported dimension write: native SPL offsetSet override|{\"k\":{\"x\":1}}|",
+        "{\"k\":{\"x\":9}}|",
     ));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

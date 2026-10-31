@@ -136,7 +136,7 @@ pub(in crate::interpreter) fn cleanup_native_function_ref_args(
                 values.release_raw_string_words(words[0], words[1])
             }
             BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
-                let word = **slot;
+                let word = slot[0];
                 values.release_raw_heap_word(word)
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
@@ -234,7 +234,7 @@ fn write_back_native_function_ref_slot(
             slot,
             target,
         } => {
-            let word = **slot;
+            let word = slot[0];
             let Some(target) = target else {
                 return values.release_raw_heap_word(word);
             };

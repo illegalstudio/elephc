@@ -37,7 +37,7 @@ echo eval($source);
 "#,
     );
 
-    assert_eq!(out, "1:5::integer:5|3:7:extra:integer:7");
+    assert_eq!(out, "1:5::integer:5|2:7:extra:integer:7");
 }
 
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.

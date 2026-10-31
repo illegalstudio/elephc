@@ -82,9 +82,9 @@ pub(super) fn stage_native_function_invoker_args(
                     let source_tag = values.type_tag(bound_arg.value)?;
                     let original = values.raw_value_word(bound_arg.value)?;
                     let retained = values.retain_raw_heap_word(original)?;
-                    let mut slot = Box::new(retained);
+                    let mut slot = Box::new([retained, 0]);
                     let marker = match values.invoker_raw_ref_cell(
-                        slot.as_mut() as *mut u64 as *mut c_void,
+                        (slot.as_mut() as *mut [u64; 2]).cast::<c_void>(),
                         source_tag,
                     ) {
                         Ok(marker) => marker,

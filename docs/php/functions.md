@@ -584,7 +584,9 @@ semantics:
 - Coercing a fresh local from a different storage representation while returning it by
   reference inside `try`/`finally`, such as a `mixed` local returned as `int` or `string`.
   These conversions can throw before the reference exists, so their handlers need a
-  recovery path. This restriction preserves the existing nullable-object staging case.
+  recovery path. Nullable-object staging is the narrow exception: the function must have
+  no `catch`, and every `finally` must first rebind the staged local from an independent,
+  call-free expression before any other use. Other protected coercion shapes are rejected.
 - Outside the native enum interface dispatch described above, capturing a reference with
   `$x = &f()` from a call the compiler cannot resolve to a by-reference return. A named
   function, a method, a static method, and a closure whose

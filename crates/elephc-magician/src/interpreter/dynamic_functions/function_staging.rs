@@ -131,8 +131,8 @@ pub(in crate::interpreter) fn stage_native_function_ref_arg(
             let tag = values.type_tag(original)?;
             let original = values.raw_value_word(original)?;
             let retained = values.retain_raw_heap_word(original)?;
-            let mut slot = Box::new(retained);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut u64).cast(), tag);
+            let mut slot = Box::new([retained, 0]);
+            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut [u64; 2]).cast(), tag);
             let marker = match marker {
                 Ok(marker) => marker,
                 Err(status) => {

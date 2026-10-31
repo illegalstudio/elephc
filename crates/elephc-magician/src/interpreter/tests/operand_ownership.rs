@@ -191,7 +191,7 @@ fn native_function_ref_staging_releases_only_its_current_owner() {
                     }
                 } else {
                     BoundNativeFunctionRefSlot::OwnedRawWord {
-                        original: original_word, slot: Box::new(current_word), target: None,
+                        original: original_word, slot: Box::new([current_word, 0]), target: None,
                     }
                 };
                 let bound = BoundNativeFunctionArgs {
