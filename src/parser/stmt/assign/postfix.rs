@@ -76,6 +76,14 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        *pos += 1;
+        let source = parse_assignment_value_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return lower_postfix_reference_assignment(lhs_expr, source, span).map(Some);
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -720,6 +728,38 @@ fn can_replay_instanceof_target(target: &InstanceOfTarget) -> bool {
         InstanceOfTarget::Generic(_) => true,
         InstanceOfTarget::Expr(expr) => can_replay_assignment_target(expr),
     }
+}
+
+/// Lowers `$place = &$source` for an array-element or property l-value.
+///
+/// PHP makes the written slot itself the source variable's reference. The desugaring stores the
+/// source value into the slot, promotes that entry to a managed reference cell, and then aliases
+/// the source local to the same cell. The target's array base and dimension are stabilized first
+/// so each side effect runs exactly once, and a non-variable source is rejected because the
+/// second step can only rebind a local name.
+fn lower_postfix_reference_assignment(
+    target: Expr,
+    source: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let ExprKind::Variable(source_name) = &source.kind else {
+        return Err(CompileError::new(
+            source.span,
+            "Reference assignment source must be a variable",
+        ));
+    };
+    let store_value = Expr::new(ExprKind::Variable(source_name.clone()), source.span);
+    let mut lowerer = EffectfulTargetLowerer::new(span);
+    let target = lowerer.stabilize_array_target(target);
+    let store = assignment_target_store_stmt(target.clone(), store_value, span)?;
+    let alias = StmtKind::RefAssign {
+        target: source_name.clone(),
+        source: target,
+    };
+    let mut stmts = lowerer.stmts;
+    stmts.push(Stmt::new(store, span));
+    stmts.push(Stmt::new(alias, span));
+    Ok(Stmt::new(StmtKind::Synthetic(stmts), span))
 }
 
 /// Lowers a compound postfix assignment (e.g., `+=`, `-=`) on a non-replayable l-value

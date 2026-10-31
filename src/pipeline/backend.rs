@@ -138,7 +138,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         ir_module.required_runtime_features.mbstring_mime |= ini_overrides.iter().any(|(name, _)| {
             name == "mbstring.http_output_conv_mimetypes"
         });
-        ir_module.mbstring_startup = Some(super::mbstring_configuration::arguments(ini_overrides));
+        ir_module.mbstring_startup = Some(crate::mbstring_startup::arguments(ini_overrides));
     }
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the

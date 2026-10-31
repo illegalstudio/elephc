@@ -2,7 +2,7 @@
 title: "__elephc_builtin_warning() - internals"
 description: "Compiler internals for __elephc_builtin_warning(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1163
+  order: 1166
 ---
 
 ## `__elephc_builtin_warning()` - internals

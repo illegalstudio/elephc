@@ -320,6 +320,9 @@ impl Checker {
                     } else {
                         crate::types::signatures::builtin_call_sig(builtin_name)
                     };
+                    let user_sig = self
+                        .canonical_function_name_folded(builtin_name)
+                        .and_then(|name| self.functions.get(&name).cloned());
                     for (idx, arg) in expanded_args.iter().enumerate() {
                         let param_idx = match &arg.kind {
                             ExprKind::NamedArg { name, .. } => contextual_sig
@@ -329,11 +332,33 @@ impl Checker {
                                         param.trim_start_matches('$') == name.trim_start_matches('$')
                                     })
                                 })
+                                .or_else(|| {
+                                    user_sig.as_ref().and_then(|sig| {
+                                        sig.params.iter().position(|(param, _)| {
+                                            param.trim_start_matches('$') == name.trim_start_matches('$')
+                                        })
+                                    })
+                                })
                                 .unwrap_or(idx),
                             _ => idx,
                         };
                         if contextual_callbacks.contains(&param_idx) {
                             continue;
+                        }
+                        // A by-reference user parameter creates the variable it receives. The
+                        // call checker records the fresh output; the eager effect pass must not
+                        // report the argument as an undefined read first.
+                        if user_sig
+                            .as_ref()
+                            .is_some_and(|sig| {
+                                sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                            })
+                        {
+                            if let Some(name) = output_variable(arg) {
+                                if env.get(name.as_str()).is_none() {
+                                    continue;
+                                }
+                            }
                         }
                         if crate::builtins::mbstring::is_capture_output_argument(builtin_name, arg, idx) {
                             // Forming the output reference requires dynamic storage before later

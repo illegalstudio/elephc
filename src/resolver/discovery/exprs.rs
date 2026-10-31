@@ -42,6 +42,7 @@ pub(super) fn discover_expr(
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     match &expr.kind {
+        ExprKind::Reference(inner) => discover_expr(inner, base_dir, loaded_paths, include_chain, state, output)?,
         // A value-position include hoists the included file's declarations just like a
         // statement-position include does.
         ExprKind::IncludeValue { path, once, required } => {

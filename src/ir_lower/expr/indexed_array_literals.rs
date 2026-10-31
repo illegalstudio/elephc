@@ -429,10 +429,15 @@ pub(super) fn lower_mixed_array_literal(
             }
             ArrayEntry::Keyed(key, value) => {
                 let span = key.span;
+                let reference_source = match &value.kind {
+                    ExprKind::Reference(inner) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                let value_expr = reference_source.unwrap_or(value);
                 let key = lower_expr(ctx, key);
                 let (key, key_owner) = root_owned_call_operand(ctx, key, span);
-                let value_span = value.span;
-                let value = lower_expr(ctx, value);
+                let value_span = value_expr.span;
+                let value = lower_expr(ctx, value_expr);
                 let value = retype_pointer_literal_value(ctx, value, pointer_elem.as_ref(), value_span);
                 ctx.emit_void(
                     Op::HashSet,
@@ -441,6 +446,23 @@ pub(super) fn lower_mixed_array_literal(
                     Op::HashSet.default_effects(),
                     Some(span),
                 );
+                if let Some(source) = reference_source {
+                    let cell = ctx.emit_value(
+                        Op::LoadArrayElemRefCell,
+                        vec![hash.value, key.value],
+                        None,
+                        PhpType::Mixed,
+                        Op::LoadArrayElemRefCell.default_effects(),
+                        Some(value_span),
+                    );
+                    crate::ir_lower::expr::assoc_array_literals::bind_reference_literal_source(
+                        ctx,
+                        source,
+                        cell,
+                        PhpType::Mixed,
+                        value_span,
+                    );
+                }
                 if let Some(owner) = key_owner {
                     retire_owned_call_operand(ctx, owner, span);
                 }
@@ -990,6 +1012,9 @@ pub(super) fn array_literal_element_type_for_ir(
         return storage;
     }
     match &item.kind {
+        // A reference entry's payload is a boxed Mixed cell owned by the managed reference, so
+        // the hash storage stays dynamic regardless of the aliased place's declared type.
+        ExprKind::Reference(_) => PhpType::Mixed,
         ExprKind::Null | ExprKind::Throw(_) => PhpType::Mixed,
         ExprKind::Cast {
             target: CastType::Array,

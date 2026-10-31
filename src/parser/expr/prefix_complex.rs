@@ -332,6 +332,7 @@ pub(super) fn collect_arrow_expr_captures(
     captures: &mut Vec<String>,
 ) {
     match &expr.kind {
+        ExprKind::Reference(inner) => collect_arrow_expr_captures(inner, bound, seen, captures),
         ExprKind::Variable(name)
         | ExprKind::PreIncrement(name)
         | ExprKind::PostIncrement(name)

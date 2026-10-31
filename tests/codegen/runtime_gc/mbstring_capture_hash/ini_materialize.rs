@@ -50,8 +50,11 @@ mb_strlen("");
 for ($i = 0; $i < 8; $i++) { for ($mode = 0; $mode < 8; $mode++) { run_ini($mode); } }
 echo "done\n";
 "#;
+    // Modes 3/4 return the configured Core INI graph: the three default encoding directives
+    // registered by `mbstring_startup` plus the directive the fixture queries. Mode 4 also
+    // includes each entry's description, so it doubles the leaf count.
     let expected = concat!("0:1:1:7800ff:1\n", "1:1:1::1\n", "2:1:1:61:1\n",
-        "3:1:4:1\n", "4:1:8:1\n", "5:1:MB_STRINGS:1\n", "6:1:3:1\n", "7:1:0:1:1\n");
+        "3:1:6:1\n", "4:1:12:1\n", "5:1:MB_STRINGS:1\n", "6:1:3:1\n", "7:1:0:1:1\n");
     let directory = make_cli_test_dir("mbstring_ini_materialize");
     let (assembly, runtime, libraries) = compile_source_to_asm_with_options(source, &directory, 8_388_608, true, true);
     let jump = if target().arch == Arch::AArch64 { "b" } else { "jmp" };

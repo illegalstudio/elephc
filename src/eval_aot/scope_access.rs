@@ -215,6 +215,7 @@ pub(super) fn collect_block_scope_access(body: &[Stmt], access: &mut EvalScopeAc
 /// Adds one expression's eval-scope reads and writes to the accumulator.
 pub(super) fn collect_expr_scope_access(expr: &Expr, access: &mut EvalScopeAccess) {
     match &expr.kind {
+        ExprKind::Reference(inner) => collect_expr_scope_access(inner, access),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

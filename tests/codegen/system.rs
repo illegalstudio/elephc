@@ -3758,3 +3758,50 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
 }
+// --- Locale ---
+
+/// PHP's canonical C and POSIX locales are accepted and reported back unchanged.
+#[test]
+fn test_setlocale_accepts_c_and_posix() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(setlocale(LC_ALL, 'C'));
+var_dump(setlocale(LC_ALL, 'POSIX'));
+"#,
+    );
+    assert_eq!(out, "string(1) \"C\"\nstring(5) \"POSIX\"\n");
+}
+
+/// Additional locale arguments are tried left to right; unsupported names report false.
+#[test]
+fn test_setlocale_tries_variadic_locales_and_rejects_unknowns() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(setlocale(LC_ALL, 'bogus', 'C'));
+var_dump(setlocale(LC_ALL, 'bogus'));
+var_dump(setlocale(999, 'C'));
+var_dump(setlocale(LC_CTYPE, 'C'));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"C\"\nbool(false)\nbool(false)\nstring(1) \"C\"\n"
+    );
+}
+
+/// Every locale category constant is registered for the compiled target.
+#[test]
+fn test_locale_constants_are_defined() {
+    let out = compile_and_run(
+        r#"<?php
+echo defined('LC_ALL') ? '1' : '0';
+echo defined('LC_COLLATE') ? '1' : '0';
+echo defined('LC_CTYPE') ? '1' : '0';
+echo defined('LC_MESSAGES') ? '1' : '0';
+echo defined('LC_MONETARY') ? '1' : '0';
+echo defined('LC_NUMERIC') ? '1' : '0';
+echo defined('LC_TIME') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "1111111");
+}

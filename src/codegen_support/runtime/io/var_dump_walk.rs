@@ -890,6 +890,15 @@ pub fn emit_var_dump_pad(emitter: &mut Emitter) {
     emitter.instruction("b __rt_vd_pad_loop");                                  // continue padding
 
     emitter.label("__rt_vd_pad_done");
+    // -- print a pending reference marker on the value line this pad opens --
+    abi::emit_symbol_address(emitter, "x0", "_vd_ref_prefix");                  // resolve the pending reference-marker flag
+    emitter.instruction("ldr x1, [x0]");                                        // load the requested marker state
+    emitter.instruction("cbz x1, __rt_vd_pad_ret");                             // ordinary values print no marker
+    emitter.instruction("str xzr, [x0]");                                       // consume the marker for this line only
+    abi::emit_symbol_address(emitter, "x1", "_vd_amp");                         // load the shared ampersand literal
+    emitter.instruction("mov x2, #1");                                          // the marker is one byte
+    emitter.instruction("bl __rt_vd_write");                                    // write `&` through the var_dump sink
+    emitter.label("__rt_vd_pad_ret");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the pad frame
     emitter.instruction("ret");                                                 // return to caller
@@ -922,6 +931,16 @@ fn emit_var_dump_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_vd_pad_loop_x86");                            // continue padding
 
     emitter.label("__rt_vd_pad_done_x86");
+    // -- print a pending reference marker on the value line this pad opens --
+    abi::emit_symbol_address(emitter, "rax", "_vd_ref_prefix");                 // resolve the pending reference-marker flag
+    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // load the requested marker state
+    emitter.instruction("test rcx, rcx");                                       // is a marker pending?
+    emitter.instruction("je __rt_vd_pad_ret_x86");                              // ordinary values print no marker
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // consume the marker for this line only
+    abi::emit_symbol_address(emitter, "rsi", "_vd_amp");                        // load the shared ampersand literal
+    emitter.instruction("mov edx, 1");                                          // the marker is one byte
+    emitter.instruction("call __rt_vd_write");                                  // write `&` through the var_dump sink
+    emitter.label("__rt_vd_pad_ret_x86");
     emitter.instruction("add rsp, 16");                                         // release the pad frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
@@ -1696,6 +1715,7 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // items emitted = 0
 
     emitter.label("__rt_vd_hash_loop");
+    emitter.instruction("str xzr, [sp, #72]");                                  // this entry starts without a reference marker
     emitter.instruction("ldr x9, [sp, #24]");                                   // reload items emitted
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload entry count
     emitter.instruction("cmp x9, x10");                                         // processed every entry?
@@ -1703,10 +1723,20 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
 
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload hash pointer
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload iterator cursor
-    emitter.instruction("bl __rt_hash_iter_next_value");                        // x0=next cursor, x1=key ptr, x2=key len, x3=val_lo, x4=val_hi, x5=val_tag
+    emitter.instruction("bl __rt_hash_iter_next");                              // raw tuple: keep tag 11 so shared references can be marked
     emitter.instruction("str x0, [sp, #8]");                                    // save the next iterator cursor
     emitter.instruction("str x1, [sp, #32]");                                   // save key ptr (or integer payload)
     emitter.instruction("str x2, [sp, #40]");                                   // save key len (-1 sentinel for integer keys)
+    // -- PHP prints `&` only while the reference cell has another owner --
+    emitter.instruction("cmp x5, #11");                                         // does this entry belong to a PHP reference set?
+    emitter.instruction("b.ne __rt_vd_hash_value_ready");                       // ordinary entries carry a value directly
+    emitter.instruction("ldr w9, [x3, #-12]");                                  // load the reference cell's owner count
+    emitter.instruction("cmp w9, #1");                                          // is the cell shared with a live alias?
+    emitter.instruction("b.ls __rt_vd_hash_value_ready");                       // a singleton reference prints as its value
+    emitter.instruction("mov x9, #1");                                          // request the `&` marker on this value line
+    emitter.instruction("str x9, [sp, #72]");                                   // publish the marker request
+    emitter.label("__rt_vd_hash_value_ready");
+    emitter.instruction("bl __rt_hash_entry_deref");                            // dereference a tag-11 cell for rendering
     emitter.instruction("str x3, [sp, #48]");                                   // save value low payload word
     emitter.instruction("str x4, [sp, #56]");                                   // save value high payload word
     emitter.instruction("str x5, [sp, #64]");                                   // save value runtime tag
@@ -1736,6 +1766,12 @@ pub fn emit_var_dump_hash(emitter: &mut Emitter) {
     emitter.label("__rt_vd_hash_after_key");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes (tags 4/5) on its own --
+    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the reference-marker request
+    emitter.instruction("cbz x9, __rt_vd_hash_no_reference_marker");            // ordinary values print no marker
+    abi::emit_symbol_address(emitter, "x9", "_vd_ref_prefix");                  // resolve the pending reference-marker flag
+    emitter.instruction("mov x10, #1");                                         // request one `&` before the value type
+    emitter.instruction("str x10, [x9]");                                       // publish the marker request
+    emitter.label("__rt_vd_hash_no_reference_marker");
     emitter.instruction("ldr x0, [sp, #64]");                                   // value tag → value renderer
     emitter.instruction("ldr x1, [sp, #48]");                                   // value low word → value renderer
     emitter.instruction("ldr x2, [sp, #56]");                                   // value high word → value renderer
@@ -1771,6 +1807,7 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // items emitted = 0
 
     emitter.label("__rt_vd_hash_loop_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // this entry starts without a reference marker
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload items emitted
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload entry count
     emitter.instruction("cmp r10, r11");                                        // processed every entry?
@@ -1778,10 +1815,19 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload hash pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload iterator cursor
-    emitter.instruction("call __rt_hash_iter_next_value");                      // rax=next cursor, rdi=key ptr, rdx=key len, rcx=val_lo, r8=val_hi, r9=val_tag
+    emitter.instruction("call __rt_hash_iter_next");                            // raw tuple: keep tag 11 so shared references can be marked
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the next iterator cursor
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save key ptr (or integer payload)
     emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                       // save key len (-1 sentinel for integer keys)
+    // -- PHP prints `&` only while the reference cell has another owner --
+    emitter.instruction("cmp r9, 11");                                          // does this entry belong to a PHP reference set?
+    emitter.instruction("jne __rt_vd_hash_value_ready_x86");                    // ordinary entries carry a value directly
+    emitter.instruction("mov r10d, DWORD PTR [rcx - 12]");                      // load the reference cell's owner count
+    emitter.instruction("cmp r10d, 1");                                         // is the cell shared with a live alias?
+    emitter.instruction("jbe __rt_vd_hash_value_ready_x86");                    // a singleton reference prints as its value
+    emitter.instruction("mov QWORD PTR [rbp - 80], 1");                         // request the `&` marker on this value line
+    emitter.label("__rt_vd_hash_value_ready_x86");
+    emitter.instruction("call __rt_hash_entry_deref");                          // dereference a tag-11 cell for rendering
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                       // save value low payload word
     emitter.instruction("mov QWORD PTR [rbp - 64], r8");                        // save value high payload word
     emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // save value runtime tag
@@ -1810,6 +1856,11 @@ fn emit_var_dump_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_vd_hash_after_key_x86");
     // -- render the value line; __rt_var_dump_value unboxes Mixed cells (tag 7)
     //    and recurses into nested arrays/hashes (tags 4/5) on its own --
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // is a reference marker requested?
+    emitter.instruction("je __rt_vd_hash_no_reference_marker_x86");             // ordinary values print no marker
+    abi::emit_symbol_address(emitter, "rax", "_vd_ref_prefix");                 // resolve the pending reference-marker flag
+    emitter.instruction("mov QWORD PTR [rax], 1");                              // publish the marker request
+    emitter.label("__rt_vd_hash_no_reference_marker_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // value low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // value high word → value renderer

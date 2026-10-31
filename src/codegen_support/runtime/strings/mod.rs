@@ -65,6 +65,7 @@ mod str_pad;
 mod str_split;
 mod str_word_count;
 mod addslashes;
+mod addcslashes;
 mod stripslashes;
 mod nl2br;
 mod base_convert;
@@ -223,6 +224,8 @@ pub use str_pad::emit_str_pad;
 pub use str_split::emit_str_split;
 /// Emit string to array split helper.
 pub use addslashes::emit_addslashes;
+/// Emit addcslashes escaping helper.
+pub use addcslashes::emit_addcslashes;
 /// Emit addslashes escaping helper.
 pub use stripslashes::emit_stripslashes;
 /// Emit stripslashes unescaping helper.

@@ -550,6 +550,7 @@ fn instanceof_target_refs(target_ref: &InstanceOfTarget, target: Symbol<'_>) -> 
 /// exhaustive so a new `ExprKind` cannot silently bypass detection.
 fn expr_refs(expr: &Expr, target: Symbol<'_>) -> Option<Span> {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_refs(inner, target),
         // `require`/`include` in expression position: recurse into the path expression.
         ExprKind::IncludeValue { path, .. } => expr_refs(path, target),
         // A matching string literal counts (function_exists/callable) — for FUNCTION targets

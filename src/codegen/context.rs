@@ -125,8 +125,18 @@ impl<'a> FunctionContext<'a> {
             .map_or(-1, |class| class.class_id as i64)
     }
 
-    /// Packs source strictness into the existing framed invocation-scope word.
-    /// Weak calls keep legacy class ids and global -1; strict calls use -scope-3.
+    /// Returns the lexical class id encoded for the shared descriptor-invoker ABI.
+    ///
+    /// Every callback scope word carries the private warning bits below the weak/strict profile;
+    /// array/regex callback helpers pass this encoded form and the invoker shifts it back before
+    /// forwarding the class id to the callee.
+    pub(super) fn callable_callback_scope(&self) -> i64 {
+        self.lexical_class_id() << 2
+    }
+
+    /// Packs source strictness and the by-reference warning request into the invocation-scope
+    /// word. Weak calls keep legacy class ids and global -1; strict calls use -scope-3. Both
+    /// values are shifted above the two private profile bits.
     pub(super) fn callable_invocation_profile(&self) -> i64 {
         let strict = self.current_inst.and_then(|id| self.function.instruction(id))
             .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
@@ -137,8 +147,23 @@ impl<'a> FunctionContext<'a> {
                 _ => None,
             })
             .is_some_and(|inst| inst.immediate == Some(Immediate::Bool(true)));
+        let warn_by_ref = self.current_inst
+            .and_then(|id| self.function.instruction(id))
+            .filter(|inst| inst.op == Op::CallableDescriptorInvoke)
+            .is_some_and(|inst| {
+                matches!(inst.immediate, Some(Immediate::I64(profile)) if profile & 2 != 0)
+            });
         let scope = self.lexical_class_id();
-        if strict { -scope - 3 } else { scope }
+        let profile = if strict { -scope - 3 } else { scope };
+        // The descriptor-invoker ABI carries one word, so the private warning request lives in
+        // the low two bits and the scope is shifted above them. A plain bit OR would collide with
+        // the negative weak/strict scope ids, whose sign extension sets every high bit.
+        let encoded = profile << 2;
+        if warn_by_ref {
+            encoded | super::runtime_callable_invoker::CALLABLE_PROFILE_WARN_BY_REF
+        } else {
+            encoded
+        }
     }
 
     /// Creates a lowering context with finalized frame and value-placement metadata.

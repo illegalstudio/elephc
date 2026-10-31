@@ -50,7 +50,7 @@ fn lower_comparator(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &st
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 4),
-        ctx.lexical_class_id(),
+        ctx.callable_callback_scope(),
     );
     abi::emit_call_label(ctx.emitter, "__rt_array_udiff_uintersect");
     abi::emit_release_temporary_stack(ctx.emitter, BORROWED_BYTES);

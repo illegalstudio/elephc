@@ -2,7 +2,7 @@
 title: "mb_chr() - internals"
 description: "Compiler internals for mb_chr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 905
+  order: 906
 ---
 
 ## `mb_chr()` - internals

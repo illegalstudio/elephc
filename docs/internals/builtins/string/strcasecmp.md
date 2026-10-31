@@ -2,7 +2,7 @@
 title: "strcasecmp() - internals"
 description: "Compiler internals for strcasecmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 995
+  order: 998
 ---
 
 ## `strcasecmp()` - internals

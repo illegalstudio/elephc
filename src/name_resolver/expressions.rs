@@ -55,6 +55,41 @@ fn is_mt_rand_php(name: &crate::names::Name) -> bool {
     name.as_canonical().trim_start_matches('\\') == "MT_RAND_PHP"
 }
 
+/// Returns the deprecation message PHP emits when reading one deprecated filter constant.
+fn filter_constant_deprecation(name: &crate::names::Name) -> Option<&'static str> {
+    match name.as_canonical().trim_start_matches('\\') {
+        "FILTER_SANITIZE_STRING" => Some(
+            "Constant FILTER_SANITIZE_STRING is deprecated since 8.1, use htmlspecialchars() instead",
+        ),
+        "FILTER_SANITIZE_STRIPPED" => Some(
+            "Constant FILTER_SANITIZE_STRIPPED is deprecated since 8.1, use htmlspecialchars() instead",
+        ),
+        _ => None,
+    }
+}
+
+/// Builds the inline deprecation PHP evaluates when reading a deprecated filter constant.
+///
+/// php-src raises `E_DEPRECATED` from the constant fetch, so the diagnostic must carry the
+/// read's own span. The ternary keeps the constant's numeric value on both branches, which
+/// preserves it even when a user error handler returns `false`.
+fn filter_constant_read(span: Span, message: &str, value: i64) -> ExprKind {
+    let at = |kind| Expr { kind, span };
+    ExprKind::Ternary {
+        condition: Box::new(at(ExprKind::FunctionCall {
+            name: resolved_name("trigger_error".to_string()),
+            args: vec![
+                at(ExprKind::StringLiteral(message.to_string())),
+                at(ExprKind::ConstRef(resolved_name(
+                    "E_USER_DEPRECATED".to_string(),
+                ))),
+            ],
+        })),
+        then_expr: Box::new(at(ExprKind::IntLiteral(value))),
+        else_expr: Box::new(at(ExprKind::IntLiteral(value))),
+    }
+}
+
 /// Builds the expression PHP evaluates when the program reads `MT_RAND_PHP`.
 ///
 /// php-src emits `E_DEPRECATED` from the constant fetch itself, so the diagnostic has to
@@ -328,6 +363,10 @@ pub(super) fn resolve_expr(
             ));
             if !in_constant_expression() && is_mt_rand_php(&resolved) {
                 mt_rand_php_read(expr.span)
+            } else if !in_constant_expression() && filter_constant_deprecation(&resolved).is_some() {
+                let message = filter_constant_deprecation(&resolved)
+                    .expect("deprecated filter constant message");
+                filter_constant_read(expr.span, message, 513)
             } else {
                 ExprKind::ConstRef(resolved)
             }

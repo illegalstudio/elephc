@@ -86,6 +86,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_get_assoc");                     // branch on the current JSON decoder condition
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
     emitter.instruction("b.eq __rt_mixed_array_get_object");                    // branch on the current JSON decoder condition
+    emitter.instruction("cmp x9, #1");                                          // tag = 1 (string)?
+    emitter.instruction("b.eq __rt_mixed_array_get_string");                    // string receivers support integer offsets
     emitter.instruction("cmp x9, #8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
     emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
@@ -211,6 +213,44 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag (mixed_from_value first arg)
     // x1 already holds value_lo; x2 already holds value_hi.
     emitter.instruction("bl __rt_mixed_from_value");                            // box the typed entry into a Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // String receiver: PHP supports integer offsets, negative offsets from the end, and warns
+    // for a missing byte. Non-integer string offsets keep the boxed-null fallback until their
+    // numeric-string conversion is modelled.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = string bytes pointer
+    emitter.instruction("ldr x11, [x0, #16]");                                  // x11 = string byte length
+    emitter.instruction("ldr x12, [sp, #16]");                                  // load key_hi
+    emitter.instruction("cmn x12, #1");                                         // is this an integer offset (-1 key_hi sentinel)?
+    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // string keys are not integer offsets
+    emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = requested integer offset
+    emitter.instruction("cmp x12, #0");                                         // is the offset negative?
+    emitter.instruction("b.ge __rt_mixed_array_get_string_non_negative");       // non-negative offsets are already indices
+    emitter.instruction("add x12, x11, x12");                                   // count negative offsets back from the end
+    emitter.instruction("cmp x12, #0");                                         // does the adjusted offset still precede the string?
+    emitter.instruction("b.lt __rt_mixed_array_get_string_missing");            // out-of-range negative offsets warn and read empty
+    emitter.label("__rt_mixed_array_get_string_non_negative");
+    emitter.instruction("cmp x12, x11");                                        // compare the offset against the string length
+    emitter.instruction("b.ge __rt_mixed_array_get_string_missing");            // offsets at or beyond length warn and read empty
+    emitter.instruction("add x1, x10, x12");                                    // point at the selected byte
+    emitter.instruction("mov x2, #1");                                          // one byte is returned as a string
+    emitter.instruction("mov x0, #1");                                          // tag 1 = string for mixed_from_value
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the one-byte string result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+    emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // isset()/?? suppress the missing-offset warning and read null
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the ORIGINAL offset for the warning text
+    emitter.instruction("bl __rt_warn_string_offset");                          // emit PHP's Uninitialized string offset warning
+    emitter.instruction("mov x0, #1");                                          // tag 1 = string for mixed_from_value
+    emitter.instruction("mov x1, #0");                                          // an uninitialized read is the empty string
+    emitter.instruction("mov x2, #0");                                          // empty strings have no bytes
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the empty string result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
@@ -399,6 +439,8 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_assoc");                       // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
     emitter.instruction("je __rt_mixed_array_get_object");                      // branch on the current JSON decoder condition
+    emitter.instruction("cmp r10, 1");                                          // tag = 1 (string)?
+    emitter.instruction("je __rt_mixed_array_get_string");                      // string receivers support integer offsets
     emitter.instruction("cmp r10, 8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
@@ -639,6 +681,44 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
+    // String receiver: integer offsets, negative offsets from the end, and warnings for a
+    // missing byte. String keys keep the boxed-null fallback for now.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = string bytes pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // r11 = string byte length
+    emitter.instruction("mov r12, QWORD PTR [rbp - 24]");                       // load key_hi
+    emitter.instruction("cmp r12, -1");                                         // is this an integer offset (-1 key_hi sentinel)?
+    emitter.instruction("jne __rt_mixed_array_get_null");                       // string keys are not integer offsets
+    emitter.instruction("mov r12, QWORD PTR [rbp - 16]");                       // r12 = requested integer offset
+    emitter.instruction("cmp r12, 0");                                          // is the offset negative?
+    emitter.instruction("jge __rt_mixed_array_get_string_non_negative");        // non-negative offsets are already indices
+    emitter.instruction("add r12, r11");                                        // count negative offsets back from the end
+    emitter.instruction("cmp r12, 0");                                          // does the adjusted offset still precede the string?
+    emitter.instruction("jl __rt_mixed_array_get_string_missing");              // out-of-range negative offsets warn and read empty
+    emitter.label("__rt_mixed_array_get_string_non_negative");
+    emitter.instruction("cmp r12, r11");                                        // compare the offset against the string length
+    emitter.instruction("jge __rt_mixed_array_get_string_missing");             // offsets at or beyond length warn and read empty
+    emitter.instruction("add r10, r12");                                        // point at the selected byte
+    emitter.instruction("mov rax, 1");                                          // tag 1 = string for mixed_from_value
+    emitter.instruction("mov rdi, r10");                                        // rdi = selected byte pointer
+    emitter.instruction("mov rsi, 1");                                          // one byte is returned as a string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the one-byte string result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+    emitter.label("__rt_mixed_array_get_string_missing");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // isset()/?? suppress the missing-offset warning and read null
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the ORIGINAL offset for the warning text
+    emitter.instruction("call __rt_warn_string_offset");                        // emit PHP's Uninitialized string offset warning
+    emitter.instruction("mov rax, 1");                                          // tag 1 = string for mixed_from_value
+    emitter.instruction("xor edi, edi");                                        // an uninitialized read is the empty string
+    emitter.instruction("xor esi, esi");                                        // empty strings have no bytes
+    emitter.instruction("call __rt_mixed_from_value");                          // box the empty string result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
     // See the ARM64 path: an object PHP cannot index raises, in every context, so this leaves
     // through the Error rather than through the shared null tail.
     emitter.label("__rt_mixed_array_get_not_indexable");
@@ -665,6 +745,22 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Boxed strings expose PHP string-offset reads on every supported target.
+    #[test]
+    fn mixed_array_get_handles_string_offsets_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_mixed_array_get_string:"), "{target}: missing string branch");
+            assert!(asm.contains("__rt_warn_string_offset"), "{target}: missing offset warning");
+            assert!(
+                asm.contains(if target == "linux-x86_64" { "cmp r12, -1" } else { "cmn x12, #1" }),
+                "{target}: must distinguish integer offsets"
+            );
+        }
+    }
 
     /// Each native ABI roots the PHP getter's key before dispatch and detaches before release.
     #[test]

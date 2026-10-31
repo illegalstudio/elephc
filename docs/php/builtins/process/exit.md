@@ -8,13 +8,13 @@ sidebar:
 ## exit()
 
 ```php
-function exit(int $status = 0): void
+function exit(string|int $status = 0): void
 ```
 
 Terminates execution with an optional status.
 
 **Parameters**:
-- `$status` (`int`), default `0`, optional
+- `$status` (`string|int`), default `0`, optional
 
 **Returns**: `void`
 

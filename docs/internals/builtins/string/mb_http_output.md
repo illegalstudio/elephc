@@ -2,7 +2,7 @@
 title: "mb_http_output() - internals"
 description: "Compiler internals for mb_http_output(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 931
+  order: 932
 ---
 
 ## `mb_http_output()` - internals

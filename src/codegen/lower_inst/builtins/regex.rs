@@ -372,7 +372,7 @@ fn emit_descriptor_callback_wrapper(ctx: &mut FunctionContext<'_>) -> String {
         capture_types: Vec::new(),
         descriptor_prefix_types: Vec::new(),
         descriptor_return_type: Some(PhpType::Str),
-        invocation_scope_class_id: ctx.lexical_class_id(),
+        invocation_scope_class_id: ctx.callable_callback_scope(),
     };
     // Out of line: spliced here, the wrapper's `label_global` opened its own ELF section in the
     // middle of the caller, and `--debug-info` then failed to assemble any function using

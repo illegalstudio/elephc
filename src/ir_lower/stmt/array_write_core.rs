@@ -240,7 +240,11 @@ fn lower_array_assign_with_update(
         string_offset_writes::lower_string_offset_assign(ctx, array, index, value, span);
         return;
     }
-    let array_value = load_array_local_for_write(ctx, array, span);
+    let auto_viv = super::array_write_storage::auto_vivified_array_type(ctx, array);
+    let array_value = match &auto_viv {
+        Some(ty) => super::array_write_storage::empty_auto_vivified_container(ctx, array, ty, span),
+        None => load_array_local_for_write(ctx, array, span),
+    };
     if let Some(update) = incdec.and_then(|increment| {
         super::buffer_element_updates::statement_update(ctx, array_value, value, increment)
     }) {
@@ -256,6 +260,13 @@ fn lower_array_assign_with_update(
         lower_write_key_and_value(ctx, index, value);
     let container_ty = ctx.builder.value_php_type(array_value.value);
     value_value = ctx.retype_value_for_container_element(&container_ty, value_value, Some(value.span));
+    // The offset and value expressions have run; publish the auto-vivified container now.
+    let array_value = match auto_viv {
+        Some(ty) => super::array_write_storage::publish_auto_vivified_container(
+            ctx, array, array_value, ty, span,
+        ),
+        None => array_value,
+    };
     // A hash whose stamped value type cannot hold the assigned value widens its storage first,
     // like the indexed path does; PHP's untyped arrays keep the runtime value (#1951).
     let (array_value, hash_storeback) = if op == Op::HashSet {

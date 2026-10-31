@@ -96,6 +96,9 @@ pub enum ExprKind {
     IntLiteral(i64),
     FloatLiteral(f64),
     Variable(String),
+    /// `&$place` inside an array literal or an array/property reference assignment.
+    /// The wrapper marks storage aliasing; ordinary expression contexts lower its inner value.
+    Reference(Box<Expr>),
     BinaryOp {
         left: Box<Expr>,
         op: BinOp,

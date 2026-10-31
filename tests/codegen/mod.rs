@@ -60,6 +60,8 @@ mod operators;
 mod control_flow;
 mod scalar_strings;
 mod array_basics;
+mod filter;
+mod filter_phpt;
 mod float_sort;
 mod numeric_scalars;
 mod type_builtins;

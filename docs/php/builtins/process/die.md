@@ -8,13 +8,13 @@ sidebar:
 ## die()
 
 ```php
-function die(int $status = 0): void
+function die(string|int $status = 0): void
 ```
 
 Terminates execution with an optional status.
 
 **Parameters**:
-- `$status` (`int`), default `0`, optional
+- `$status` (`string|int`), default `0`, optional
 
 **Returns**: `void`
 

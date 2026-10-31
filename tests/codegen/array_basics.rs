@@ -1332,6 +1332,33 @@ fn test_die() {
     assert_eq!(out, "before");
 }
 
+/// `die("message")` prints the message and exits with status zero, like PHP.
+#[test]
+fn test_die_string_prints_message_and_exits_zero() {
+    let output = compile_and_run_capture("<?php echo \"before\"; die(\"failed: reason\"); echo \"after\";");
+    assert_eq!(output.stdout, "beforefailed: reason");
+    assert!(output.success, "string die must exit successfully");
+}
+
+/// Weak scalar statuses follow PHP's bool/float/null coercion rules.
+#[test]
+fn test_exit_weak_scalar_statuses() {
+    assert!(!compile_and_run_capture("<?php exit(true);").success, "true exits 1");
+    assert!(compile_and_run_capture("<?php exit(false);").success, "false exits 0");
+    assert!(compile_and_run_capture("<?php exit(null);").success, "null exits 0");
+    assert!(!compile_and_run_capture("<?php exit(1.5);").success, "float truncates to 1");
+}
+
+/// `exit("message")` flushes active output buffers before terminating.
+#[test]
+fn test_exit_string_flushes_output_buffers() {
+    let output = compile_and_run_capture(
+        "<?php ob_start(); echo \"buffered\"; exit(\" done\");",
+    );
+    assert_eq!(output.stdout, "buffered done");
+    assert!(output.success, "string exit must exit successfully");
+}
+
 // --- Nested control flow ---
 
 /// Verifies nested if.

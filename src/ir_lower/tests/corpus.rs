@@ -154,6 +154,9 @@ fn example_requires_non_default_profile(main_php: &Path) -> bool {
         // from the project's built extensions, which corpus lowering does not
         // resolve.
         "extension",
+        // ext/filter is a synthetic prelude the CLI injects on use; the filter
+        // codegen and PHPT suites compile it directly.
+        "filter",
     ];
     main_php
         .parent()

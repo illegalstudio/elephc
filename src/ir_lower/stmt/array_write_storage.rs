@@ -35,6 +35,66 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
     ctx.load_local(name, Some(span))
 }
 
+/// Returns the container type an undefined local must be auto-vivified as, if this write is its
+/// first binding. PHP creates an indexed array for `$undefined[$k] = $v`, with no undefined-read
+/// diagnostic.
+pub(super) fn auto_vivified_array_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+) -> Option<PhpType> {
+    if ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    if let Some(slot) = ctx.local_slots.get(name).copied() {
+        if ctx.slot_is_initialized(slot) {
+            return None;
+        }
+    }
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Some(ctx.local_type(name)),
+        _ => None,
+    }
+}
+
+/// Builds the empty container an undefined array local starts from. It is stored only after the
+/// offset and value expressions have run, matching PHP's evaluation order when they throw.
+pub(super) fn empty_auto_vivified_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    // The raw load is zero while the variable is still unbound; the runtime helper allocates
+    // only in that case, so a loop body does not reset a container created by an earlier
+    // iteration.
+    let target = if matches!(ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        crate::ir::RuntimeCallTarget::AutoVivifyHash
+    } else {
+        crate::ir::RuntimeCallTarget::AutoVivifyArray
+    };
+    let loaded = ctx.load_local(name, Some(span));
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![loaded.value],
+        Some(Immediate::RuntimeCall(target)),
+        ty.clone(),
+        crate::ir_lower::effects_lookup::runtime_effects(),
+        Some(span),
+    )
+}
+
+/// Stores the auto-vivified container into its local and returns the reloaded write receiver.
+pub(super) fn publish_auto_vivified_container(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    value: LoweredValue,
+    ty: PhpType,
+    span: Span,
+) -> LoweredValue {
+    ctx.store_call_argument_local(name, value, ty, Some(span));
+    ctx.load_local(name, Some(span))
+}
+
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
@@ -44,9 +104,13 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
     // Loading here also gives the ordinary parent guards the RHS-updated storage type.
     // Append's final-storage normalization mutates a bound box directly. Other indexed
     // writers still require the detached cell published by load_array_local_for_write.
-    // PHP 8 auto-vivifies a missing variable on `$a[] = ...`. The checker admitted the
-    // write, so declare a generic boxed array local before loading it for the append.
-    if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {
+    let array_value = if let Some(ty) = auto_vivified_array_type(ctx, array) {
+        let empty = empty_auto_vivified_container(ctx, array, &ty, span);
+        publish_auto_vivified_container(ctx, array, empty, ty, span)
+    } else if !ctx.has_local_slot(array) && !ctx.is_ref_bound_local(array) {
+        // A write whose first-use type the checker did not retain still needs a real local.
+        // PHP auto-vivifies a missing variable on `$a[] = ...`, so start from a generic boxed
+        // array; the checker admitted the write.
         let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
         ctx.declare_local(array, array_ty.clone());
         let empty = ctx.emit_value(
@@ -58,8 +122,8 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
             Some(span),
         );
         ctx.store_local(array, empty, array_ty, Some(span));
-    }
-    let array_value = if ctx.is_ref_bound_local(array) {
+        ctx.load_local(array, Some(span))
+    } else if ctx.is_ref_bound_local(array) {
         ctx.load_local(array, Some(span))
     } else {
         load_array_local_for_write(ctx, array, span)

@@ -82,6 +82,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["tokenizer"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_filter",
+        package: "elephc-filter",
+        php_extensions: &["filter"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
         php_extensions: &["openssl"],

@@ -24,6 +24,7 @@ use super::{walk_static_receiver, Pass};
 pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let span = expr.span;
     let kind = match expr.kind {
+        ExprKind::Reference(inner) => ExprKind::Reference(Box::new(walk_expr(*inner, pass))),
         ExprKind::MagicConstant(mc) => pass.transform_magic(span, mc),
 
         ExprKind::StringLiteral(value) => pass.transform_string(value),

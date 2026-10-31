@@ -406,6 +406,43 @@ echo $repeated;
     assert_eq!(out, "position:name|position:name|position|counted|second");
 }
 
+/// A by-reference parameter creates an undefined variable it receives, as PHP does.
+#[test]
+fn test_by_reference_parameter_creates_undefined_argument() {
+    let out = compile_and_run(
+        r#"<?php
+function set_value(&$value): void { $value = 42; }
+set_value($created);
+echo $created;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// A by-reference callback parameter passed through `call_user_func()` reports PHP's warning
+/// for every argument; a dynamic variable callee with a real variable stays silent.
+#[test]
+fn test_call_user_func_by_reference_parameter_warning() {
+    let output = compile_and_run_capture(
+        r#"<?php
+function inspect(&$value): string { return "seen"; }
+function run_dynamic(mixed $callback, mixed $value): string {
+    return call_user_func($callback, (string) $value);
+}
+$x = 1;
+$y = 2;
+$callback = $argv[0] !== "" ? "inspect" : "strlen";
+echo run_dynamic($callback, $x), "|", run_dynamic($callback, $y), "|";
+$dynamic = "inspect";
+echo $dynamic($x);
+"#,
+    );
+    assert_eq!(output.stdout, "seen|seen|seen");
+    let warning = "Warning: inspect(): Argument #1 ($value) must be passed by reference, value given";
+    assert_eq!(output.stderr.lines().count(), 2, "stderr: {:?}", output.stderr);
+    assert_eq!(output.stderr.matches(warning).count(), 2, "stderr: {:?}", output.stderr);
+}
+
 // --- Issue #1062: a by-reference variadic may retype the caller's variable -----------------
 //
 // `f(&...$items)` is the one by-reference form PHP's checker does not constrain: the callee

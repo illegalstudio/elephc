@@ -37,6 +37,7 @@ pub(super) fn lower_literal_callable_array_expr_call(
         ctx,
         lowered_callee,
         arg_container,
+        false,
         expr.span,
     ))
 }
@@ -51,7 +52,7 @@ pub(super) fn lower_expr_call_from_value(
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
     let callee = root_descriptor_callback(ctx, callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
-    emit_callable_descriptor_invoke(ctx, callee, arg_container, expr.span)
+    emit_callable_descriptor_invoke(ctx, callee, arg_container, false, expr.span)
 }
 
 /// Lowers explicit named arguments for signature-unknown descriptor invocations.
@@ -271,6 +272,7 @@ pub(super) fn lower_first_class_callable_expr_call(
                 ctx,
                 callable,
                 arg_container,
+                false,
                 expr.span,
             ))
         }

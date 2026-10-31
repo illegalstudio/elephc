@@ -2,7 +2,7 @@
 title: "crc32() - internals"
 description: "Compiler internals for crc32(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 867
+  order: 868
 ---
 
 ## `crc32()` - internals

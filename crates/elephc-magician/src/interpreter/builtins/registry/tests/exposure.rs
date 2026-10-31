@@ -15,6 +15,7 @@ use super::*;
         for name in [
             "abs",
             "acos",
+            "addcslashes",
             "addslashes",
             "array_chunk",
             "array_column",

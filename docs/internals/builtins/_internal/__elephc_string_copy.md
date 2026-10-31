@@ -2,7 +2,7 @@
 title: "__elephc_string_copy() - internals"
 description: "Compiler internals for __elephc_string_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1260
+  order: 1263
 ---
 
 ## `__elephc_string_copy()` - internals

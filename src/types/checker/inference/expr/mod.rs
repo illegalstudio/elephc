@@ -36,6 +36,7 @@ impl Checker {
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {
+            ExprKind::Reference(inner) => self.infer_type(inner, env),
             ExprKind::IncludeValue { .. }
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null

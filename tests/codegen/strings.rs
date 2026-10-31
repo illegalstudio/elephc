@@ -100,6 +100,8 @@ mod mbstring_http_input;
 mod mbstring_startup;
 #[path = "strings/mbstring_parse_str.rs"]
 mod mbstring_parse_str;
+#[path = "strings/parse_str.rs"]
+mod parse_str;
 #[path = "strings/mbstring_response.rs"]
 mod mbstring_response;
 mod mbstring_output_handler;

@@ -32,6 +32,7 @@
 //!   remembering positions in a bitset, so no signature length silently escapes the check.
 
 mod argument_owners;
+mod by_reference;
 mod defaults;
 mod mbstring;
 mod owned_value_args;
@@ -66,6 +67,16 @@ use crate::codegen_support::try_handlers::{
     EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::types::{FunctionSig, PhpType};
+
+/// Marks a call_user_func-family invocation whose by-reference parameters receive temporaries.
+///
+/// PHP's `call_user_func*` helpers pass their arguments by value. When the resolved callable
+/// declares a by-reference parameter, the engine emits
+/// `Argument #N ($name) must be passed by reference, value given` for each one. The private
+/// marker occupies bit 1 of the invocation-profile word; the weak/strict scope is shifted above
+/// the low two bits so a cached invoker shared with ordinary dynamic calls can decide at runtime
+/// without colliding with the negative scope ids.
+pub(super) const CALLABLE_PROFILE_WARN_BY_REF: i64 = 2;
 
 const INVOKER_DESCRIPTOR_OFFSET: usize = 8;
 const INVOKER_CONCAT_OFFSET: usize = 16;
@@ -663,10 +674,16 @@ fn emit_loaded_indexed_array_callback_call(
                 push_default_ref_arg(index, target_ty, index, emitter, ctx, data);
                 abi::emit_jump(emitter, &done_label);
                 emitter.label(&load_label);
+                by_reference::warn_indexed_ref_temporary(
+                    emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
+                );
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
                 emitter.label(&done_label);
             } else {
+                by_reference::warn_indexed_ref_temporary(
+                    emitter, ctx, data, sig, index, &elem_ty, array_reg, elem_size,
+                );
                 load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
                 push_loaded_indexed_array_ref_arg(&elem_ty, target_ty, index, emitter, ctx, data);
             }
@@ -2898,6 +2915,19 @@ fn call_target_with_pushed_args(
         abi::int_result_reg(emitter),
         INVOKER_SCOPE_OFFSET,
     );
+    // The low two bits are invoker-private (bit 1 is the warning request); a callee must see
+    // the original weak/strict invocation scope only.
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!(
+            "asr {}, {}, #2",
+            abi::int_result_reg(emitter),
+            abi::int_result_reg(emitter)
+        )),                                                                   // recover the weak/strict scope from its shifted profile word
+        Arch::X86_64 => emitter.instruction(&format!(
+            "sar {}, 2",
+            abi::int_result_reg(emitter)
+        )),                                                                   // recover the weak/strict scope from its shifted profile word
+    }
     abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
     let mut abi_arg_types = arg_types.to_vec();
     abi_arg_types.push(PhpType::Int);
@@ -3847,6 +3877,34 @@ mod tests {
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()
+    }
+
+    /// A by-reference parameter emits the scope-gated warning on every supported target, and the
+    /// invoker decodes the private profile word before forwarding the original scope.
+    #[test]
+    fn by_reference_temporary_warning_is_emitted_on_all_targets() {
+        let mut sig = crate::types::first_class_callable_builtin_sig("clone").unwrap();
+        sig.ref_params[0] = true;
+        sig.params[0].0 = "value".to_string();
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let asm = emit_invoker_asm(name, &sig, "by_reference_warning_invoker");
+            assert!(
+                asm.contains("by_reference_warning_invoker_invoker_byref_warning"),
+                "{name}: missing by-reference warning: {asm}"
+            );
+            let decode = match target.arch {
+                Arch::AArch64 => "asr x0, x0, #2",
+                Arch::X86_64 => "sar rax, 2",
+            };
+            assert!(asm.contains(decode), "{name}: missing scope decode: {asm}");
+        }
     }
 
     /// Every target forwards the framed invocation scope after the complete PHP ABI shape.

@@ -650,31 +650,6 @@ fn test_error_goto_label_is_not_supported() {
     expect_error("<?php done: echo 1;", "the label `done:`");
 }
 
-// --- References inside array literals ---
-
-/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
-/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
-#[test]
-fn test_error_reference_element_in_array_literal() {
-    expect_error(
-        "<?php $first = 1; $r = [&$first];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
-    );
-}
-
-/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
-#[test]
-fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
-    expect_error(
-        "<?php $a = 1; $r = [\"k\" => &$a];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
-    );
-    expect_error(
-        "<?php $a = 1; $r = array(&$a);",
-        "Reference elements in array literals (`[&$x]`) are not supported",
-    );
-}
-
 /// Verifies a `(object)` cast with no operand is rejected rather than silently accepted.
 ///
 /// `(object)` is a PREFIX operator over the three-token `( identifier )` window, so a missing

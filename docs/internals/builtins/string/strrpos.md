@@ -2,7 +2,7 @@
 title: "strrpos() - internals"
 description: "Compiler internals for strrpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1006
+  order: 1009
 ---
 
 ## `strrpos()` - internals

@@ -119,6 +119,14 @@ pub(super) fn lower(
         RuntimeFnId::Sscanf => Some({
             crate::codegen::lower_inst::builtins::strings::lower_sscanf(ctx, inst)
         }),
+        RuntimeFnId::Addcslashes => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_binary_string_runtime(
+                    ctx,
+                    inst,
+                    "addcslashes",
+                    "__rt_addcslashes",
+                )
+        }),
         RuntimeFnId::StrContains => Some({
             crate::codegen::lower_inst::builtins::strings::lower_str_contains(ctx, inst)
         }),

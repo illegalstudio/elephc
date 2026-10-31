@@ -208,7 +208,7 @@ jobs:
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
       - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-curl -p elephc-zend
+        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-filter -p elephc-magician -p elephc-curl -p elephc-zend
 
       - name: Build curl-aware Magician staticlib
         run: |
@@ -266,6 +266,7 @@ jobs:
             libelephc_xml.a \
             libelephc_fileinfo.a \
             libelephc_tokenizer.a \
+            libelephc_filter.a \
             libelephc_magician.a \
             libelephc_curl.a \
             libelephc_magician_curl.a \
@@ -469,6 +470,7 @@ jobs:
               lib.install "libelephc_xml.a"
               lib.install "libelephc_fileinfo.a"
               lib.install "libelephc_tokenizer.a"
+              lib.install "libelephc_filter.a"
               lib.install "libelephc_magician.a"
               lib.install "libelephc_curl.a"
               lib.install "libelephc_magician_curl.a"

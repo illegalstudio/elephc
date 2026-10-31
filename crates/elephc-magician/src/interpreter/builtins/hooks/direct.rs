@@ -271,6 +271,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PtrWriteF64,
     /// Dispatches `ptr_write_string(...)`.
     PtrWriteString,
+    /// Dispatches `addcslashes(...)`.
+    Addcslashes,
     /// Dispatches `addslashes(...)` and `stripslashes(...)`.
     Slashes,
     /// Dispatches `strip_tags(...)`.
@@ -512,6 +514,7 @@ impl EvalDirectHook {
             Self::PtrWriteString => eval_builtin_ptr_write_string(args, context, scope, values),
             Self::Sin => eval_builtin_sin(args, context, scope, values),
             Self::Sinh => eval_builtin_sinh(args, context, scope, values),
+            Self::Addcslashes => eval_builtin_addcslashes(args, context, scope, values),
             Self::Slashes => match name {
                 "addslashes" => eval_builtin_addslashes(args, context, scope, values),
                 "stripslashes" => eval_builtin_stripslashes(args, context, scope, values),

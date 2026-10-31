@@ -757,6 +757,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         _ => {}
     }
     match &expr.kind {
+        ExprKind::Reference(inner) => scan_expr(inner, usage),
         ExprKind::IncludeValue { path, .. } => {
             // Like the include statement: a runtime include inside a fragment loads code this
             // walk cannot read.

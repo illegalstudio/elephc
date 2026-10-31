@@ -549,6 +549,22 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``src/builtins/parity_tests.rs``'s ``injected_prelude_programs``, and its
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
+# Prelude-provided contracts whose declaration lives in a dedicated prelude rather than the
+# area's usual one. Keyed by canonical PHP name; the value has the same shape as
+# ``PRELUDE_SOURCES``.
+PRELUDE_SOURCE_OVERRIDES: dict[str, tuple[str, str, str]] = {
+    "parse_str": (
+        "parse_str_prelude.rs",
+        "parse_str",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+    "setlocale": (
+        "locale_prelude.rs",
+        "locale",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
+}
+
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
     "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
     "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
@@ -664,7 +680,9 @@ def resolve_non_registry_lowering(
     kind = aot_support.get("kind")
     if kind == "prelude":
         try:
-            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            source, label, sig_file = PRELUDE_SOURCE_OVERRIDES.get(
+                canonical
+            ) or PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
         except KeyError:
             raise ValueError(
                 f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "

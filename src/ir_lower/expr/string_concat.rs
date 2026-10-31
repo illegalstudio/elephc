@@ -101,6 +101,7 @@ pub(crate) fn persist_pending_string(ctx: &mut LoweringContext<'_, '_>, value: L
 /// Returns whether evaluating an expression can reset the caller's concat scratch storage.
 pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_can_reset_concat_storage(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

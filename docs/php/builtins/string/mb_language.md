@@ -2,7 +2,7 @@
 title: "mb_language()"
 description: "Reads or changes the current mbstring language."
 sidebar:
-  order: 933
+  order: 934
 ---
 
 ## mb_language()

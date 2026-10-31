@@ -83,6 +83,8 @@ pub struct RuntimeFnDescriptor {
 /// Stable semantic identity for one runtime function callable from EIR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeFnId {
+    /// Escapes bytes selected by a literal character list and range expression.
+    Addcslashes,
     ArrayAll,
     ArrayAny,
     ArrayChunk,
@@ -1372,6 +1374,7 @@ impl RuntimeFnId {
             RuntimeFnId::Sin |
             RuntimeFnId::Sinh |
             RuntimeFnId::Sqrt |
+            RuntimeFnId::Addcslashes |
             RuntimeFnId::StrContains |
             RuntimeFnId::StrEndsWith |
             RuntimeFnId::StrIreplace |
@@ -2193,6 +2196,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::Gettype
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
+                | RuntimeFnId::Addcslashes
         )
     }
 
@@ -2226,7 +2230,7 @@ impl RuntimeFnId {
             | RuntimeFnId::MemoryGetUsage
             | RuntimeFnId::MemoryResetPeakUsage
             => true,
-            RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
+            RuntimeFnId::Trim | RuntimeFnId::Addcslashes => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
     }
@@ -2740,6 +2744,9 @@ impl RuntimeFnId {
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
                 // handed back can alias the subject or the character-list argument.
                 | RuntimeFnId::StrWordCount
+                // addcslashes writes into a concat reservation and publishes it, so the result
+                // never aliases the subject or the character list.
+                | RuntimeFnId::Addcslashes
                 | RuntimeFnId::Stripos
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strripos
@@ -3237,6 +3244,7 @@ impl RuntimeFnId {
             RuntimeFnId::Base64Decode => "base64_decode",
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
+            RuntimeFnId::Addcslashes => "addcslashes",
             RuntimeFnId::ChunkSplit => "chunk_split",
             RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",

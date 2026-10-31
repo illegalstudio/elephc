@@ -8,7 +8,12 @@
 //! - Centralizes compile options, define handling, runtime harness injection, and diagnostic capture.
 
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+thread_local! {
+    /// Compiler INI overrides for the fixture currently compiling on this thread.
+    static TEST_INI_OVERRIDES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
 
 // One-shot override that forces the GMP prelude for a PHPT corpus compile.
 //
@@ -34,7 +39,7 @@ pub(crate) fn compile_and_run_capture_merged_with_gmp(source: &str) -> ProgramOu
     FORCE_GMP_PRELUDE.with(|flag| flag.set(true));
     let _guard = ForceGmpGuard;
     // php-src's CLI runs the corpus with its default 128 MiB memory_limit; the decimal
-    // transport needs that headroom for `1000!` even though live values stay tiny.
+    // transport needs that headroom for extreme factorial payloads.
     compile_and_run_capture_merged_with_heap(source, 128 * 1024 * 1024)
 }
 
@@ -337,6 +342,16 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Mirror `pipeline::compile`: filter reachability is decided before any other prelude is
+    // injected. Later preludes contain introspection that must not be mistaken for user filter
+    // usage, or unrelated binaries acquire the filter bridge.
+    let overrides = TEST_INI_OVERRIDES.with(|slot| slot.borrow().clone());
+    let resolved = elephc::filter_prelude::inject_if_used_with_ini_and_initializer(
+        resolved,
+        &overrides,
+        false,
+        &mut prelude_inventory,
+    );
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
     // the harness seeds `set_linked_extensions` from the same bits so
     // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
@@ -371,6 +386,28 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::parse_str_prelude::inject_if_used(
+        resolved,
+        &overrides,
+        &mut prelude_inventory,
+    );
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = if source.contains("ini_get") || source.contains("ini_set") {
+        let (resolved, _) = elephc::opcache_prelude::inject_if_used(
+            resolved,
+            php_version,
+            false,
+            None,
+            &[],
+            &overrides,
+            None,
+            false,
+            &mut prelude_inventory,
+        );
+        resolved
+    } else {
+        resolved
+    };
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
@@ -450,6 +487,18 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
+    // Mirror `pipeline::backend`: Core/mbstring INI overrides reach the shared request
+    // configuration only when the program uses the shared runtime. This is what makes
+    // `ini_get('filter.default_flags')` report the fixture `--INI--` value.
+    let configures_mbstring = ir_module.required_runtime_features.mbstring
+        || ir_module.required_runtime_features.mbregex
+        || ir_module.required_runtime_features.eval_bridge;
+    if configures_mbstring {
+        ir_module.required_runtime_features.mbstring_mime |= overrides.iter().any(|(name, _)| {
+            name == "mbstring.http_output_conv_mimetypes"
+        });
+        ir_module.mbstring_startup = Some(elephc::mbstring_startup::arguments(&overrides));
+    }
     // Mirror `pipeline::backend`: report the bridges this fixture actually links to
     // `extension_loaded()` / `get_loaded_extensions()`. Extension folding happens during
     // instruction lowering, so the seed has to land before `generate_user_asm_*`.
@@ -498,6 +547,7 @@ fn set_fixture_linked_extensions(libraries: &[String]) {
             "elephc_tls" => Some("openssl"),
             "elephc_pdo" => Some("PDO"),
             "elephc_crypto" => Some("hash"),
+            "elephc_filter" => Some("filter"),
             "elephc_bcmath" => Some("bcmath"),
             "elephc_gmp" => Some("gmp"),
             "elephc_random" => Some("random"),
@@ -1061,6 +1111,19 @@ fn compile_and_run_with_heap_size_and_optional_regex(
 /// Provides the Compile and run helper used by the compiler module.
 pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
+}
+
+/// Compiles and runs a fixture with compiler-level INI overrides, resetting them afterwards.
+pub(crate) fn compile_and_run_capture_with_ini(
+    source: &str,
+    ini: &[(String, String)],
+) -> ProgramOutput {
+    TEST_INI_OVERRIDES.with(|slot| *slot.borrow_mut() = ini.to_vec());
+    elephc::codegen::set_ini_overrides(ini.to_vec());
+    let output = compile_and_run_capture(source);
+    elephc::codegen::set_ini_overrides(Vec::new());
+    TEST_INI_OVERRIDES.with(|slot| slot.borrow_mut().clear());
+    output
 }
 
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.

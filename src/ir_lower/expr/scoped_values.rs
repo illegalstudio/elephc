@@ -46,6 +46,14 @@ pub(super) fn callable_profile_immediate() -> Option<Immediate> {
     Some(Immediate::Bool(crate::strict_php::is_enabled()))
 }
 
+/// Returns the descriptor-invoke profile: bit 0 is strict PHP, bit 1 requests the
+/// `call_user_func*` by-reference temporary warning.
+pub(super) fn callable_invoke_immediate(warn_by_ref: bool) -> Option<Immediate> {
+    let profile = i64::from(crate::strict_php::is_enabled())
+        | (i64::from(warn_by_ref) << 1);
+    Some(Immediate::I64(profile))
+}
+
 /// Lowers a pointer cast.
 pub(super) fn lower_ptr_cast(ctx: &mut LoweringContext<'_, '_>, target_type: &str, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);

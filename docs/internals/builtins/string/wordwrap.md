@@ -2,7 +2,7 @@
 title: "wordwrap() - internals"
 description: "Compiler internals for wordwrap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1023
+  order: 1026
 ---
 
 ## `wordwrap()` - internals

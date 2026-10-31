@@ -241,7 +241,7 @@ pub(super) fn emit_descriptor_callback_wrapper(
         capture_types: Vec::new(),
         descriptor_prefix_types: Vec::new(),
         descriptor_return_type: Some(return_ty),
-        invocation_scope_class_id: ctx.lexical_class_id(),
+        invocation_scope_class_id: ctx.callable_callback_scope(),
     };
     // Out of line, not spliced into the caller: see `Emitter::begin_out_of_line`.
     let scope = ctx.emitter.begin_out_of_line();

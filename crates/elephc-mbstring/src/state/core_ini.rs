@@ -44,6 +44,7 @@ impl CoreIni {
             let Some((_, value)) = overrides.iter().rev().find(|(name, _)| name == directive.name.as_bytes()) else { continue; };
             let accepted = match key {
                 Key::Separators => !value.is_empty(),
+                Key::FilterDefault | Key::FilterFlags => true,
                 Key::DisplayErrors => { state.display_errors = numeric::display_errors(value); true },
                 Key::MaxNesting | Key::MaxVariables => {
                     let (parsed, warning) = numeric::quantity(value);

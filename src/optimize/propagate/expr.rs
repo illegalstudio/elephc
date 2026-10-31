@@ -67,6 +67,9 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     };
     let span = expr.span;
     let kind = match expr.kind {
+        // A reference element names the STORAGE it aliases; substituting the variable's
+        // current constant would turn `[&$value]` into `[&1]` and break the alias.
+        ExprKind::Reference(inner) => ExprKind::Reference(inner),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(

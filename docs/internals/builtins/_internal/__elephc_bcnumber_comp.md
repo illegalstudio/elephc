@@ -2,7 +2,7 @@
 title: "__elephc_bcnumber_comp() - internals"
 description: "Compiler internals for __elephc_bcnumber_comp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1150
+  order: 1153
 ---
 
 ## `__elephc_bcnumber_comp()` - internals

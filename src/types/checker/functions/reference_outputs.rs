@@ -223,7 +223,17 @@ impl Checker {
         call_span: Span,
         env: &TypeEnv,
     ) {
-        let output_ty = if expected.is_php_array()
+        let undefined_source = match &arg.kind {
+            ExprKind::Variable(name) => env.get(name).is_none(),
+            ExprKind::NamedArg { value, .. } => matches!(
+                &value.kind,
+                ExprKind::Variable(name) if env.get(name).is_none()
+            ),
+            _ => false,
+        };
+        let output_ty = if undefined_source {
+            PhpType::Mixed
+        } else if expected.is_php_array()
             && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             PhpType::php_array()

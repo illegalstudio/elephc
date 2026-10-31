@@ -3076,6 +3076,36 @@ fn web_array_push_onto_a_request_superglobal_keeps_the_worker_alive() {
     }
 }
 
+
+/// `filter.default` filters `$_GET` while `filter_input()` still returns the raw request value,
+/// and `ini_get()` reports the baked directive.
+#[test]
+fn web_filter_default_filters_superglobals_and_keeps_raw_input() {
+    let dir = make_test_dir("web_filter_default");
+    let src = r#"<?php echo $_GET["a"], "|", filter_input(INPUT_GET, "a"), "|", filter_input(INPUT_GET, "a", FILTER_SANITIZE_SPECIAL_CHARS), "|", ini_get("filter.default");"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=special_chars"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=%3Cb%3Ex%3C%2Fb%3E");
+    assert!(
+        response.ends_with("&#60;b&#62;x&#60;/b&#62;|<b>x</b>|&#60;b&#62;x&#60;/b&#62;|special_chars"),
+        "response: {response:?}"
+    );
+}
+
+
+/// A configured `filter.default` applies even when the program never names a filter function.
+#[test]
+fn web_filter_default_applies_without_a_filter_call() {
+    let dir = make_test_dir("web_filter_default_auto");
+    let src = r#"<?php echo $_GET["a"];"#;
+    let bin = compile_web_with_flags(&dir, src, "app", &["--ini", "filter.default=special_chars"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/?a=%3Cb%3Ex%3C%2Fb%3E");
+    assert!(response.ends_with("&#60;b&#62;x&#60;/b&#62;"), "response: {response:?}");
+}
+
 #[path = "web/memory_metrics.rs"]
 mod memory_metrics;
 

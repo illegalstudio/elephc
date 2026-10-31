@@ -29,7 +29,7 @@ _Lowered by a dedicated compiler language-construct path._
 ## Signature summary
 
 ```php
-function exit(int $status = 0): void
+function exit(string|int $status = 0): void
 ```
 
 ## What the type checker enforces

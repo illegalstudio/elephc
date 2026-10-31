@@ -2,7 +2,7 @@
 title: "mb_convert_case() - internals"
 description: "Compiler internals for mb_convert_case(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 906
+  order: 907
 ---
 
 ## `mb_convert_case()` - internals

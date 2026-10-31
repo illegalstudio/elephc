@@ -62,6 +62,8 @@ pub(super) fn lower(
         | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, true)
         }
+        RuntimeCallTarget::AutoVivifyArray => lower_auto_vivify_array(ctx, inst, false),
+        RuntimeCallTarget::AutoVivifyHash => lower_auto_vivify_array(ctx, inst, true),
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
@@ -533,6 +535,65 @@ fn lower_unary_string(
         abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
         ctx.emitter.label(&ready);
     }
+    store_if_result(ctx, inst)
+}
+
+/// Returns the operand pointer unchanged, or allocates an empty indexed array when it is zero.
+///
+/// The loaded slot is passed unmodified: an unbound local is the zero pointer. The result is
+/// published by the caller only after the offset and value expressions have run.
+fn lower_auto_vivify_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash: bool,
+) -> Result<()> {
+    let loaded = expect_operand(inst, 0)?;
+    let result = inst
+        .result
+        .ok_or_else(|| CodegenIrError::invalid_module("auto-vivified array missing result value"))?;
+    let result_ty = ctx.value_php_type(result)?.codegen_repr();
+    let (stride, value_tag) = if hash {
+        let PhpType::AssocArray { value, .. } = &result_ty else {
+            return Err(CodegenIrError::unsupported(format!(
+                "auto-vivified hash result PHP type {:?}",
+                result_ty
+            )));
+        };
+        (0, crate::codegen::runtime_value_tag(&value.codegen_repr()) as i64)
+    } else {
+        let PhpType::Array(element) = &result_ty else {
+            return Err(CodegenIrError::unsupported(format!(
+                "auto-vivified array result PHP type {:?}",
+                result_ty
+            )));
+        };
+        (match element.codegen_repr() {
+            PhpType::Str => 16,
+            PhpType::Void | PhpType::Never => 0,
+            _ => 8,
+        }, 0)
+    };
+    let existing = ctx.next_label("array_auto_vivify_existing");
+    let done = ctx.next_label("array_auto_vivify_done");
+    ctx.load_value_to_result(loaded)?;
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &existing);
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x1", if hash { value_tag } else { stride });
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", if hash { value_tag } else { stride });
+        }
+    }
+    abi::emit_call_label(ctx.emitter, if hash { "__rt_hash_new" } else { "__rt_array_new" });
+    abi::emit_jump(ctx.emitter, &done);
+    // The caller owns the returned result. An existing bound array is borrowed from its slot,
+    // so retain it here; the freshly allocated arm already owns its one reference.
+    ctx.emitter.label(&existing);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 

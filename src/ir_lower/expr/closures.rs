@@ -502,6 +502,7 @@ fn stmt_writes_local(stmt: &Stmt, name: &str) -> bool {
 /// Returns true when an expression can store into the local named `name`.
 fn expr_writes_local(expr: &Expr, name: &str) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_writes_local(inner, name),
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             expr_is_variable(target, name)
                 || expr_writes_local(target, name)
@@ -805,6 +806,7 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
 /// Returns true when an expression contains an `eval(...)` call.
 pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
     match &expr.kind {
+        ExprKind::Reference(inner) => expr_contains_eval_call(inner),
         ExprKind::FunctionCall { name, args } => {
             is_eval_call_name(name) || args.iter().any(expr_contains_eval_call)
         }

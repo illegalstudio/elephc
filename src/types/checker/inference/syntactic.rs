@@ -281,6 +281,8 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
 /// and `new` expressions. Returns a conservative type for unrecognized constructs.
 pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
+        // A reference element carries the storage type of the place it aliases.
+        ExprKind::Reference(inner) => infer_expr_type_syntactic(inner),
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
         ExprKind::FloatLiteral(_) => PhpType::Float,

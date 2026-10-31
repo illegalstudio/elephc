@@ -970,6 +970,7 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    out.push_str(".globl _diag_addcslashes_range\n_diag_addcslashes_range:\n    .ascii \"Warning: addcslashes(): Invalid '..'-range, '..'-range needs to be incrementing\\n\"\n");
     // -- curl_setopt()'s unsupported-option warning, split around the option number --
     // `__rt_curl_warn_unsupported_option` derives both `write()` lengths from the same
     // two constants the bytes below are built from, so the message and the immediates
@@ -1603,6 +1604,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _vd_array_prefix\n_vd_array_prefix:\n    .ascii \"array(\"\n");
     out.push_str(".globl _vd_brace_open\n_vd_brace_open:\n    .ascii \") {\\n\"\n");
     out.push_str(".globl _vd_brace_close\n_vd_brace_close:\n    .ascii \"}\\n\"\n");
+    // `&` marks a value written through a shared PHP reference set. The hash walker sets the
+    // pending flag immediately before rendering such a value; `__rt_vd_pad` prints the marker
+    // right after the indentation and clears the flag, so nested lines never inherit it.
+    out.push_str(".globl _vd_amp\n_vd_amp:\n    .ascii \"&\"\n");
+    out.push_str(&comm_directive("_vd_ref_prefix", 8, target));
     // _vd_indent: current var_dump line indentation, in spaces. The var_dump
     // builtin sets it to 2 around a top-level array body and back to 0 after;
     // `__rt_var_dump_value` bumps it by 2 across each nested container walk.

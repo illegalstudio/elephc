@@ -144,6 +144,20 @@ $map["age"] = "30";      // add new key
 
 Associative arrays use a hash table runtime. If later values do not match the first value type, the checker widens to internal `mixed` runtime shape.
 
+Assigning to an offset of a variable that does not exist yet creates an empty array before the
+write, exactly as PHP does, and emits no `Undefined variable` diagnostic:
+
+```php
+<?php
+$map["name"] = "Alice";   // $map becomes ["name" => "Alice"]
+$list[] = 1;              // $list becomes [1]
+foreach ([1, 2, 3] as $value) { $totals[] = $value * 2; }
+```
+
+The implicit container is published after the key and right-hand side expressions run, so an
+exception in either leaves the variable undefined. A loop body reads the container already
+created by its previous iteration instead of resetting it.
+
 Keys follow PHP's array-key normalization. Integer keys remain integers, booleans and floats normalize to integer keys, `null` normalizes to the empty-string key, numeric strings such as `"1"` normalize to the integer key `1`, and strings with leading zeroes such as `"01"` remain string keys. This applies to literals, reads and writes, `foreach`, `array_keys()`, `array_search()`, `array_key_exists()`, `array_flip()`, JSON object keys, and array union.
 
 ```php
@@ -328,32 +342,43 @@ echo $b[0];   // 9
 
 The same applies to function parameters and mutating built-ins (`array_push()`, `sort()`, `shuffle()`, etc.).
 
-### Reference elements in array literals are not supported
+### Reference elements in array literals
 
 PHP lets an array literal hold a *reference* to a variable, so writing through the
-array writes through to that variable:
+array writes through to that variable, and vice versa:
 
 ```php
 <?php
 $first = 1;
-$r = [&$first];   // not supported by elephc
+$r = [&$first];
 $r[0] = 9;
-echo $first;      // PHP: 9
+echo $first;      // 9
+$first = 12;
+echo $r[0];       // 12
 ```
 
-elephc rejects this at compile time:
+elephc stores such an entry as a managed reference cell inside an associative
+hash, so the same code works for bare elements (`[&$a]`), keyed elements
+(`['k' => &$a]`), the legacy `array(&$a)` spelling, and element reference
+assignments (`$data['k'] = &$value`). A filtered value written through the
+reference is visible through the aliased variable as well.
+
+`var_dump()` prints PHP's `&` marker while the reference cell is shared:
 
 ```text
-error[3:12]: Reference elements in array literals (`[&$x]`) are not supported:
-an array element cannot alias a variable's storage.
+array(1) {
+  [0]=>
+  &int(1)
+}
 ```
 
-The same applies to keyed elements (`['k' => &$a]`) and the legacy
-`array(&$a)` spelling. elephc's arrays store plain values, and its only
-reference form points *into* array storage (`$b =& $a[0]`), never out of it —
-an element aliasing a local variable would be a pointer to a stack slot the
-array can outlive. Assign the value and copy back afterwards, or alias an
-existing element with `$b =& $a[0]`.
+After `unset($first)` the cell has a single owner and the marker disappears,
+matching PHP.
+
+Current limits: a reference element must name a variable. Referencing another
+container place (`[&$items[0]]`, `[&$object->prop]`) and a bare reference after a
+spread (`[...$items, &$value]`) are rejected with a compile-time diagnostic.
+Alias an existing element with `$b =& $a[0]` when that is the storage you need.
 
 ## Multi-dimensional arrays
 ```php

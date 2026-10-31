@@ -66,7 +66,7 @@ pub(super) fn lower_closure_bind_method(
         let bound = root_descriptor_callback(ctx, bound, PhpType::Mixed, expr.span);
         let arg_container =
             lower_untyped_descriptor_invoker_arg_container(ctx, call_args, expr.span);
-        emit_callable_descriptor_invoke(ctx, bound, arg_container, expr.span)
+        emit_callable_descriptor_invoke(ctx, bound, arg_container, false, expr.span)
     } else {
         bound
     };

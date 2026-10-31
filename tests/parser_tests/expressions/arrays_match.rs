@@ -197,3 +197,67 @@ fn test_parse_array_implicit_after_negative_key() {
     assert!(matches!(&entries[2], ArrayEntry::Value(value)
         if value.kind == ExprKind::StringLiteral("c".to_string())));
 }
+/// `[&$x]` parses as an associative entry whose value is a reference marker.
+#[test]
+fn test_parse_reference_array_element() {
+    let stmts = parse_source("<?php $refs = [&$value];");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("expected assignment, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::ArrayLiteralAssoc(pairs) = &value.kind else {
+        panic!("reference literals must use hash storage, got {:?}", value.kind);
+    };
+    assert_eq!(pairs.len(), 1);
+    assert!(matches!(pairs[0].0.kind, ExprKind::IntLiteral(0)));
+    assert!(matches!(
+        &pairs[0].1.kind,
+        ExprKind::Reference(inner) if matches!(inner.kind, ExprKind::Variable(ref name) if name == "value")
+    ));
+}
+
+/// Keyed and legacy reference elements carry the same marker.
+#[test]
+fn test_parse_keyed_and_legacy_reference_array_elements() {
+    for source in [
+        "<?php $refs = ['k' => &$value];",
+        "<?php $refs = array(&$value);",
+    ] {
+        let stmts = parse_source(source);
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+            panic!("expected assignment for {source}");
+        };
+        let ExprKind::ArrayLiteralAssoc(pairs) = &value.kind else {
+            panic!("expected hash storage for {source}, got {:?}", value.kind);
+        };
+        assert!(matches!(pairs[0].1.kind, ExprKind::Reference(_)), "{source}");
+    }
+}
+
+/// `$data['k'] = &$value` lowers to the store-then-alias statement sequence.
+#[test]
+fn test_parse_array_element_reference_assignment() {
+    let stmts = parse_source("<?php $data['k'] = &$value;");
+    let StmtKind::Synthetic(parts) = &stmts[0].kind else {
+        panic!("expected synthetic sequence, got {:?}", stmts[0].kind);
+    };
+    assert_eq!(parts.len(), 2);
+    assert!(matches!(parts[0].kind, StmtKind::ArrayAssign { .. }));
+    assert!(matches!(
+        &parts[1].kind,
+        StmtKind::RefAssign { target, source }
+            if target == "value" && matches!(source.kind, ExprKind::ArrayAccess { .. })
+    ));
+}
+
+/// Non-variable reference elements are rejected instead of silently copying.
+#[test]
+fn test_parse_rejects_non_variable_reference_array_element() {
+    assert!(parse_fails("<?php $refs = [&1];"));
+    assert!(parse_fails("<?php $refs = [&$items[0]];"));
+}
+
+/// A bare reference after a spread needs a runtime key and is rejected explicitly.
+#[test]
+fn test_parse_rejects_bare_reference_after_spread() {
+    assert!(parse_fails("<?php $refs = [...$items, &$value];"));
+}

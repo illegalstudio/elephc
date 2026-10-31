@@ -486,6 +486,17 @@ ifdef (DEBUG) {
 See [Conditional Compilation](../beyond-php/ifdef.md) for the full `ifdef` syntax
 and semantics.
 
+## Filter
+
+Using `filter_var()`, `filter_var_array()`, `filter_input()`,
+`filter_input_array()`, `filter_has_var()`, `filter_list()` or `filter_id()`
+automatically links the optional `elephc_filter` bridge and injects the complete
+`ext/filter` PHP surface. `--with-filter` also retains the surface for opaque
+dynamic eval. Integer, float, boolean, IP, MAC, domain, email, regexp and
+sanitizer validation run in the bridge on every supported target; email and
+regexp validation use its pure-Rust PCRE-compatible engine, so no managed native
+package is required.
+
 ## Fileinfo
 
 Using `finfo` or a fileinfo function automatically links the optional
