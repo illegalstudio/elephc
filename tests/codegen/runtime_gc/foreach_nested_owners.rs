@@ -49,3 +49,37 @@ rebuildWithAlias();
     check();
     without_ir_opt(check);
 }
+
+/// A native isset probe releases the promoted hash receiver before the following write.
+#[test]
+fn test_header_normalization_isset_releases_promoted_receiver() {
+    let check = || {
+        let output = compile_and_run_with_heap_debug(r#"<?php
+function normalizeHeaders(): void {
+    $fields = ['Content-Type' => ['application/json']];
+    $normalized = [];
+    foreach ($fields as $name => $values) {
+        $key = strtolower((string) $name);
+        if (!isset($normalized[$key])) {
+            $normalized[$key] = [];
+        }
+        foreach ($values as $value) {
+            $normalized[$key][] = $value;
+        }
+    }
+    echo $normalized['content-type'][0], "\n";
+}
+normalizeHeaders();
+normalizeHeaders();
+"#);
+        assert!(output.success, "{}", output.stderr);
+        assert_eq!(output.stdout, "application/json\napplication/json\n");
+        assert!(
+            output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+            "{}",
+            output.stderr
+        );
+    };
+    check();
+    without_ir_opt(check);
+}

@@ -70,6 +70,10 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
     });
 
     ctx.builder.position_at_end(null_block);
+    // A concrete container projected from a widened Mixed local owns the lease created by that
+    // projection. The probe arm retires it after `ArrayIsset` / `HashIsset`; the null arm skips
+    // the probe, so it must retire the same receiver here instead of leaking one lease.
+    release_owning_receiver_temporary(ctx, array_value, expr.span);
     let false_value = emit_bool_literal(ctx, false, Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
     branch_to(ctx, merge);
@@ -97,7 +101,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
             let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
-            if index_ty == PhpType::Int {
+            let result = if index_ty == PhpType::Int {
                 index_value = coerce_array_key_to_int_at_span(ctx, index_value, Some(index.span), false);
                 ctx.emit_value(
                     Op::ArrayIsset,
@@ -146,18 +150,25 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     Op::ICmp.default_effects(),
                     Some(expr.span),
                 )
-            }
+            };
+            // Ordinary array reads stabilize their result and retire an owning receiver. Native
+            // `isset` returns only a bool, so no stabilization is needed, but the receiver still
+            // has to be released when it was projected from widened Mixed frame storage.
+            release_owning_receiver_temporary(ctx, array_value, expr.span);
+            result
         }
         IrType::Heap(IrHeapKind::Hash) => {
             let index_value = lower_expr(ctx, index);
-            ctx.emit_value(
+            let result = ctx.emit_value(
                 Op::HashIsset,
                 vec![array_value.value, index_value.value],
                 None,
                 PhpType::Bool,
                 Op::HashIsset.default_effects(),
                 Some(expr.span),
-            )
+            );
+            release_owning_receiver_temporary(ctx, array_value, expr.span);
+            result
         }
         _ => {
             let read_value = lower_array_access_from_value(ctx, array_value, index, expr, false);

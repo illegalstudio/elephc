@@ -27,6 +27,7 @@ mod ref_local_append;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
+mod unset_collection;
 mod array_edge_guards;
 mod assoc_push;
 mod append_writes;

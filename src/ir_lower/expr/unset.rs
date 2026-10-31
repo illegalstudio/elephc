@@ -29,25 +29,35 @@ pub(super) fn lower_unset_locals(
         return None;
     }
     let null = lower_null(ctx, expr);
+    let mut changed = None;
+    let mut unconditional = false;
     for arg in args {
-        match &arg.kind {
+        let removal = match &arg.kind {
             ExprKind::Variable(name) => {
                 ctx.unset_local(name, null, Some(arg.span));
+                None
             }
             ExprKind::ArrayAccess { array, index } => {
-                lower_unset_array_access(ctx, array, index, arg);
+                lower_unset_array_access(ctx, array, index, arg)
             }
             ExprKind::PropertyAccess { object, property }
             | ExprKind::NullsafePropertyAccess { object, property } => {
                 lower_unset_property_access(ctx, object, property, arg);
+                None
             }
             ExprKind::DynamicPropertyAccess { object, property } => {
                 lower_unset_dynamic_property_access(ctx, object, property, arg);
+                None
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(removal) = removal {
+            changed = Some(super::unset_collection::combine_removals(ctx, changed, removal, arg.span));
+        } else {
+            unconditional = true;
         }
     }
-    crate::ir_lower::ownership::collect_cycles(ctx, Some(expr.span));
+    super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
     Some(null)
 }
 
@@ -145,63 +155,76 @@ pub(super) fn lower_unset_array_access(
     array: &Expr,
     index: &Expr,
     expr: &Expr,
-) {
+) -> Option<LoweredValue> {
+    let can_gate = super::unset_collection::key_has_no_callbacks(ctx, index);
     if matches!(array.kind, ExprKind::Variable(_))
         && unset_array_access_has_object_receiver(ctx, array)
     {
         let (key, key_temp) = evaluate_once(ctx, index, expr);
-        let owner = key_temp.as_ref().filter(|name|
-            Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+        let owner = key_temp
+            .as_ref()
+            .filter(|name| Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
             .map(|name| ctx.local_slots[name]);
-        if let Some(slot) = owner { register_owned_call_operand(ctx, slot, expr.span); }
-        lower_unset_array_access_from_key(ctx, array, &key, expr);
-        if let Some(slot) = owner { unregister_owned_call_operand(ctx, slot, expr.span); }
+        if let Some(slot) = owner {
+            register_owned_call_operand(ctx, slot, expr.span);
+        }
+        let removed = lower_unset_array_access_from_key(ctx, array, &key, expr, can_gate);
+        if let Some(slot) = owner {
+            unregister_owned_call_operand(ctx, slot, expr.span);
+        }
         release_evaluated_once(ctx, key_temp, expr.span);
-    } else { lower_unset_array_access_from_key(ctx, array, index, expr); }
+        removed
+    } else {
+        lower_unset_array_access_from_key(ctx, array, index, expr, can_gate)
+    }
 }
 
-/// Selects storage after any object-variable key side effects have completed.
+/// Selects storage after object-variable key side effects and returns a safe collection gate.
 fn lower_unset_array_access_from_key(
-    ctx: &mut LoweringContext<'_, '_>, array: &Expr, index: &Expr, expr: &Expr,
-) {
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+    can_gate: bool,
+) -> Option<LoweredValue> {
     if let ExprKind::PropertyAccess { object, property } = &array.kind {
         if let Some(property_ty) = unset_array_access_property_array_type(ctx, array) {
             if let Some(message) = readonly_property_element_unset_message(ctx, object, property) {
                 lower_unset_readonly_property_element(ctx, object, property, &message, index, expr);
-                return;
+                return None;
             }
             lower_unset_property_array_element(ctx, object, property, &property_ty, index, expr);
-            return;
+            return None;
         }
         if unset_array_access_has_array_access_property_receiver(ctx, array) {
             lower_unset_array_access_property_offset(ctx, array, object, property, index, expr);
-            return;
+            return None;
         }
     }
     if let Some((receiver, property)) = unset_array_access_static_php_array_receiver(ctx, array) {
         lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
-        return;
+        return None;
     }
     if opaque_property_dimension::supports(ctx, array) {
         opaque_property_dimension::lower(ctx, array, index, expr);
-        return;
+        return None;
     }
     if mixed_dimension::supports(ctx, array) {
         mixed_dimension::lower(ctx, array, index, expr);
-        return;
+        return None;
     }
     if let ExprKind::Variable(name) = &array.kind {
         if ctx.local_type(name).is_php_array()
             || (ctx.is_ref_bound_local(name)
                 && ctx.local_type(name).codegen_repr() == PhpType::Mixed)
         {
-            lower_unset_boxed_array_element(ctx, name, array.span, index, expr);
-            return;
+            let removed = lower_unset_boxed_array_element(ctx, name, array.span, index, expr);
+            return can_gate.then_some(removed);
         }
         match ctx.local_type(name).codegen_repr() {
             PhpType::AssocArray { .. } => {
-                lower_unset_hash_element(ctx, name, array.span, index, expr);
-                return;
+                let removed = lower_unset_hash_element(ctx, name, array.span, index, expr);
+                return can_gate.then_some(removed);
             }
             PhpType::Array(elem_ty) if !ctx.is_ref_bound_local(name) => {
                 let elem_ty = if *elem_ty == PhpType::Never {
@@ -209,16 +232,23 @@ fn lower_unset_array_access_from_key(
                 } else {
                     *elem_ty
                 };
-                lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
-                return;
+                let removed = lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
+                return can_gate.then_some(removed);
             }
             _ => {}
         }
     }
     let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
     let object = lower_expr(ctx, array);
-    native_dimension_probes::lower(ctx, object, &ty, index,
-        elephc_builtin_contract::ObjectDimension::Unset, expr);
+    native_dimension_probes::lower(
+        ctx,
+        object,
+        &ty,
+        index,
+        elephc_builtin_contract::ObjectDimension::Unset,
+        expr,
+    );
+    None
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
@@ -228,50 +258,55 @@ fn lower_unset_boxed_array_element(
     array_span: Span,
     index: &Expr,
     expr: &Expr,
-) {
+) -> LoweredValue {
     let index_value = lower_expr(ctx, index);
     // Clearing a key temp through a PHP null assignment widens its storage to Mixed.
     // Reloading it as Str then creates an unrooted copy before the destructor can throw.
     // Keep the concrete operand and clear its scoped owner without changing the slot type.
     let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
     let array_value = crate::ir_lower::stmt::load_array_local_for_write(ctx, name, array_span);
-    ctx.emit_void(
+    let removed = ctx.emit_value(
         Op::OffsetUnset,
         vec![array_value.value, index_value.value],
         None,
+        PhpType::Bool,
         Op::OffsetUnset.default_effects(),
         Some(expr.span),
     );
     if let Some(slot) = key_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    removed
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
 ///
 /// Loads the array local, lowers the key, and emits the removal. The backend (`lower_hash_unset`)
 /// copy-on-write splits the table, releases the removed key/value payloads, and stores the unique
-/// table pointer back into the local slot, so no explicit store-back is needed here.
+/// table pointer back into the local slot, so no explicit store-back is needed here. Owned key
+/// temporaries remain unwind-visible across destructors and are retired before collection.
 pub(super) fn lower_unset_hash_element(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     array_span: Span,
     index: &Expr,
     expr: &Expr,
-) {
+) -> LoweredValue {
     let array_value = ctx.load_local(name, Some(array_span));
     let index_value = lower_expr(ctx, index);
     let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
-    ctx.emit_void(
+    let removed = ctx.emit_value(
         Op::HashUnset,
         vec![array_value.value, index_value.value],
         None,
+        PhpType::Bool,
         Op::HashUnset.default_effects(),
         Some(expr.span),
     );
     if let Some(slot) = key_owner {
         retire_owned_call_operand(ctx, slot, index.span);
     }
+    removed
 }
 
 /// Lowers `unset($arr[$key])` for a packed indexed-array local.
@@ -287,7 +322,7 @@ pub(super) fn lower_unset_indexed_element(
     array_span: Span,
     index: &Expr,
     expr: &Expr,
-) {
+) -> LoweredValue {
     let array_value = ctx.load_local(name, Some(array_span));
     let assoc_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Int),
@@ -302,7 +337,7 @@ pub(super) fn lower_unset_indexed_element(
         Some(array_span),
     );
     ctx.store_mutated_local(name, hash, assoc_ty, Some(array_span));
-    lower_unset_hash_element(ctx, name, array_span, index, expr);
+    lower_unset_hash_element(ctx, name, array_span, index, expr)
 }
 
 /// Returns true when a property unset target can be lowered without normal property storage support.

@@ -36,6 +36,7 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
     abi::emit_call_label(ctx.emitter, "__rt_mixed_cell_promote_to_hash");
     let valid = ctx.next_label("offset_unset_array");
     let done = ctx.next_label("offset_unset_done");
+    let fallback_done = ctx.next_label("offset_unset_fallback_done");
     let string_offset = ctx.next_label("offset_unset_string");
     let non_array = ctx.next_label("offset_unset_non_array");
     let object = ctx.next_label("offset_unset_object");
@@ -47,10 +48,10 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbnz x0, {valid}"));              // a nonzero result is the cell's installed unique hash
             ctx.load_value_to_reg(cell, "x9")?;
-            ctx.emitter.instruction(&format!("cbz x9, {done}"));                // a missing cell reads as null, which PHP leaves alone
+            ctx.emitter.instruction(&format!("cbz x9, {fallback_done}"));       // preserve the conservative safe point for a non-array payload
             ctx.emitter.instruction("ldr x10, [x9]");                           // load the runtime tag of the non-array payload
             ctx.emitter.instruction("cmp x10, #8");                             // runtime tag 8 = null
-            ctx.emitter.instruction(&format!("b.eq {done}"));                   // unset of an offset of null is a silent no-op
+            ctx.emitter.instruction(&format!("b.eq {fallback_done}"));          // unset of an offset of null is a silent no-op
             ctx.emitter.instruction("cmp x10, #1");                             // runtime tag 1 = string
             ctx.emitter.instruction(&format!("b.eq {string_offset}"));          // strings refuse offset removal with their own Error
             ctx.emitter.instruction("cmp x10, #6");                             // runtime tag 6 = object
@@ -66,10 +67,10 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.emitter.instruction(&format!("jnz {valid}"));                   // take the removal path for a real array
             ctx.load_value_to_reg(cell, "r10")?;
             ctx.emitter.instruction("test r10, r10");                           // a missing cell reads as null, which PHP leaves alone
-            ctx.emitter.instruction(&format!("jz {done}"));                     // skip the removal for a missing cell
+            ctx.emitter.instruction(&format!("jz {fallback_done}"));            // preserve the conservative safe point for a non-array payload
             ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the runtime tag of the non-array payload
             ctx.emitter.instruction("cmp r11, 8");                              // runtime tag 8 = null
-            ctx.emitter.instruction(&format!("je {done}"));                     // unset of an offset of null is a silent no-op
+            ctx.emitter.instruction(&format!("je {fallback_done}"));            // unset of an offset of null is a silent no-op
             ctx.emitter.instruction("cmp r11, 1");                              // runtime tag 1 = string
             ctx.emitter.instruction(&format!("je {string_offset}"));            // strings refuse offset removal with their own Error
             ctx.emitter.instruction("cmp r11, 6");                              // runtime tag 6 = object
@@ -100,14 +101,14 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
             ctx.load_value_to_reg(cell, "x9")?;
             ctx.emitter.instruction("ldr x0, [x9, #8]");                        // pass the unboxed object
             abi::emit_call_label(ctx.emitter, "__rt_mixed_object_offset_unset");
-            ctx.emitter.instruction(&format!("b {done}"));                      // the object answered through offsetUnset or threw
+            ctx.emitter.instruction(&format!("b {fallback_done}"));             // retain collection after an arbitrary offsetUnset callback
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rsi");
             ctx.load_value_to_reg(cell, "r10")?;
             ctx.emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");            // pass the unboxed object
             abi::emit_call_label(ctx.emitter, "__rt_mixed_object_offset_unset");
-            ctx.emitter.instruction(&format!("jmp {done}"));                    // the object answered through offsetUnset or threw
+            ctx.emitter.instruction(&format!("jmp {fallback_done}"));           // retain collection after an arbitrary offsetUnset callback
         }
     }
     ctx.emitter.label(&false_offset);
@@ -116,13 +117,20 @@ pub(super) fn lower_offset_unset(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "Deprecated: Automatic conversion of false to array is deprecated\n",
         true,
     );
-    abi::emit_jump(ctx.emitter, &done);
+    abi::emit_jump(ctx.emitter, &fallback_done);
     ctx.emitter.label(&string_offset);
     super::exceptions::emit_error(ctx, "Cannot unset string offsets");
     ctx.emitter.label(&non_array);
     super::exceptions::emit_error(ctx, "Cannot unset offset in a non-array variable");
+    ctx.emitter.label(&fallback_done);
+    if inst.result.is_some() {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        super::store_if_result(ctx, inst)?;
+    }
+    abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&valid);
     lower_array_offset_unset(ctx, key)?;
+    hashes::store_unset_result(ctx, inst)?;
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -166,7 +174,7 @@ pub(super) fn lower_array_unset_with_key_diagnostics(
     ctx: &mut FunctionContext<'_>, key: ValueId,
 ) -> Result<()> {
     // -- publish one snapshot owner across any key-conversion warning callback --
-    abi::emit_reserve_temporary_stack(ctx.emitter, 80);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 96);
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_store_to_sp(ctx.emitter, result, 8);
     abi::emit_call_label(ctx.emitter, "__rt_incref");
@@ -216,6 +224,8 @@ pub(super) fn lower_array_unset_with_key_diagnostics(
     abi::emit_load_temporary_stack_slot(ctx.emitter, key_lo, 16);
     abi::emit_load_temporary_stack_slot(ctx.emitter, key_hi, 24);
     abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+    let removed = if ctx.emitter.target.arch == Arch::AArch64 { "x1" } else { "rdx" };
+    abi::emit_store_to_sp(ctx.emitter, removed, 80);
     // -- only detached snapshots still have an owner record to retire --
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
     match ctx.emitter.target.arch {
@@ -231,7 +241,8 @@ pub(super) fn lower_array_unset_with_key_diagnostics(
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, 0);
     abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
     ctx.emitter.label(&done);
-    abi::emit_release_temporary_stack(ctx.emitter, 80);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, removed, 80);
+    abi::emit_release_temporary_stack(ctx.emitter, 96);
     Ok(())
 }
 

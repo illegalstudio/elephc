@@ -1009,6 +1009,26 @@ In full-reset `--web` mode, the next request reclaims the previous PHP heap aren
 - **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 14 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
 
+EIR array-element removal instructions report whether the key existed,
+including entries whose value was null. EIR combines these flags for an
+array-only unset list and runs its final automatic cycle collection only if an
+entry was removed. Missing keys therefore avoid a full heap graph scan. The flag
+lives in the runtime call's stack frame so reentrant destructors cannot overwrite
+another removal's result. Copy-on-write publication, sparse-array promotion, and
+normal key evaluation still precede removal.
+
+This gate applies to scalar key literals and concrete scalar locals, plus pure
+unary string builtins applied to concrete strings, such as
+`unset($fields[strtolower($name)])`. Keys that can invoke user code, weak-coercion
+diagnostics, or other effects keep unconditional collection. Unsets of local
+roots, properties, and `ArrayAccess` offsets keep their existing safe point,
+including lists mixing those targets with array offsets. Explicit
+`gc_collect_cycles()` remains independent of the removal flags.
+When a boxed reference holds a non-array value, its runtime fallback conservatively
+requests collection, preserving `ArrayAccess` and false-conversion callback effects.
+Float and boxed-key diagnostic snapshots preserve the removal flag across their
+temporary hash-owner cleanup.
+
 Collector-triggered destructors run under individual native exception handlers.
 Both explicit collection and automatic EIR safe points have conservative callback
 effects, including `MAY_THROW`, so optimizers must preserve surrounding catches
