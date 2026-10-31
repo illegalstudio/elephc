@@ -494,9 +494,7 @@ fn emit_tagged_marker_write_or_promote(emitter: &mut Emitter) {
         Arch::AArch64 => emitter.instruction("ldr x0, [sp, #16]"),              // consume the rejected box while the original array owner is still intact
         Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [rbp - 24]"),   // consume the rejected box while the original array owner is still intact
     }
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    super::container_refusal_owner::emit_release(emitter);
-    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
+    super::container_refusal_owner::emit_throw(emitter);
     emitter.label(valid);
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -554,8 +552,10 @@ mod tests {
             let invalid = selection.find("__rt_array_set_mixed_key_tagged_invalid:").unwrap();
             let valid = selection.find("__rt_array_set_mixed_key_tagged_valid:").unwrap();
             let refusal = &selection[invalid..valid];
+            assert!(refusal.find("__rt_tagged_reference_assignment_error_new").unwrap()
+                < refusal.find("__rt_decref_mixed").unwrap(), "{name}: {refusal}");
             assert!(refusal.find("__rt_decref_mixed").unwrap()
-                < refusal.find("__rt_tagged_reference_assignment_error").unwrap(), "{name}: {refusal}");
+                < refusal.find("__rt_throw_current").unwrap(), "{name}: {refusal}");
             assert!(!selection.contains("__rt_decref_array") && !selection.contains("__rt_hash_new"),
                 "{name}: a refused marker write must leave the destination owner intact");
             assert!(selection.contains("__rt_mixed_unbox"), "{name}: persistent reference replacements need decoding");

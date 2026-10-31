@@ -663,6 +663,9 @@ consuming helper. Their setter entry marks that owner for retirement on shape12 
 ordinary raw-local transfers leave their stored owner intact. The flag follows already-hash
 destinations into the hash setter and stays independent from float-key diagnostic and shared
 payload flags, so successful writes retain their existing COW behavior.
+The refusal creates its pending Error before retiring the rejected value or extra container
+owner. Both releases use protected cleanup, preserving the original Error in the previous
+chain if a destructor throws and completing the remaining cleanup before propagation.
 
 A nullable local returned by reference with a non-null object result is checked before
 promotion to an object-payload cell. The original local name stays attached, including

@@ -8,6 +8,7 @@
 //! - Mode bit one marks a helper-owned destination distinct from the owner's storage slot.
 //! - Both setter frames save mode at sp+56 on AArch64 and rbp-64 on x86_64.
 //! - Refusal precedes container consumption; ordinary raw-local owners remain untouched.
+//! - The pending Error is rooted before either rejected owner can run a throwing destructor.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -25,8 +26,22 @@ pub(super) fn emit_release(emitter: &mut Emitter) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                // use the generic native release convention for indexed or hash storage
         }
     }
-    abi::emit_call_label(emitter, "__rt_decref_any");
+    abi::emit_unary_cleanup_preserving_exception(
+        emitter, "__rt_decref_any", abi::int_result_reg(emitter),
+    );
     emitter.label("986");
+}
+
+/// Consumes the boxed rejected value and optional extra destination owner before propagating Error.
+pub(super) fn emit_throw(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result);
+    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error_new");
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    abi::emit_pop_reg(emitter, result);
+    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", result);
+    emit_release(emitter);
+    abi::emit_call_label(emitter, "__rt_throw_current");
 }
 
 #[cfg(test)]
@@ -45,6 +60,21 @@ mod tests {
                 else { "tbz x9, #1, 986f" };
             assert!(assembly.find(gate).unwrap() < assembly.find("__rt_decref_any").unwrap(), "{name}");
             assert!(assembly.find("__rt_decref_any").unwrap() < assembly.find("986:").unwrap(), "{name}");
+        }
+    }
+
+    /// Destructor throws cannot bypass either owner retirement or erase the initial refusal.
+    #[test]
+    fn nullable_refusal_roots_error_before_protected_owner_cleanup_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_throw(&mut emitter);
+            let assembly = emitter.output();
+            let error = assembly.find("__rt_tagged_reference_assignment_error_new").unwrap();
+            let cleanup = assembly.find("__rt_cleanup_preserve_exception").unwrap();
+            let thrown = assembly.find("__rt_throw_current").unwrap();
+            assert!(error < cleanup && cleanup < thrown, "{name}: {assembly}");
+            assert!(assembly.contains("__rt_decref_mixed") && assembly.contains("__rt_decref_any"), "{name}");
         }
     }
 }

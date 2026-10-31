@@ -319,9 +319,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // consume the rejected direct payload with its original PHP tag
     emitter.instruction("ldr x2, [sp, #32]");                                   // preserve string lengths and other high words during cleanup
     abi::emit_call_label(emitter, "__rt_hash_to_mixed_box_owned");
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    super::container_refusal_owner::emit_release(emitter);
-    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
+    super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid");
     emitter.instruction("ldr x1, [sp, #24]");                                   // load the direct nullable-integer payload
     emitter.instruction("str x1, [x14]");                                       // publish the scalar payload
@@ -337,9 +335,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     );
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid");
     abi::emit_pop_reg_pair(emitter, "x0", "x14");
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    super::container_refusal_owner::emit_release(emitter);
-    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
+    super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid");
     abi::emit_load_temporary_stack_slot(emitter, "x14", 8);
     emitter.instruction("str x1, [x14]");                                       // publish the unboxed scalar payload
@@ -693,9 +689,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // consume the rejected direct payload with its original PHP tag
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // preserve string lengths and other high words during cleanup
     abi::emit_call_label(emitter, "__rt_hash_to_mixed_x86_box_owned");
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    super::container_refusal_owner::emit_release(emitter);
-    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
+    super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_valid_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
     emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the scalar payload
@@ -711,9 +705,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid_x");
     abi::emit_pop_reg_pair(emitter, "rax", "r14");
-    abi::emit_call_label(emitter, "__rt_decref_mixed");
-    super::container_refusal_owner::emit_release(emitter);
-    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error");
+    super::container_refusal_owner::emit_throw(emitter);
     emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid_x");
     abi::emit_load_temporary_stack_slot(emitter, "r14", 8);
     emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the unboxed scalar payload
@@ -869,8 +861,11 @@ mod tests {
                 let guard_end = tagged.find(&invalid).unwrap();
                 let publication = tagged.find(&valid).unwrap();
                 let rejected = &tagged[guard_end..publication];
+                assert!(rejected.find("__rt_tagged_reference_assignment_error_new").unwrap()
+                    < rejected.find("__rt_decref_mixed").unwrap(),
+                    "{name}: {shape} must root the refusal before destructor cleanup");
                 assert!(rejected.find("__rt_decref_mixed").unwrap()
-                    < rejected.find("__rt_tagged_reference_assignment_error").unwrap(),
+                    < rejected.find("__rt_throw_current").unwrap(),
                     "{name}: {shape} must release a rejected replacement before throwing");
                 assert!(!rejected.contains(tagged_store), "{name}: {shape} modified the caller on refusal");
                 let guard = &tagged[..guard_end];

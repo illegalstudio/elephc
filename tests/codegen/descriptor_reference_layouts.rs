@@ -10,6 +10,34 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// A rejected fresh object's throwing destructor keeps the original nullable-reference refusal.
+#[test]
+fn test_nullable_reference_refusal_preserves_error_during_throwing_replacement_cleanup() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingNullableReferenceHolder { public ?int $value = null; }
+class ThrowingNullableReferenceReplacement {
+    public function __destruct() { throw new Exception('cleanup'); }
+}
+function throwingNullableReferenceTarget(&...$items): void {
+    try { $items['last'] = new ThrowingNullableReferenceReplacement(); }
+    catch (Throwable $error) {
+        echo $error->getMessage(), '|';
+        $previous = $error->getPrevious();
+        if ($previous !== null) { echo $previous->getMessage(), '|'; } else { echo 'missing|'; }
+        echo json_encode($items['last']);
+        unset($previous, $error);
+    }
+}
+function throwingNullableReferenceOther(&...$items): void { echo 'unexpected'; }
+$holder = new ThrowingNullableReferenceHolder(); $value =& $holder->value;
+$target = $argc > 0 ? 'throwingNullableReferenceTarget' : 'throwingNullableReferenceOther';
+$target(last: $value); unset($target, $value, $holder);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "cleanup|Unsupported assignment through a nullable integer reference: value must be int or null|null");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Ref-cell storebacks retire the helper's extra owner on both indexed and named-hash refusal.
 #[test]
 fn test_nullable_marker_ref_cell_storeback_refusals_retire_extra_destination_owners() {
