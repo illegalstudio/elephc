@@ -824,6 +824,79 @@ mod tests {
         assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
     }
 
+    /// An idempotent promotion does not override a transferred cell's concrete payload ABI.
+    #[test]
+    fn adopted_string_alias_ignores_idempotent_promotion_owner_type() {
+        let mut function = Function::new(
+            "adopted_string_alias".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let target = function.add_local(
+            Some("target".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let source = function.add_local(
+            Some("source".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let owner = function.add_local(
+            Some("source#ref".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::RefCell,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let cell = builder.emit_const_i64(0);
+            builder.emit(
+                Op::AdoptRefCellPtr,
+                vec![cell],
+                Some(Immediate::LocalSlotPair {
+                    first: source,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: source,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: target,
+                    second: source,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(analysis.stable_ref_cell_payload_type(source), Some(&PhpType::Str));
+        assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
+    }
+
     /// Verifies AArch64 cleanup guards skip raw release when the runtime slot is a cell.
     #[test]
     fn dynamic_release_emits_aarch64_representation_guard() {

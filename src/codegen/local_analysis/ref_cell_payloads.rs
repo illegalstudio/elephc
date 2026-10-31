@@ -60,12 +60,10 @@ pub(super) fn stable_payload_types(function: &Function) -> HashMap<LocalSlotId, 
             continue;
         };
         let payload_ty = match (inst.op, inst.immediate.as_ref()) {
-            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
-                function
-                    .locals
-                    .get(second.as_raw() as usize)
-                    .map(|owner| owner.php_type.clone())
-            }
+            // Local promotions are emitted from the slot's final frame type, so the ordinary
+            // local fallback is authoritative. They are also idempotent after an external cell
+            // was adopted, and therefore must not conflict with that cell's narrower payload ABI.
+            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { .. })) => None,
             (Op::AliasLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
                 if conflicts.contains(second) {
                     conflicts.insert(slot);
