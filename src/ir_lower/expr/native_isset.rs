@@ -70,10 +70,6 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
     });
 
     ctx.builder.position_at_end(null_block);
-    // A concrete container projected from a widened Mixed local owns the lease created by that
-    // projection. The probe arm retires it after `ArrayIsset` / `HashIsset`; the null arm skips
-    // the probe, so it must retire the same receiver here instead of leaking one lease.
-    release_owning_receiver_temporary(ctx, array_value, expr.span);
     let false_value = emit_bool_literal(ctx, false, Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
     branch_to(ctx, merge);

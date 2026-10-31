@@ -72,6 +72,8 @@ mod array_cast;
 mod nullable_string_return;
 #[path = "runtime_gc/nullable_array_read_owners.rs"]
 mod nullable_array_read_owners;
+#[path = "runtime_gc/nullable_native_isset.rs"]
+mod nullable_native_isset;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
