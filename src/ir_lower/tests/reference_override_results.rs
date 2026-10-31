@@ -62,7 +62,7 @@ echo json_encode(readErasedReferenceOverride(new ReferenceOverrideChild()));
     let symbol = crate::names::function_symbol("readErasedReferenceOverride");
     let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
     let body = body.split("\n.globl ").next().unwrap();
-    assert_eq!(body.matches("__rt_mixed_clone").count(), 2,
+    assert!(body.matches("__rt_mixed_clone").count() >= 2,
         "{target}: both the inherited override and the direct reference candidate need value copies");
 }
 

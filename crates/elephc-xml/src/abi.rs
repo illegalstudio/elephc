@@ -61,7 +61,7 @@ pub const OPTION_CASE_FOLDING: i64 = 1;
 pub const OPTION_TARGET_ENCODING: i64 = 2;
 /// `XML_OPTION_SKIP_TAGSTART` (stored for `xml_parser_get_option`, applied by the prelude).
 pub const OPTION_SKIP_TAGSTART: i64 = 3;
-/// `XML_OPTION_SKIP_WHITE` (stored here and cached by the prelude when struct parsing starts).
+/// `XML_OPTION_SKIP_WHITE` (stored here and read live by the prelude during struct parsing).
 pub const OPTION_SKIP_WHITE: i64 = 4;
 /// `XML_OPTION_PARSE_HUGE`.
 pub const OPTION_PARSE_HUGE: i64 = 5;
@@ -164,7 +164,7 @@ struct ParserEntry {
     case_folding: bool,
     /// `XML_OPTION_SKIP_TAGSTART`, stored for `xml_parser_get_option` only.
     skip_tagstart: i64,
-    /// `XML_OPTION_SKIP_WHITE`, cached by the prelude when struct parsing starts.
+    /// `XML_OPTION_SKIP_WHITE`, read live by the prelude during struct parsing.
     skip_white: bool,
     /// `XML_OPTION_PARSE_HUGE`.
     parse_huge: bool,

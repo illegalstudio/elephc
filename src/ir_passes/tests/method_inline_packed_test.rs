@@ -130,8 +130,10 @@ echo $counter->post(), $counter->pre(), $counter->postdec(), $counter->predec();
             crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
             crate::ir_passes::optimize_module(&mut module);
             let calls = called_methods(&module, function(&module, "main"));
-            assert!(!calls.iter().any(|name| matches!(name.as_str(), "post" | "pre" | "postdec" | "predec")),
-                "{target}, xml={xml}: ordinary scalar updates must remain inlinable: {calls:?}");
+            let retained = calls.iter().any(|name|
+                matches!(name.as_str(), "post" | "pre" | "postdec" | "predec"));
+            assert_eq!(retained, xml,
+                "{target}, xml={xml}: SimpleXML's warning backtrace alone must retain these frames: {calls:?}");
         }
     }
 }

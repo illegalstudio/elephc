@@ -27,15 +27,23 @@ $value = null; packedNullableRefusalIr($value);
         let module = super::lower_source_at_for_target(source, Path::new("main.php"),
             Path::new("."), Target::parse(name).unwrap());
         let function = module.functions.iter().find(|function| function.name == "packedNullableRefusalIr").unwrap();
-        let write = function.instructions.iter().find(|inst| inst.op == Op::ArraySet).unwrap();
+        let write_index = function.instructions.iter().position(|inst| inst.op == Op::ArraySet).unwrap();
+        let write = &function.instructions[write_index];
         let value = write.operands[2];
         let replacement = function.value(value).unwrap();
         assert_eq!(replacement.php_type, PhpType::Object("PackedNullableRefusalReplacement".into()), "{name}");
         assert_eq!(replacement.ownership, crate::ir::Ownership::Owned, "{name}");
         assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
             && inst.operands.first() == Some(&value)), "{name}: the setter must consume the owner");
-        assert!(!function.instructions.iter().any(|inst| inst.op == Op::StoreLocal
-            && inst.operands == [value]), "{name}: a scoped owner would hide premature setter cleanup");
+        for (store_index, store) in function.instructions[..write_index].iter().enumerate()
+            .filter(|(_, inst)| inst.op == Op::StoreLocal && inst.operands == [value])
+        {
+            let Some(crate::ir::Immediate::LocalSlot(slot)) = store.immediate else { continue; };
+            assert!(function.instructions[store_index + 1..write_index].iter().any(|inst|
+                inst.op == Op::UnsetLocal
+                    && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))),
+                "{name}: a scoped owner must transfer before the consuming setter");
+        }
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
         let refusal = &assembly[assembly.find("__rt_tagged_reference_assignment_error_new").unwrap()..];
         let cleanup = refusal.find("__rt_cleanup_preserve_exception").unwrap();

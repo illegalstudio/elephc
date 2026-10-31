@@ -14,7 +14,7 @@ fn nullable_to_bare_object_arguments_check_the_object_tag_on_every_target() {
     let source = r#"<?php
 class BareObjectArgumentNode {}
 function acceptBareObjectArgument(object $node): string { return get_class($node); }
-function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
+function passBareObjectArgument(?BareObjectArgumentNode $node): string { return acceptBareObjectArgument($node); }
 echo passBareObjectArgument(new BareObjectArgumentNode());
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -811,13 +811,7 @@ echo coercionCaller($argc);
         // the call, and two backend roots protect the implicit Mixed boxes.
         assert_eq!(before.matches("publish temporary call operand owner").count(), 5, "{target}: {body}");
         assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
-        let implicit = after.split_once("op=pop_call_operand_owner").unwrap().0;
-        assert_eq!(implicit.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
-        let (inner, outer) = if target == "linux-x86_64" {
-            ("mov r10, QWORD PTR [rsp + 80]", "mov r10, QWORD PTR [rsp + 16]")
-        } else {
-            ("ldr x10, [sp, #80]", "ldr x10, [sp, #16]")
-        };
-        assert!(after.find(inner).unwrap() < after.find(outer).unwrap(), "{target}: {after}");
+        assert!(!after.contains("publish temporary call operand owner"),
+            "{target}: every temporary owner must already be published before the call");
     }
 }

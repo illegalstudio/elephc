@@ -53,7 +53,7 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
         "__rt_reference_cell_clone", "__rt_hash_to_mixed_box_owned", "__rt_hash_to_mixed_x86_box_owned",
         "__rt_mixed_from_value", "__rt_decref_mixed", "__rt_reference_cell_new",
         "__rt_reference_cell_value_release", "__rt_tagged_reference_assignment_error_new",
-        "__rt_cleanup_preserve_exception", "__rt_mixed_unbox", "__rt_throw_current",
+        "__rt_cleanup_preserve_exception", "__rt_mixed_unbox",
     ] {
         emitter.label_global(symbol);
         emitter.instruction(if target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }); // reject reference paths outside this growth fixture

@@ -341,8 +341,9 @@ fn needs_concrete_reference_staging(ctx: &LoweringContext<'_, '_>) -> bool {
 
 /// Keeps new scalar/container coercions out of protected paths until their handlers can recover.
 fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    let load_type = ctx.local_load_php_type(name).unwrap_or_else(|| ctx.local_type(name));
     if ctx.finally_stack.is_empty() || !needs_concrete_reference_staging(ctx)
-        || ctx.local_type(name).reference_payload_compatible(&ctx.return_php_type)
+        || load_type.reference_payload_compatible(&ctx.return_php_type)
     { return false; }
     let object_staging = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
         && match ctx.local_type(name) {
@@ -351,61 +352,12 @@ fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, na
                 && members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)),
             _ => false,
         };
-    if !object_staging {
-        return true;
-    }
-    // The null guard runs before the source local is promoted. A same-frame catch, or a finally
-    // that can observe the source before replacing it, would be lowered with post-promotion
-    // facts while the throwing path still holds the raw nullable slot. Keep the established
-    // SimpleXML surface where a catch-free finalizer starts by replacing the source from an
-    // independent property chain; that first write makes the later finalizer safe.
-    ctx.finally_stack.iter().any(|frame| {
-        frame.has_catches || !finally_rebinds_local_before_observation(&frame.body, name)
-    })
-}
-
-/// Returns true when a finalizer cannot inspect a failed staged local before replacing it.
-fn finally_rebinds_local_before_observation(body: &[Stmt], name: &str) -> bool {
-    let Some(first) = body.first() else { return true; };
-    match &first.kind {
-        StmtKind::Assign { name: target, value }
-        | StmtKind::TypedAssign { name: target, value, .. } if target == name => {
-            independent_finally_replacement(value, name)
-        }
-        StmtKind::Synthetic(stmts) => finally_rebinds_local_before_observation(stmts, name),
-        _ => false,
-    }
-}
-
-/// Accepts only non-calling replacement expressions that cannot read or escape `name`.
-fn independent_finally_replacement(expr: &Expr, name: &str) -> bool {
-    match &expr.kind {
-        ExprKind::Variable(variable) => variable != name,
-        ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. }
-        | ExprKind::ObjectClassName { object } => independent_finally_replacement(object, name),
-        ExprKind::DynamicPropertyAccess { object, property }
-        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-            independent_finally_replacement(object, name)
-                && independent_finally_replacement(property, name)
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            independent_finally_replacement(array, name)
-                && independent_finally_replacement(index, name)
-        }
-        ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::Null
-        | ExprKind::ConstRef(_)
-        | ExprKind::StaticPropertyAccess { .. }
-        | ExprKind::This
-        | ExprKind::ClassConstant { .. }
-        | ExprKind::ScopedConstantAccess { .. }
-        | ExprKind::MagicConstant(_) => true,
-        _ => false,
-    }
+    // Object staging performs its throwing null/class guard before promotion. Loads and stores
+    // lowered for a same-frame catch or copied finalizer use the slot's runtime representation
+    // flag, so the guard-failure path reads the still-raw nullable slot while the successful path
+    // follows the promoted cell. Scalar and string coercions remain refused above because their
+    // conversions can run user code and need a stronger recovery contract.
+    !object_staging
 }
 
 /// Returns whether a local's cell payload agrees with the declared by-reference result shape.
@@ -1008,7 +960,6 @@ pub(super) fn push_finally_frame(
     body: &[Stmt],
     run_on_throw: bool,
     handler_cleanup: Option<(i64, Span)>,
-    has_catches: bool,
 ) -> usize {
     let depth = ctx.finally_stack.len();
     let loop_depth = ctx.loop_stack.len();
@@ -1017,7 +968,6 @@ pub(super) fn push_finally_frame(
         body: body.to_vec(),
         run_on_throw,
         handler_cleanup,
-        has_catches,
     });
     depth
 }

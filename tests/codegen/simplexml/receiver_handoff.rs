@@ -24,7 +24,7 @@ $source = $argc > 0 ? 'class ReturnedEvalFactoryXml extends SimpleXMLElement {
 }' : '';
 eval($source);
 $class = 'ReturnedEvalFactoryXml';
-$root = new $class('<r id="x"><item>1</item></r>', 7);
+object $root = new $class('<r id="x"><item>1</item></r>', 7);
 $child = $root->item;
 $children = $root->children();
 $attributes = $root->attributes();

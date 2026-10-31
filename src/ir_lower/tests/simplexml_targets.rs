@@ -64,7 +64,7 @@ fn ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid_on_ever
     let source = r#"<?php
 function ordinaryNullableDomTruthy(?DOMNode $node): bool { return (bool)$node; }
 $document = new DOMDocument();
-echo ordinaryNullableDomTruthy($document->createElement('r')), ordinaryNullableDomTruthy(null);
+echo ordinaryNullableDomTruthy($document), ordinaryNullableDomTruthy(null);
 $xml = new SimpleXMLElement('<r/>');
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {

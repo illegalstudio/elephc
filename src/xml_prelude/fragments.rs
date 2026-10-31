@@ -139,7 +139,6 @@ final class XMLParser {
     public bool $__elephc_extref_installed = false;
     public bool $__elephc_start_ns_installed = false;
     public int $__elephc_skip_tagstart = 0;
-    public bool $__elephc_skip_white = false;
     public bool $__elephc_parsing = false;
     public int $__elephc_level = 0;
     // xml_parse_into_struct() state (php-src: parser->data / info / ltags / lastwasopen /
@@ -492,9 +491,8 @@ final class XMLParser {
         if ($this->__elephc_parsing) {
             throw new Error("Parser must not be called recursively");
         }
-        // The bridge owns option state across procedural wrapper calls. Cache the hot
-        // whitespace flag on this parser for the character-data loop below.
-        $this->__elephc_skip_white = elephc_xml_parser_get_option($this->__elephc_handle, 4) === 1;
+        // The bridge owns option state across procedural wrapper calls. Character-data
+        // dispatch reads the live option because a handler may change it during parsing.
         $this->__elephc_collecting = true;
         $this->__elephc_collect_index = $with_index;
         $this->__elephc_struct_values = [];
@@ -699,7 +697,7 @@ final class XMLParser {
             return;
         }
         $doprint = false;
-        if ($this->__elephc_skip_white) {
+        if (elephc_xml_parser_get_option($this->__elephc_handle, 4) === 1) {
             $length = strlen($data);
             for ($i = 0; $i < $length; $i++) {
                 $byte = $data[$i];
@@ -709,7 +707,7 @@ final class XMLParser {
                 }
             }
         }
-        $keep = $doprint || !$this->__elephc_skip_white;
+        $keep = $doprint || elephc_xml_parser_get_option($this->__elephc_handle, 4) !== 1;
         if ($this->__elephc_lastwasopen) {
             $index = $this->__elephc_ctag_index;
             $entry = $this->__elephc_struct_values[$index];

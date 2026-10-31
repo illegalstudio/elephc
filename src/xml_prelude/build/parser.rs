@@ -52,7 +52,6 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
         .prop("__elephc_extref_installed", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_start_ns_installed", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_skip_tagstart", TypeExpr::Int, Some(e_int(0)))
-        .prop("__elephc_skip_white", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_parsing", TypeExpr::Bool, Some(e_bool(false)))
         .prop("__elephc_level", TypeExpr::Int, Some(e_int(0)))
         .prop("__elephc_collecting", TypeExpr::Bool, Some(e_bool(false)))
@@ -666,15 +665,6 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_prop_assign(
-                        e_this(),
-                        "__elephc_skip_white",
-                        e_binop(
-                            e_call("elephc_xml_parser_get_option", vec![e_this_prop("__elephc_handle"), e_int(4)]),
-                            BinOp::StrictEq,
-                            e_int(1),
-                        ),
-                    ),
                     s_prop_assign(e_this(), "__elephc_collecting", e_bool(true)),
                     s_prop_assign(e_this(), "__elephc_collect_index", e_var("with_index")),
                     s_prop_assign(e_this(), "__elephc_struct_values", e_array(vec![])),
@@ -1047,7 +1037,11 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                     ),
                     s_assign("doprint", e_bool(false)),
                     s_if(
-                        e_this_prop("__elephc_skip_white"),
+                        e_binop(
+                            e_call("elephc_xml_parser_get_option", vec![e_this_prop("__elephc_handle"), e_int(4)]),
+                            BinOp::StrictEq,
+                            e_int(1),
+                        ),
                         vec![
                             s_assign("length", e_call("strlen", vec![e_var("data")])),
                             s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("length"))), Some(s_expr(e_post_inc("i"))), vec![
@@ -1066,7 +1060,18 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_assign("keep", e_binop(e_var("doprint"), BinOp::Or, e_not(e_this_prop("__elephc_skip_white")))),
+                    s_assign(
+                        "keep",
+                        e_binop(
+                            e_var("doprint"),
+                            BinOp::Or,
+                            e_binop(
+                                e_call("elephc_xml_parser_get_option", vec![e_this_prop("__elephc_handle"), e_int(4)]),
+                                BinOp::StrictNotEq,
+                                e_int(1),
+                            ),
+                        ),
+                    ),
                     s_if(
                         e_this_prop("__elephc_lastwasopen"),
                         vec![

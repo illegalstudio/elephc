@@ -17,9 +17,9 @@ pub(super) fn fetch_interface_parent(
     key_already_diagnosed: bool,
 ) -> Option<LoweredValue> {
     let PhpType::Object(name) = ctx.builder.value_php_type(receiver.value).codegen_repr() else { return None; };
-    if !ctx.interfaces.contains_key(&name) || !ctx.classes.iter().any(|(class, info)|
+    if !ctx.interfaces.contains_key(&name) || !ctx.classes.keys().any(|class|
         crate::types::builtin_classes::spl_storage_write_fetch_owner(class, ctx.classes).is_some()
-            && info.interfaces.iter().any(|interface| interface.eq_ignore_ascii_case(&name))) {
+            && ctx.type_is_or_implements_interface(class, &name)) {
         return None;
     }
     let span = expr.span;

@@ -15,7 +15,7 @@ fn test_nullable_to_bare_object_argument_checks_the_runtime_tag() {
     let out = compile_and_run_with_heap_debug(r#"<?php
 class BareObjectArgumentNode {}
 function acceptBareObjectArgument(object $node): string { return get_class($node); }
-function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
+function passBareObjectArgument(?BareObjectArgumentNode $node): string { return acceptBareObjectArgument($node); }
 echo passBareObjectArgument(new BareObjectArgumentNode()), '|';
 try { passBareObjectArgument(null); }
 catch (TypeError $error) { echo explode(', called in ', $error->getMessage())[0]; }

@@ -438,7 +438,7 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
 
-    /// Eval replacement requires a by-value parameter owner even without explicit EIR stores.
+    /// Eval replacement owns every visible parameter because a by-ref binding can detach.
     #[test]
     fn eval_scope_makes_visible_by_value_parameters_owned() {
         for by_ref in [false, true] {
@@ -451,7 +451,7 @@ mod tests {
             function.add_local(Some("scope".to_string()), IrType::I64, PhpType::Int, LocalKind::EvalScope);
             let analysis = LocalSlotAnalysis::new(&function);
             assert!(!analysis.has_store(slot));
-            assert_eq!(analysis.owns_parameter_slot(slot), !by_ref);
+            assert!(analysis.owns_parameter_slot(slot));
         }
     }
 

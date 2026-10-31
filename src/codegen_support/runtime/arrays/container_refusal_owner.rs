@@ -37,7 +37,7 @@ pub(super) fn emit_throw(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(emitter, result);
     emit_release(emitter);
-    abi::emit_call_label(emitter, "__rt_throw_current");
+    abi::emit_jump(emitter, "__rt_throw_current");
 }
 
 #[cfg(test)]

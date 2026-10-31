@@ -165,7 +165,7 @@ mod tests {
                 (["[sp, #112]", "[sp, #160]"], "add x10, x10, #144", "add x10, x10, #96")
             };
             for offset in owners { assert!(asm.contains(offset), "{target}: {asm}"); }
-            assert!(asm.find(detach_inner).unwrap() < asm.find(detach_outer).unwrap(), "{target}: {asm}");
+            assert!(asm.rfind(detach_inner).unwrap() < asm.rfind(detach_outer).unwrap(), "{target}: {asm}");
             let (reserve, release) = if target == "linux-x86_64" {
                 ("sub rsp, 16", "add rsp, 16")
             } else { ("sub sp, sp, #16", "add sp, sp, #16") };
@@ -217,7 +217,13 @@ mod tests {
             assert_eq!(assembly.matches(save).count(), 2, "{target}: {assembly}");
             assert_eq!(assembly.matches(restore).count(), 2, "{target}: {assembly}");
             assert!(assembly.contains(splice), "{target}: keep the newer guard's predecessor link");
-            assert!(!assembly.contains("bl ") && !assembly.contains("call "), "{target}: no call clobbers");
+            assert!(
+                !assembly.lines().any(|line| {
+                    let line = line.trim_start();
+                    line.starts_with("bl ") || line.starts_with("call ")
+                }),
+                "{target}: no call clobbers"
+            );
         }
     }
 }

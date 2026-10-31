@@ -79,8 +79,6 @@ pub(crate) struct FinallyFrame {
     pub body: Vec<Stmt>,
     pub run_on_throw: bool,
     pub handler_cleanup: Option<(i64, Span)>,
-    /// Whether the protected body can transfer a pre-promotion failure to a same-function catch.
-    pub has_catches: bool,
     /// Loop-stack length when the frame was pushed, so the loops enclosing the protected region
     /// have indices `0..loop_depth` and the ones opened inside it start at `loop_depth`. A
     /// `break`/`continue` whose target loop INDEX is strictly below `loop_depth` leaves the
@@ -1826,7 +1824,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns true when `type_name` is `interface_name` or implements/extends it.
-    fn type_is_or_implements_interface(&self, type_name: &str, interface_name: &str) -> bool {
+    pub(crate) fn type_is_or_implements_interface(&self, type_name: &str, interface_name: &str) -> bool {
         let type_key = php_symbol_key(type_name);
         let interface_key = php_symbol_key(interface_name);
         if type_key == interface_key {
