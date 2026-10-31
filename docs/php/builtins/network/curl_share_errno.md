@@ -2,7 +2,7 @@
 title: "curl_share_errno()"
 description: "Returns the last share curl error number."
 sidebar:
-  order: 791
+  order: 792
 ---
 
 ## curl_share_errno()

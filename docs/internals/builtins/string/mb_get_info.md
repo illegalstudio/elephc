@@ -2,7 +2,7 @@
 title: "mb_get_info() - internals"
 description: "Compiler internals for mb_get_info(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 929
+  order: 930
 ---
 
 ## `mb_get_info()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_get_info.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_get_info.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

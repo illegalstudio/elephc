@@ -125,6 +125,12 @@ pub(crate) struct Checker {
     /// any statement check, which keeps class/constant/default-value checking on PHP's coercive
     /// rules — the behaviour elephc had before the directive was honoured.
     pub strict_types: bool,
+    /// Whether a direct call on one known concrete class may keep an undefined method and
+    /// lower it to PHP's runtime `Error` instead of failing compilation.
+    ///
+    /// Union/interface dispatch stays strict: every member must provide the method for the
+    /// closed-world vtable to be sound.
+    pub allow_undefined_method_calls: bool,
     /// Whether the checker is validating arguments synthesized by an internal callback site.
     /// These expressions describe engine-provided values, not caller-owned lvalues, so they
     /// must not publish reference aliases or boxed write-back metadata.

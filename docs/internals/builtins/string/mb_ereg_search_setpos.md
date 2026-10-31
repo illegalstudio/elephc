@@ -2,7 +2,7 @@
 title: "mb_ereg_search_setpos() - internals"
 description: "Compiler internals for mb_ereg_search_setpos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 926
+  order: 927
 ---
 
 ## `mb_ereg_search_setpos()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_ereg_search_setpos.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_ereg_search_setpos.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

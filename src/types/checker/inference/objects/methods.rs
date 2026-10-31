@@ -43,7 +43,14 @@ impl Checker {
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);
             }
-            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+            // A direct call on one concrete class may name a missing method: PHP raises
+            // `Error: Call to undefined method ...` only when that call executes, and EIR
+            // lowering emits exactly that runtime error.
+            let previous = self.allow_undefined_method_calls;
+            self.allow_undefined_method_calls = true;
+            let result = self.infer_method_call_on_class_type(class_name, method, args, expr, env);
+            self.allow_undefined_method_calls = previous;
+            let return_ty = result?;
             return Ok(self
                 .tracked_reflection_class_method_return_type(object, method)
                 .unwrap_or(return_ty));
@@ -605,6 +612,34 @@ impl Checker {
                 // It is resolved here, one round before its instantiation exists.
                 return Ok(return_ty);
             } else {
+                if self.allow_undefined_method_calls
+                    && !self.classes.get(class_name).is_some_and(|info| info.is_internal)
+                {
+                    let descendants = self.class_and_descendants(class_name);
+                    let method_override = descendants.iter().any(|descendant| {
+                        self.classes.get(descendant).is_some_and(|info| {
+                            info.methods.contains_key(&method_key)
+                        })
+                    });
+                    let descendant_call = descendants.iter().any(|descendant| {
+                        self.classes.get(descendant).is_some_and(|info| {
+                            info.methods.contains_key("__call")
+                        })
+                    });
+                    if method_override || descendant_call {
+                        // Lowering boxes the receiver and dispatches on its runtime class id.
+                        // A concrete descendant override is the candidate shape it emits; a
+                        // descendant `__call` is synthesized at the same boundary.
+                        return Ok(PhpType::Mixed);
+                    }
+                    // A non-final class can be extended by code the closed-world scan did not
+                    // see; PHP accepts the uncalled body and raises at run time if it executes.
+                    // A final class has no such extension point, so keep the compile-time
+                    // diagnostic that rejects unsupported final testing helpers.
+                    if self.classes.get(class_name).is_some_and(|info| !info.is_final) {
+                        return Ok(PhpType::Mixed);
+                    }
+                }
                 return Err(CompileError::new(
                     expr.span,
                     &format!("Undefined method: {}::{}", class_name, method),

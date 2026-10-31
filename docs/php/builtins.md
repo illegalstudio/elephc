@@ -761,6 +761,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pcntl_wtermsig()`](./builtins/misc/pcntl_wtermsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`php_sapi_name()`](./builtins/misc/php_sapi_name.md) | `(): string` | `string` | ✓ | - |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
+| [`phpinfo()`](./builtins/misc/phpinfo.md) | `(int $flags = 4294967295): bool` | `bool` | ✓ | ✓ |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |

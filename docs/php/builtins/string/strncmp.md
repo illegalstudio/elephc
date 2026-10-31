@@ -2,7 +2,7 @@
 title: "strncmp()"
 description: "Compares the first n bytes of two strings."
 sidebar:
-  order: 1002
+  order: 1003
 ---
 
 ## strncmp()

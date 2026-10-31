@@ -352,6 +352,10 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let pack_used = elephc::pack_prelude::program_uses_pack(&resolved);
+    let resolved = elephc::pack_prelude::inject_if_used(resolved, pack_used);
+    let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
@@ -775,6 +779,10 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::default();
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let pack_used = elephc::pack_prelude::program_uses_pack(&resolved);
+    let resolved = elephc::pack_prelude::inject_if_used(resolved, pack_used);
+    let locale_used = elephc::locale_prelude::program_uses_locale(&resolved);
+    let resolved = elephc::locale_prelude::inject_if_used(resolved, locale_used);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`

@@ -68,10 +68,11 @@ fn curl_exec_rejects_a_non_handle() {
     expect_curl_error(r#"<?php curl_exec("not a handle");"#, "curl_exec");
 }
 
-/// `curl_init()` accepts an optional URL string; passing an int is a type error.
+/// PHP's weak parameter binding converts a scalar into the nullable `?string` URL, so an
+/// array is the non-coercible value that stays a compile-time error.
 #[test]
 fn curl_init_rejects_a_non_string_url() {
-    expect_curl_error("<?php $ch = curl_init(42);", "curl_init");
+    expect_curl_error("<?php $ch = curl_init([]);", "curl_init");
 }
 
 /// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a

@@ -201,7 +201,10 @@ pub(super) fn register_eval_native_function(
             (&name_label, name_len), registered_index,
             source_constant_names.get(physical_index).and_then(Option::as_deref));
     }
-    if let Some(type_spec) = eval_native_callable_return_type_spec(&registration.signature) {
+    let return_type_spec = crate::fileinfo_prelude::abi::reflection_return_type(&registration.name)
+        .map(str::to_string)
+        .or_else(|| eval_native_callable_return_type_spec(&registration.signature));
+    if let Some(type_spec) = return_type_spec {
         register_eval_native_function_return_type(
             ctx,
             context_source,

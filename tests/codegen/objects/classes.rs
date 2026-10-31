@@ -1478,3 +1478,61 @@ echo $c->chained(), "\n";
         )
     );
 }
+
+/// A subclass override satisfies a method statically missing on the base class, and the
+/// runtime class id picks the correct implementation for each descendant.
+#[test]
+fn test_subclass_override_dispatches_from_base_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { $this->hook(); } }
+class Child extends Base { public function hook(): void { echo "child\n"; } }
+class Other extends Base { public function hook(): void { echo "other\n"; } }
+(new Child())->run();
+(new Other())->run();
+try { (new Base())->run(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "child\nother\nCall to undefined method Base::hook()\n"
+    );
+}
+
+/// A descendant `__call` receives the original method name and arguments for a method
+/// statically missing on the base class.
+#[test]
+fn test_descendant_call_dispatches_from_base_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { $this->hook(1, "x"); $this->named(a: 2, b: "y"); } }
+class Child extends Base {
+    public function __call(string $name, array $args): mixed {
+        if ($name === "named") {
+            echo $name, ":", $args["a"], $args["b"], "\n";
+        } else {
+            echo $name, ":", count($args), ":", $args[0], $args[1], "\n";
+        }
+        return null;
+    }
+}
+(new Child())->run();
+"#,
+    );
+    assert_eq!(out, "hook:2:1x\nnamed:2y\n");
+}
+
+/// A descendant `__call` does not intercept an inherited method that actually exists.
+#[test]
+fn test_inherited_method_ignores_descendant_call() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function run(): void { echo "run\n"; } }
+class Child extends Base {
+    public function __call(string $name, array $args): mixed { echo "call:", $name, "\n"; return null; }
+}
+(new Child())->run();
+"#,
+    );
+    assert_eq!(out, "run\n");
+}

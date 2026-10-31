@@ -135,7 +135,12 @@ pub(super) fn reflection_class_method_member(
     } else {
         info.late_static_method_returns.get(&method_key)
     };
-    let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    let type_metadata = reflection_method_return_metadata(
+        declaring_class_name.as_deref().unwrap_or(class_name),
+        &method_key,
+        sig,
+        late_static_return,
+    );
     let is_generator = reflection_method_is_generator(
         ctx,
         declaring_class_name.as_deref().unwrap_or(class_name),
@@ -246,7 +251,12 @@ pub(super) fn reflection_interface_method_member(
     } else {
         info.late_static_method_returns.get(&method_key)
     };
-    let type_metadata = reflection_method_return_type_metadata(sig, late_static_return);
+    let type_metadata = reflection_method_return_metadata(
+        &declaring_class_name,
+        &method_key,
+        sig,
+        late_static_return,
+    );
     let declared_name = reflection_declared_method_name(
         ctx,
         &[declaring_class_name.as_str(), interface_name],
@@ -319,6 +329,17 @@ pub(super) fn reflection_trait_method_members(
     Ok(members)
 }
 
+/// Returns the declared method return type, honoring a prelude literal `true` contract.
+fn reflection_method_return_metadata(
+    class_name: &str,
+    method_key: &str,
+    sig: &crate::types::FunctionSig,
+    late_static_return: Option<&crate::parser::ast::TypeExpr>,
+) -> Option<super::ReflectionParameterTypeMetadata> {
+    reflection_owner_return_type_metadata(&format!("{class_name}::{method_key}"))
+        .or_else(|| reflection_method_return_type_metadata(sig, late_static_return))
+}
+
 /// Builds one ReflectionMethod array entry from retained trait metadata.
 pub(super) fn reflection_trait_method_member(
     ctx: &FunctionContext<'_>,
@@ -339,7 +360,12 @@ pub(super) fn reflection_trait_method_member(
         false,
     );
     let required_parameter_count = reflection_required_parameter_count(&info.signature);
-    let type_metadata = reflection_return_type_metadata(&info.signature);
+    let type_metadata = reflection_method_return_metadata(
+        trait_name,
+        &method_key,
+        &info.signature,
+        None,
+    );
     let is_generator = reflection_method_is_generator(ctx, trait_name, &method_key);
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: info.declared_name.clone(),

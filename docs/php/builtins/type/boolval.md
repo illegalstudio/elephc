@@ -2,7 +2,7 @@
 title: "boolval()"
 description: "Returns the boolean value of a variable."
 sidebar:
-  order: 1024
+  order: 1025
 ---
 
 ## boolval()

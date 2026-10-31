@@ -2,7 +2,7 @@
 title: "html_entity_decode()"
 description: "Converts HTML entities in a string back into their corresponding characters."
 sidebar:
-  order: 883
+  order: 884
 ---
 
 ## html_entity_decode()

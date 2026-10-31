@@ -492,6 +492,9 @@ Using `finfo` or a fileinfo function automatically links the optional
 `elephc_fileinfo` bridge. Declare its native dependency with
 `elephc native add libmagic`. The pinned package supplies
 `libelephc_magic_database.a -> libmagic.a`, including its complete compiled magic
-database, without a system-library fallback. `--with-fileinfo` also injects and
-retains the PHP surface for opaque dynamic eval. All supported targets use the
-same extern ABI and native recipe.
+database, without a system-library fallback. The recipe adds the managed `pcre2`
+dependency and links `libelephc_pcre2_shim.a -> libpcre2-posix.a -> libpcre2-8.a`
+after libmagic, because magic regular expressions use PCRE2 exactly as PHP's
+bundled libmagic does. `--with-fileinfo` also injects and retains the PHP surface
+for opaque dynamic eval. All supported targets use the same extern ABI and native
+recipe.

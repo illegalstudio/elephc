@@ -465,3 +465,87 @@ pub(super) fn builtin_reflection_function_constructor_method() -> ClassMethod {
         attributes: Vec::new(),
     }
 }
+
+/// Returns `getTentativeReturnType()`, which exposes `__type` only for a tentative method.
+pub(super) fn builtin_reflection_tentative_type_getter() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let this = || Expr::new(ExprKind::This, dummy_span);
+    let property = |name: &str| Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(this()),
+            property: name.to_string(),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "getTentativeReturnType".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(property("__has_tentative_return_type")),
+                    then_expr: Box::new(property("__type")),
+                    else_expr: Box::new(null_expr().expect("null literal")),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns `getReturnType()`, which hides the tentative `__type` contract from callers.
+pub(super) fn builtin_reflection_declared_type_getter() -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let this = || Expr::new(ExprKind::This, dummy_span);
+    let property = |name: &str| Expr::new(
+        ExprKind::PropertyAccess {
+            object: Box::new(this()),
+            property: name.to_string(),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        type_params: Vec::new(),
+        name: "getReturnType".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(mixed_type()),
+        by_ref_return: false,
+        body: vec![Stmt::new(
+            StmtKind::Return(Some(Expr::new(
+                ExprKind::Ternary {
+                    condition: Box::new(property("__has_tentative_return_type")),
+                    then_expr: Box::new(null_expr().expect("null literal")),
+                    else_expr: Box::new(property("__type")),
+                },
+                dummy_span,
+            ))),
+            dummy_span,
+        )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}

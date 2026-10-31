@@ -2,7 +2,7 @@
 title: "mb_ereg_search_pos()"
 description: "Returns the next multibyte regex match byte offset and length, or false."
 sidebar:
-  order: 924
+  order: 925
 ---
 
 ## mb_ereg_search_pos()

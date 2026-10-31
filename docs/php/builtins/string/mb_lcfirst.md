@@ -2,7 +2,7 @@
 title: "mb_lcfirst()"
 description: "Converts the first character to Unicode lowercase."
 sidebar:
-  order: 934
+  order: 935
 ---
 
 ## mb_lcfirst()

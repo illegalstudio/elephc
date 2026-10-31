@@ -127,6 +127,7 @@ pub(crate) fn build_method_sig(
             }
         }
     }
+    crate::fileinfo_prelude::abi::widen_method_params(declaring_type, &method.name, &mut sig.params);
     Ok(sig)
 }
 

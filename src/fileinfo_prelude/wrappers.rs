@@ -71,6 +71,40 @@ fn filtered_url() -> Stmt {
 pub(super) fn read_method() -> MethodBuilder {
     let mut body = vec![super::streams::data_uri(), super::streams::file_uri(),
         super::streams::network_uri(), filtered_url()];
+    // PHP's `zip://archive#entry` is a read-only view over the same zip parser the
+    // `phar://` wrapper already reaches. Translate it, and preserve the directory
+    // entry's trailing slash so identification answers `directory`.
+    body.push(s_if(prefix("zip://"), vec![
+        s_assign("_zip_rest", e_call("substr", vec![e_var("filename"), e_int(6)])),
+        s_assign("_zip_split", e_call("strpos", vec![e_var("_zip_rest"), e_str("#")])),
+        s_if(eq(e_var("_zip_split"), e_bool(false)), super::streams::failure(e_str("Invalid zip URL specified")), vec![], None),
+        s_assign("_zip_archive", e_call("substr", vec![e_var("_zip_rest"), e_int(0), e_var("_zip_split")])),
+        s_assign("_zip_entry", e_call("substr", vec![e_var("_zip_rest"), e_binop(e_var("_zip_split"), BinOp::Add, e_int(1))])),
+        // Keep the entry inside the archive's member namespace.
+        s_if(e_binop(e_binop(eq(e_var("_zip_entry"), e_str("")), BinOp::Or,
+            e_call("str_contains", vec![e_var("_zip_entry"), e_str("..")])), BinOp::Or,
+            e_call("str_starts_with", vec![e_var("_zip_entry"), e_str("/")])),
+            super::streams::failure(e_str("Invalid zip entry")), vec![], None),
+        s_if(e_call("str_ends_with", vec![e_var("_zip_entry"), e_str("/")]), vec![
+            // Only claim a directory after the archive/entry actually opens. This keeps a
+            // hostile `../` or nonexistent entry from being classified as a directory.
+            s_assign("_zip_probe", e_call("fopen", vec![
+                e_binop(e_binop(e_str("phar://"), BinOp::Concat, e_var("_zip_archive")),
+                    BinOp::Concat, e_binop(e_str("/"), BinOp::Concat, e_var("_zip_entry"))),
+                e_str("rb"),
+            ])),
+            s_if(eq(e_var("_zip_probe"), e_bool(false)), super::streams::failure(e_str("operation failed")), vec![], None),
+            s_expr(e_call("fclose", vec![e_var("_zip_probe")])),
+            s_assign("_directory", e_bool(true)),
+            s_assign("_pending", e_int(-2)),
+            s_return(e_str("")),
+        ], vec![], None),
+        s_assign("filename", e_binop(
+            e_binop(e_str("phar://"), BinOp::Concat, e_var("_zip_archive")),
+            BinOp::Concat,
+            e_binop(e_str("/"), BinOp::Concat, e_var("_zip_entry")),
+        )),
+    ], vec![], None));
     for scheme in ["compress.zlib://", "compress.bzip2://"] {
         body.push(s_if(prefix(scheme), vec![
             // PHP opens the wrapper but cannot identify it when stream stat is unavailable.
@@ -94,7 +128,7 @@ pub(super) fn read_method() -> MethodBuilder {
         e_binop(eq(e_call("strtolower", vec![e_var("filename")]), e_str("php://temp")), BinOp::Or, prefix("php://temp/"))),
         vec![s_return(e_str(""))], vec![], None));
     body.push(s_if(prefix("php://"), vec![
-        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_var("_function"), BinOp::Concat, e_str("(): Invalid php:// URL specified"))])),
+        super::build::warning(e_binop(e_var("_function"), BinOp::Concat, e_str("(): Invalid php:// URL specified"))),
     ].into_iter().chain(super::streams::failure(e_str("operation failed"))).collect(), vec![], None));
     body.push(s_if(prefix("glob://"), super::streams::failure(e_str("wrapper does not support stream open")), vec![], None));
     body.push(s_if(e_not(e_method_call(e_this(), "__elephc_is_stream", vec![e_var("filename"), e_var("_function"), e_int(1)])), local_bytes(), vec![], None));
@@ -124,7 +158,7 @@ pub(super) fn routing_method() -> MethodBuilder {
             s_assign("_scheme_index", e_binop(e_var("_scheme_index"), BinOp::Add, e_int(1))),
         ]),
     ];
-    for scheme in ["data", "php", "http", "https", "ftp", "ftps", "compress.zlib", "compress.bzip2", "phar", "glob"] {
+    for scheme in ["data", "php", "http", "https", "ftp", "ftps", "compress.zlib", "compress.bzip2", "phar", "zip", "glob"] {
         body.push(s_if(eq(e_call("strtolower", vec![e_var("_scheme")]), e_str(scheme)), vec![s_return(e_bool(true))], vec![], None));
     }
     body.push(s_if(eq(e_call("elephc_runtime_stream_has_wrapper", vec![e_var("_scheme")]), e_int(1)), vec![s_return(e_bool(true))], vec![], None));
@@ -132,7 +166,7 @@ pub(super) fn routing_method() -> MethodBuilder {
         BinOp::Concat, e_call("substr", vec![e_var("_scheme"), e_int(0), e_int(31)])), BinOp::Concat, e_str("\" - did you forget to enable it when you configured PHP?"));
     body.push(s_assign("_lookup", e_int(0)));
     body.push(s_while(e_binop(e_var("_lookup"), BinOp::Lt, e_var("_lookups")), vec![
-        s_expr(e_call("__elephc_builtin_warning", vec![message])),
+        super::build::warning(message),
         s_assign("_lookup", e_binop(e_var("_lookup"), BinOp::Add, e_int(1))),
     ]));
     body.push(s_return(e_bool(false)));
@@ -168,10 +202,10 @@ pub(super) fn filter_method() -> MethodBuilder {
         s_expr(e_call("rewind", vec![e_var("_stream")]))];
     work.extend(attach);
     work.push(s_if(eq(e_var("_attached"), e_bool(false)), vec![
-        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat,
-            e_str("(): Unable to locate filter \"")), BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str("\"")))])),
-        s_expr(e_call("__elephc_builtin_warning", vec![e_binop(e_binop(e_var("_function"), BinOp::Concat,
-            e_str("(): Unable to create filter (")), BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str(")")))])),
+        super::build::warning(e_binop(e_binop(e_var("_function"), BinOp::Concat,
+            e_str("(): Unable to locate filter \"")), BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str("\"")))),
+        super::build::warning(e_binop(e_binop(e_var("_function"), BinOp::Concat,
+            e_str("(): Unable to create filter (")), BinOp::Concat, e_binop(e_var("name"), BinOp::Concat, e_str(")")))),
         // PHP warns about an unknown filter and leaves its input bytes unchanged.
         s_return(e_var("data")),
     ], vec![], None));

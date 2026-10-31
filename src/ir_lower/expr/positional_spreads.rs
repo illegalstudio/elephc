@@ -30,7 +30,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
         ))
         .flatten();
     let args = projected.as_deref().unwrap_or(args);
-    let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
+    let spread_idx = trailing_spread_arg_index(args)?;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     if spread_idx > regular_param_count {
         return None;
@@ -58,7 +58,13 @@ pub(super) fn lower_positional_spread_args_with_signature(
         }
     }
 
-    let spread_type = indexed_spread_source_type(ctx, inner)?;
+    let spread_type = match indexed_spread_source_type(ctx, inner) {
+        Some(ty) => ty,
+        // A boxed value at the variadic boundary is sliced by the runtime helper, which
+        // dispatches on the actual payload instead of assuming a raw array layout.
+        None if sig.variadic.is_some() && spread_idx >= regular_param_count => PhpType::Mixed,
+        None => return None,
+    };
     let spread = lower_expr(ctx, inner);
     let spread = root_evaluated_call_argument(ctx, spread, inner.span);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
@@ -308,6 +314,19 @@ pub(super) fn static_indexed_spread_len(expr: &Expr) -> Option<usize> {
         ExprKind::ArrayLiteral(items) if !items.iter().any(is_spread_arg) => Some(items.len()),
         _ => None,
     }
+}
+
+/// Returns the single trailing spread position without assuming its storage layout.
+fn trailing_spread_arg_index(args: &[Expr]) -> Option<usize> {
+    let spread_indices = args
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, arg)| matches!(arg.kind, ExprKind::Spread(_)).then_some(idx))
+        .collect::<Vec<_>>();
+    let [spread_idx] = spread_indices.as_slice() else {
+        return None;
+    };
+    (*spread_idx + 1 == args.len()).then_some(*spread_idx)
 }
 
 /// Returns the index of a single trailing positional spread that EIR can materialize.

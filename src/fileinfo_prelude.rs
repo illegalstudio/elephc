@@ -8,6 +8,7 @@
 //! - Synthetic declarations use the ordinary EIR, object and extern ABI paths on every target.
 //! - Opaque dynamic eval can opt in with --with-fileinfo.
 
+pub(crate) mod abi;
 mod build;
 mod detect;
 mod streams;

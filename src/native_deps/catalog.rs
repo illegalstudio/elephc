@@ -374,8 +374,8 @@ const LIBMAGIC_VERSIONS: &[PackageVersion] = &[PackageVersion {
         exact_size: 1_312_892,
         body_limit: 8 * 1024 * 1024,
     },
-    recipe_revision: 1,
-    dependencies: &[],
+    recipe_revision: 11,
+    dependencies: &["pcre2"],
     supported_targets: TARGETS,
     ordered_link_outputs: &["lib/libelephc_magic_database.a", "lib/libmagic.a"],
     retained_headers: &["include/magic.h"],
@@ -625,7 +625,7 @@ mod tests {
         assert_eq!(spec.source.sha256, "c9cc77c7c560c543135edc555af609d5619dbef011997e988ce40a3d75d86088");
         assert_eq!(spec.supported_targets, TARGETS);
         assert_eq!(spec.ordered_link_outputs, &["lib/libelephc_magic_database.a", "lib/libmagic.a"]);
-        assert!(spec.dependencies.is_empty());
+        assert_eq!(spec.dependencies, &["pcre2"]);
     }
 
     /// Verifies the official libxml2 source identity, the shim-first static archive contract, and

@@ -2,7 +2,7 @@
 title: "str_word_count()"
 description: "Counts the words in a string, or returns them as a list or byte-offset map."
 sidebar:
-  order: 994
+  order: 995
 ---
 
 ## str_word_count()

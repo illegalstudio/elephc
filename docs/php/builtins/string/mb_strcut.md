@@ -2,7 +2,7 @@
 title: "mb_strcut()"
 description: "Selects complete encoded characters within a byte offset and length."
 sidebar:
-  order: 949
+  order: 950
 ---
 
 ## mb_strcut()

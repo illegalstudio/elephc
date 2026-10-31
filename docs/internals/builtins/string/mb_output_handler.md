@@ -2,7 +2,7 @@
 title: "mb_output_handler() - internals"
 description: "Compiler internals for mb_output_handler(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 938
+  order: 939
 ---
 
 ## `mb_output_handler()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/mb_output_handler.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/mb_output_handler.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -581,6 +581,9 @@ impl Checker {
             };
             param_types.push((variadic_name.clone(), PhpType::Array(Box::new(elem_ty))));
         }
+        // The body must see the same boxed storage the callers pass. Reflection keeps the
+        // declaration from `param_type_exprs`; see `fileinfo_prelude::abi`.
+        crate::fileinfo_prelude::abi::widen_function_params(name, &mut param_types);
         Ok(param_types)
     }
 

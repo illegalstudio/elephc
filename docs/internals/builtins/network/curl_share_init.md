@@ -2,7 +2,7 @@
 title: "curl_share_init() - internals"
 description: "Compiler internals for curl_share_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 792
+  order: 793
 ---
 
 ## `curl_share_init()` - internals

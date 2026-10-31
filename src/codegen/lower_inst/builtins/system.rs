@@ -731,6 +731,25 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
+    if ctx.value_php_type(status)?.codegen_repr() == PhpType::Str {
+        // `exit("message")` prints the message and exits with status 0.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_string_value_to_regs(status, "x1", "x2")?;
+                ctx.emitter.instruction("mov x0, x1");                          // capture-aware write: message pointer → x0
+                ctx.emitter.instruction("mov x1, x2");                          // capture-aware write: message length → x1
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("mov x0, #0");                          // string statuses exit successfully
+            }
+            Arch::X86_64 => {
+                ctx.load_string_value_to_regs(status, "rdi", "rsi")?;
+                abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+                ctx.emitter.instruction("xor eax, eax");                        // string statuses exit successfully
+            }
+        }
+        emit_dynamic_exit(ctx);
+        return Ok(());
+    }
     require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())

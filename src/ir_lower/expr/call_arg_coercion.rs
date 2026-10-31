@@ -493,7 +493,8 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     // the strict path for the same reason.
     let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
         && !sig.ref_params.get(index).copied().unwrap_or(false);
-    let param_ty = param_ty.codegen_repr();
+    let declared_param_ty = param_ty.clone();
+    let param_ty = declared_param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
@@ -514,8 +515,8 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {
-        if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
-            return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
+        if let Some(casted) = apply_declared_scalar_cast(ctx, &declared_param_ty, value, Some(arg.span)) {
+            return casted;
         }
     }
     value
@@ -535,6 +536,28 @@ fn argument_static_type(
             (!matches!(ty.codegen_repr(), PhpType::Mixed)).then_some(ty)
         }
         _ => super::ref_place_args::static_place_type(ctx, arg),
+    }
+}
+
+/// Applies a declared-parameter scalar cast and restores the storage shape the callee expects.
+///
+/// A union parameter lowers to a boxed `Mixed` slot, so the casted scalar must be boxed again
+/// before it crosses the ABI boundary.
+fn apply_declared_scalar_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    declared: &PhpType,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> Option<LoweredValue> {
+    // Preserve the logical type: `False` and `Bool` share `codegen_repr`, but a `false`
+    // literal is already an exact member of a `string|false` union and must not be cast.
+    let source = ctx.builder.value_php_type(value.value);
+    let cast = crate::types::param_binding::scalar_param_cast(declared, &source)?;
+    let casted = apply_scalar_param_cast(ctx, cast, value, span);
+    if declared.codegen_repr() == PhpType::Mixed {
+        Some(coerce_value_for_temp(ctx, casted, &PhpType::Mixed, span.unwrap_or_else(crate::span::Span::dummy)))
+    } else {
+        Some(casted)
     }
 }
 
@@ -772,8 +795,10 @@ fn apply_scalar_param_cast(
     match cast {
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
-        // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
+        CastType::Int => coerce_to_int_at_span(ctx, value, span),
+        CastType::Float => coerce_to_float_at_span(ctx, value, span),
+        // Array/object casts are never reported by the parameter-binding classifier.
+        CastType::Array | CastType::Object => value,
     }
 }
 
@@ -815,7 +840,8 @@ pub(super) fn coerce_operands_to_params(
         };
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
-        let param_ty = param_ty.codegen_repr();
+        let declared_param_ty = param_ty.clone();
+        let param_ty = declared_param_ty.codegen_repr();
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
@@ -859,14 +885,11 @@ pub(super) fn coerce_operands_to_params(
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
             // and only reordered afterwards.
-            if let Some(cast) =
-                crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty)
-            {
-                let lowered = LoweredValue {
-                    value,
-                    ir_type: ctx.builder.value_type(value),
-                };
-                let coerced = apply_scalar_param_cast(ctx, cast, lowered, None);
+            let lowered = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            if let Some(coerced) = apply_declared_scalar_cast(ctx, &declared_param_ty, lowered, None) {
                 operands[index] =
                     root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
             }
@@ -900,7 +923,11 @@ fn operand_needs_param_coercion(
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (sig.declared_params.get(index).copied().unwrap_or(false)
-            && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
+            && crate::types::param_binding::scalar_param_cast(
+                sig.params.get(index).map(|(_, ty)| ty).unwrap_or(&param_ty),
+                &operand_ty,
+            )
+            .is_some())
 }
 
 /// Normalizes concrete local arrays to the storage required by their by-reference parameter.

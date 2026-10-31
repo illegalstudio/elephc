@@ -1025,8 +1025,9 @@ The variables in this table are read by the **compiler**. A separate family,
 
 `--with-fileinfo` force-links the optional fileinfo bridge and retains its PHP
 functions and `finfo` class for dynamic eval. Declare the managed `libmagic`
-package first with `elephc native add libmagic`. Its compiled database is embedded
-in the resulting program.
+package first with `elephc native add libmagic`; the package also installs the
+managed `pcre2` dependency used for magic regular expressions. Its compiled
+database is embedded in the resulting program.
 
 ## PHP extension SDK selection
 

@@ -100,7 +100,7 @@ mod tests {
     /// BUMPED TO 21: both branches' deferred-default expressions and retained readonly
     /// setter contracts now share generic declarations and caller-scope access masks.
     /// BUMPED TO 22: retained token streams distinguish reserved qualified-name segments.
-    const RECORDED_FINGERPRINT: u64 = 11016239859085291084;
+    const RECORDED_FINGERPRINT: u64 = 10360967529234743599;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

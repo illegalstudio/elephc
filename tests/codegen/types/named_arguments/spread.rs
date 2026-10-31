@@ -572,3 +572,19 @@ try {
     );
     assert_eq!(out, "1:2|r1:2|Error|ArgumentCountError");
 }
+
+/// A boxed array element spread into a variadic tail is sliced by the runtime helper instead
+/// of being passed as the collector's raw array payload.
+#[test]
+fn test_variadic_spread_from_boxed_array_element() {
+    let out = compile_and_run(
+        r#"<?php
+function f(string $fmt, ...$values) { echo $fmt, ":"; foreach ($values as $v) { echo $v, ","; } echo "\n"; }
+$case = ["C2X", [1, 2]];
+$args = $case[1];
+f($case[0], ...$args);
+f("x", ...$case[1]);
+"#,
+    );
+    assert_eq!(out, "C2X:1,2,\nx:1,2,\n");
+}

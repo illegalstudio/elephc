@@ -95,7 +95,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Older token variant indexes must not be decoded as this layout.
 /// BUMPED TO 23 because `EvalExpr` gained the assignment-expression variant; older
 /// variant indexes must not be decoded as this layout.
-pub(crate) const FORMAT_VERSION: u32 = 23;
+pub(crate) const FORMAT_VERSION: u32 = 24;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

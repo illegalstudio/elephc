@@ -2,7 +2,7 @@
 title: "__elephc_curl_option_kind() - internals"
 description: "Compiler internals for __elephc_curl_option_kind(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1202
+  order: 1203
 ---
 
 ## `__elephc_curl_option_kind()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/curl/__elephc_curl_option_kind.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/curl/__elephc_curl_option_kind.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:719](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L719) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

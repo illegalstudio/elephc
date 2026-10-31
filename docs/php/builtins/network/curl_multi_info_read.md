@@ -2,7 +2,7 @@
 title: "curl_multi_info_read()"
 description: "Gets information about the current transfers."
 sidebar:
-  order: 780
+  order: 781
 ---
 
 ## curl_multi_info_read()
