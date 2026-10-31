@@ -294,8 +294,23 @@ pub(super) fn store_compiled_call_result(
     by_ref_return: bool,
 ) -> Result<()> {
     if by_ref_return {
-        // EIR retains the PHP payload type here, then AdoptRefCellPtr consumes this raw word.
-        if let Some(result) = inst.result { ctx.store_int_result_value(result)?; }
+        if let Some(result) = inst.result {
+            if ctx.call_result_transfers_reference(result) {
+                // EIR retains the PHP payload type here, then AdoptRefCellPtr consumes this word.
+                ctx.store_int_result_value(result)?;
+            } else {
+                // Erased dispatch can discover a reference-returning implementation only now.
+                // Its caller requested a value, so retire the cell after acquiring a snapshot.
+                let result_ty = ctx.value_php_type(result)?;
+                super::reference_return_dispatch::emit_value_snapshot(ctx, return_ty, &result_ty)?;
+                ctx.store_result_value(result)?;
+            }
+        } else {
+            crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(
+                ctx.emitter, return_ty,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
         return Ok(());
     }
     let Some(result) = inst.result else { return Ok(()); };

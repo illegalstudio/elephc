@@ -10,6 +10,7 @@
 //!   later passes can assume table IDs, branch args, and value types are sound.
 
 mod string_append;
+mod reference_results;
 
 use std::collections::{HashMap, HashSet};
 
@@ -96,6 +97,7 @@ pub enum ValidationError {
     },
     NeverFunctionReturns,
     InvalidReferenceOwner { local: LocalSlotId, owner: LocalSlotId },
+    InvalidReferenceCallResult { inst: InstId, operand: ValueId },
 }
 
 /// Validates every function stored in a module.
@@ -133,6 +135,7 @@ pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
     string_append::validate_transfers(function)?;
+    reference_results::validate_transfers(function)?;
     Ok(())
 }
 

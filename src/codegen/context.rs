@@ -66,6 +66,8 @@ pub(crate) struct FunctionContext<'a> {
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     callable_reachability: CallableReachabilityAnalysis,
+    /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
+    raw_reference_call_results: HashSet<ValueId>,
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
@@ -192,6 +194,9 @@ impl<'a> FunctionContext<'a> {
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
+            raw_reference_call_results: function.instructions.iter()
+                .filter(|inst| inst.op == Op::AdoptRefCellPtr)
+                .filter_map(|inst| inst.operands.first().copied()).collect(),
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
@@ -1489,6 +1494,11 @@ impl<'a> FunctionContext<'a> {
             &payload_ty,
             previous,
         )
+    }
+
+    /// Returns whether lowering explicitly adopts this call's transferred cell before using it.
+    pub(super) fn call_result_transfers_reference(&self, result: ValueId) -> bool {
+        self.raw_reference_call_results.contains(&result)
     }
 
     /// Returns the payload shape of a cell pointer stored in this local slot.

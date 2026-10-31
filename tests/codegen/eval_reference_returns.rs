@@ -9,6 +9,45 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// An arity-selected reference method returns an independent value to an erased receiver call.
+#[test]
+fn test_erased_reference_method_candidates_copy_payloads_before_cell_retirement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ErasedReferenceCandidate {
+    public string $text = 'before';
+    public array $items = [1, 2];
+    public int $number = 7;
+    public stdClass $object;
+    public function __construct() { $this->object = new stdClass(); $this->object->label = 'before'; }
+    public function &readText(): string { return $this->text; }
+    public function &readItems(): array { return $this->items; }
+    public function &readNumber(): int { return $this->number; }
+    public function &readObject(): stdClass { return $this->object; }
+    public function change(): void {
+        $this->text = 'after'; $this->items = [9]; $this->number = 8; $this->object->label = 'after';
+    }
+}
+class ErasedReferenceOtherArity {
+    public function readText(int $unused): mixed { return null; }
+    public function readItems(int $unused): mixed { return null; }
+    public function readNumber(int $unused): mixed { return null; }
+    public function readObject(int $unused): mixed { return null; }
+}
+function snapshotErasedReferenceCandidate(mixed $holder): void {
+    $text = $holder->readText(); $items = $holder->readItems();
+    $number = $holder->readNumber(); $object = $holder->readObject();
+    $holder->change();
+    echo $text, ':', $holder->text, ':', json_encode($items), ':', json_encode($holder->items),
+        ':', $number, ':', $holder->number, ':', $object->label;
+    unset($holder, $text, $items, $number, $object);
+}
+$holder = new ErasedReferenceCandidate(); snapshotErasedReferenceCandidate($holder); unset($holder);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "before:after:[1,2]:[9]:7:8:after");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Native method bridges update typed aliases even when they rewrite the imported box in place.
 #[test]
 fn test_eval_native_method_reference_writeback_dirties_typed_snapshots() {

@@ -23,11 +23,14 @@ class ReferenceOverrideChild extends ReferenceOverrideParent {
     public static function &staticItems(): mixed { $value = self::$staticData; return $value; }
 }
 class ReferenceOverrideStable { public function plain(): mixed { return [3]; } }
+class ReferenceOverrideOtherArity { public function items(int $unused): mixed { return []; } }
 function readReferenceOverride(ReferenceOverrideParent $value): mixed { return $value->items(); }
 function readReferenceStable(ReferenceOverrideStable $value): mixed { return $value->plain(); }
+function readErasedReferenceOverride(mixed $value): mixed { return $value->items(); }
 echo json_encode(readReferenceOverride(new ReferenceOverrideChild()));
 echo json_encode(ReferenceOverrideChild::forwarded());
 echo json_encode(readReferenceStable(new ReferenceOverrideStable()));
+echo json_encode(readErasedReferenceOverride(new ReferenceOverrideChild()));
 "#;
     let module = super::lower_source_at_for_target(
         source, std::path::Path::new("main.php"), std::path::Path::new("."),
@@ -53,6 +56,14 @@ echo json_encode(readReferenceStable(new ReferenceOverrideStable()));
     let body = assembly.split_once(&format!("{stable}:\n")).unwrap().1;
     let body = body.split("\n.globl ").next().unwrap();
     assert!(!body.contains("reference_override_value"), "{target}: unaffected families gain no branch");
+    let erased = module.functions.iter().find(|function| function.name == "readErasedReferenceOverride").unwrap();
+    assert!(!erased.instructions.iter().any(|inst| inst.op == crate::ir::Op::AdoptRefCellPtr),
+        "{target}: the erased caller requests a value");
+    let symbol = crate::names::function_symbol("readErasedReferenceOverride");
+    let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+    let body = body.split("\n.globl ").next().unwrap();
+    assert_eq!(body.matches("__rt_mixed_clone").count(), 2,
+        "{target}: both the inherited override and the direct reference candidate need value copies");
 }
 
 /// Schedules one target separately to preserve the ordinary unit-test timeout.

@@ -91,7 +91,7 @@ pub(super) fn emit_call(
 }
 
 /// Converts a returned reference cell into the owned representation promised to its caller.
-fn emit_value_snapshot(
+pub(super) fn emit_value_snapshot(
     ctx: &mut FunctionContext<'_>, physical_ty: &PhpType, caller_ty: &PhpType,
 ) -> Result<()> {
     crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(

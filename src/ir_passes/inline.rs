@@ -322,7 +322,7 @@ fn callee_contains_a_loop(callee: &Function) -> bool {
 /// `receiver` is true for a statically bound method body, whose `$this` parameter is the
 /// one object `callee_is_inline_safe` accepts.
 fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: bool) -> bool {
-    if callee.flags.is_generator || callee.flags.is_fiber_wrapper {
+    if callee.flags.is_generator || callee.flags.is_fiber_wrapper || callee.flags.by_ref_return {
         return false;
     }
     // A by-value container parameter is privatized on entry into an owning shadow slot
