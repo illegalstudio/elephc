@@ -14,7 +14,7 @@
 //!   read-modify-write sequences, the array-property shapes elephc-PHP compiles today.
 
 use crate::parser::ast::{BinOp, CastType, Stmt, TypeExpr};
-use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_index, e_int, e_method_call, e_new, e_new_self, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_self_static_prop, e_static_call, e_str, e_ternary, e_this, e_this_prop, e_var, function, method, s_array_assign, s_array_push, s_assign, s_break, s_expr, s_for, s_foreach, s_if, s_prop_array_assign, s_prop_assign, s_return, s_return_void, s_self_static_prop_assign, s_throw, s_try, s_while, t_array, t_class, t_mixed, t_nullable};
+use crate::synthetic_class::{class, e_array, e_array_assoc, e_binop, e_bool, e_call, e_cast, e_index, e_int, e_method_call, e_new, e_new_self, e_not, e_null, e_null_coalesce, e_post_inc, e_prop, e_self_static_prop, e_static_call, e_str, e_ternary, e_this, e_this_prop, e_var, function, method, s_array_assign, s_array_push, s_assign, s_expr, s_for, s_foreach, s_if, s_prop_array_assign, s_prop_assign, s_return, s_return_void, s_self_static_prop_assign, s_throw, s_try, s_while, t_array, t_class, t_mixed, t_nullable};
 
 /// `XMLParser` — transcribed from the PHP form.
 pub(super) fn decl_class_xmlparser() -> Stmt {
