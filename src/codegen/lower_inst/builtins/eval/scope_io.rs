@@ -319,11 +319,11 @@ pub(super) fn emit_branch_if_scope_entry_clean(ctx: &mut FunctionContext<'_>, la
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_DIRTY}")); // test whether eval actually changed this synchronized binding
-            ctx.emitter.instruction(&format!("b.eq {label}")); // preserve a native alias whose scope entry remains a snapshot
+            ctx.emitter.instruction(&format!("b.eq {label}"));                  // preserve a native alias whose scope entry remains a snapshot
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_DIRTY}")); // test whether eval actually changed this synchronized binding
-            ctx.emitter.instruction(&format!("je {label}")); // preserve a native alias whose scope entry remains a snapshot
+            ctx.emitter.instruction(&format!("je {label}"));                    // preserve a native alias whose scope entry remains a snapshot
         }
     }
 }

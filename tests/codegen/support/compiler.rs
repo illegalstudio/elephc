@@ -958,6 +958,16 @@ fn compile_and_capture_per_argv(
 
 /// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
 pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramOutput, String) {
+    compile_heap_debug_with_asm(source, 8_388_608)
+}
+
+/// Runs a stress fixture with its required live heap while retaining all heap-debug checks.
+pub(crate) fn compile_and_run_with_heap_debug_sized(source: &str, heap_size: usize) -> ProgramOutput {
+    compile_heap_debug_with_asm(source, heap_size).0
+}
+
+/// Shares compilation, exact assembly capture and failure diagnostics across debug heap budgets.
+fn compile_heap_debug_with_asm(source: &str, heap_size: usize) -> (ProgramOutput, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -965,7 +975,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
     fs::create_dir_all(&dir).unwrap();
 
     let (user_asm, runtime_asm, required_libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
