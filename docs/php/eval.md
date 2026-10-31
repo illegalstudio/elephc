@@ -1260,8 +1260,8 @@ updates, but eval `fclose()` still closes only eval-managed streams. Native loca
 synchronized into eval remain retained until the next synchronization or context
 release, which can delay last-owner resource retirement.
 
-Materializing an eval scope refuses a visible native reference with unboxed indexed-array
-elements, such as an alias of an `array<int>` property or parameter. Normalizing those elements
+Materializing an eval scope refuses a visible native reference with unboxed indexed-array or associative-array
+values, such as an alias of an `array<int>` or `array<string, int>` property or parameter. Normalizing those values
 would invalidate the native layout shared by other aliases, so compilation reports
 `Unsupported eval: native reference $name has unboxed array elements`. Already boxed whole-local
 array aliases remain supported. For a literal fragment using scope helpers, the check applies

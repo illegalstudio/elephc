@@ -33,11 +33,12 @@ pub(super) fn refuse_unboxed_array_aliases(
     }
 }
 
-/// Finds an indexed-array representation whose slots are narrower than boxed Mixed elements.
+/// Finds indexed or associative storage whose values have a native layout eval may normalize.
 fn contains_unboxed_array(ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(element) => element.codegen_repr() != PhpType::Mixed,
-        PhpType::AssocArray { value, .. } => contains_unboxed_array(value),
+        PhpType::AssocArray { value, .. } => value.codegen_repr() != PhpType::Mixed
+            || contains_unboxed_array(value),
         PhpType::Union(members) => members.iter().any(contains_unboxed_array),
         _ => false,
     }

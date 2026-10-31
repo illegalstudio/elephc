@@ -1,5 +1,5 @@
 //! Purpose:
-//! Refuses opaque eval normalization of typed indexed-array aliases still shared with native code.
+//! Refuses opaque eval normalization of typed container aliases still shared with native code.
 //!
 //! Called from:
 //! - EIR regression CI for all supported targets.
@@ -15,6 +15,26 @@ use std::path::Path;
 #[test]
 fn opaque_eval_refuses_native_typed_indexed_aliases_on_every_target() {
     let cases = [
+        ("hash_parameter", r#"<?php
+function nativeHashParameter(array<string, int> &$items, string $source): void { eval($source); }
+$items = ["value" => 1]; nativeHashParameter($items, $argc > 0 ? '$items["value"] = 2;' : '');
+"#),
+        ("hash_capture", r#"<?php
+function nativeHashCapture(array<string, int> &$items, string $source): void {
+    $callback = function() use (&$items, $source): void { eval($source); }; $callback();
+}
+$items = ["value" => 1]; nativeHashCapture($items, $argc > 0 ? '$items["value"] = 2;' : '');
+"#),
+        ("hash_property", r#"<?php
+class NativeHashProperty { public array<string, int> $items = ["value" => 1]; }
+$holder = new NativeHashProperty(); $items =& $holder->items;
+$source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
+"#),
+        ("hash_static", r#"<?php
+class NativeHashStaticProperty { public static array<string, int> $items = ["value" => 1]; }
+$items =& NativeHashStaticProperty::$items;
+$source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
+"#),
         ("parameter", r#"<?php
 function nativeArrayParameter(array<int> &$items, string $source): void { eval($source); }
 $items = [1]; nativeArrayParameter($items, $argc > 0 ? '$items[0] = 2;' : '');
@@ -68,10 +88,19 @@ fn eval_keeps_boxed_array_aliases_and_name_precise_native_scopes_on_every_target
 function namedLiteralNativeArray(array<int> &$items): void {
     $other = 1; eval('$other = 3;'); echo $other, $items[0];
 }
+function namedLiteralNativeHash(array<string, int> &$items): void {
+    $other = 1; eval('$other = 3;'); echo $other, $items['value'];
+}
+function nativeBoxedHash(array<string, mixed> &$items, string $source): void {
+    eval($source); echo $items['value'];
+}
 function boxedLocalEvalArray(string $source): void {
     $items = [1, 2]; $alias =& $items; eval($source); echo $alias[0];
 }
 $items = [1]; namedLiteralNativeArray($items);
+$hash = ['value' => 1]; namedLiteralNativeHash($hash);
+$boxed = ['value' => json_decode($argc > 0 ? '1' : '2')];
+nativeBoxedHash($boxed, $argc > 0 ? '$items["value"] = 4;' : '');
 boxedLocalEvalArray($argc > 0 ? '$items[0] = 4;' : '');
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
