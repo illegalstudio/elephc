@@ -261,3 +261,14 @@ with the matching installed PHP 8.5.12 SDK. Clang accepts extension assembly for
 ELF x86_64, ELF aarch64 and Mach-O arm64. Real ARM64-host execution and the
 Valgrind/Apple-leaks matrix remain for the existing SDK CI matrix. No full local
 Rust suite is run. No new PR, push or external review is requested for this phase.
+
+## CPU comparison example
+
+The exported class also exposes countPrimes(int): int, a trial-division CPU workload.
+The driver accepts an integer limit (default 2000000), labels the execution mode,
+and reports the count plus hrtime-based seconds around one complete method call.
+Both paths share the exact source algorithm. Reference sieve checks cover ten
+small/edge inputs and independently confirm 148933 primes at the default limit.
+Five alternating real-PHP measurements per mode show the current Linux x86_64
+native module slower on this workload; no performance improvement is claimed.
+Measurements and the boxed-numeric follow-up are recorded in Code Journal.

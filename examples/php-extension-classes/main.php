@@ -33,4 +33,26 @@ final class Pippo
     {
         return $value * 2;
     }
+
+    // Trial division provides a CPU workload without I/O or array construction.
+    public static function countPrimes(int $limit): int
+    {
+        if ($limit < 2) {
+            return 0;
+        }
+        $count = 1;
+        for ($candidate = 3; $candidate <= $limit; $candidate += 2) {
+            $prime = true;
+            for ($divisor = 3; $divisor * $divisor <= $candidate; $divisor += 2) {
+                if ($candidate % $divisor === 0) {
+                    $prime = false;
+                    break;
+                }
+            }
+            if ($prime) {
+                $count++;
+            }
+        }
+        return $count;
+    }
 }
