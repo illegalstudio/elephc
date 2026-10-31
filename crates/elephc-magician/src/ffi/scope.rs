@@ -13,7 +13,7 @@
 use super::util::{
     abi_name_to_string, release_owned_scope_cells, release_scope_cell, scope_entry_abi_flags,
 };
-use crate::abi::{ElephcEvalScope, SCOPE_FLAG_OWNED};
+use crate::abi::{ElephcEvalScope, SCOPE_FLAG_NATIVE_SNAPSHOT, SCOPE_FLAG_OWNED};
 use crate::errors::EvalStatus;
 use crate::scope::ScopeCellOwnership;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
@@ -68,9 +68,9 @@ pub unsafe extern "C" fn __elephc_eval_scope_set(
     } else {
         ScopeCellOwnership::Borrowed
     };
-    if let Some(replaced) =
-        scope.set_from_aot(name, RuntimeCellHandle::from_raw(cell), ownership)
-    {
+    let replaced = scope.set_from_aot(name.clone(), RuntimeCellHandle::from_raw(cell), ownership);
+    if flags & SCOPE_FLAG_NATIVE_SNAPSHOT != 0 { scope.mark_name_clean(&name); }
+    if let Some(replaced) = replaced {
         if let Some(thrown) = release_scope_cell(replaced) {
             *throwable = thrown.as_ptr();
             return EvalStatus::UncaughtThrowable.code();

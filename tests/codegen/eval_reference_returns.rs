@@ -9,7 +9,7 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
-/// A conservative eval mask preserves raw locals and unaccessed live native aliases independently.
+/// Actual scope writes preserve raw locals and native aliases even with a full or colliding mask.
 #[test]
 fn test_eval_unaccessed_native_reference_aliases_keep_conditional_bindings() {
     let out = compile_and_run_with_heap_debug(r#"<?php
@@ -22,17 +22,24 @@ function exerciseConditionalNativeAlias(bool $bind, bool $run): void {
     $value = 'raw';
     if ($bind) { $value =& $box->valueRef(); }
     $source = $run ? '$box->value = "updated";' : '';
+    $K = 0;
     eval($source);
     echo $value, ':', $box->value, '|';
     eval($source);
     echo $value, ':', $box->value, '|';
-    unset($value, $box, $source);
+    $source = $run ? '$K++;' : '';
+    eval($source);
+    echo $value, ':', $box->value, ':', $K, '|';
+    $source = $run ? '$value = "by-name";' : '';
+    eval($source);
+    echo $value, ':', $box->value, '|';
+    unset($value, $box, $source, $K);
 }
 exerciseConditionalNativeAlias(false, $argc > 0);
 exerciseConditionalNativeAlias(true, $argc > 0);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "raw:updated|raw:updated|updated:updated|updated:updated|");
+    assert_eq!(out.stdout, "raw:updated|raw:updated|raw:updated:1|by-name:updated|updated:updated|updated:updated|updated:updated:1|by-name:by-name|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
@@ -67,10 +74,13 @@ unset($copy, $error);
 ' : '';
 eval($source);
 echo json_encode($value), ':', $text, ':', $number, ':', $weight, ':', $maybe;
+$source = $argc > 0 ? '$text = "alias"; $number = 8; $weight = 3.5; $maybe = 4;' : '';
+eval($source);
+echo '|', $box->text, ':', $box->number, ':', $box->weight, ':', $box->maybe;
 unset($box, $value, $text, $number, $weight, $maybe, $source);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "[1,2]:[9,2]|new:7:2.5:3|Unsupported unset(): by-reference property|[1,2]:new:7:2.5:3");
+    assert_eq!(out.stdout, "[1,2]:[9,2]|new:7:2.5:3|Unsupported unset(): by-reference property|[1,2]:new:7:2.5:3|alias:8:3.5:4");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

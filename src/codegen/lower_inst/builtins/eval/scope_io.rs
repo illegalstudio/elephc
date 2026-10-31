@@ -153,11 +153,14 @@ fn reload_eval_scope_locals_with_mask(
             (offset, unaccessed)
         });
         if let Some((offset, unaccessed)) = &unaccessed {
-            emit_branch_if_eval_local_unaccessed(ctx, local, *offset, unaccessed)?;
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, unaccessed);
         }
         emit_eval_scope_get(ctx, local);
         let missing = ctx.next_label("eval_scope_reload_missing");
         let done = ctx.next_label("eval_scope_reload_done");
+        if access_mask_offset.is_some() {
+            emit_branch_if_scope_entry_clean(ctx, &done);
+        }
         emit_branch_if_scope_entry_missing(ctx, &missing);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 0);
@@ -307,6 +310,22 @@ pub(super) fn emit_eval_global_scope_get(ctx: &mut FunctionContext<'_>, global: 
 /// Branches to `label` when the latest scope-get flags do not mark a visible value.
 pub(super) fn emit_branch_if_scope_entry_missing(ctx: &mut FunctionContext<'_>, label: &str) {
     emit_branch_if_scope_entry_missing_at(ctx, 8, label);
+}
+
+/// Skips an unchanged native snapshot even when a conservative access mask selects its name.
+pub(super) fn emit_branch_if_scope_entry_clean(ctx: &mut FunctionContext<'_>, label: &str) {
+    let flags = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, flags, 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_DIRTY}")); // test whether eval actually changed this synchronized binding
+            ctx.emitter.instruction(&format!("b.eq {label}")); // preserve a native alias whose scope entry remains a snapshot
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_DIRTY}")); // test whether eval actually changed this synchronized binding
+            ctx.emitter.instruction(&format!("je {label}")); // preserve a native alias whose scope entry remains a snapshot
+        }
+    }
 }
 
 /// Branches to `label` when the scope-get flags at `flags_offset` do not mark a visible value.

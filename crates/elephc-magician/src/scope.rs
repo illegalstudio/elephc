@@ -493,6 +493,11 @@ impl ElephcEvalScope {
             .collect()
     }
 
+    /// Marks one imported native snapshot clean without changing other pending writes.
+    pub fn mark_name_clean(&mut self, name: &str) {
+        if let Some(entry) = self.entries.get_mut(name) { entry.mark_clean(); }
+    }
+
     /// Clears dirty flags after native code reloads or invalidates affected locals.
     pub fn mark_all_clean(&mut self) {
         for entry in self.entries.values_mut() {

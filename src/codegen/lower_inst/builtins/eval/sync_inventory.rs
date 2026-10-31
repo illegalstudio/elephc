@@ -269,7 +269,7 @@ fn flush_eval_scope_locals_with_mask(
             (offset, skip)
         });
         if let Some((offset, skip)) = &skip {
-            emit_branch_if_eval_local_unaccessed(ctx, local, *offset, skip)?;
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
         }
         let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -280,7 +280,7 @@ fn flush_eval_scope_locals_with_mask(
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED);
+        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);
         if let Some((_, skip)) = skip {
             ctx.emitter.label(&skip);
         }

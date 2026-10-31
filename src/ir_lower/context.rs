@@ -1880,7 +1880,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             })
             .collect::<Vec<_>>();
         for (name, slot) in local_names {
-            if eval_barrier_can_widen(&self.builder.local_php_type(slot)) {
+            if !self.is_ref_bound_local(&name)
+                && eval_barrier_can_widen(&self.builder.local_php_type(slot))
+            {
                 self.set_local_type(&name, PhpType::Mixed);
             }
         }
@@ -1892,6 +1894,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .unwrap_or(LocalKind::PhpLocal);
             if kind == LocalKind::PhpLocal
                 && !crate::names::is_generated_local_name(&name)
+                && !self.is_ref_bound_local(&name)
                 && eval_barrier_can_widen(&ty)
             {
                 self.local_types.insert(name, PhpType::Mixed);
@@ -1960,6 +1963,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .iter()
             .filter(|name| {
                 self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                    && !self.is_ref_bound_local(name)
                     && self
                         .local_slots
                         .get(*name)

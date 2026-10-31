@@ -11,6 +11,15 @@ sidebar:
 `src/codegen_support/runtime/eval_scope.rs`, and
 `crates/elephc-magician/`.
 
+Dynamic eval scope flushes mark imported native snapshots clean with the private
+scope-set flag `SCOPE_FLAG_NATIVE_SNAPSHOT`. Interpreter assignments, in-place
+reference writes and unset markers carry the existing dirty bit. Dynamic local
+reload skips clean snapshots even when the conservative access mask selects every
+name or two names share a mask bit. This prevents a stale snapshot from replacing a
+property changed through another native alias. AOT eval scope writes remain dirty;
+literal scope reload keeps its existing path. Eval barriers preserve the payload
+types of already-bound native references rather than widening shared cells to Mixed.
+
 Constructorless native allocation probes dynamic classes through the private
 `__elephc_eval_try_allocate_object_v1` ABI when Magician is linked. Prelude
 factories with no eval local borrow the context of the active interpreter-to-native

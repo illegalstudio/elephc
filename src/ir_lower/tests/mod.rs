@@ -59,6 +59,7 @@ mod enum_review;
 mod enum_result_owners;
 mod string_append;
 mod eval_ownership;
+mod eval_native_reference_layout;
 mod eval_default_helpers;
 mod default_review_boundaries;
 mod exhaustive;
