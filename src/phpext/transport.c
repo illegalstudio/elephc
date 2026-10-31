@@ -4,6 +4,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef ELEPHC_PHPEXT_OBJECTS
+/* Function-only modules have no native wrapper owners to exclude or publish. */
+uintptr_t elephc_php_native_wrapper_owner(const void *object)
+{
+    (void)object;
+    return 0;
+}
+
+bool elephc_php_native_object_is_mirrored(const void *object)
+{
+    (void)object;
+    return false;
+}
+
+void elephc_php_native_object_root(const void *object, bool rooted)
+{
+    (void)object;
+    (void)rooted;
+}
+#endif
+
 #define EP_HOST_PREDECESSOR_LIMIT 64
 
 typedef struct ep_allocation {
@@ -97,6 +118,17 @@ typedef struct ep_call {
     char *parked_warning_buffer;
     zval pending_exception;
     const HashTable *ancestors[64];
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_allocation *object_allocations;
+    size_t object_transport_bytes;
+    bool object_transport;
+    bool object_raw;
+    bool objects_published;
+    uint64_t object_identity;
+    zend_object *object_target;
+    ep_object_lease *object_new_leases;
+    ep_object_change *object_changes;
+#endif
 } ep_call;
 
 /* Set once at MINIT, before requests can allocate transport or native snapshots. */
@@ -119,8 +151,17 @@ static void *ep_alloc(ep_call *call, size_t size)
         call->error = "PHP extension transport allocation failed";
         return NULL;
     }
-    allocation->next = call->allocations;
-    call->allocations = allocation;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    if (call->object_transport) {
+        allocation->next = call->object_allocations;
+        call->object_allocations = allocation;
+        call->object_transport_bytes += bytes;
+    } else
+#endif
+    {
+        allocation->next = call->allocations;
+        call->allocations = allocation;
+    }
     call->transport_bytes += bytes;
     return allocation->bytes;
 }
@@ -128,6 +169,9 @@ static void *ep_alloc(ep_call *call, size_t size)
 /* Also safe after a fatal has abandoned Zend frames and their request-owned values. */
 static void ep_call_free_storage(ep_call *call)
 {
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_reset_transport(call);
+#endif
     ep_allocation *allocation = call->allocations;
     while (allocation) {
         ep_allocation *next = allocation->next;
@@ -173,7 +217,14 @@ static void ep_call_destroy(ep_call *call)
             host_predecessors[host_predecessor_count++] = call->host_predecessors[i].exception;
         }
     }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    uint64_t object_identity = call->object_identity;
+#endif
     ep_call_free_storage(call);
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_retire(object_identity);
+    ep_objects_finish_broken();
+#endif
     if (!Z_ISUNDEF(pending)) { zval_ptr_dtor(&pending); }
     for (size_t i = 0; i < host_predecessor_count; i++) {
         zval_ptr_dtor(&host_predecessors[i]);
@@ -192,6 +243,9 @@ static void ep_call_destroy(ep_call *call)
         zval_ptr_dtor(&exception);
         parked = next;
     }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_shutdown();
+#endif
 }
 
 /* Fatal request termination can skip Fiber destructors, leaving parked calls in this chain. */
@@ -320,6 +374,9 @@ static zval *ep_copy(ep_call *call, const zval *source, bool host, unsigned dept
             ZVAL_ARR(copy, array);
             break;
         }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+        case IS_OBJECT: return ep_object_copy(call, source, host);
+#endif
         default:
             call->error = "PHP extension boundary supports only int, float, bool, string, array and null";
             return NULL;
@@ -328,8 +385,9 @@ static zval *ep_copy(ep_call *call, const zval *source, bool host, unsigned dept
 }
 
 /* This phase may allocate or bailout in Zend, after the native lock was released. */
-static void ep_to_zend(const zval *source, zval *destination)
+static void ep_to_zend(ep_call *call, const zval *source, zval *destination)
 {
+    (void)call;
     switch (Z_TYPE_P(source)) {
         case IS_NULL: ZVAL_NULL(destination); break;
         case IS_FALSE: ZVAL_FALSE(destination); break;
@@ -353,11 +411,14 @@ static void ep_to_zend(const zval *source, zval *destination)
                     slot = zend_hash_index_add_new(Z_ARRVAL_P(destination), bucket->h, &empty);
                 }
                 ZEND_ASSERT(slot != NULL);
-                ep_to_zend(&bucket->val, slot);
+                ep_to_zend(call, &bucket->val, slot);
             }
             Z_ARRVAL_P(destination)->nNextFreeElement = array->nNextFreeElement;
             break;
         }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+        case IS_OBJECT: ep_object_to_zend(call, source, destination); break;
+#endif
         default: ZEND_UNREACHABLE();
     }
 }

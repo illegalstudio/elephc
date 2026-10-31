@@ -371,6 +371,8 @@ elephc --emit cdylib module.php
 # Build a module loaded by real PHP 8.5, using its matching development SDK
 ELEPHC_PHPEXT_PHP_CONFIG=/path/to/php-config elephc --emit phpext --heap-size=1048576 module.php
 php -n -d extension=./module.so app.php
+# Export a global constant too; #[Export] final classes expose their public PHP surface
+elephc --emit phpext --export-constant='Demo\VERSION' module.php
 
 # Pin the PHP compatibility profile and silence non-error output
 elephc --php-version 8.3 --quiet app.php

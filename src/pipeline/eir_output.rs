@@ -22,6 +22,7 @@ pub(super) fn emit(
     web: bool,
     ir_opt: bool,
     exported_functions: &HashMap<String, exports::ExportedFunction>,
+    exported_classes: &[crate::phpext::classes::ExportedClass],
     included_files: &[opcache_prelude::ScriptEntry],
     timings: &mut CompileTimings,
 ) {
@@ -52,6 +53,7 @@ pub(super) fn emit(
         .iter()
         .map(|entry| entry.path.clone())
         .collect();
+    crate::phpext::class_helpers::lower(&mut module, exported_classes);
     timings.record_since("ir-lower", phase_started);
 
     if !exported_functions.is_empty() {
