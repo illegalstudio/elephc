@@ -129,11 +129,11 @@ pub(super) fn detach_rebound_local(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("tst {flags}, #{EVAL_SCOPE_FLAG_NATIVE_DETACHED}")); // test the persistent native-name detachment marker
-            ctx.emitter.instruction(&format!("b.eq {attached}"));              // preserve the original alias unless unset detached this name
+            ctx.emitter.instruction(&format!("b.eq {attached}"));               // preserve the original alias unless unset detached this name
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {flags}, {EVAL_SCOPE_FLAG_NATIVE_DETACHED}")); // test the persistent native-name detachment marker
-            ctx.emitter.instruction(&format!("je {attached}"));                // preserve the original alias unless unset detached this name
+            ctx.emitter.instruction(&format!("je {attached}"));                 // preserve the original alias unless unset detached this name
         }
     }
     detach_missing_local(ctx, local, pending_throw)?;
