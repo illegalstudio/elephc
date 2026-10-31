@@ -99,12 +99,22 @@ eval($source);
     assert!(!function.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
     assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOf), "{name}");
     assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOfDynamic), "{name}");
+    let guard = module.functions.iter()
+        .find(|function| function.name == "acceptEscapedEvalReference").unwrap();
+    assert!(!guard.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
+    assert!(guard.instructions.iter().any(|instruction| instruction.op == Op::InstanceOf), "{name}");
     let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     let symbol = crate::names::function_symbol("inspectEscapedEvalRelations");
     let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
     let body = body.split("\n.globl ").next().unwrap();
-    assert!(body.contains(&target.extern_symbol("__elephc_eval_object_is_a")), "{name}");
-    assert!(body.contains(&target.extern_symbol("__elephc_eval_object_is_a_dynamic")), "{name}");
+    let named_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a"));
+    let dynamic_call = format!("{}\n", target.extern_symbol("__elephc_eval_object_is_a_dynamic"));
+    assert!(body.matches(&named_call).count() >= 4, "{name}");
+    assert_eq!(body.matches(&dynamic_call).count(), 1, "{name}");
+    let guard_symbol = crate::names::function_symbol("acceptEscapedEvalReference");
+    let guard_body = assembly.split_once(&format!("{guard_symbol}:\n")).unwrap().1;
+    let guard_body = guard_body.split("\n.globl ").next().unwrap();
+    assert!(guard_body.contains(&named_call), "{name}");
 }
 
 macro_rules! context_free_eval_object_relations_target_test {

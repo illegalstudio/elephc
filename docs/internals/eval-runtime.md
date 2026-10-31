@@ -111,6 +111,17 @@ static function/method targets before setting `RuntimeFeatures::eval_bridge`.
 Consequently, the presence of `EvalLiteralCall` alone does not imply that the
 binary links Magician.
 
+When a module does link Magician, named and dynamic object-relation predicates
+recover eval-created object owners by runtime identity before consulting a
+caller context. Context-free native values probe the global eval registry only
+when the requested class, interface, enum, trait or alias is registered there;
+ordinary native names use generated class metadata directly. This preserves
+eval aliases without cloning the complete global declaration registry for each
+native `instanceof`, `is_a()` or `is_subclass_of()` probe. The owner lookup uses
+the process-local dynamic-object registry, so eval-enabled modules pay that
+lookup even for native values in exchange for distinguishing an eval object's
+PHP-visible class from its native backing allocation.
+
 ## EIR representation
 
 Literal calls use `EvalLiteralCall`, carrying the fragment in the module data

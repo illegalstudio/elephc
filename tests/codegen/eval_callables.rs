@@ -2067,6 +2067,39 @@ return $first . ":" . $second . ":" . $value->label() . ":" . $relations;');
     assert_eq!(out, "eval:eval:eval:iasdn");
 }
 
+/// Context-free relation probes preserve eval aliases and reject invalid dynamic targets.
+#[test]
+fn test_context_free_object_relations_cover_aliases_and_dynamic_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalRelationNative {}
+
+function evalRelationProbe(mixed $value, mixed $target): string {
+    try {
+        return $value instanceof $target ? "y" : "n";
+    } catch (Error $error) {
+        return "e";
+    }
+}
+
+function evalNamedAliasProbe(mixed $value): string {
+    return is_a($value, "EvalRelationAlias") ? "y" : "n";
+}
+
+echo evalRelationProbe(new EvalRelationNative(), "MissingEvalRelation");
+echo evalRelationProbe(new EvalRelationNative(), "\xFF");
+echo eval('class_alias("EvalRelationNative", "EvalRelationAlias");
+class EvalRelationDynamicTarget extends EvalRelationNative {}
+return evalRelationProbe(new EvalRelationNative(), "EvalRelationAlias")
+    . evalNamedAliasProbe(new EvalRelationNative())
+    . evalRelationProbe(new EvalRelationNative(), new EvalRelationDynamicTarget())
+    . evalRelationProbe(new EvalRelationNative(), 42);');
+"#,
+    );
+
+    assert_eq!(out, "nnyyne");
+}
+
 /// Verifies `Closure::call()` rebinds method closures but passes later args by value.
 #[test]
 fn test_eval_closure_from_callable_call_rebinds_targets_and_uses_by_value_args() {

@@ -14,8 +14,9 @@
 //! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
 //! - Named predicate probes fail closed as false; dynamic `instanceof` invalid
 //!   targets return -1 so generated code can raise PHP's fatal diagnostic.
-//! - Relation predicates recover an escaped dynamic object's owner when the AOT callee has no
-//!   persistent eval context of its own, then fall back to native class metadata.
+//! - Relation predicates prefer a dynamic object's owner over the caller context. Context-free
+//!   native values consult global eval aliases only for registered targets, then use native
+//!   class metadata directly.
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
@@ -342,30 +343,54 @@ unsafe fn eval_object_is_a_inner(
         return 0;
     };
     let object = RuntimeCellHandle::from_raw(object).borrowed();
-    let mut values = ElephcRuntimeOps::new();
-    let owner = values.object_identity(object).ok().and_then(|identity| {
-        crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
-    });
-    let resolved = owner.unwrap_or(ctx);
-    let Some(context) = resolved.as_mut() else {
-        return values.object_is_a(object, target.trim_start_matches('\\'), exclude_self != 0)
-            .map(i32::from).unwrap_or(0);
-    };
-    if context.abi_version() != ABI_VERSION {
-        return 0;
-    }
-    context.sync_global_eval_classes();
-    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_object_is_a(
-        context,
-        object,
-        &target,
-        exclude_self != 0,
-        &mut values,
-    ) {
+    match eval_object_relation_with_target(ctx, object, &target, None, exclude_self != 0) {
         Ok(result) => i32::from(result),
         Err(_) => 0,
     }
+}
+
+/// Resolves one named object relation through live eval metadata or a gated snapshot.
+#[cfg(not(test))]
+unsafe fn eval_object_relation_with_target(
+    ctx: *mut ElephcEvalContext,
+    object: RuntimeCellHandle,
+    target: &str,
+    target_owner: Option<*mut ElephcEvalContext>,
+    exclude_self: bool,
+) -> Result<bool, EvalStatus> {
+    let target = target.trim_start_matches('\\');
+    let mut probe = ElephcRuntimeOps::new();
+    let object_owner = probe.object_identity(object).ok().and_then(|identity| {
+        crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+    });
+    let resolved = object_owner.or(target_owner).unwrap_or(ctx);
+    if let Some(context) = resolved.as_mut() {
+        if context.abi_version() != ABI_VERSION {
+            return Err(EvalStatus::AbiMismatch);
+        }
+        context.sync_global_eval_classes();
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        return interpreter::execute_context_object_is_a(
+            context,
+            object,
+            target,
+            exclude_self,
+            &mut values,
+        );
+    }
+    if !crate::context::global_eval_class_like_exists(target) {
+        return probe.object_is_a(object, target, exclude_self);
+    }
+    let mut snapshot = ElephcEvalContext::new();
+    snapshot.sync_global_eval_classes();
+    let mut values = ElephcRuntimeOps::with_context(&snapshot as *const ElephcEvalContext);
+    interpreter::execute_context_object_is_a(
+        &mut snapshot,
+        object,
+        target,
+        exclude_self,
+        &mut values,
+    )
 }
 
 /// Runs the eval dynamic object relation ABI body after installing a panic boundary.
@@ -386,33 +411,47 @@ unsafe fn eval_object_is_a_dynamic_inner(
     let object = RuntimeCellHandle::from_raw(object).borrowed();
     let target = RuntimeCellHandle::from_raw(target).borrowed();
     let mut probe = ElephcRuntimeOps::new();
-    let object_owner = probe.object_identity(object).ok().and_then(|identity| {
-        crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
-    });
-    let target_owner = if probe.type_tag(target).ok() == Some(RUNTIME_TAG_OBJECT) {
-        probe.object_identity(target).ok().and_then(|identity| {
-            crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
-        })
-    } else {
-        None
+    let (target, target_owner) = match probe.type_tag(target) {
+        Ok(crate::interpreter::EVAL_TAG_STRING) => {
+            let Ok(bytes) = probe.string_bytes(target) else { return -1; };
+            let Ok(target) = String::from_utf8(bytes) else { return 0; };
+            (target, None)
+        }
+        Ok(RUNTIME_TAG_OBJECT) => {
+            let Ok(identity) = probe.object_identity(target) else { return -1; };
+            let owner = crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity);
+            let resolved = owner.unwrap_or(ctx);
+            let dynamic_name = if let Some(context) = resolved.as_mut() {
+                if context.abi_version() != ABI_VERSION {
+                    return -1;
+                }
+                context.sync_global_eval_classes();
+                context.dynamic_object_class_name(identity)
+            } else {
+                None
+            };
+            let target = match dynamic_name {
+                Some(target) => target,
+                None => {
+                    let Ok(class_name) = probe.object_class_name(target) else { return -1; };
+                    let bytes = probe.string_bytes(class_name);
+                    let released = probe.release(class_name);
+                    if released.is_err() { return -1; }
+                    let Ok(bytes) = bytes else { return -1; };
+                    let Ok(target) = String::from_utf8(bytes) else { return -1; };
+                    target
+                }
+            };
+            (target, owner)
+        }
+        _ => return -1,
     };
-    // The subject owner is authoritative; synced global metadata supplies a foreign target class.
-    let resolved = object_owner.or(target_owner).unwrap_or(ctx);
-    let mut fallback = resolved.is_null().then(ElephcEvalContext::new);
-    let Some(context) = resolved.as_mut().or_else(|| fallback.as_mut()) else {
-        return -1;
-    };
-    if context.abi_version() != ABI_VERSION {
-        return -1;
-    }
-    context.sync_global_eval_classes();
-    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    match interpreter::execute_context_object_is_a_dynamic(
-        context,
+    match eval_object_relation_with_target(
+        ctx,
         object,
-        target,
+        &target,
+        target_owner,
         exclude_self != 0,
-        &mut values,
     ) {
         Ok(result) => i32::from(result),
         Err(_) => -1,

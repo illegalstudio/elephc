@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - Predicate results preserve Mixed boxing and target-aware ABI handling.
-//! - Named object predicates can recover escaped dynamic-object owners without a callee-local
-//!   eval context.
+//! - Named and dynamic object predicates recover escaped dynamic-object owners without a
+//!   callee-local eval context.
 
 use super::*;
 
