@@ -8,6 +8,34 @@
 //! Key details:
 //! - ArrayIterator and ArrayObject preserve insertion-order keys through Mixed keys/values storage.
 
+/// Attached SPL writes detach snapshots and clones, including missing and runtime-boxed parents.
+#[test]
+fn test_spl_nested_writes_preserve_storage_snapshots_and_getter_overrides() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class NestedStorageSetter extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-setter|'; }
+}
+class NestedStorageGetter extends ArrayObject {
+    public function offsetGet(mixed $key): mixed { echo 'get|'; return parent::offsetGet($key); }
+}
+function nestedStorageBox(): mixed { return new ArrayIterator(['x' => [1]]); }
+$a = new ArrayObject(['x' => [1]]); $snapshot = $a->getArrayCopy(); $clone = clone $a;
+$a['x'][] = 2; $a['missing']['n'] = 3;
+echo json_encode($a->getArrayCopy()), '|', json_encode($snapshot), '|', json_encode($clone->getArrayCopy()), '|';
+$iterator = nestedStorageBox(); $iterator['x'][] = 4; $iterator['missing']['n'] = 5;
+echo json_encode($iterator->getArrayCopy()), '|';
+$setter = new NestedStorageSetter(['x' => [1]]); $setter['x'][] = 6;
+echo json_encode($setter->getArrayCopy()), '|';
+set_error_handler(function(int $severity, string $message, string $file, int $line): bool { return true; });
+$getter = new NestedStorageGetter(['x' => [1]]); $getter['x'][] = 7;
+restore_error_handler(); echo json_encode($getter->getArrayCopy());
+unset($getter, $setter, $iterator, $clone, $snapshot, $a);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"x\":[1,2],\"missing\":{\"n\":3}}|{\"x\":[1]}|{\"x\":[1]}|{\"x\":[1,4],\"missing\":{\"n\":5}}|{\"x\":[1,6]}|get|{\"x\":[1]}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 use crate::support::*;
 
 /// Verifies that storage classes are declared and implement contracts.

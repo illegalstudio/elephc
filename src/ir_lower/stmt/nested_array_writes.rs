@@ -736,9 +736,14 @@ fn lower_nested_parent_from_receiver(
         lower_throw_access_error(ctx, "Cannot use string offset as an array", span);
         return receiver;
     }
+    if matches!(ctx.builder.value_php_type(receiver.value).codegen_repr(), PhpType::Object(class)
+        if crate::types::builtin_classes::spl_storage_write_fetch_owner(&class, ctx.classes).is_some()) {
+        let receiver = ctx.box_value_as_mixed(receiver, PhpType::Mixed, Some(span));
+        return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span, key_already_diagnosed);
+    }
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         if convert_false {
-            return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span);
+            return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span, key_already_diagnosed);
         }
         let key = lower_expr(ctx, index);
         let key = crate::ir_lower::ownership::persist_string_byte_view(

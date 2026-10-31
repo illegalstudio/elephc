@@ -117,7 +117,7 @@ fn array_object_properties() -> Vec<ClassProperty> {
 
 /// Builds the method list for SPL array iterator.
 fn spl_array_iterator_methods() -> Vec<ClassMethod> {
-    vec![
+    let mut methods = vec![
         method_with_body(
             "__construct",
             vec![
@@ -170,12 +170,14 @@ fn spl_array_iterator_methods() -> Vec<ClassMethod> {
             array_append_body(),
         ),
         method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
-    ]
+    ];
+    methods.extend(array_write_fetch_methods());
+    methods
 }
 
 /// Builds the method list for SPL array object.
 fn spl_array_object_methods() -> Vec<ClassMethod> {
-    vec![
+    let mut methods = vec![
         method_with_body(
             "__construct",
             vec![
@@ -218,7 +220,39 @@ fn spl_array_object_methods() -> Vec<ClassMethod> {
             array_append_body(),
         ),
         method_with_body("getArrayCopy", Vec::new(), Some(array_type()), array_copy_body()),
-    ]
+    ];
+    methods.extend(array_write_fetch_methods());
+    methods
+}
+
+/// Declares private storage selectors whose EIR returns an attached cell without PHP references.
+fn array_write_fetch_methods() -> Vec<ClassMethod> {
+    let mut index_body = array_search_prelude();
+    index_body.push(while_stmt(
+        binary_expr(var_expr("i"), BinOp::Lt, var_expr("limit")),
+        vec![
+            if_stmt(binary_expr(key_at(var_expr("i")), BinOp::StrictEq, var_expr("offset")),
+                return_body(var_expr("i")), None),
+            increment_stmt("i"),
+        ],
+    ));
+    index_body.push(property_array_push_stmt(this_expr(), "keys", var_expr("offset")));
+    index_body.push(property_array_push_stmt(this_expr(), "values", null_expr()));
+    index_body.push(return_stmt(var_expr("limit")));
+    let mut methods = vec![
+        method_with_body("__elephc_offset_index", vec![param("offset", mixed_type())],
+            Some(TypeExpr::Int), index_body),
+        method_with_body("__elephc_fetch_for_write", vec![param("offset", mixed_type())],
+            Some(mixed_type()), vec![
+                assign_stmt("i", method_call(this_expr(), "__elephc_offset_index", vec![var_expr("offset")])),
+                return_stmt(value_at(var_expr("i"))),
+            ]),
+    ];
+    for method in &mut methods {
+        method.visibility = crate::parser::ast::Visibility::Private;
+        method.is_final = true;
+    }
+    methods
 }
 
 /// Builds the AST expression for keys.

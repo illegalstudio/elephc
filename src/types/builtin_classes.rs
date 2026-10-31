@@ -22,6 +22,19 @@ use std::sync::OnceLock;
 
 use elephc_builtin_contract::{classes, lookup_class, ClassKind, ClassRoute, PhpModule};
 
+/// Selects internal SPL storage only when the actual offset getter is inherited unchanged.
+pub(crate) fn spl_storage_write_fetch_owner<'a>(
+    name: &str, classes: &'a HashMap<String, super::ClassInfo>,
+) -> Option<&'a super::ClassInfo> {
+    let info = classes.get(name.trim_start_matches('\\'))?;
+    let owner = info.method_declaring_classes.get("offsetget").map_or(name.trim_start_matches('\\'), String::as_str);
+    if !["ArrayObject", "ArrayIterator"].iter().any(|candidate| owner.eq_ignore_ascii_case(candidate)) {
+        return None;
+    }
+    classes.get(owner).filter(|info| info.is_internal
+        && info.methods.contains_key("__elephc_fetch_for_write"))
+}
+
 /// Returns the PHP spellings of every builtin class-like name, internal helpers included.
 pub(crate) fn builtin_class_like_names() -> impl Iterator<Item = &'static str> {
     classes().iter().map(|class| class.name)

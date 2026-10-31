@@ -178,6 +178,7 @@ fn emit_array_access_append(
 /// Fetches one child with balanced, unwind-visible input and result owners.
 pub(super) fn fetch_parent(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, index: &Expr, span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let (receiver, receiver_owner) =
         super::nested_array_writes::root_static_update_receiver(ctx, receiver, span);
@@ -193,7 +194,9 @@ pub(super) fn fetch_parent(
         return receiver;
     }
     let child = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else { RuntimeCallTarget::ArrayFetchForWrite })),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
     let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let slot = ctx.local_slots[&selected];

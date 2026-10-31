@@ -667,6 +667,15 @@ The refusal creates its pending Error before retiring the rejected value or extr
 owner. Both releases use protected cleanup, preserving the original Error in the previous
 chain if a destructor throws and completing the remaining cleanup before propagation.
 
+Native nested writes through ArrayObject and ArrayIterator use a private storage selector
+when the concrete offset getter is inherited from the internal SPL implementation. It first
+locates or inserts a boxed null slot, separates the raw values array in its property, and then
+detaches and returns the stored Mixed child for write. No PHP reference is created in the
+backing arrays, so getArrayCopy and object clones keep their normal value semantics. The
+runtime table checks the actual getter owner; an overridden offsetSet alone does not change
+the selector, while a user offsetGet keeps its own value or reference behavior. Read warnings
+and attached selection use independent mode bits, including across the boxed-key owner record.
+
 A nullable local returned by reference with a non-null object result is checked before
 promotion to an object-payload cell. The original local name stays attached, including
 during `finally`. A boxed replacement is checked and unboxed before publication, with

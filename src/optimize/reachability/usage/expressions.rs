@@ -1283,7 +1283,7 @@ impl Scanner<'_> {
                 self.usage.hazards.dynamic_method = true;
             }
             ExprKind::ArrayAccess { array, .. } => {
-                self.record_protocol_methods(array, &["__elephc_reference"]);
+                self.record_protocol_methods(array, &["__elephc_reference", "__elephc_fetch_for_write"]);
                 self.scan_assignment_target(array);
             }
             _ => {}

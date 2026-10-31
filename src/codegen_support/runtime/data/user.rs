@@ -704,6 +704,17 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    out.push_str(".globl _class_offsetget_forwrite_ptrs\n_class_offsetget_forwrite_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let entry = class_name_by_id.get(&class_id)
+                .and_then(|name| crate::types::builtin_classes::spl_storage_write_fetch_owner(name, classes))
+                .map(|owner| source_instance_method_entry(owner, "__elephc_fetch_for_write", classes))
+                .transpose()?.unwrap_or_else(|| "0".into());
+            out.push_str(&format!("    .quad {entry}\n"));
+        }
+    }
+
     // Native property projections retain PHP's own interface membership.
     for (table, methods) in [
         ("_class_array_projection_ptrs", &["__elephc_array"][..]),

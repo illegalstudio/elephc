@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
+//! - Mode bit zero enables read warnings; bit one selects attached internal SPL storage.
 //! - Callers pass an explicit warning flag so normal reads diagnose missing/null
 //!   offsets while `isset()`/`??` keep the same helper quiet.
 //! - A container payload that is null or the in-band null-container sentinel
@@ -36,6 +37,39 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
         return;
     }
     emit_mixed_array_get_aarch64(emitter);
+}
+
+/// Selects a trusted attached getter for write context, retaining the ordinary getter fallback.
+fn emit_offset_get_table(emitter: &mut Emitter, stack_bias: usize) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("ldr x12, [sp, #{}]", 40 + stack_bias)); // recover mode above any published operand-owner record
+            emitter.instruction("tbz x12, #1, 976f");                           // ordinary reads always use the public offset getter
+            abi::emit_symbol_address(emitter, "x12", "_class_offsetget_forwrite_ptrs");
+            emitter.instruction("ldr x12, [x12, x11, lsl #3]");                 // only inherited internal SPL getters have an attached entry
+            emitter.instruction("cbnz x12, 977f");                              // a trusted private selector already supplies the final method pointer
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test QWORD PTR [rbp - 32], 2");                // write fetches request the private attached selector
+            emitter.instruction("jz 976f");                                     // reads and quiet probes use public offsetGet
+            abi::emit_symbol_address(emitter, "r12", "_class_offsetget_forwrite_ptrs");
+            emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");          // user overrides have zero entries and keep their ordinary behavior
+            emitter.instruction("test r12, r12");                               // test the selected attached entry
+            emitter.instruction("jnz 977f");                                    // skip public lookup when trusted native storage is selected
+        }
+    }
+    emitter.label("976");
+    match emitter.target.arch {
+        Arch::AArch64 => abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs"),
+        Arch::X86_64 => abi::emit_symbol_address(emitter, "r12", "_class_offsetget_ptrs"),
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("ldr x12, [x12, x11, lsl #3]"),    // resolve the concrete or inherited public offset getter
+        Arch::X86_64 => {
+            emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");          // resolve the concrete or inherited public offset getter
+        }
+    }
+    emitter.label("977");
 }
 
 /// Emits `__rt_mixed_array_get` for ARM64 (AAPCS64 ABI).
@@ -152,13 +186,13 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_missing");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
     emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit the PHP warning for a missing string key
@@ -194,7 +228,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the normalized key high word
     emitter.instruction("cmn x9, #1");                                          // does the missing key use the integer-key sentinel?
     emitter.instruction("b.eq __rt_mixed_array_get_assoc_missing_int");         // integer keys use the decimal warning formatter
@@ -299,8 +333,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "x12", "_class_iface_method_count", 0);
     emitter.instruction("cmp x11, x12");                                        // is the id within the dense table?
     emitter.instruction("b.hs __rt_mixed_array_get_not_indexable");             // out-of-range ids have no entry
-    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
-    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // resolve the concrete or inherited offsetGet
+    emit_offset_get_table(emitter, 0);
     emitter.instruction("cbz x12, __rt_mixed_array_get_not_indexable");         // 0 means the class is not ArrayAccess at all
     emitter.instruction("str x10, [sp, #0]");                                   // save unboxed receiver while boxing the key
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload normalized key high word
@@ -323,8 +356,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #56]");                                   // pass boxed offset above the 48-byte cleanup record
     emitter.instruction("ldr x0, [sp, #48]");                                   // pass the receiver above the same cleanup record
     emitter.instruction("ldr x11, [x0]");                                       // reload class id, clobbered across the boxing call
-    abi::emit_symbol_address(emitter, "x12", "_class_offsetget_ptrs");
-    emitter.instruction("ldr x12, [x12, x11, lsl #3]");                         // re-resolve offsetGet for the same class
+    emit_offset_get_table(emitter, 48);
     emitter.instruction("blr x12");                                             // read through PHP's ArrayAccess::offsetGet
     emitter.instruction("str x0, [sp, #48]");                                   // stash the owned result in the original receiver slot
     abi::emit_pop_call_operand_owner(emitter);
@@ -346,7 +378,7 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_null_container");
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
-    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // quiet read contexts suppress the null-offset warning
+    emitter.instruction("tbz x9, #0, __rt_mixed_array_get_null");               // quiet read contexts suppress the null-offset warning
     emitter.instruction("bl __rt_warn_array_offset_on_null");                   // emit PHP's warning for indexing a null receiver
     emitter.label("__rt_mixed_array_get_null");
     emitter.instruction("mov x0, #8");                                          // tag = 8 (null)
@@ -466,13 +498,13 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_indexed_missing_string");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the missing string key length
@@ -508,7 +540,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_assoc_missing");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does the missing key use the integer-key sentinel?
     emitter.instruction("je __rt_mixed_array_get_assoc_missing_int");           // integer keys use the decimal warning formatter
@@ -602,8 +634,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("js __rt_mixed_array_get_not_indexable");               // synthetic ids cannot index metadata
     emitter.instruction("cmp r11, QWORD PTR [rip + _class_iface_method_count]"); // is the id within the dense table?
     emitter.instruction("jae __rt_mixed_array_get_not_indexable");              // out-of-range ids have no entry
-    emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
-    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // resolve the concrete or inherited offsetGet
+    emit_offset_get_table(emitter, 0);
     emitter.instruction("test r12, r12");                                       // 0 means the class is not ArrayAccess
     emitter.instruction("jz __rt_mixed_array_get_not_indexable");               // 0 means the class is not ArrayAccess at all
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save unboxed receiver while boxing the key
@@ -627,8 +658,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the boxed offset after publishing its cleanup record
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass unboxed receiver as argument 0
     emitter.instruction("mov r11, QWORD PTR [rdi]");                            // reload class id, clobbered across the boxing call
-    emitter.instruction("lea r12, [rip + _class_offsetget_ptrs]");              // dense ArrayAccess::offsetGet table
-    emitter.instruction("mov r12, QWORD PTR [r12 + r11 * 8]");                  // re-resolve offsetGet for the same class
+    emit_offset_get_table(emitter, 48);
     emitter.instruction("call r12");                                            // read through PHP's ArrayAccess::offsetGet
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // stash the owned result; the receiver is done
     abi::emit_pop_call_operand_owner(emitter);
@@ -648,7 +678,7 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_throw_object_not_array");                     // never returns
 
     emitter.label("__rt_mixed_array_get_null_container");
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("test QWORD PTR [rbp - 32], 1");                        // are ordinary read warnings enabled?
     emitter.instruction("je __rt_mixed_array_get_null");                        // quiet read contexts suppress the null-offset warning
     emitter.instruction("call __rt_warn_array_offset_on_null");                 // emit PHP's warning for indexing a null receiver
     emitter.label("__rt_mixed_array_get_null");
@@ -665,6 +695,26 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// An ARM operand-owner record cannot hide the saved mode used to select an attached getter.
+    #[test]
+    fn mixed_array_write_fetch_mode_survives_key_owner_publication_on_all_targets() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_mixed_array_get(&mut emitter);
+            let assembly = emitter.output();
+            let getter = assembly.split_once("__rt_mixed_array_get_php_box_key:\n").unwrap().1;
+            let call = getter.find(if target == "linux-x86_64" { "call r12" } else { "blr x12" }).unwrap();
+            let dispatch = &getter[..call];
+            assert!(dispatch.contains("_class_offsetget_forwrite_ptrs"), "{target}: {dispatch}");
+            let mode = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 2" }
+                else { "ldr x12, [sp, #88]" };
+            assert!(dispatch.contains(mode), "{target}: {dispatch}");
+            let warn = if target == "linux-x86_64" { "test QWORD PTR [rbp - 32], 1" }
+                else { "tbz x9, #0, __rt_mixed_array_get_null" };
+            assert_eq!(assembly.matches(warn).count(), 4, "{target}: write mode must stay quiet");
+        }
+    }
 
     /// Each native ABI roots the PHP getter's key before dispatch and detaches before release.
     #[test]
