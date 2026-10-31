@@ -148,3 +148,49 @@ echo $n;
     );
     assert_eq!(compile_and_run(source), "0");
 }
+
+/// The full decimal numeric-entity map is a literal packed array, so the
+/// allocation-free length call and both operand loads move into the preheader.
+#[test]
+fn test_licm_hoists_numericentity_length_with_the_full_decimal_map() {
+    let source = r#"<?php
+$s = "héllo wörld";
+$map = [0x80, 0x10FFFF, 0, 0x1FFFFF];
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_encode_numericentity($s, $map, "UTF-8")) + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        preheader.contains("runtime.mb_encode_numericentity_len")
+            && preheader.contains("origin: licm"),
+        "the numeric-entity length must move into the preheader:\n{preheader}"
+    );
+    assert!(
+        !body.contains("runtime.mb_encode_numericentity_len"),
+        "the loop body must only read the hoisted length:\n{body}"
+    );
+    assert_eq!(compile_and_run(source), "12");
+}
+
+/// A map that is not the full decimal range keeps the call in the loop because
+/// the bridge fallback may throw and its per-iteration result is not proven total.
+#[test]
+fn test_licm_does_not_hoist_numericentity_with_a_nonstandard_map() {
+    let source = r#"<?php
+$s = "héllo wörld";
+$map = [0x80, 0x10FFFF, 0, 0x1FFF];
+$iters = (int)($argc + 3);
+$n = 0;
+for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_encode_numericentity($s, $map, "UTF-8")) + $i; }
+echo $n;
+"#;
+    let ir = emit_main_ir(source);
+    let (_preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    assert!(
+        body.contains("runtime.mb_encode_numericentity_len"),
+        "a nonstandard map must keep the call in the loop:\n{body}"
+    );
+}

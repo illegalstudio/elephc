@@ -18,10 +18,13 @@
 //!   subject throws. Every other admitted call is total for string arguments.
 //! - The loop may contain no other global writer except `concat_reset`, whose
 //!   process-local scratch reset cannot affect an explicit-encoding mbstring call.
+//! - A numeric-entity length call is admitted only when its map is the literal full
+//!   decimal packed array; the proof follows the load/store/array-push chain and
+//!   rejects any other map or later array mutation.
 
 use crate::ir::{
-    DataPool, Effects, Function, Immediate, InstId, Instruction, IrType, Op, Ownership,
-    RuntimeCallTarget, RuntimeFnId, ValueId,
+    DataPool, Effects, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, Op,
+    Ownership, RuntimeCallTarget, RuntimeFnId, ValueId,
 };
 
 use super::loops::NaturalLoop;
@@ -66,6 +69,8 @@ pub(super) fn is_whitelisted_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbStrcut
             | RuntimeFnId::MbScrub
             | RuntimeFnId::MbConvertKana
+            | RuntimeFnId::MbEncodeNumericentityLen
+            | RuntimeFnId::MbDecodeNumericentityLen
     )
 }
 
@@ -211,6 +216,13 @@ pub(super) fn is_hoistable_mbstring_call(
         RuntimeFnId::MbDetectEncodingLen => {
             inst.operands.len() == 2 && string_arg(0) && literal_is(1, "UTF-8")
         }
+        RuntimeFnId::MbEncodeNumericentityLen | RuntimeFnId::MbDecodeNumericentityLen => {
+            inst.operands.len() == 3
+                && string_arg(0)
+                && int_array_arg(function, inst, 1)
+                && full_decimal_map(function, inst.operands[1])
+                && encoding_arg(2)
+        }
         _ => false,
     }
 }
@@ -337,6 +349,95 @@ fn utf8_encoding_arg(function: &Function, data: &DataPool, inst: &Instruction, i
         const_string_value(function, data, value)
             .is_some_and(|encoding| encoding.eq_ignore_ascii_case("UTF-8"))
     })
+}
+
+/// Returns whether one operand is a packed `array<int>`.
+fn int_array_arg(function: &Function, inst: &Instruction, index: usize) -> bool {
+    inst.operands
+        .get(index)
+        .and_then(|&value| function.value(value))
+        .is_some_and(|value| {
+            matches!(&value.php_type, crate::types::PhpType::Array(inner)
+                if inner.codegen_repr() == crate::types::PhpType::Int)
+        })
+}
+
+/// Proves that `map` is the literal `[0x80, 0x10FFFF, 0, 0x1FFFFF]` packed
+/// integer array used by the allocation-free numeric-entity length helpers.
+///
+/// The proof follows the load/store wrapper chain, requires exactly four packed
+/// pushes with those constants, and rejects any other use of the array value so
+/// a later mutation cannot invalidate the map.
+fn full_decimal_map(function: &Function, map: ValueId) -> bool {
+    let mut value = map;
+    let array = loop {
+        let Some(inst) = defining_instruction(function, value) else {
+            return false;
+        };
+        match inst.op {
+            Op::LoadLocal => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                    return false;
+                };
+                let mut stores = function.instructions.iter().filter(|other| {
+                    other.op == Op::StoreLocal
+                        && other.immediate == Some(Immediate::LocalSlot(slot))
+                });
+                let Some(store) = stores.next() else {
+                    return false;
+                };
+                if stores.next().is_some() {
+                    return false;
+                }
+                let Some(&stored) = store.operands.first() else {
+                    return false;
+                };
+                value = stored;
+            }
+            Op::Acquire | Op::Move | Op::Borrow => {
+                let Some(&inner) = inst.operands.first() else {
+                    return false;
+                };
+                value = inner;
+            }
+            Op::ArrayNew => break value,
+            _ => return false,
+        }
+    };
+    let Some(array_inst) = defining_instruction(function, array) else {
+        return false;
+    };
+    if array_inst.op != Op::ArrayNew
+        || !matches!(array_inst.result_type, IrType::Heap(IrHeapKind::Array))
+        || !matches!(&array_inst.result_php_type, crate::types::PhpType::Array(inner)
+            if inner.codegen_repr() == crate::types::PhpType::Int)
+    {
+        return false;
+    }
+    let mut elements = Vec::new();
+    for inst in &function.instructions {
+        if !inst.operands.contains(&array) {
+            continue;
+        }
+        match inst.op {
+            Op::ArrayPush => {
+                if inst.operands.len() != 2 || inst.operands[0] != array {
+                    return false;
+                }
+                let Some(element) = const_i64(function, inst.operands[1]) else {
+                    return false;
+                };
+                elements.push(element);
+            }
+            Op::Acquire | Op::Move | Op::Borrow | Op::Release => {
+                if inst.operands.len() != 1 {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    elements == [0x80, 0x10FFFF, 0, 0x1FFFFF]
 }
 
 /// Returns whether the loop has no global writer other than the call and the

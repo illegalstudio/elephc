@@ -7,10 +7,11 @@
 //! - The fixed-point pass driver before checked-int specialization, CSE, and LICM.
 //!
 //! Key details:
-//! - Only concrete integer, float, and string PHP locals are considered; aliases, ref cells,
-//!   statics, hidden temporaries, mixed storage, and any slot named by an unknown operation
-//!   fail closed. String loads are refined only when the function contains a whitelisted
-//!   explicit-UTF-8 mbstring call that can consume them.
+//! - Only concrete integer, float, string, and numeric-entity map-array PHP locals are
+//!   considered; aliases, ref cells, statics, hidden temporaries, mixed storage, and any
+//!   slot named by an unknown operation fail closed. String loads are refined only when the
+//!   function contains a whitelisted explicit-UTF-8 mbstring call that can consume them;
+//!   packed `array<int>` loads are refined only next to a numeric-entity length call.
 //! - A slot is immutable when it is a read-only incoming parameter/main `$argc`, or has
 //!   exactly one entry-block store that dominates every load. The entry must have no
 //!   predecessor, proving that the store executes once rather than once per loop iteration.
@@ -25,7 +26,8 @@
 use std::collections::HashSet;
 
 use crate::ir::{
-    DataPool, Effects, Function, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Op,
+    DataPool, Effects, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind,
+    LocalSlotId, Op,
 };
 use crate::types::PhpType;
 
@@ -58,7 +60,13 @@ impl IrPass for ImmutableLocalLoads {
             .into_iter()
             .filter(|slot| {
                 let local = &function.locals[slot.as_raw() as usize];
-                local.ir_type != IrType::Str || consumers.mbstring
+                match local.ir_type {
+                    IrType::Str => consumers.mbstring,
+                    IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash) => {
+                        consumers.numericentity
+                    }
+                    _ => true,
+                }
             })
             .collect();
         if candidates.is_empty() {
@@ -101,6 +109,8 @@ struct ScalarConsumers {
     float: bool,
     /// The function contains a whitelisted pure mbstring runtime call.
     mbstring: bool,
+    /// The function contains a numeric-entity length call that can consume a map.
+    numericentity: bool,
 }
 
 impl ScalarConsumers {
@@ -114,6 +124,15 @@ impl ScalarConsumers {
                 super::pure_mbstring_calls::instruction_target(inst)
                     .is_some_and(super::pure_mbstring_calls::is_whitelisted_target)
             }),
+            numericentity: function.instructions.iter().any(|inst| {
+                matches!(
+                    super::pure_mbstring_calls::instruction_target(inst),
+                    Some(
+                        crate::ir::RuntimeFnId::MbEncodeNumericentityLen
+                            | crate::ir::RuntimeFnId::MbDecodeNumericentityLen
+                    )
+                )
+            }),
         }
     }
 
@@ -123,6 +142,7 @@ impl ScalarConsumers {
             IrType::I64 => self.checked_int,
             IrType::F64 => self.float,
             IrType::Str => self.mbstring,
+            IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash) => self.numericentity,
             _ => false,
         }
     }
@@ -153,7 +173,8 @@ fn actionable_scalar_load_slot(
         .get(slot.as_raw() as usize)
         .filter(|local| {
             local.kind == LocalKind::PhpLocal
-                && is_concrete_scalar_storage(local.ir_type, &local.php_type)
+                && (is_concrete_scalar_storage(local.ir_type, &local.php_type)
+                    || is_concrete_array_storage(local.ir_type, &local.php_type))
         })
         .map(|_| slot)
 }
@@ -266,7 +287,8 @@ fn slot_is_read_only_input(function: &Function, slot: LocalSlotId) -> bool {
                 && !param.variadic
                 && param.ir_type == local.ir_type
                 && param.php_type.codegen_repr() == local.php_type.codegen_repr()
-                && is_concrete_scalar_storage(param.ir_type, &param.php_type)
+                && (is_concrete_scalar_storage(param.ir_type, &param.php_type)
+                    || is_concrete_array_storage(param.ir_type, &param.php_type))
         })
 }
 
@@ -277,6 +299,16 @@ fn is_concrete_scalar_storage(ir_type: IrType, php_type: &PhpType) -> bool {
         (ir_type, php_type.codegen_repr()),
         (IrType::I64, PhpType::Int) | (IrType::F64, PhpType::Float) | (IrType::Str, PhpType::Str)
     )
+}
+
+/// Returns true only for a packed `array<int>` local, the numeric-entity map shape.
+fn is_concrete_array_storage(ir_type: IrType, php_type: &PhpType) -> bool {
+    match (ir_type, php_type.codegen_repr()) {
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(inner)) => {
+            inner.codegen_repr() == PhpType::Int
+        }
+        _ => false,
+    }
 }
 
 /// Proves that the sole store is in the entry and occurs before every local load.

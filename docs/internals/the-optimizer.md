@@ -1432,7 +1432,10 @@ throw, and a loop with no other global writer except the concatenation scratch
 reset. An owned `mb_substr`/`mb_strcut` result observed only by `strlen` moves
 as one group with its length observer and single release, so the loop body reads
 only the scalar length and no per-iteration allocation survives. An extra
-observer keeps the producer and release in the loop. Branch cleanup composes SSA
+observer keeps the producer and release in the loop. A numeric-entity length call
+whose map operand is the literal full decimal packed array
+`[0x80, 0x10FFFF, 0, 0x1FFFFF]` moves with the subject and map loads; the proof
+follows the load, store, and four array-push chain and rejects any other map. Branch cleanup composes SSA
 forwarding arguments and merges single-predecessor loop update blocks. See
 [Canonical Loop Optimization](the-ir.md#canonical-loop-optimization).
 
