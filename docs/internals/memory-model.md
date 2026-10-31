@@ -1825,6 +1825,30 @@ identity before allocator reuse. Eval array-reference observers retire before
 this skip, including when a Mixed cell no longer contains its former array
 value. Other allocation kinds retain their existing identity retirement path.
 
+The native INI registry records origins before the first INI call so copies made
+earlier still share their logical identity. Initially, fresh strings and literals
+store only their kind and length in the allocation-address map. Copying a tracked
+full string or resolving it for INI promotes that origin to shared metadata;
+fresh replacement detaches the source while existing aliases keep the old
+origin. Repeated literal observations preserve both unresolved and resolved
+origins. Scratch pointers and different-length views never inherit a tracked
+identity.
+
+Once a promoted fresh origin has no remaining copied aliases and has never been
+resolved, refresh reuses that metadata allocation. Repeated update/copy/release
+loops therefore avoid allocating shared metadata again on each update. Interned
+or resolved origins and origins with live aliases still detach on replacement.
+
+The map hashes internal allocation addresses with an integer mixer, independently
+of PHP string-key hashing. Request reset releases every origin and identity lease
+outside the map borrow, then reuses the empty table. Its capacity therefore follows
+the worker thread's largest request instead of being allocated again each request.
+No native byte storage is retained by that capacity. The callback benchmark
+`cargo run -p elephc-mbstring --release --example native_ini_tracking` reports
+allocation calls and timing for fresh strings, refreshes, literals, copies, and
+256-string request resets. It measures the Rust callbacks; generated register
+preservation hooks and HTTP request handling add separate costs.
+
 ### Packed integer prefixes in JSON arrays
 
 The structural JSON decoder constructs each fresh indexed array with signed-i64 slots. A bounded, allocation-free token probe accepts only strict JSON integers within PHP's integer range, followed by JSON whitespace and a comma or closing bracket. It appends the raw value with `__rt_array_push_int`, preserving the ordinary separator, depth and error cleanup paths. It records the same token-start diagnostic candidate as recursive decoding.

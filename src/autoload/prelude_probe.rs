@@ -19,6 +19,7 @@
 //!   numbers so the real parse keeps those identities. Process-global synthetic spans and
 //!   include temporaries remain monotonic, preserving identities other threads allocated.
 //! - A probe failure is not reported here: the real pass hits the same error and reports it.
+//! - The web environment group retains process entries when an autoloaded file observes them.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -44,6 +45,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("xml", crate::xml_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
+    ("web_environment", crate::web_prelude::program_observes_environment),
 ];
 
 /// Returns the prelude groups some file of the autoload closure uses.
@@ -66,14 +68,15 @@ pub fn autoloaded_prelude_groups(
         .and_then(|resolved| {
             super::run_collecting_included_with_defines(resolved, base_dir, registry, defines).ok()
         });
+    let groups = closure.map_or_else(HashSet::new, |(closure, _)| {
+        PROBED_GROUPS
+            .iter()
+            .filter(|(_, detect)| detect(&closure))
+            .map(|(group, _)| *group)
+            .collect()
+    });
+    // Usage detectors may parse literal eval fragments, so their identities are discarded too.
     Span::restore_counters(span_counters);
     crate::parser::restore_anonymous_class_counter(anonymous_classes);
-    let Some((closure, _)) = closure else {
-        return HashSet::new();
-    };
-    PROBED_GROUPS
-        .iter()
-        .filter(|(_, detect)| detect(&closure))
-        .map(|(group, _)| *group)
-        .collect()
+    groups
 }

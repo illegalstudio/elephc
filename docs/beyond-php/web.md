@@ -108,7 +108,12 @@ every request and readable inside any function scope (no `global` needed):
   (values percent-decoded).
 - **`$_REQUEST`** — `$_GET` overlaid with `$_POST` (POST wins on key collision),
   matching PHP's default `request_order = "GP"`.
-- **`$_ENV`** — the process environment.
+- **`$_ENV`** - the process environment. The compiler omits the environment
+  copy when the program cannot observe it. Direct access, global-table access,
+  variable-table inspection, and eval retain a fresh copy for every request.
+  This detection includes Composer and SPL autoloaded code.
+  Calls through computed or escaped callable values conservatively retain the copy.
+  `getenv()` reads the process environment independently of this copy.
 - **`php://input`** — `file_get_contents('php://input')` returns the raw request
   body (e.g. a JSON payload). An empty body returns `false`.
 

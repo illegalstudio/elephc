@@ -69,6 +69,11 @@ pub(crate) struct Usage {
     /// here: a `$$computed` access does not, which is what keeps a consumer honest
     /// about being a pay-for-use gate rather than a completeness claim.
     pub(crate) variables: HashSet<String>,
+    /// Variable names held directly by statement storage slots or closure captures,
+    /// rather than by a `Variable` expression. Kept separate from read-based CLI seeding.
+    pub(crate) storage_variables: HashSet<String>,
+    /// Conservative binding facts for calls whose spelling can become visible only after folding.
+    pub(crate) callable_names: super::callable_names::CallableNames,
     /// A CALL whose target this walk cannot name (`$f()`, `call_user_func($x)`, a closure
     /// call). Its failure mode is LOUD — an undefined function at the call site — so the pruner
     /// answers it by widening the roots to the names the program does mention.
@@ -338,7 +343,8 @@ fn scan_params(
     params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
     usage: &mut Usage,
 ) {
-    for (_, ty, default, _) in params {
+    for (name, ty, default, _) in params {
+        usage.callable_names.write(name);
         if let Some(ty) = ty {
             scan_type(ty, usage);
         }
@@ -408,6 +414,49 @@ fn scan_program(program: &[Stmt], usage: &mut Usage) {
 
 /// Scans every expression-bearing position of one statement.
 fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
+    match &stmt.kind {
+        StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. }
+        | StmtKind::StaticVar { name, init: value } => usage.callable_names.assignment(name, value),
+        StmtKind::RefAssign { target, source } => {
+            usage.callable_names.write(target);
+            if let ExprKind::Variable(name) = &source.kind { usage.callable_names.write(name); }
+        }
+        StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => usage.callable_names.write(array),
+        StmtKind::Global { vars } | StmtKind::ListUnpack { vars, .. } => {
+            for name in vars { usage.callable_names.write(name); }
+        }
+        StmtKind::Foreach { key_var, value_var, .. } => {
+            if let Some(name) = key_var { usage.callable_names.write(name); }
+            usage.callable_names.write(value_var);
+        }
+        StmtKind::Try { catches, .. } => {
+            for name in catches.iter().filter_map(|catch| catch.variable.as_ref()) {
+                usage.callable_names.write(name);
+            }
+        }
+        _ => {}
+    }
+    match &stmt.kind {
+        StmtKind::Assign { name, .. }
+        | StmtKind::TypedAssign { name, .. }
+        | StmtKind::StaticVar { name, .. }
+        | StmtKind::RefAssign { target: name, .. }
+        | StmtKind::ArrayAssign { array: name, .. }
+        | StmtKind::ArrayPush { array: name, .. } => {
+            usage.storage_variables.insert(name.clone());
+        }
+        StmtKind::Global { vars } | StmtKind::ListUnpack { vars, .. } => {
+            usage.storage_variables.extend(vars.iter().cloned());
+        }
+        StmtKind::Foreach { key_var, value_var, .. } => {
+            usage.storage_variables.extend(key_var.iter().cloned());
+            usage.storage_variables.insert(value_var.clone());
+        }
+        StmtKind::Try { catches, .. } => {
+            usage.storage_variables.extend(catches.iter().filter_map(|c| c.variable.clone()));
+        }
+        _ => {}
+    }
     match &stmt.kind {
         StmtKind::Echo(expr)
         | StmtKind::Throw(expr)
@@ -697,6 +746,17 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
 /// Scans every child and callable position of one expression.
 fn scan_expr(expr: &Expr, usage: &mut Usage) {
     match &expr.kind {
+        ExprKind::FunctionCall { args, .. } | ExprKind::ExprCall { args, .. }
+        | ExprKind::ClosureCall { args, .. } | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. } | ExprKind::NullsafeDynamicMethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. } | ExprKind::NewObject { args, .. }
+        | ExprKind::NewGeneric { args, .. } | ExprKind::NewDynamic { args, .. }
+        | ExprKind::NewDynamicObject { args, .. } | ExprKind::NewScopedObject { args, .. } => {
+            usage.callable_names.arguments(args);
+        }
+        _ => {}
+    }
+    match &expr.kind {
         ExprKind::IncludeValue { path, .. } => {
             // Like the include statement: a runtime include inside a fragment loads code this
             // walk cannot read.
@@ -708,6 +768,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::FunctionCall { name, args } => {
             let name = php_symbol_key(name.as_str().trim_start_matches('\\'));
             record_name(usage, &name);
+            if CALLABLE_TAKING_BUILTINS.contains(&name.as_str()) && !args.is_empty() {
+                usage.callable_names.unknown_call();
+            }
             let literal_first = matches!(
                 args.first().map(|arg| &arg.kind),
                 Some(ExprKind::StringLiteral(_))
@@ -801,13 +864,15 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             record_method(usage, method);
         }
         ExprKind::ExprCall { callee, args } => {
+            usage.callable_names.expression_call(callee);
             usage.dynamic_function_call = true;
             scan_expr(callee, usage);
             for arg in args {
                 scan_expr(arg, usage);
             }
         }
-        ExprKind::ClosureCall { args, .. } => {
+        ExprKind::ClosureCall { var, args } => {
+            usage.callable_names.variable_call(var);
             usage.dynamic_function_call = true;
             for arg in args {
                 scan_expr(arg, usage);
@@ -844,13 +909,15 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(inner, usage);
         }
         ExprKind::NullCoalesce { value, default }
-        | ExprKind::ShortTernary { value, default }
-        | ExprKind::Pipe {
-            value,
-            callable: default,
-        } => {
+        | ExprKind::ShortTernary { value, default } => {
             scan_expr(value, usage);
             scan_expr(default, usage);
+        }
+        ExprKind::Pipe { value, callable } => {
+            usage.callable_names.expression_call(callable);
+            usage.callable_names.arguments(std::slice::from_ref(value.as_ref()));
+            scan_expr(value, usage);
+            scan_expr(callable, usage);
         }
         ExprKind::Assignment {
             target,
@@ -859,6 +926,11 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             prelude,
             ..
         } => {
+            if let ExprKind::Variable(name) = &target.kind {
+                usage.callable_names.assignment(name, value);
+            } else {
+                usage.callable_names.write_target(target);
+            }
             scan_expr(target, usage);
             scan_expr(value, usage);
             if let Some(result_target) = result_target {
@@ -913,7 +985,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(then_expr, usage);
             scan_expr(else_expr, usage);
         }
-        ExprKind::Closure { params, body, .. } => {
+        ExprKind::Closure { params, body, captures, capture_refs, .. } => {
+            for name in capture_refs { usage.callable_names.write(name); }
+            usage.storage_variables.extend(captures.iter().chain(capture_refs).cloned());
             scan_params(params, usage);
             scan_program(body, usage);
         }
@@ -1059,12 +1133,15 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => {
+            usage.callable_names.write(name);
+            usage.storage_variables.insert(name.clone());
+        }
         ExprKind::ObjectClassName { object } => scan_expr(object, usage),
     }
 }

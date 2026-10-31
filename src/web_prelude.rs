@@ -19,6 +19,7 @@
 //!   session-handler gate, and the catch-all `try` wrap.
 //! - Legacy callable-handler dispatch is injected only when user code can reach
 //!   `session_set_save_handler()`.
+//! - Process-environment copying is omitted when source access and introspection cannot observe it.
 
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
 use crate::synthetic_class::{
@@ -66,7 +67,12 @@ pub const fn sapi_name(web: bool) -> &'static str {
 /// The declaration SHAPES, built as AST. This module decides what a `--web` binary KEEPS;
 /// `build` spells out what there is to keep.
 pub(crate) mod build;
+mod environment;
 
+/// Detects environment observers in the discarded autoload probe before web injection.
+pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
+    environment::is_observable(&usage::collect(program))
+}
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
 /// becomes a 500 before response commitment, or aborts an already-streaming response, instead of
@@ -197,6 +203,21 @@ pub fn inject_if_web(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
 ) -> Program {
+    inject_if_web_with_autoload_usage(
+        program, web, php_version, ini_overrides, inventory, preload_path, false,
+    )
+}
+
+/// Injects the web surface while retaining environment use discovered in autoloaded files.
+pub(crate) fn inject_if_web_with_autoload_usage(
+    program: Program,
+    web: bool,
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+    preload_path: Option<&std::path::Path>,
+    autoload_observes_environment: bool,
+) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         inject_if_web_on_compiler_stack(
             program,
@@ -205,6 +226,7 @@ pub fn inject_if_web(
             ini_overrides,
             inventory,
             preload_path,
+            autoload_observes_environment,
         )
     })
 }
@@ -217,6 +239,7 @@ fn inject_if_web_on_compiler_stack(
     ini_overrides: &[(String, String)],
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
+    autoload_observes_environment: bool,
 ) -> Program {
     if !web {
         return program;
@@ -225,7 +248,11 @@ fn inject_if_web_on_compiler_stack(
     let user_usage = usage::collect(&program);
     let needs_callable_session_handler = user_usage.references("session_set_save_handler")
         || user_usage.dynamic_function_call;
-    let mut combined = build::web_declarations(php_version, ini_overrides);
+    let mut combined = build::web_declarations_with_environment(
+        php_version,
+        ini_overrides,
+        autoload_observes_environment || environment::is_observable(&user_usage),
+    );
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
     }

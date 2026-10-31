@@ -625,13 +625,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             ast, php_version, &ini_overrides, &mut prelude_inventory,
             preload_startup_path.as_deref(),
         )
+    } else if autoloaded("web_environment") {
+        web_prelude::inject_if_web_with_autoload_usage(
+            ast, web, php_version, &ini_overrides, &mut prelude_inventory,
+            preload_startup_path.as_deref(), true,
+        )
     } else {
         web_prelude::inject_if_web(
-            ast,
-            web,
-            php_version,
-            &ini_overrides,
-            &mut prelude_inventory,
+            ast, web, php_version, &ini_overrides, &mut prelude_inventory,
             preload_startup_path.as_deref(),
         )
     };

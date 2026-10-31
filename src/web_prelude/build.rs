@@ -5131,10 +5131,20 @@ fn decl_stmt_bootstrap_44() -> Stmt {
     )
 }
 
-/// Builds the whole `--web` surface, one declaration per helper above, in source order.
+/// Builds the complete web surface for application preparation and declaration audits.
 pub(crate) fn web_declarations(
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+) -> Program {
+    web_declarations_with_environment(php_version, ini_overrides, true)
+}
+
+/// Builds the web surface, copying the environment only when user code can observe it.
+/// The empty array remains available for internal session callback storage in either case.
+pub(crate) fn web_declarations_with_environment(
+    php_version: PhpVersion,
+    ini_overrides: &[(String, String)],
+    populate_environment: bool,
 ) -> Program {
     internal_declarations(|| {
         let mut declarations: Program = vec![
@@ -5279,8 +5289,11 @@ pub(crate) fn web_declarations(
             decl_stmt_bootstrap_31(),
             decl_stmt_bootstrap_32(),
             decl_stmt_bootstrap_33(),
-            decl_stmt_bootstrap_34(),
-            decl_stmt_bootstrap_35(),
+        ];
+        if populate_environment {
+            declarations.extend([decl_stmt_bootstrap_34(), decl_stmt_bootstrap_35()]);
+        }
+        declarations.extend([
             decl_fn_elephc_emit_cookie(),
             decl_fn_setcookie(),
             decl_fn_setrawcookie(),
@@ -5331,7 +5344,7 @@ pub(crate) fn web_declarations(
             decl_fn_elephc_ini_session_keys(),
             decl_fn_elephc_is_session_ini(),
             decl_fn_elephc_ini_get_raw(),
-        ];
+        ]);
 
         // The shared `opcache.*` INI helpers (`__elephc_opcache_ini_string` / `_access` / `_keys`
         // / `_all_details` / `_all_plain`), baked for the compile target so `ini_get`/`ini_set`/

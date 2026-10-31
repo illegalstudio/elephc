@@ -59,6 +59,7 @@ Source (.php or .lfc)
 │              │  resolved source usage, forced bridge flags, or --web. Before
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
 │              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
+│              │  The same probe retains web environment copies for autoloaded observers.
 └─────┬────────┘
       │
       ▼
@@ -376,7 +377,7 @@ src/
 ├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
 ├── image_prelude/             Image prelude usage detection
 ├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)
-├── web_prelude/               Web-prelude function-reachability analysis for pay-for-use injection
+├── web_prelude/               Web declarations and conservative environment-copy demand detection
 ├── superglobals.rs            Canonical --web request-superglobal set shared by checker, IR lowering, and runtime reset
 │
 ├── lexer/

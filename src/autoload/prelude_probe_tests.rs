@@ -35,7 +35,10 @@ impl ProbeProject {
 namespace App;
 $value = require __DIR__ . '/value.php';
 $object = new class {};
-class Probe { public ?\PDO $pdo = null; }
+class Probe {
+    public ?\PDO $pdo = null;
+    public function inspect() { eval('new class {};'); }
+}
 "#).unwrap();
         project
     }
@@ -134,5 +137,25 @@ fn probe_detects_fileinfo_in_autoloaded_classes() {
         let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
         let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
         assert!(groups.contains("fileinfo"), "autoloaded body was missed: {body}");
+    }
+}
+
+/// Autoloaded observers retain web environment population while getenv remains independent.
+#[test]
+fn probe_detects_web_environment_observers_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    for (body, observes) in [
+        (r"return $_ENV['PATH'];", true),
+        (r"return get_defined_vars();", true),
+        (r"return eval($source);", true),
+        (r"return getenv('PATH');", false),
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function read(string $source) {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert_eq!(groups.contains("web_environment"), observes, "{body}");
     }
 }

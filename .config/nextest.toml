@@ -354,6 +354,25 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 filter = 'test(web_resets_core_handlers_between_requests)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
+# These environment probes compile eval-capable web hosts. The computed-name
+# regression needs three separate programs, since one literal eval target would
+# otherwise retain the environment for every case. It took 90s locally.
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
+slow-timeout = { period = "60s", terminate-after = 6 }
+
+[[profile.default.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
 # This ownership fixture likewise compiles the web prelude with opaque eval and
 # then drives several requests. Both retries on macOS CI reached nextest's exact
 # 60s termination boundary without a test panic or server diagnostic.
