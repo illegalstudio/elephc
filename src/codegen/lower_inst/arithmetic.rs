@@ -398,7 +398,7 @@ pub(super) fn lower_mixed_numeric_binop(
                 Arch::X86_64 => "rdi",
             };
             abi::emit_load_int_immediate(ctx.emitter, rhs_reg, integer);
-            assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
+            assert!(abi::emit_mixed_operator_integer_rhs_call(ctx.emitter, op));
             return store_if_result(ctx, inst);
         }
     }
@@ -498,12 +498,13 @@ fn expect_mixed_numeric_op(inst: &Instruction) -> Result<MixedNumericOp> {
     }
 }
 
-/// Maps a mixed numeric operation to the target-aware runtime helper label.
+/// Maps a Mixed `+`, `-`, `*` or `**` to its runtime entry: the operator entries for the first
+/// three, which also unite two arrays and refuse an array beside anything else as PHP does.
 fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
     match op {
-        MixedNumericOp::Add => "__rt_mixed_numeric_add",
-        MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
-        MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
+        MixedNumericOp::Add => "__rt_mixed_operator_add",
+        MixedNumericOp::Sub => "__rt_mixed_operator_sub",
+        MixedNumericOp::Mul => "__rt_mixed_operator_mul",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
     }
 }

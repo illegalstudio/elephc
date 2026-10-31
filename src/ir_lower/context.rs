@@ -785,6 +785,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .any(|names| names.contains(name))
     }
 
+    /// Returns whether a `try` handler in this function is active where lowering is now.
+    pub(crate) fn has_active_try_handler(&self) -> bool {
+        !self.try_loop_depths.is_empty()
+    }
+
     /// Drops the innermost active `try` handler's record.
     pub(crate) fn pop_try_loop_depth(&mut self) {
         self.try_loop_depths.pop();

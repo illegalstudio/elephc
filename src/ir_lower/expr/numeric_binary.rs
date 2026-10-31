@@ -446,6 +446,14 @@ pub(super) fn should_use_mixed_numeric_binop(lhs: IrType, rhs: IrType) -> bool {
 }
 
 /// Emits a mixed-numeric EIR opcode with the operation immediate required by the backend.
+///
+/// `+`, `-` and `*` over an operand that may hold an array can throw PHP's `TypeError`
+/// (`Unsupported operand types`) from the operator runtime entry. The owned temporaries that may
+/// hold that array are pinned for the unwinding path, and the instruction carries `MAY_THROW`
+/// when it pinned one or sits inside a `try` of this function, where passes must not move state
+/// across the throw. Otherwise a throw only leaves the frame: the AST optimizer already keeps the
+/// operator and its caller's `catch`, and loads of `mixed` locals keep the effects and shape the
+/// numeric fast paths and concat-scratch coalescing rely on.
 pub(super) fn lower_mixed_numeric_binary(
     ctx: &mut LoweringContext<'_, '_>,
     lhs: LoweredValue,
@@ -453,14 +461,61 @@ pub(super) fn lower_mixed_numeric_binary(
     op: MixedNumericOp,
     expr: &Expr,
 ) -> LoweredValue {
-    ctx.emit_value(
+    let array_operands: Vec<crate::ir::ValueId> = [lhs.value, rhs.value]
+        .into_iter()
+        .filter(|value| may_hold_array_value(ctx, *value))
+        .collect();
+    let array_operator = !matches!(op, MixedNumericOp::Pow) && !array_operands.is_empty();
+    let pins = if array_operator {
+        pin_in_flight_owners(ctx, &array_operands, expr.span)
+    } else {
+        Vec::new()
+    };
+    let may_throw = array_operator && (!pins.is_empty() || ctx.has_active_try_handler());
+    let effects = if may_throw {
+        Op::MixedNumericBinop.default_effects() | crate::ir::Effects::MAY_THROW
+    } else {
+        Op::MixedNumericBinop.default_effects()
+    };
+    let result = ctx.emit_value(
         Op::MixedNumericBinop,
         vec![lhs.value, rhs.value],
         Some(Immediate::MixedNumericOp(op)),
         PhpType::Mixed,
-        Op::MixedNumericBinop.default_effects(),
+        effects,
         Some(expr.span),
-    )
+    );
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    result
+}
+
+/// Returns whether an operand may hold a PHP array at run time. A checked integer operation, and a
+/// Mixed `-`, `*` or `**`, yield a number whatever their boxed type says; a Mixed `+` yields an
+/// array only as the union of two operands that may both hold one.
+fn may_hold_array_value(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
+    if let Some(inst) = ctx.builder.value_defining_instruction(value) {
+        match inst.op {
+            Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::ICheckedPow => return false,
+            Op::MixedNumericBinop => {
+                if !matches!(inst.immediate, Some(Immediate::MixedNumericOp(MixedNumericOp::Add))) {
+                    return false;
+                }
+                let operands = inst.operands.clone();
+                return operands.iter().all(|operand| may_hold_array_value(ctx, *operand));
+            }
+            _ => {}
+        }
+    }
+    may_hold_array(&ctx.builder.value_php_type(value))
+}
+
+/// Returns whether a value of this static type may hold a PHP array at run time.
+fn may_hold_array(ty: &PhpType) -> bool {
+    match ty.codegen_repr() {
+        PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+        PhpType::Union(members) => members.iter().any(may_hold_array),
+        _ => false,
+    }
 }
 
 /// Maps AST arithmetic to the mixed-numeric runtime helper set currently available.

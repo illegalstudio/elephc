@@ -27,7 +27,7 @@ pub use bootstrap::{
     emit_cdylib_exit_escape, emit_enable_heap_debug_flag, emit_enable_web_heap_guard_flag,
     emit_exit, emit_exit_hook, emit_exit_with_result_reg, emit_store_process_args_to_globals,
 };
-pub use borrowed_numeric::emit_mixed_numeric_integer_rhs_call;
+pub use borrowed_numeric::{emit_mixed_numeric_integer_rhs_call, emit_mixed_operator_integer_rhs_call};
 pub use calls::{
     build_outgoing_arg_assignments_for_target, emit_call_label, emit_call_reg,
     emit_load_temporary_stack_slot, emit_pop_float_reg, emit_pop_reg, emit_pop_reg_pair,

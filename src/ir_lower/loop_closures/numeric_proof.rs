@@ -421,8 +421,9 @@ fn closure_result(
                 let operand = inst.operands.first()?;
                 *values.get(&operand.as_raw())?
             }
+            // The unwind-owner push and pop around an array operator carry no value.
             Op::Release | Op::ReleaseUnlessAliases | Op::ReleaseLocalSlot | Op::Nop | Op::ConcatReset
-            | Op::ZeroLocalSlot | Op::UnsetLocal => continue,
+            | Op::ZeroLocalSlot | Op::UnsetLocal | Op::PushCallOperandOwner | Op::PopCallOperandOwner => continue,
             Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::MixedNumericBinop => {
                 if inst.op == Op::MixedNumericBinop
                     && !matches!(

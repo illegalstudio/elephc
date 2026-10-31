@@ -205,6 +205,14 @@ pub(crate) const UNSER_ALLOWED_CLASSES_ENTRY_PREFIX: &str =
 pub(crate) const OBJECT_NOT_ARRAY_PREFIX: &str = "Cannot use object of type ";
 /// Suffix for PHP's catchable Error when an object is indexed like an array.
 pub(crate) const OBJECT_NOT_ARRAY_SUFFIX: &str = " as array";
+/// Prefix for PHP's catchable TypeError when `+`, `-` or `*` meets an array it cannot combine.
+///
+/// Only `array + array` is defined (the union); an array beside any other operand, or two arrays
+/// under `-` or `*`, raise `Unsupported operand types: <left> <op> <right>`, each operand named as
+/// `get_debug_type()` names it, measured against 8.5 with both operands in variables.
+pub(crate) const UNSUPPORTED_OPERANDS_PREFIX: &str = "Unsupported operand types: ";
+/// The operator between the two operand names, three bytes each, indexed by the helper's opcode.
+pub(crate) const UNSUPPORTED_OPERANDS_OPS: &str = " +  -  * ";
 /// Prefix for PHP's catchable Exception when an object's class forbids serialization.
 ///
 /// `serialize()` on a Reflection object throws `Serialization of 'ReflectionMethod' is not
