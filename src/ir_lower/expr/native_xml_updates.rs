@@ -126,7 +126,9 @@ fn lower(
         ctx, parent, name_value, verb, expr.span,
     );
     let code = operation(op).expect("validated update operation") as i64;
-    let result = if !ctx.classes.contains_key("SimpleXMLElement") {
+    // Capturing a concrete ordinary receiver preserves its type even when XML is loaded.
+    let native_possible = possible(ctx, &local_expr(&inputs.receiver, expr.span), property);
+    let result = if !native_possible {
         ordinary(ctx, parent, property, &name_expr, op, &right_expr, post, reread, expr)
     } else { property_access::native_xml_reads::dispatch(
         ctx, parent, expr, PhpType::Mixed, false,

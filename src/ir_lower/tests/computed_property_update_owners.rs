@@ -206,6 +206,12 @@ $xml->a += 1;
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let numeric = module.functions.iter().find(|function| function.name == "updateOwnerNumericMask").unwrap();
+        let exercise = module.functions.iter().find(|function| function.name == "updateOwnerExercise").unwrap();
+        assert!(!exercise.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "__elephc_property_update")),
+            "{target}: a concrete ordinary receiver must not dispatch an XML update adapter\n{}",
+            crate::ir::print_function(exercise));
         assert!(!numeric.instructions.iter().any(|inst| matches!(inst.op,
             crate::ir::Op::InstanceOf | crate::ir::Op::PushCallOperandOwner)),
             "{target}: scalar coercion must not gain native dispatch or operand owners\n{}",

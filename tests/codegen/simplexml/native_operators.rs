@@ -10,6 +10,51 @@
 
 use crate::support::*;
 
+/// Typed ordinary updates preserve scalar writes and expression results while XML is loaded.
+#[test]
+fn test_simplexml_ordinary_typed_update_bridge_bundle() {
+    if skip_without_xml_native("test_simplexml_ordinary_typed_update_bridge_bundle") { return; }
+    let setup = r#"<?php
+class OrdinaryXmlEnabledCounter {
+    public int $number = 3;
+    public string $text = 'a';
+    public function receiver(): self { echo 'r|'; return $this; }
+}
+class OrdinaryXmlEnabledName {
+    public function __toString(): string { echo 'n|'; return 'number'; }
+}
+function updateOrdinaryXmlEnabledCounter(OrdinaryXmlEnabledCounter $counter): void {
+    $counter->receiver()->number += 2; echo $counter->number, '|';
+    echo ++$counter->receiver()->number, '|';
+    echo $counter->receiver()->number++, '|';
+    echo ($counter->receiver()->text .= 'b'), '|';
+    $counter->{new OrdinaryXmlEnabledName()} += 1;
+    echo $counter->number, '|';
+}
+$xml = new SimpleXMLElement('<r/>');
+"#;
+    let body = r#"
+$counter = new OrdinaryXmlEnabledCounter();
+updateOrdinaryXmlEnabledCounter($counter);
+unset($counter, $xml);
+"#;
+    let aot = format!("{setup}{body}");
+    let eval_setup = setup.replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled");
+    let eval_body = body.replace("OrdinaryXmlEnabled", "EvalOrdinaryXmlEnabled")
+        .replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("{eval_setup}\n$code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
+    let expected = "r|5|r|6|r|6|r|ab|n|8|";
+    assert_bundle_with(&[
+        BundleCase { name: "ordinary_xml_enabled_aot", source: &aot, expected },
+        BundleCase { name: "ordinary_xml_enabled_eval_bridge", source: &eval, expected },
+    ], |source| {
+        let output = compile_and_run_with_heap_debug(source);
+        assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        output.stdout
+    });
+}
+
 /// Mixed native refusal keeps scalar byte complements, conversion diagnostics and fresh owners.
 #[test]
 fn test_simplexml_bitnot_scalar_fallback_bundle() {
