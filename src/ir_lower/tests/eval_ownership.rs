@@ -8,7 +8,7 @@
 //! - Profile metadata must not hide owned eval results from expression cleanup.
 //! - The source buffer has a frame root while native or eval code can throw.
 
-use crate::ir::{Immediate, Op, Ownership};
+use crate::ir::{Immediate, LocalKind, Op, Ownership};
 
 /// Verifies catch adapter cleanup for one independently scheduled target compilation.
 fn assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes(name: &str) {
@@ -66,6 +66,47 @@ fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_aarch64() {
 fn eval_catch_predicates_retire_raw_throwable_adapter_boxes_linux_x86_64() {
     assert_eval_catch_predicates_retire_raw_throwable_adapter_boxes("linux-x86_64");
 }
+
+/// Verifies an AOT callee without an eval local still consults escaped-object ownership.
+fn assert_context_free_object_reference_guard_uses_eval_owner(name: &str) {
+    let source = r#"<?php
+interface EscapedEvalReferenceContract {}
+function acceptEscapedEvalReference(EscapedEvalReferenceContract &$value): bool { return true; }
+$source = $argc > 0
+    ? 'class EscapedEvalReferenceImplementation implements EscapedEvalReferenceContract {}
+       $value = new EscapedEvalReferenceImplementation();
+       acceptEscapedEvalReference($value);'
+    : '';
+eval($source);
+"#;
+    let target = crate::codegen::platform::Target::parse(name).unwrap();
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+    );
+    let function = module.functions.iter()
+        .find(|function| function.name == "acceptEscapedEvalReference").unwrap();
+    assert!(!function.locals.iter().any(|local| local.kind == LocalKind::EvalContext), "{name}");
+    assert!(function.instructions.iter().any(|instruction| instruction.op == Op::InstanceOf), "{name}");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let symbol = crate::names::function_symbol("acceptEscapedEvalReference");
+    let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+    let body = body.split("\n.globl ").next().unwrap();
+    assert!(body.contains(&target.extern_symbol("__elephc_eval_object_is_a")), "{name}");
+}
+
+macro_rules! context_free_eval_object_guard_target_test {
+    ($test:ident, $target:literal) => {
+        /// A context-free AOT object-reference guard recovers eval ownership on this target.
+        #[test]
+        fn $test() { assert_context_free_object_reference_guard_uses_eval_owner($target); }
+    };
+}
+
+context_free_eval_object_guard_target_test!(context_free_eval_object_guard_macos, "macos-aarch64");
+context_free_eval_object_guard_target_test!(context_free_eval_object_guard_ios, "ios-arm64");
+context_free_eval_object_guard_target_test!(context_free_eval_object_guard_ios_sim, "ios-sim-arm64");
+context_free_eval_object_guard_target_test!(context_free_eval_object_guard_linux_arm64, "linux-aarch64");
+context_free_eval_object_guard_target_test!(context_free_eval_object_guard_linux_x86_64, "linux-x86_64");
 
 /// Checks bounded eval scope writeback before unwinding for one independently scheduled target.
 fn check_eval_throw_writeback_is_bounded_before_unwinding(target: &str) {

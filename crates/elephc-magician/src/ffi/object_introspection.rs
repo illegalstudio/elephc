@@ -14,6 +14,8 @@
 //! - Class-name and relation lookups return boxed Mixed cells through `ElephcEvalResult`.
 //! - Named predicate probes fail closed as false; dynamic `instanceof` invalid
 //!   targets return -1 so generated code can raise PHP's fatal diagnostic.
+//! - Named predicates recover an escaped dynamic object's owner when the AOT callee has no
+//!   persistent eval context of its own, then fall back to native class metadata.
 
 use super::util::{abi_name_to_string, clear_result, write_outcome};
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
@@ -332,19 +334,29 @@ unsafe fn eval_object_is_a_inner(
     target_len: u64,
     exclude_self: u64,
 ) -> i32 {
-    let Some(context) = ctx.as_mut() else {
-        return 0;
-    };
-    if context.abi_version() != ABI_VERSION || object.is_null() {
+    if object.is_null() {
         return 0;
     }
     let Ok(target) = abi_name_to_string(target_ptr, target_len) else {
         return 0;
     };
+    let object = RuntimeCellHandle::from_raw(object).borrowed();
+    let mut values = ElephcRuntimeOps::new();
+    let owner = values.object_identity(object).ok().and_then(|identity| {
+        crate::ffi::dynamic_destructors::dynamic_object_owner_context(identity)
+    });
+    let resolved = owner.unwrap_or(ctx);
+    let Some(context) = resolved.as_mut() else {
+        return values.object_is_a(object, target.trim_start_matches('\\'), exclude_self != 0)
+            .map(i32::from).unwrap_or(0);
+    };
+    if context.abi_version() != ABI_VERSION {
+        return 0;
+    }
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_context_object_is_a(
         context,
-        RuntimeCellHandle::from_raw(object).borrowed(),
+        object,
         &target,
         exclude_self != 0,
         &mut values,

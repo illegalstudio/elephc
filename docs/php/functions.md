@@ -677,13 +677,14 @@ The same refusal applies to a runtime-selected `iterable &$items` parameter when
 is a fresh array or object local boxed for unknown-signature dispatch, including a runtime-named
 method call. An existing alias whose storage is already raw `Iterable` remains supported. This
 limit belongs to calls whose signature is unknown at compile time.
-Class-typed object reference parameters adapt boxed unknown-signature locals, and callable
-descriptors that preserve a raw object slot, including closures, also accept existing object
-aliases. The callee validates the declared class or interface, including `self`, `parent`,
-subclasses, interface implementations and eval-declared objects. A mismatched object raises the
-ordinary catchable argument `TypeError` before the function body runs. A direct alias whose
-storage does not match the selected descriptor is refused earlier with the physical-layout
-`Error`, because it cannot safely enter that reference slot.
+Class-typed object reference parameters adapt boxed unknown-signature locals that contain
+objects, and callable descriptors that preserve a raw object slot, including closures, also
+accept existing object aliases. The callee validates the declared class or interface, including
+`self`, `parent`, subclasses, interface implementations and eval-declared objects. A mismatched
+object raises the ordinary catchable argument `TypeError` before the function body runs. A
+direct alias whose storage does not match the selected descriptor, or a boxed non-object payload
+selected into a raw object slot, is refused earlier with the physical-layout `Error`, because it
+cannot safely enter that reference slot.
 When such an alias reaches a by-reference variadic parameter, writes of `int` and `null` succeed;
 other writes raise `Unsupported assignment through a nullable integer reference: value must be
 int or null` before changing the slot. These diagnostics describe compiler limits, including

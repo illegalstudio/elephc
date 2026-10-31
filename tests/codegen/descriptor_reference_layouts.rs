@@ -233,12 +233,15 @@ class RuntimeClosureReferenceOwner {
     }
 }
 class RuntimeClosureReferenceOther {}
+function runtimeClosureReferenceOther(mixed &$value): void {}
 class RuntimeClosureReferenceHolder {
     public int $number = 4;
     public RuntimeClosureReferenceOther $other;
     public function __construct() { $this->other = new RuntimeClosureReferenceOther(); }
 }
-$callback = RuntimeClosureReferenceOwner::callback();
+$callback = $argc > 0
+    ? RuntimeClosureReferenceOwner::callback()
+    : 'runtimeClosureReferenceOther';
 $value = new RuntimeClosureReferenceOwner('start');
 $callback($value); echo 'changed:', $value->name, '|';
 $other = new RuntimeClosureReferenceOther();

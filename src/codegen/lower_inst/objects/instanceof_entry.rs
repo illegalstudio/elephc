@@ -55,7 +55,8 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         emit_incomplete_class_instanceof(ctx, value, &value_ty)?;
         return store_if_result(ctx, inst);
     }
-    if builtins::has_eval_context(ctx) {
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An escaped eval-declared object carries its owner independently of this AOT frame.
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }
     let Some((target_id, target_kind)) = classify_named_target(ctx, &class_name) else {
