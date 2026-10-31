@@ -17,20 +17,12 @@ pub(super) fn store_mixed_scope_cell_to_local(
     pending_throw: Option<usize>,
 ) -> Result<()> {
     let payload_ty = ctx.ref_cell_payload_type(local.slot)?.codegen_repr();
-    let logical_ty = local.ty.codegen_repr();
-    if payload_ty != logical_ty && ctx.local_ref_cell_representation_is_definite(local.slot) {
-        return store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw);
-    }
-    if payload_ty != logical_ty && ctx.local_ref_cell_representation_is_dynamic(local.slot) {
+    if let Some(state) = ctx.ref_cell_state_offset(local.slot)
+        && ctx.local_slot_ever_stores_ref_cell_pointer(local.slot)
+    {
         let attached = ctx.next_label("eval_local_reload_attached_ref_cell");
         let done = ctx.next_label("eval_local_reload_representation_done");
         let result = abi::int_result_reg(ctx.emitter);
-        let state = ctx.ref_cell_state_offset(local.slot).ok_or_else(|| {
-            CodegenIrError::invalid_module(format!(
-                "dynamic eval local ${} has no reference state",
-                local.name
-            ))
-        })?;
         abi::emit_push_reg(ctx.emitter, result);
         abi::load_at_offset(ctx.emitter, result, state);
         match ctx.emitter.target.arch {
@@ -50,6 +42,9 @@ pub(super) fn store_mixed_scope_cell_to_local(
         store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw)?;
         ctx.emitter.label(&done);
         return Ok(());
+    }
+    if ctx.local_slot_ever_stores_ref_cell_pointer(local.slot) {
+        return store_mixed_scope_cell_to_ref_cell(ctx, local, &payload_ty, pending_throw);
     }
     store_mixed_scope_cell_to_logical_local(ctx, local, pending_throw)
 }

@@ -272,7 +272,7 @@ fn flush_eval_scope_locals_with_mask(
         if let Some((offset, skip)) = &skip {
             emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
         }
-        let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
+        let ty = ctx.load_eval_local_to_result(local.slot)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
         } else {

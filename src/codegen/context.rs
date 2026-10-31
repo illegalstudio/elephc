@@ -901,6 +901,42 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
+    /// Loads an eval-synchronized local using its runtime raw/ref-cell state.
+    ///
+    /// Eval flushes every visible binding from one instruction, while an attached native alias
+    /// may have arrived through a path the instruction-local may-analysis cannot prove. The
+    /// frame state word is authoritative for these synchronization boundaries.
+    pub(super) fn load_eval_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
+        let ty = self.local_php_type(slot)?;
+        if !self.local_slot_ever_stores_ref_cell_pointer(slot) {
+            return self.load_raw_local_to_result(slot);
+        }
+        let Some(state_offset) = self.ref_cell_state_offset(slot) else {
+            return self.load_ref_cell_local_to_result(slot);
+        };
+        let ref_cell = self.next_label("eval_local_load_ref_cell");
+        let done = self.next_label("eval_local_load_done");
+        let state_reg = abi::secondary_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, state_reg, state_offset);
+        match self.emitter.target.arch {
+            Arch::AArch64 => {
+                self.emitter
+                    .instruction(&format!("cbnz {state_reg}, {ref_cell}"));      // follow an attached native reference cell during eval flush
+            }
+            Arch::X86_64 => {
+                self.emitter
+                    .instruction(&format!("test {state_reg}, {state_reg}"));    // inspect the authoritative eval-time representation flag
+                self.emitter.instruction(&format!("jne {ref_cell}"));           // follow an attached native reference cell during eval flush
+            }
+        }
+        self.load_raw_local_to_result(slot)?;
+        self.emit_branch(&done);
+        self.emitter.label(&ref_cell);
+        self.load_ref_cell_local_to_result(slot)?;
+        self.emitter.label(&done);
+        Ok(ty)
+    }
+
     /// Loads a local slot using its raw frame representation without consulting ref-cell state.
     pub(super) fn load_raw_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let ty = self.local_php_type(slot)?;

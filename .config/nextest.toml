@@ -29,6 +29,16 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(embedder_stack_tests) or binary(compiler_security_limits_tests)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# These exact EIR probes emit all supported targets or compile the complete SimpleXML integration
+# source. Under four-way non-codegen sharding they crossed 60 seconds without hanging.
+[[profile.default.overrides]]
+filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(=ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'test(/^ir_lower::tests::simplexml_targets::simplexml_target_/) or test(=ir_lower::tests::reference_return_boundaries::protected_nullable_object_reference_returns_use_dynamic_slot_state)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
 # Keep their assertions and use the same bounded budget as REPL eval hosts.
 [[profile.default.overrides]]
@@ -251,15 +261,15 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # like `codegen::eval`, but run in the non-codegen shards, where they had only
 # the plain 60s cap. Two of them were terminated at 60s on both attempts on one
 # slow macOS runner while the same shard had passed in 11 minutes the run before.
-# Give them five minutes: the expanded builtin catalog makes the two largest binaries reach the
-# three-minute cap on both Linux architectures, while successful siblings remain below two minutes.
+# Give them ten minutes: the expanded builtin catalog made the resource and inline-HTML hosts
+# exhaust five minutes on both Linux architectures, while successful siblings remain below two.
 [[profile.default.overrides]]
 filter = 'binary(/^eval_/)'
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
 filter = 'binary(/^eval_/)'
-slow-timeout = { period = "60s", terminate-after = 5 }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # The `opcache_*` integration binaries are in the same position: most of their programs call
 # `eval()` or `include` a path known only at run time — the only ways to reach the runtime

@@ -28,7 +28,7 @@ $items = ["value" => 1]; nativeHashCapture($items, $argc > 0 ? '$items["value"] 
         ("hash_property", r#"<?php
 class NativeHashProperty {
     public array<string, int> $items = ["value" => 1];
-    public function &itemsRef(): array { return $this->items; }
+    public function &itemsRef(): array<string, int> { return $this->items; }
 }
 $holder = new NativeHashProperty(); $items =& $holder->itemsRef();
 $source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
@@ -36,7 +36,7 @@ $source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
         ("hash_static", r#"<?php
 class NativeHashStaticProperty {
     public static array<string, int> $items = ["value" => 1];
-    public static function &itemsRef(): array { return self::$items; }
+    public static function &itemsRef(): array<string, int> { return self::$items; }
 }
 $items =& NativeHashStaticProperty::itemsRef();
 $source = $argc > 0 ? '$items["value"] = 2;' : ''; eval($source);
@@ -54,7 +54,7 @@ $items = [1]; nativeArrayCapture($items, $argc > 0 ? '$items[0] = 2;' : '');
         ("property", r#"<?php
 class NativeArrayProperty {
     public array<int> $items = [1];
-    public function &itemsRef(): array { return $this->items; }
+    public function &itemsRef(): array<int> { return $this->items; }
 }
 $holder = new NativeArrayProperty(); $items =& $holder->itemsRef();
 $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
@@ -62,7 +62,7 @@ $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
         ("static", r#"<?php
 class NativeArrayStaticProperty {
     public static array<int> $items = [1];
-    public static function &itemsRef(): array { return self::$items; }
+    public static function &itemsRef(): array<int> { return self::$items; }
 }
 $items =& NativeArrayStaticProperty::itemsRef();
 $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
@@ -70,7 +70,7 @@ $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);
         ("nullable_property", r#"<?php
 class NativeNullableArrayProperty {
     public ?array<int> $items = null;
-    public function &itemsRef(): ?array { return $this->items; }
+    public function &itemsRef(): ?array<int> { return $this->items; }
 }
 $holder = new NativeNullableArrayProperty(); $holder->items = [1]; $items =& $holder->itemsRef();
 $source = $argc > 0 ? '$items[0] = 2;' : ''; eval($source);

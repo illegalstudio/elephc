@@ -46,7 +46,16 @@ fn parsed_prelude() -> Program {
     PARSED_PRELUDE
         .get_or_init(|| {
             let source = format!("<?php\n{}\n{}\n{}\n{}\n{}", entities::SRC, attributes::SRC, node_cache::SRC, text::SRC, surface::SRC);
-            let tokens = crate::lexer::tokenize(&source).expect("dom html prelude must tokenize");
+            // The root source owns identity zero. Giving the cached prelude its own identity keeps
+            // equal line/column pairs from colliding in span-keyed checker maps once a user program
+            // grows to the same coordinates as a declaration or helper in this source.
+            let source_id = crate::span::Span::fresh_synthetic_source_id();
+            let tokens = crate::lexer::tokenize_with_mode_and_source_id(
+                &source,
+                crate::source::SourceMode::Php,
+                source_id,
+            )
+            .expect("dom html prelude must tokenize");
             crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
         })
         .clone()
@@ -163,6 +172,13 @@ mod tests {
         let program = inject_if_used(program, false, &mut inventory);
         assert!(inventory.groups.contains_key("core"));
         assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
+    }
+
+    /// Cached DOM declarations cannot share span identity with the entry source.
+    #[test]
+    fn dom_prelude_spans_use_a_synthetic_source_identity() {
+        let prelude = parsed_prelude();
+        assert!(prelude.iter().all(|stmt| stmt.span.source_id() != 0));
     }
 
     /// The prelude must declare the Termwind node types and its private traversal helper.

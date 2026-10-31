@@ -683,6 +683,8 @@ fn terminate_return_with_owner(
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
     let saved_cleaned = ctx.exit_cleaned_loops.clone();
+    let saved_types = ctx.local_types_snapshot();
+    let saved_initialized = ctx.initialized_slots_snapshot();
     release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
@@ -694,6 +696,8 @@ fn terminate_return_with_owner(
         ctx.try_loop_depths = saved_try_loop_depths;
         ctx.taken_finally_exceptions = saved_taken;
         ctx.exit_cleaned_loops = saved_cleaned;
+        ctx.restore_local_types(saved_types);
+        ctx.restore_initialized_slots(saved_initialized);
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
@@ -714,6 +718,8 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
     let saved_cleaned = ctx.exit_cleaned_loops.clone();
+    let saved_types = ctx.local_types_snapshot();
+    let saved_initialized = ctx.initialized_slots_snapshot();
     // `break N` / `continue N` target the loop at this depth: `loop_cleanup_count` is N - 1.
     let target_loop_depth = ctx.loop_stack.len().saturating_sub(loop_cleanup_count + 1);
     release_taken_exceptions(ctx, Some(target_loop_depth));
@@ -725,6 +731,8 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         ctx.try_loop_depths = saved_try_loop_depths;
         ctx.taken_finally_exceptions = saved_taken;
         ctx.exit_cleaned_loops = saved_cleaned;
+        ctx.restore_local_types(saved_types);
+        ctx.restore_initialized_slots(saved_initialized);
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
@@ -740,12 +748,16 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
+    let saved_types = ctx.local_types_snapshot();
+    let saved_initialized = ctx.initialized_slots_snapshot();
     if run_innermost_finally(ctx, true, None) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
+        ctx.restore_local_types(saved_types);
+        ctx.restore_initialized_slots(saved_initialized);
         return;
     }
     // NOT every active loop: a `try` inside one catches without leaving it. See
