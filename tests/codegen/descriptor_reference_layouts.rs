@@ -10,6 +10,34 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Copies of reference variadics retain their destination owner after named or packed refusal.
+#[test]
+fn test_nullable_variadic_copy_refusal_preserves_named_and_positional_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CopiedNullableReferenceHolder { public ?int $value = null; }
+function copiedNullableReferenceTarget(&...$items): void {
+    $copy = $items; $key = array_key_first($items);
+    try {
+        if ($key === 'last') { $copy['last'] = 'invalid'; }
+        else { $copy[0] = 'invalid'; }
+    } catch (Error $error) { echo 'refused|'; unset($error); }
+    echo count($copy), ':', count($items), ':', json_encode($copy[$key]), '|';
+    if ($key === 'last') { $copy['last'] = 7; } else { $copy[0] = 7; }
+    echo json_encode($copy[$key]), ':', json_encode($items[$key]), '|';
+    $copy['extra'] = 'kept'; echo count($copy), ':', count($items), '|';
+    unset($copy, $key);
+}
+function copiedNullableReferenceOther(&...$items): void { echo 'unexpected'; }
+$holder = new CopiedNullableReferenceHolder(); $value =& $holder->value;
+$target = $argc > 0 ? 'copiedNullableReferenceTarget' : 'copiedNullableReferenceOther';
+$target(last: $value); $holder->value = null; $target($value);
+unset($value, $holder, $target);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "refused|1:1:null|7:7|2:1|refused|1:1:null|7:7|2:1|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A rejected fresh object's throwing destructor keeps the original nullable-reference refusal.
 #[test]
 fn test_nullable_reference_refusal_preserves_error_during_throwing_replacement_cleanup() {

@@ -10,6 +10,35 @@
 use crate::{codegen::platform::Target, ir::Op, types::PhpType};
 use std::path::Path;
 
+/// A copied named variadic reaches marker validation before any consuming hash conversion.
+#[test]
+fn nullable_variadic_copies_use_mixed_key_string_writes_on_every_target() {
+    let source = r#"<?php
+function nullableCopiedWriteIr(&...$items): void {
+    $copy = $items;
+    try { $copy['last'] = 'invalid'; } catch (Error $error) { echo count($copy); }
+    $copy['extra'] = 7;
+}
+$value = null; nullableCopiedWriteIr(last: $value);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, Path::new("main.php"),
+            Path::new("."), Target::parse(name).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nullableCopiedWriteIr").unwrap();
+        let writes = function.instructions.iter().filter(|inst| inst.op == Op::ArraySetMixedKey).collect::<Vec<_>>();
+        assert_eq!(writes.len(), 2, "{name}");
+        for write in writes {
+            let crate::ir::ValueDef::Instruction { inst, .. } = function.value(write.operands[0]).unwrap().def
+                else { panic!("{name}: copied destination must be a local load"); };
+            assert_eq!(function.instruction(inst).unwrap().op, Op::LoadLocal, "{name}");
+        }
+        assert!(!function.instructions.iter().any(|inst| inst.op == Op::ArrayToHash),
+            "{name}: consuming conversion must not precede a nullable marker refusal");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// A native generic by-reference parameter reaches the retiring mixed-key storeback entry.
 #[test]
 fn nullable_mixed_key_ref_cell_destinations_select_owned_refusal_entries_on_every_target() {
