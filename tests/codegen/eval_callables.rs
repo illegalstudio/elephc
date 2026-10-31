@@ -28,16 +28,19 @@ function eval_native_descriptor_probe(int &$value, int $delta = 2, string ...$re
 $callback = eval_native_descriptor_probe(...);
 $source = $argc > 0 ? '$first = "3";
 $a = call_user_func_array($callback, ["value" => &$first]);
+$firstClass = $callback(...);
+$third = "5";
+$c = $firstClass($third, 4);
 $closure = Closure::fromCallable($callback);
 unset($callback);
 $second = 4;
 $b = call_user_func_array($closure, ["delta" => 3, "value" => &$second, "extra" => "z"]);
-return $a . ":" . gettype($first) . ":" . $first . "|" . $b . ":" . gettype($second) . ":" . $second;' : '';
+return $a . ":" . gettype($first) . ":" . $first . "|" . $b . ":" . gettype($second) . ":" . $second . "|" . $c . ":" . gettype($third) . ":" . $third;' : '';
 echo eval($source);
 "#,
     );
 
-    assert_eq!(out, "1:5::integer:5|2:7:extra:integer:7");
+    assert_eq!(out, "1:5::integer:5|2:7:extra:integer:7|2:9::integer:9");
 }
 
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.

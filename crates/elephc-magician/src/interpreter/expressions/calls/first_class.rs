@@ -51,6 +51,18 @@ pub(in crate::interpreter) fn eval_invokable_callable_expr(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[object], context, scope, values, |args, context, _, values| {
         let object = args[0].borrowed();
+        if values.type_tag(object)? == EVAL_TAG_CALLABLE {
+            if let Some(signature) = values.native_callable_signature(object)? {
+                return eval_closure_object_expr(
+                    EvalClosureObjectTarget::NativeDescriptor {
+                        callback: object,
+                        display_name: signature.display_name,
+                    },
+                    context,
+                    values,
+                );
+            }
+        }
         eval_invokable_object_precheck(object, context, values)?;
         eval_closure_object_expr(
             EvalClosureObjectTarget::InvokableObject { object }, context, values,
