@@ -283,6 +283,9 @@ pub(super) fn reflection_parameter_type_metadata(
     type_expr: Option<&TypeExpr>,
     ty: &PhpType,
 ) -> Option<ReflectionParameterTypeMetadata> {
+    // A declared type expression is the PHP-visible contract even when the parameter's ABI
+    // slot is widened to `mixed` for runtime coercion. Synthetic preludes rely on this:
+    // `finfo` and `?string` stay in `param_type_exprs` while their storage is boxed.
     if *ty == PhpType::Mixed {
         if let Some(type_expr) = type_expr {
             // A widened `mixed` ABI slot can still carry the source declaration in
@@ -341,6 +344,16 @@ pub(super) fn reflection_declared_type_metadata(
         _ => reflection_named_type_metadata_from_type_expr(type_expr)
             .map(ReflectionParameterTypeMetadata::Named),
     }
+}
+
+/// Returns a prelude-declared literal return type that the runtime `PhpType` widens.
+pub(super) fn reflection_owner_return_type_metadata(
+    owner: &str,
+) -> Option<ReflectionParameterTypeMetadata> {
+    crate::fileinfo_prelude::abi::reflection_return_type(owner)
+        .map(|name| ReflectionParameterTypeMetadata::Named(
+            reflection_builtin_named_type(name, false),
+        ))
 }
 
 /// Converts a declared return type into the supported `ReflectionType` subset.

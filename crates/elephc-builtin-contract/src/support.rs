@@ -383,7 +383,7 @@ mod tests {
         // `preg_grep`, `preg_last_error`, and `preg_last_error_msg` have eval homes,
         // the filter surface adds its seven forwarding homes, and seven ext/posix bindings
         // run through the PCNTL interpreter adapter.
-        assert_eq!(eval_registry, 810 + curl_surface);
+        assert_eq!(eval_registry, 811 + curl_surface);
         // 83 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -411,11 +411,11 @@ mod tests {
         // three compiled-pattern helpers the `preg_grep()` prelude calls, the internal
         // `parse_str()` query parser, and the internal unserialize property store and
         // PHAR validity probe.
-        assert_eq!(eval_internal, 151);
+        assert_eq!(eval_internal, 155);
         // 30 registry builtins awaiting eval homes, plus the PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`);
-        // the ten deprecated `zip_*` procedures are part of that latter group.
-        assert_eq!(eval_pending, 392);
+        // the ten deprecated `zip_*` procedures and `pack` are part of that latter group.
+        assert_eq!(eval_pending, 393);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -433,12 +433,12 @@ mod tests {
         // compiled-pattern helpers, the internal `parse_str()` query parser, the internal
         // unserialize property store and PHAR validity probe, and the seven ext/posix bridge
         // builtins as ordinary PCNTL registry operations.
-        assert_eq!(aot_registry, 858);
+        assert_eq!(aot_registry, 863);
         // Compiler transforms, constructs, dedicated syntax, preludes (now including
-        // `preg_grep`, the filter surface, and the ten deprecated `zip_*` procedures),
+        // `preg_grep`, the filter surface, `pack`, and the ten deprecated `zip_*` procedures),
         // and name-resolver rewrites remain outside the ordinary AOT registry. The two
         // PHP-visible locale functions are prelude-provided.
-        assert_eq!(aot_external, 495 + curl_surface);
+        assert_eq!(aot_external, 496 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -492,7 +492,7 @@ mod tests {
         // interpreter adapters, plus the GMP, SimpleXML, tidy, ctype, locale, and filter
         // forwarding homes, plus the `preg_grep` / `preg_last_error*` eval homes.
         // The seven ext/posix bridge builtins are served by the PCNTL adapter.
-        assert_eq!(interpreter_adapter, 715 + curl_surface);
+        assert_eq!(interpreter_adapter, 716 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
         // internal aliases the extension-hosting prelude calls, the two setlocale helpers,
@@ -501,8 +501,8 @@ mod tests {
         // diagnostic helpers, `__elephc_set_memory_limit`, the `preg_grep()` prelude's
         // three internal compiled-pattern helpers, the internal `parse_str()` parser, and
         // the internal unserialize property store and PHAR validity probe, plus the ten
-        // deprecated `zip_*` procedures whose prelude surface eval does not implement.
-        assert_eq!(unsupported, 543);
+        // deprecated `zip_*` procedures and `pack`, whose eval implementations do not exist.
+        assert_eq!(unsupported, 548);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

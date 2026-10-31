@@ -226,12 +226,15 @@ echo $box->missing;
     );
 }
 
-/// Verifies the error diagnostic for undefined method.
+/// Verifies a STATIC call to an absent method remains a compile-time diagnostic.
+///
+/// Direct INSTANCE calls on user classes keep PHP's runtime `Error` (covered by
+/// `codegen/objects/classes.rs`); the static closed-world dispatch has no runtime
+/// fallback and keeps refusing here.
 #[test]
 fn test_error_undefined_method() {
-    // calling an absent method on an object reports undefined method with the class name.
     expect_error(
-        "<?php class Box {} $b = new Box(); $b->missing();",
+        "<?php class Box { public static function make() {} } Box::missing();",
         "Undefined method: Box::missing",
     );
 }

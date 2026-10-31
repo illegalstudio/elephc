@@ -205,6 +205,24 @@ impl Checker {
                         } else {
                             ty
                         };
+                        // Keep the body environment aligned with the widened ABI slot the
+                        // signature builders publish for fileinfo's runtime-checked params.
+                        // A userland class named `finfo` keeps its declared storage.
+                        let ty = if self
+                            .classes
+                            .get(&class.name)
+                            .is_some_and(|info| info.is_internal)
+                            || self.internal_class_decls.contains(&class.name)
+                        {
+                            crate::fileinfo_prelude::abi::widened_method_param(
+                                &class.name,
+                                &method.name,
+                                i,
+                            )
+                            .unwrap_or(ty)
+                        } else {
+                            ty
+                        };
                         // A DECLARED `callable(A): B` parameter also types its own invocation.
                         // Methods never populated this channel at all, so `$f($this->value)`
                         // inside a generic method answered `mixed` and the value it produced was

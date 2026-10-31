@@ -424,7 +424,7 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 - **Pass-by-reference parameters** (`function f(string &$s)`) stay strict. PHP converts the caller's variable in place and writes the converted value back; elephc would have to pass a converted temporary, silently dropping the callee's writes, so the call is rejected instead.
 - **Builtin functions** keep their own per-builtin argument rules.
 - **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
-- **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
+- **Union parameters with a non-scalar member** (`array|string|null`) stay strict; coercing an `int` into the `string` member would accept a call PHP rejects. A union made only of scalar members (`?string $s`, `int|string $v`, `string|false`) binds coercively: the value already matching a member is never converted, otherwise PHP's preference order (int, float, string, bool) picks the member.
 
 #### Runtime-typed arguments
 
@@ -578,6 +578,10 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
 - A `mixed` or union bound passed to `random_int()`, `mt_rand()` or `rand()` is coerced like `(int)`: an int passes through, a float truncates, a numeric string parses. A non-numeric string becomes `0`, where PHP throws a `TypeError` for the `int` parameter.
 - A `SplDoublyLinkedList`, `SplStack` or `SplQueue` offset of `null` reads as index `0`, as in PHP, but without PHP's `Passing null to parameter #1 ($index) of type int is deprecated`. `SplFixedArray` offsets follow PHP for an int, bool, float (with PHP's `Implicit conversion from float … to int loses precision` deprecation) or canonical integer string (`"1"`), and any other offset raises `Cannot access offset of type <type> on SplFixedArray` — including a resource offset, where PHP instead warns `Resource ID#N used as offset, casting to integer (N)` and indexes by the handle.
 - Invoking an object (`$this(...)`, `($this)(...)`, `$obj(...)`) is checked against the static class: the class must declare or inherit `__invoke`. An abstract parent calling `$this()` when only a subclass defines `__invoke` is refused at compile time, where PHP resolves the method at run time.
+
+- A call to an instance method the static class does not declare is accepted on a concrete non-final class (and when a descendant provides it or intercepts it with `__call()`), because PHP resolves the method on the runtime class and raises `Error` only when the call executes. A typo on such a class therefore compiles; a `final` class keeps the compile-time `Undefined method` diagnostic, which also rejects unsupported test assertions early.
+
+- A runtime-typed (`mixed`) value bound to a scalar-union parameter is checked member by member but not converted between members. `function g(int|string $v)` called with a `mixed` holding `true` keeps the boolean where PHP passes `int(1)`; one holding `1.5` keeps the float where PHP passes `int(1)` with its `Deprecated:` notice. A statically typed scalar argument follows the coercive table above, including its compile-time rejections.
 - `usort()` callbacks that do not define a consistent order always terminate and keep every element, but the resulting order can differ from PHP's. `sort()` and `rsort()` over raw float and boxed scalar arrays follow PHP's comparison schedule, including `NAN` placement.
 - Variable variables (`$$name`, `${$expr}`) are not supported yet. Native AOT
   locals use fixed compile-time stack slots; supporting a runtime-computed name

@@ -443,6 +443,11 @@ fn type_guard_may_throw(ty: Option<&TypeExpr>) -> bool {
             "object" | "self" | "static" | "parent"
         ) => true,
         TypeExpr::GenericClass { .. } | TypeExpr::Intersection(_) => true,
+        // A declared scalar parameter can reject a union-valued argument at the CALL
+        // boundary under `strict_types`; coercive mode resolves scalar arguments at the
+        // call site, so the callee body remains the conservative source there.
+        TypeExpr::Int | TypeExpr::Float | TypeExpr::Str | TypeExpr::Bool | TypeExpr::False
+            if crate::source::current_strict_types() => true,
         TypeExpr::Nullable(inner) => type_guard_may_throw(Some(inner)),
         TypeExpr::Union(members) => members.iter().any(|member| type_guard_may_throw(Some(member))),
         _ => false,

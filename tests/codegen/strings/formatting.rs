@@ -788,3 +788,168 @@ echo sprintf("%d", $a), "|", sprintf("%d", $b), "|", sprintf("%d", $c), "|",
     );
     assert_eq!(out, "3|42|1|0|0|7\n");
 }
+
+/// `pack()` emits PHP's exact byte order for hex, integer, and padded string formats.
+#[test]
+fn test_pack_binary_formats() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(pack("H*", "fffe000000099999")), "\n";
+echo bin2hex(pack("C*", 1, 2, 255)), "\n";
+echo bin2hex(pack("n", 0x1234)), "\n";
+echo bin2hex(pack("V", 0x12345678)), "\n";
+echo bin2hex(pack("s", 0x1234)), "\n";
+echo bin2hex(pack("S", 0x1234)), "\n";
+echo bin2hex(pack("n", 0x1234)), "\n";
+echo bin2hex(pack("l", 0x12345678)), "\n";
+echo bin2hex(pack("L", 0x12345678)), "\n";
+echo bin2hex(pack("N", 0x12345678)), "\n";
+echo bin2hex(pack("q", 0x0102030405060708)), "\n";
+echo bin2hex(pack("J", 0x0102030405060708)), "\n";
+echo bin2hex(pack("P", 0x0102030405060708)), "\n";
+echo bin2hex(pack("a4", "hi")), "\n";
+echo bin2hex(pack("Z3", "abcd")), "\n";
+echo bin2hex(pack("Z*", "abc")), "\n";
+echo bin2hex(pack("i", 0x12345678)), "\n";
+echo bin2hex(pack("I", 0x12345678)), "\n";
+"#,
+    );
+    assert_eq!(out, "fffe000000099999\n0102ff\n1234\n78563412\n3412\n3412\n1234\n78563412\n78563412\n12345678\n0807060504030201\n0102030405060708\n0807060504030201\n68690000\n616200\n61626300\n78563412\n78563412\n");
+}
+
+/// A namespaced `pack()` is a distinct symbol and does not suppress the global builtin.
+#[test]
+fn test_pack_namespaced_override_keeps_global_builtin() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+function pack(string $format): string { return "local:" . $format; }
+echo bin2hex(\pack("C", 1)), "|", pack("x"), "\n";
+"#,
+    );
+    assert_eq!(out, "01|local:x\n");
+}
+
+/// Odd hex counts pad the final nibble with `0`, and surplus values warn like php-src.
+#[test]
+fn test_pack_odd_hex_counts_and_unused_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function(int $errno, string $msg): bool { echo "W:", $msg, "\n"; return true; });
+echo bin2hex(pack("H1", "ab")), "|",
+     bin2hex(pack("H3", "abcd")), "|",
+     bin2hex(pack("h3", "abcd")), "\n";
+echo bin2hex(pack("H*", "aG")), "|", bin2hex(pack("h*", "aG")), "\n";
+try { pack("X3*", "ab"); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+pack("C", 1, 2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "a0|abc0|ba0c\nW:pack(): Type H: illegal hex digit G\na0|\
+         W:pack(): Type h: illegal hex digit G\n0a\n\
+         Type *: unknown format code\nW:pack(): 1 arguments unused\n"
+    );
+}
+
+/// `pack()` distinguishes an explicit zero count from an omitted one, backs up with `X`, and
+/// raises PHP's missing-argument ValueErrors.
+#[test]
+fn test_pack_zero_count_backup_and_missing_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function(int $errno, string $msg): bool { echo "W:", $msg, "\n"; return true; });
+echo "empty:", bin2hex(pack("C0")), "|", bin2hex(pack("C*")), "\n";
+echo "x:", bin2hex(pack("C2X", 1, 2)), "|", bin2hex(pack("C2X0", 1, 2)), "\n";
+echo "xstar:", bin2hex(pack("C2X*", 1, 2)), "\n";
+foreach (["C", "C2", "a0", "H*"] as $f) {
+    try { pack($f); }
+    catch (Throwable $e) { echo $f, ":", $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "empty:|\nx:01|0102\nxstar:W:pack(): Type X: '*' ignored\n01\nC:Type C: too few arguments\nC2:Type C: too few arguments\na0:Type a: not enough arguments\nH*:Type H: not enough arguments\n"
+    );
+}
+
+/// A fixed hex count larger than the source truncates at the available nibbles instead of
+/// emitting zero-filled phantom bytes, and warns once before any illegal-digit diagnostic.
+#[test]
+fn test_pack_hex_exhaustion_truncates_and_warns() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function(int $errno, string $msg): bool { echo "W:", $msg, "\n"; return true; });
+$a = bin2hex(pack("H4", "ab"));
+$b = bin2hex(pack("H6", "abcd"));
+$c = bin2hex(pack("h4", "ab"));
+$d = bin2hex(pack("H2", "a"));
+$e = bin2hex(pack("H3", "ab"));
+$f = bin2hex(pack("H*", "abc"));
+$g = bin2hex(pack("H6", "z"));
+echo "$a|$b|$c|$d|$e|$f|$g\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "W:pack(): Type H: not enough characters in string\n\
+         W:pack(): Type H: not enough characters in string\n\
+         W:pack(): Type h: not enough characters in string\n\
+         W:pack(): Type H: not enough characters in string\n\
+         W:pack(): Type H: not enough characters in string\n\
+         W:pack(): Type H: not enough characters in string\n\
+         W:pack(): Type H: illegal hex digit z\n\
+         ab|abcd|ba|a0|ab|abc0|00\n"
+    );
+}
+
+/// `pack()` emits IEEE-754 single and double bytes in machine and explicit byte order.
+#[test]
+fn test_pack_float_formats() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(pack("f", 1.5)), "|", bin2hex(pack("d", 1.5)), "|", bin2hex(pack("G", 1.5)), "|", bin2hex(pack("g", -0.1)), "|", bin2hex(pack("e", 0.0)), "|", bin2hex(pack("E", 1.5)), "\n";
+echo bin2hex(pack("f2", 1.5, -0.1)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "0000c03f|000000000000f83f|3fc00000|cdccccbd|0000000000000000|3ff8000000000000\n0000c03fcdccccbd\n"
+    );
+}
+
+/// `@n` sets an absolute output position: a shorter buffer is zero-filled, a longer one is
+/// truncated so the following formats overwrite from `n`.
+#[test]
+fn test_pack_absolute_position() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(pack("C2@1C", 1, 2, 3)), "|";
+echo bin2hex(pack("C3@1C", 1, 2, 3, 4)), "|";
+echo bin2hex(pack("C2@5C", 1, 2, 3)), "|";
+echo bin2hex(pack("C2@0C", 1, 2, 3)), "|";
+echo bin2hex(pack("C2@1@3C", 1, 2, 3)), "
+";
+"#,
+    );
+    assert_eq!(out, "0103|0104|010200000003|03|01000003
+");
+}
+
+/// Large repeated formats accumulate fragments and join once, so the byte and hex paths stay
+/// linear instead of copying the whole prefix on every value.
+#[test]
+fn test_pack_large_repeated_formats_stay_linear() {
+    let out = compile_and_run(
+        r#"<?php
+$values = range(1, 50000);
+$packed = pack("C*", ...$values);
+echo strlen($packed), "|", bin2hex(substr($packed, 0, 3)), "|", bin2hex(substr($packed, -2)), "\n";
+$hex = str_repeat("ab", 50000);
+$bytes = pack("H*", $hex);
+echo strlen($bytes), "|", bin2hex(substr($bytes, -2)), "\n";
+"#,
+    );
+    assert_eq!(out, "50000|010203|4f50\n50000|abab\n");
+}

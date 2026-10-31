@@ -51,6 +51,7 @@ mod type_spec;
 pub mod mbstring_abi;
 pub mod output_abi;
 pub mod pcre_errors;
+pub mod phpinfo;
 pub mod string_literal;
 pub mod reflection_format;
 pub mod reflection_methods;

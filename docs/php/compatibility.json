@@ -195,7 +195,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1140,
+      "have": 1142,
       "total": 2169
     }
   },
@@ -1518,8 +1518,8 @@
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 354,
-        "have": 394,
+        "eval": 355,
+        "have": 396,
         "total": 545
       },
       "name": "standard",

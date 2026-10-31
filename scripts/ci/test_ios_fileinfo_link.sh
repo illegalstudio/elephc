@@ -88,8 +88,13 @@ find_native_archive() {
   printf '%s\n' "$found"
 }
 
-SHIM_ARCHIVE="$(find_native_archive libmagic 5.46 1 libelephc_magic_database.a)"
-LIBMAGIC_ARCHIVE="$(find_native_archive libmagic 5.46 1 libmagic.a)"
+SHIM_ARCHIVE="$(find_native_archive libmagic 5.46 11 libelephc_magic_database.a)"
+LIBMAGIC_ARCHIVE="$(find_native_archive libmagic 5.46 11 libmagic.a)"
+# The merged libmagic recipe compiles magic regexes with PCRE2, so the iOS link must
+# carry the same three archives the catalog declares as pcre2's ordered outputs.
+PCRE2_SHIM_ARCHIVE="$(find_native_archive pcre2 10.47 10 libelephc_pcre2_shim.a)"
+PCRE2_POSIX_ARCHIVE="$(find_native_archive pcre2 10.47 10 libpcre2-posix.a)"
+PCRE2_CORE_ARCHIVE="$(find_native_archive pcre2 10.47 10 libpcre2-8.a)"
 
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-fileinfo-link.XXXXXX")"
 cleanup() {
@@ -125,6 +130,9 @@ xcrun --sdk "$APPLE_SDK" clang \
   "$TLS_ARCHIVE" \
   "$SHIM_ARCHIVE" \
   "$LIBMAGIC_ARCHIVE" \
+  "$PCRE2_SHIM_ARCHIVE" \
+  "$PCRE2_POSIX_ARCHIVE" \
+  "$PCRE2_CORE_ARCHIVE" \
   -lz \
   -lbz2 \
   -o "$WORK_DIR/ios-fileinfo-host"

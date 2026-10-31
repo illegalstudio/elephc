@@ -55,9 +55,9 @@ class ContractPipelineTests(unittest.TestCase):
                     # functions of the XML prelude, the SimpleXML, tokenizer and
                     # random and fileinfo surfaces, the twenty-four tidy_* functions
                     # of the tidy prelude, the full mysqli procedural surface, `preg_grep`,
-                    # the filter surface, the ten deprecated procedural zip functions,
+                    # the filter surface, `pack`, the ten deprecated procedural zip functions,
                     # and the remaining injected preludes.
-                    "prelude": 466,
+                    "prelude": 467,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.

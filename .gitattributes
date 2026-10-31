@@ -5,3 +5,7 @@ crates/elephc-xml/src/parser/tests/fixtures/*.out -text -whitespace
 # Zip fixtures are byte-exact php-src expectations with trailing spaces and blank lines.
 tests/php_src/zip/** -text -whitespace
 tests/codegen/zip_php_src_cases.rs -text -whitespace
+
+# Fileinfo fixtures are verbatim php-src inputs: the PHPT sources, magic databases and
+# resource samples keep their trailing whitespace and must not be normalized.
+tests/php_src/fileinfo/** -text -whitespace

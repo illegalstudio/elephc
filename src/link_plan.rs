@@ -64,6 +64,13 @@ pub enum LinkItem {
     SearchPath(PathBuf),
     /// A macOS framework name.
     Framework(String),
+    /// A linker `-u` root that forces an archive member to be included.
+    UndefinedSymbol {
+        /// Undecorated symbol name; rendering adds the platform's leading underscore.
+        name: String,
+        /// Compiler surface that requested the anchor.
+        origin: LinkOrigin,
+    },
 }
 
 impl LinkItem {
@@ -107,6 +114,14 @@ impl LinkItem {
         }
     }
 
+    /// Creates a linker undefined-symbol root for one archive-provided symbol.
+    pub fn undefined(name: impl Into<String>) -> Self {
+        Self::UndefinedSymbol {
+            name: name.into(),
+            origin: LinkOrigin::Runtime,
+        }
+    }
+
     /// Creates a named library selected by compiler/runtime feature detection.
     pub fn named_runtime(name: impl Into<String>) -> Self {
         Self::NamedLibrary {
@@ -125,7 +140,10 @@ impl LinkItem {
                 origin: LinkOrigin::Bridge { name },
                 ..
             } => Some(format!("Elephc bridge `{name}`")),
-            Self::StaticArchive { .. } | Self::SearchPath(_) | Self::Framework(_) => None,
+            Self::StaticArchive { .. }
+            | Self::SearchPath(_)
+            | Self::Framework(_)
+            | Self::UndefinedSymbol { .. } => None,
         }
     }
 }
@@ -220,6 +238,7 @@ impl LinkPlan {
                         origin: LinkOrigin::Bridge { .. },
                         ..
                     }
+                    | LinkItem::UndefinedSymbol { .. }
             )
         })
     }
@@ -238,7 +257,8 @@ impl LinkPlan {
                 } => Some(name.as_str()),
                 LinkItem::StaticArchive { .. }
                 | LinkItem::SearchPath(_)
-                | LinkItem::Framework(_) => None,
+                | LinkItem::Framework(_)
+                | LinkItem::UndefinedSymbol { .. } => None,
             })
             .collect();
         let embedded: HashSet<&str> = EMBEDDED_BRIDGE_RELATIONSHIPS
@@ -261,7 +281,8 @@ impl LinkPlan {
                     } => !embedded.contains(name.as_str()),
                     LinkItem::StaticArchive { .. }
                     | LinkItem::SearchPath(_)
-                    | LinkItem::Framework(_) => true,
+                    | LinkItem::Framework(_)
+                    | LinkItem::UndefinedSymbol { .. } => true,
                 })
                 .cloned()
                 .collect(),
@@ -380,7 +401,8 @@ mod tests {
                 } => Some(name.as_str()),
                 LinkItem::StaticArchive { .. }
                 | LinkItem::SearchPath(_)
-                | LinkItem::Framework(_) => None,
+                | LinkItem::Framework(_)
+                | LinkItem::UndefinedSymbol { .. } => None,
             })
             .collect();
 

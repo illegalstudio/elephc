@@ -1979,3 +1979,25 @@ echo "next\n";
     assert_eq!(output.stdout, "dz\ng 2 20\ndz\ng 2 20\ndz\ng 2 20\nnext\n");
     assert!(output.stderr.contains("leak summary: clean"), "{}", output.stderr);
 }
+
+/// Strict scalar unions guard a boxed `mixed` argument from its runtime tag and keep the
+/// caller's `catch` reachable; the message uses the value's runtime type, not a static member.
+#[test]
+fn test_mixed_argument_to_scalar_union_uses_the_runtime_type() {
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+function want(int|string $v): string { return gettype($v); }
+function box(mixed $v): mixed { return $v; }
+foreach ([true, 1.5, "ok", 3] as $v) {
+    try { echo want(box($v)), "|"; } catch (TypeError $e) { echo str_replace(__FILE__, "F", $e->getMessage()), "|"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "want(): Argument #1 ($v) must be of type string|int, true given, called in F on line 6|\
+         want(): Argument #1 ($v) must be of type string|int, float given, called in F on line 6|\
+         string|integer|"
+    );
+}

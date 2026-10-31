@@ -48,6 +48,22 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
     let mut plan = LinkPlan::new();
     let mut named = HashSet::new();
 
+    // The fileinfo bridge defines the strong libmagic warning sink. A linker `-u` root
+    // forces that archive member in before libmagic's weak default can satisfy the call,
+    // independent of LTO/CGU layout.
+    let fileinfo_planned = inputs
+        .user_libraries
+        .iter()
+        .chain(inputs.forced_bridges)
+        .chain(inputs.checker_libraries)
+        .any(|library| library == "elephc_fileinfo")
+        || inputs.runtime_requirements.iter().any(|requirement| {
+            matches!(requirement, LinkRequirement::Bridge("elephc_fileinfo"))
+        });
+    if fileinfo_planned {
+        plan.push(LinkItem::undefined("elephc_libmagic_warn"));
+    }
+
     for library in inputs.user_libraries {
         push_named_once(&mut plan, &mut named, library, LinkOrigin::User);
     }
@@ -177,6 +193,22 @@ mod tests {
             forced_bridges: &[],
             web: false,
         }
+    }
+
+    /// A detected fileinfo bridge forces its strong warning symbol before the archives,
+    /// so libmagic's weak stderr default can never satisfy the call first.
+    #[test]
+    fn fileinfo_bridge_forces_the_strong_warning_symbol() {
+        let checker = ["elephc_fileinfo".to_string()];
+        let inputs = LinkPlanningInputs {
+            checker_libraries: &checker,
+            ..managed_inputs(&[], &[])
+        };
+        let plan = build(inputs);
+        assert!(matches!(
+            plan.items().first(),
+            Some(LinkItem::UndefinedSymbol { name, .. }) if name == "elephc_libmagic_warn"
+        ));
     }
 
     /// The hosted engine archive keeps its place after the extension archives but

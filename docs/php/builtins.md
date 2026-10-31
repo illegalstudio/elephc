@@ -801,6 +801,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`pcntl_wtermsig()`](./builtins/misc/pcntl_wtermsig.md) | `(int $status): mixed` | `mixed` | ✓ | ✓ |
 | [`php_sapi_name()`](./builtins/misc/php_sapi_name.md) | `(): string` | `string` | ✓ | - |
 | [`php_uname()`](./builtins/misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
+| [`phpinfo()`](./builtins/misc/phpinfo.md) | `(int $flags = 4294967295): bool` | `bool` | ✓ | ✓ |
 | [`phpversion()`](./builtins/misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
 | [`posix_errno()`](./builtins/misc/posix_errno.md) | `(): int` | `int` | ✓ | ✓ |
 | [`posix_get_last_error()`](./builtins/misc/posix_get_last_error.md) | `(): int` | `int` | ✓ | ✓ |
@@ -1038,6 +1039,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
+| [`pack()`](./builtins/string/pack.md) | `(string $format, ...$values): string` | `string` | ✓ | - |
 | [`parse_str()`](./builtins/string/parse_str.md) | `(string $string, array $result): void` | `void` | ✓ | - |
 | [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |

@@ -7,3 +7,6 @@ publish = false
 
 [lib]
 crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+libc = "0.2"

@@ -10,7 +10,7 @@ sidebar:
 
 Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1140 / 2169** (53%), classes **205 / 329** (62%), constants **1673 / 3181** (53%).
+Overall coverage: functions **1142 / 2169** (53%), classes **205 / 329** (62%), constants **1673 / 3181** (53%).
 
 ## Coverage by PHP module
 
@@ -70,7 +70,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `sodium` | 0 / 104 · 0% | 0 / 1 · 0% | 0 / 94 · 0% |
 | [`spl`](./spl.md#functions) | 15 / 15 · 100% | 54 / 55 · 98% | - |
 | `sqlite3` | - | 0 / 4 · 0% | 0 / 12 · 0% |
-| `standard` | 394 / 545 · 72% | 3 / 6 · 50% | 174 / 400 · 44% |
+| `standard` | 396 / 545 · 73% | 3 / 6 · 50% | 174 / 400 · 44% |
 | `sysvmsg` | 0 / 7 · 0% | 0 / 1 · 0% | 0 / 5 · 0% |
 | `sysvsem` | 0 / 4 · 0% | 0 / 1 · 0% | - |
 | `sysvshm` | 0 / 7 · 0% | 0 / 1 · 0% | - |
@@ -98,7 +98,7 @@ The counts above are what a compiled program has. Exported backend support diffe
 - `pdo` functions: 1 / 0
 - `random` functions: 9 / 3
 - `session` functions: 23 / 0
-- `standard` functions: 394 / 354
+- `standard` functions: 396 / 355
 - `standard` constants: 174 / 153
 - `zip` functions: 10 / 0
 

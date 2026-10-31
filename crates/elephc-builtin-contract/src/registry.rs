@@ -182,6 +182,8 @@ mod tests {
         // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
         // eval-built member reflectors store.
         // +24: the `tidy_*` procedures of the tidy prelude.
+        // +1: `phpinfo`, the module table the fileinfo PHPT corpus inspects.
+        // +1: `pack`, the binary formatter shared by the fileinfo corpus.
         // +1: `__elephc_call_strict_types`, the internal strictness reader the random
         // prelude's injected constructor calls.
         // +7: the complete `ctype_*` surface (cntrl/graph/lower/print/punct/upper/xdigit).
@@ -200,7 +202,8 @@ mod tests {
         // +7: the ext/posix bridge builtins `posix_kill`, `posix_isatty`, `posix_geteuid`,
         // `posix_getpgrp`, `posix_get_last_error`, `posix_errno` and `posix_strerror`.
         // +10: the deprecated procedural `zip_*` prelude contracts.
-        assert_eq!(contracts().len(), 1353 + curl_surface);
+        // +4: the internal `__elephc_ptr*` aliases the pack prelude calls.
+        assert_eq!(contracts().len(), 1359 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

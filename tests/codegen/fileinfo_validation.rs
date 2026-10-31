@@ -190,7 +190,7 @@ echo mime_content_type("file:///elephc-fileinfo-missing/file") === false ? "mime
 restore_error_handler();
 echo $f->buffer("hello"), "\n";
 "#);
-    assert_eq!(out, "Exception:finfo::__construct(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\n2:finfo_open(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\ndatabase\n2:finfo::file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmethod\n2:finfo_file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nfunction\n2:mime_content_type(file:///elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmime\ntext/plain\n");
+    assert_eq!(out, "Exception:finfo::__construct(/elephc-fileinfo-missing/magic): Failed to open stream: No such file or directory\n2:finfo_open(/elephc-fileinfo-missing/magic): Failed to open stream: No such file or directory\n2:finfo_open(/elephc-fileinfo-missing/magic): Failed to open stream: No such file or directory\n2:finfo_open(): Failed to load magic database at \"/elephc-fileinfo-missing/magic\"\ndatabase\n2:finfo::file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmethod\n2:finfo_file(/elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nfunction\n2:mime_content_type(file:///elephc-fileinfo-missing/file): Failed to open stream: No such file or directory\nmime\ntext/plain\n");
 }
 
 /// Directory identification requires an openable descriptor even when stat succeeds.
@@ -212,4 +212,16 @@ echo $f->file($dir), "\n";
 rmdir($dir);
 "#);
     assert_eq!(out, "ok\ndirectory\n");
+}
+
+/// Wrong handle types and surplus constructor arguments are runtime PHP errors.
+#[test]
+fn test_fileinfo_runtime_argument_errors() {
+    if fileinfo_native::skip("test_fileinfo_runtime_argument_errors") { return; }
+    let out = compile_and_run_with_php_version(r#"<?php
+try { finfo_buffer(1, "hello"); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+try { new finfo(0, null, 1); } catch (ArgumentCountError $e) { echo $e->getMessage(), "\n"; }
+try { finfo_close(fopen("php://memory", "r")); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+"#, elephc::php_version::PhpVersion::Php84);
+    assert_eq!(out, "finfo_buffer(): Argument #1 ($finfo) must be of type finfo, int given\nfinfo::__construct() expects at most 2 arguments, 3 given\nfinfo_close(): Argument #1 ($finfo) must be of type finfo, resource given\n");
 }
