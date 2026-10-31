@@ -9,6 +9,41 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Typed reference payloads remain readable when nullable stores widen their original frame slot.
+#[test]
+fn test_concrete_reference_return_payloads_survive_final_frame_widening() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class WidenedReturnNode { public string $label = 'node'; }
+class WidenedReturnHolder {
+    public ?WidenedReturnNode $node = null;
+    public ?string $text = null;
+}
+function &widenedReturnBefore(WidenedReturnHolder $holder): WidenedReturnNode {
+    $value = $holder->node; $value = new WidenedReturnNode(); return $value;
+}
+function &widenedReturnAfter(WidenedReturnHolder $holder, bool $first): WidenedReturnNode {
+    $value = new WidenedReturnNode(); if ($first) { return $value; }
+    $value = $holder->node; $value = new WidenedReturnNode(); return $value;
+}
+function &widenedReturnText(WidenedReturnHolder $holder, bool $first): string {
+    $value = 'early'; if ($first) { return $value; }
+    $value = $holder->text; $value = 'late'; return $value;
+}
+$holder = new WidenedReturnHolder();
+$before =& widenedReturnBefore($holder);
+$early =& widenedReturnAfter($holder, $argc > 0);
+$late =& widenedReturnAfter($holder, $argc < 0);
+$textEarly =& widenedReturnText($holder, $argc > 0);
+$textLate =& widenedReturnText($holder, $argc < 0);
+$before->label = 'changed'; $textEarly .= '!';
+echo $before->label, ':', $early->label, ':', $late->label, ':', $textEarly, ':', $textLate;
+unset($before, $early, $late, $textEarly, $textLate, $holder);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "changed:node:node:early!:late");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// An arity-selected reference method returns an independent value to an erased receiver call.
 #[test]
 fn test_erased_reference_method_candidates_copy_payloads_before_cell_retirement() {

@@ -577,8 +577,12 @@ the variable's identity.
 That promotion uses the DECLARED result's payload representation, not the local's
 narrower inferred storage: a concretely typed array local inside an `: array` function
 widens to `Mixed` before its cell exists, because the caller dereferences the cell with
-the declared shape and a later write through either alias has to keep meaning. Storage
-that other aliases ALREADY share cannot be re-shaped that way, so it is checked instead
+the declared shape and a later write through either alias has to keep meaning.
+For a concrete declared result, storage is staged in a dedicated typed local before promotion,
+then the original name is attached to that cell. This keeps the payload independent of
+the source slot's final frame layout, which can become `Mixed` after a nullable store
+lowered earlier or later in the function. Storage that other aliases ALREADY share cannot
+be re-shaped that way, so it is checked instead
 of widened:
 
 - A by-reference parameter's storage belongs to the caller. A payload representation
