@@ -70,6 +70,7 @@ pub use object_operators::{
 pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
+pub use catalog_constants_tokenizer::token_const_id;
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{

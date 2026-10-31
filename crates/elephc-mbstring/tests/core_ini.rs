@@ -65,6 +65,16 @@ fn core_ini_runtime_access_display_modes_and_restore() {
         state.restore(name);
     }
     assert_eq!((state.max_variables(), state.max_nesting(), state.separators()), (1000, 64, b"&".as_slice()));
+    assert_eq!(&*state.get(b"memory_limit").unwrap(), b"128M");
+    assert_eq!(state.memory_limit(), 128 * 1024 * 1024);
+    let previous = state.get(b"memory_limit").unwrap();
+    assert_eq!(state.set(b"memory_limit", IniString::new(b"1024")).unwrap(), previous);
+    assert_eq!(&*state.get(b"memory_limit").unwrap(), b"1024");
+    assert_eq!(state.memory_limit(), 1024);
+    assert!(state.set(b"memory_limit", IniString::new(b"abc")).is_none());
+    assert_eq!(&*state.get(b"memory_limit").unwrap(), b"1024");
+    state.restore(b"memory_limit");
+    assert_eq!(&*state.get(b"memory_limit").unwrap(), b"128M");
     state.restore(b"display_errors");
     assert_eq!(&*state.get(b"display_errors").unwrap(), b"1");
     assert_eq!(state.display_errors(), 1);
@@ -138,8 +148,8 @@ fn core_ini_abi_and_query_provider_share_request_state() {
     let mut all = call(INI_GET_ALL, &[MbArgV1::boolean(true)]);
     let bytes = unsafe { std::slice::from_raw_parts(all.bytes, all.len as usize) };
     let (graph, owners) = decode_ini_array(bytes, all.value as u64).unwrap();
-    assert_eq!(graph.arrays()[0].len(), 4);
-    assert_eq!(owners.len(), 8);
+    assert_eq!(graph.arrays()[0].len(), 5);
+    assert_eq!(owners.len(), 10);
     unsafe { elephc_mbstring_release_v1(&mut all); }
     std::thread::spawn(|| assert_eq!(query(QUERY_CONFIG_ENTRY), (b";&".to_vec(), 2, 1, 0))).join().unwrap();
     assert_eq!(query(QUERY_CONFIG_FIELD).3, 1);

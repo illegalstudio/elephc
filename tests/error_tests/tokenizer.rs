@@ -23,6 +23,17 @@ fn tokenizer_function_arity_errors() {
     }
 }
 
+/// A statically sized spread cannot smuggle surplus positional arguments past arity.
+#[test]
+fn tokenizer_function_static_spread_arity_error() {
+    let error = check_source("<?php token_get_all('x', ...[0, 1]);")
+        .expect_err("surplus spread elements must fail");
+    assert!(
+        error.contains("Function 'token_get_all' expects 1 to 2 arguments, got 3"),
+        "{error}"
+    );
+}
+
 /// Tokenizer string and integer parameters reject array input.
 #[test]
 fn tokenizer_function_argument_type_errors() {

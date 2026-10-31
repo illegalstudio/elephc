@@ -647,11 +647,6 @@ fn describe(ty: &TypeExpr) -> String {
     describe_with_roots(ty, false)
 }
 
-/// Renders parser-owned call arguments without losing explicit roots before name resolution.
-pub(crate) fn describe_written_type(ty: &TypeExpr) -> String {
-    describe_with_roots(ty, true)
-}
-
 /// Renders nested type syntax in either canonical identity or unresolved source mode.
 fn describe_with_roots(ty: &TypeExpr, preserve_roots: bool) -> String {
     match ty {

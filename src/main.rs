@@ -8,13 +8,15 @@
 //! Key details:
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
+pub use elephc::{compiler_stack, lexer, names, parser, span};
+pub use elephc::string_bytes;
+
 mod autoload;
 mod brand;
 mod builtins;
 mod cli;
 mod codegen;
 mod codegen_support;
-mod compiler_stack;
 mod conditional;
 mod curl_prelude;
 mod dom_html_prelude;
@@ -42,13 +44,11 @@ mod ir_passes;
 mod link_plan;
 mod link_planning;
 mod linker;
-mod lexer;
 mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
 #[allow(dead_code, unused_imports)]
 mod native_deps;
-mod names;
 mod numeric_string;
 mod object_cast_prelude;
 mod opcache;
@@ -56,7 +56,6 @@ mod opcache_prelude;
 mod shared_ini_prelude;
 mod optimize;
 mod otlp;
-mod parser;
 mod php_version;
 mod mysqli_prelude;
 mod pdo_prelude;
@@ -78,9 +77,7 @@ mod runtime_cache;
 mod debug_info;
 mod source;
 mod source_map;
-mod span;
 mod strict_php;
-mod string_bytes;
 mod superglobals;
 #[allow(dead_code)]
 mod synthetic_class;

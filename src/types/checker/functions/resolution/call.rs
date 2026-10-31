@@ -169,6 +169,12 @@ impl Checker {
             return self.rewalk_failed_function_body_at_call(name, args, span, caller_env);
         }
 
+        if let Some(decl) = self.fn_decls.get(name) {
+            if decl.internal_prelude {
+                check_prelude_function_arity(name, args, decl.variadic.is_some(), span)?;
+            }
+        }
+
         if let Some(mut sig) = self.functions.get(name).cloned() {
             if let Some(reason) = sig.deprecation.as_deref() {
                 let message = if reason.is_empty() {
@@ -784,4 +790,80 @@ fn is_callable_array_type(ty: &PhpType) -> bool {
         PhpType::AssocArray { value, .. } => value.as_ref() == &PhpType::Callable,
         _ => false,
     }
+}
+
+/// Returns the statically known positional argument count.
+///
+/// Returns `None` when a spread's length is not knowable at compile time. String-keyed
+/// arrays map to named arguments and are left to the call planner.
+fn static_positional_arg_count(args: &[crate::parser::ast::Expr]) -> Option<usize> {
+    let mut count = 0usize;
+    for arg in args {
+        match &arg.kind {
+            crate::parser::ast::ExprKind::NamedArg { .. } => return None,
+            crate::parser::ast::ExprKind::Spread(inner) => match &inner.kind {
+                crate::parser::ast::ExprKind::ArrayLiteral(entries) => count += entries.len(),
+                _ => return None,
+            },
+            _ => count += 1,
+        }
+    }
+    Some(count)
+}
+
+/// Enforces the PHP-internal maximum arity for a compiler-injected prelude function.
+///
+/// PHP user functions tolerate surplus positional arguments, but the internal functions a
+/// prelude models (`token_get_all`, `token_name`, …) do not. The neutral contract owns the
+/// boundary, so this uses the same minimum/maximum fields as the registry-backed builtins.
+fn check_prelude_function_arity(
+    name: &str,
+    args: &[crate::parser::ast::Expr],
+    declared_variadic: bool,
+    span: crate::span::Span,
+) -> Result<(), CompileError> {
+    let Some(contract) = elephc_builtin_contract::lookup(name) else {
+        return Ok(());
+    };
+    if contract.kind != elephc_builtin_contract::BuiltinKind::PreludeProvided {
+        return Ok(());
+    }
+    // A named argument needs the call planner, and a dynamic spread length is only known
+    // at run time. A statically sized array spread is different: its positional count is
+    // final here, and PHP internals reject surplus elements before the call runs.
+    if args.iter().any(|arg| matches!(
+        arg.kind,
+        crate::parser::ast::ExprKind::NamedArg { .. }
+    )) {
+        return Ok(());
+    }
+    let Some(arg_count) = static_positional_arg_count(args) else {
+        return Ok(());
+    };
+    let required = contract.min_args.unwrap_or_else(|| {
+        contract.params.iter().take_while(|param| param.default.is_none()).count()
+    });
+    let maximum = contract.max_args.or_else(|| {
+        (contract.variadic.is_none()).then_some(contract.params.len())
+    });
+    // Too-few arguments already have a canonical message on the ordinary user-function path;
+    // this check exists only because PHP internals reject surplus arguments that a user
+    // function would accept.
+    // A variadic prelude declaration deliberately accepts extra positional arguments so its
+    // body can raise PHP's exact runtime ArgumentCountError.
+    let Some(maximum) = maximum.filter(|_| !declared_variadic) else {
+        return Ok(());
+    };
+    if arg_count <= maximum {
+        return Ok(());
+    }
+    let expected = if required == maximum {
+        format!("{maximum}")
+    } else {
+        format!("{required} to {maximum}")
+    };
+    Err(CompileError::new(
+        span,
+        &format!("Function '{}' expects {} arguments, got {}", name, expected, arg_count),
+    ))
 }

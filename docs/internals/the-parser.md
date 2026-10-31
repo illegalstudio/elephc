@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-**Source:** `src/parser/` — `expr/`, `stmt/`, `control.rs`, `attributes.rs`, `keyword_name.rs`, `ast/`, `mod.rs`
+**Source:** `crates/elephc-syntax/src/parser/` — `expr/`, `stmt/`, `control.rs`, `attributes.rs`, `keyword_name.rs`, `ast/`, `mod.rs`
 
 The parser takes the token stream from the [lexer](the-lexer.md) and builds an **Abstract Syntax Tree** (AST) — a tree structure that represents the program's meaning, not just its text.
 
@@ -32,7 +32,7 @@ The tree encodes that `2 * 3` happens before `+ 1` — **operator precedence** i
 
 ## The AST types
 
-**File:** `src/parser/ast/`
+**File:** `crates/elephc-syntax/src/parser/ast/`
 
 The AST has two main node types:
 
@@ -171,7 +171,7 @@ Each `Stmt` also carries a source `span` and an `attributes` list. The list is p
 
 Constructor property promotion is normalized during class-body parsing. A parameter such as `public int $id` in `__construct` becomes a `ClassProperty` plus a synthetic leading `PropertyAssign` statement equivalent to `$this->id = $id;`. Parameter defaults stay on the constructor signature rather than `ClassProperty.default`, matching PHP's distinction between promoted parameter defaults and property defaults. By-reference promoted parameters preserve a `by_ref` flag on the generated property so codegen can bind the property slot to the referenced argument or to a heap reference cell when a default value is used. Later passes otherwise see ordinary properties and ordinary constructor assignments.
 
-There is no `Declare` statement kind. `declare(directive=literal, ...)` is parsed by `src/parser/stmt/declare.rs` and lowered directly to `Synthetic`: the statement form `declare(strict_types=1);` becomes an empty `Synthetic(vec![])`, while the block form `declare(ticks=1) { ... }` (single statement, braced block, or alternative `: ... enddeclare;` syntax) becomes a `Synthetic` wrapping the body statements so they execute in the enclosing scope. Directive values must be literals; the parser enforces PHP's rules that `strict_types` takes only `0` or `1`, must be the very first statement in the script, and cannot use block mode. `ticks` and `encoding` are compile-time syntax only, but `strict_types` is applied: once the directive passes those checks, the parser records it on its per-file source profile (`crate::source::declare_strict_types`), which stamps `Stmt::strict_types` on every statement parsed afterwards. Because PHP requires the directive to be the file's first statement, "afterwards" is exactly "the rest of this file", and the flag survives include/autoload merging so the type checker can pick strict or coercive parameter binding per call site (`src/types/param_binding.rs`).
+There is no `Declare` statement kind. `declare(directive=literal, ...)` is parsed by `crates/elephc-syntax/src/parser/stmt/declare.rs` and lowered directly to `Synthetic`: the statement form `declare(strict_types=1);` becomes an empty `Synthetic(vec![])`, while the block form `declare(ticks=1) { ... }` (single statement, braced block, or alternative `: ... enddeclare;` syntax) becomes a `Synthetic` wrapping the body statements so they execute in the enclosing scope. Directive values must be literals; the parser enforces PHP's rules that `strict_types` takes only `0` or `1`, must be the very first statement in the script, and cannot use block mode. `ticks` and `encoding` are compile-time syntax only, but `strict_types` is applied: once the directive passes those checks, the parser records it on its per-file source profile (`crate::source::declare_strict_types`), which stamps `Stmt::strict_types` on every statement parsed afterwards. Because PHP requires the directive to be the file's first statement, "afterwards" is exactly "the rest of this file", and the flag survives include/autoload merging so the type checker can pick strict or coercive parameter binding per call site (`src/types/param_binding.rs`).
 
 ### Statement dispatch
 
@@ -293,7 +293,7 @@ Every AST node carries a `Span` from the source, so error messages in later phas
 
 ## The Pratt parser
 
-**File:** `src/parser/expr/`
+**File:** `crates/elephc-syntax/src/parser/expr/`
 
 Parsing expressions with operators is the hardest part. Consider:
 
@@ -460,7 +460,7 @@ After parsing a prefix, the parser checks for postfix operators:
 - `::` on a dynamic (non-name) receiver: `$obj::class` / `expr::class` builds `ObjectClassName`, and `$cls::method(args)` / `$cls::$method(args)` desugar to `call_user_func([$cls, $method], ...args)`; any other dynamic `$class::X` access is rejected
 - `++` / `--` in expression position on a property, static property, or array element: the postfix form desugars through `desugar_lvalue_incdec()` to an `ExprKind::Assignment` whose prelude captures the old value into a hidden `__elephc_incdec_*` temporary, so `$k = $this->i++;` reads the pre-increment value
 
-Member names after `->` / `?->` may be a plain identifier, a variable (`->$name`), a brace-enclosed expression (`->{$expr}`), or — per PHP 8's semi-reserved rule — any keyword (`->class`, `->print`, `->static`, ...), whose exact source spelling is preserved via the lexer's `TokenMetadata` and the shared bareword mapper in `src/parser/keyword_name.rs`. The same mapper serves named-argument labels, `::` scoped access, and method/constant declaration names.
+Member names after `->` / `?->` may be a plain identifier, a variable (`->$name`), a brace-enclosed expression (`->{$expr}`), or — per PHP 8's semi-reserved rule — any keyword (`->class`, `->print`, `->static`, ...), whose exact source spelling is preserved via the lexer's `TokenMetadata` and the shared bareword mapper in `crates/elephc-syntax/src/parser/keyword_name.rs`. The same mapper serves named-argument labels, `::` scoped access, and method/constant declaration names.
 
 At statement level, `stmt.rs` also parses `trait` declarations and class/trait-body `use` clauses. That `use` handling is intentionally context-sensitive so it does not interfere with closure capture lists like `function () use ($x) { ... }`.
 
@@ -478,7 +478,7 @@ parent::boot()   →  StaticMethodCall { receiver: Parent, method: "boot", args:
 
 ## Statement parsing
 
-**Files:** `src/parser/stmt/`, `src/parser/control.rs`
+**Files:** `crates/elephc-syntax/src/parser/stmt/`, `crates/elephc-syntax/src/parser/control.rs`
 
 Statement parsing is simpler — after `parse()` has peeled off top-level `extern` blocks, `stmt.rs` looks at the current token to decide what kind of statement to parse:
 

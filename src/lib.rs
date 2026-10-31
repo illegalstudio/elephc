@@ -8,6 +8,8 @@
 //! Key details:
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
+pub use elephc_syntax::{compiler_stack, lexer, names, parser, span};
+
 pub mod autoload;
 /// Local Cargo source inputs shared by bridge discovery and integration-test builders.
 #[doc(hidden)]
@@ -22,7 +24,6 @@ pub mod codegen;
 #[doc(hidden)]
 pub mod codegen_support;
 /// The stack depth a compiler run needs, and the wrapper that supplies it.
-pub mod compiler_stack;
 /// Conditional compilation directives.
 pub mod conditional;
 /// `ext/curl` easy-handle standard-library prelude injection (`CurlHandle` + `curl_*`).
@@ -66,7 +67,6 @@ pub mod ir_passes;
 #[doc(hidden)]
 pub mod link_plan;
 /// Lexer for tokenizing PHP source.
-pub mod lexer;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
 pub mod list_id_prelude;
 /// Magic constant substitution.
@@ -77,7 +77,6 @@ pub mod native_deps;
 /// Namespace and use resolution.
 pub mod name_resolver;
 /// Name resolution and mangling.
-pub mod names;
 /// Compile-time implementation of PHP's numeric-string grammar.
 pub(crate) mod numeric_string;
 /// Compile-time OPcache introspection data (directive matrix).
@@ -90,7 +89,6 @@ pub mod object_cast_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.
-pub mod parser;
 /// Selected PHP compatibility version for version-sensitive compiler surfaces.
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
@@ -111,10 +109,9 @@ pub mod resolver;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;
 /// Source span tracking.
-pub mod span;
 /// `--strict-php` mode state and PHP-compatibility audit pass.
 pub mod strict_php;
-mod string_bytes;
+pub use elephc_syntax::string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;
 /// Rust builder for the synthetic PHP class surfaces the compiler injects itself.
@@ -129,6 +126,8 @@ pub mod tz_prelude;
 pub mod xml_prelude;
 pub mod fileinfo_prelude;
 pub mod tokenizer_prelude;
+/// TOKEN_PARSE validation through the compiler AST parser.
+pub use elephc_syntax::tokenizer_validation;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
 /// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,

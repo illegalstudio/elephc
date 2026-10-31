@@ -318,6 +318,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
                 | UnsetPropertyAction::Noop
                 | UnsetPropertyAction::ClearSlot
                 | UnsetPropertyAction::RemoveDynamic
+                | UnsetPropertyAction::RuntimeClass
         )
     )
 }
@@ -358,6 +359,10 @@ pub(super) fn lower_unset_property_access(
                     Some(expr.span),
                 );
             });
+        }
+        Some(UnsetPropertyAction::RuntimeClass) => {
+            let name = Expr::new(ExprKind::StringLiteral(property.to_string()), expr.span);
+            lower_unset_dynamic_property_access(ctx, object, &name, expr);
         }
         Some(UnsetPropertyAction::Fallback) | None => {}
     }
@@ -541,6 +546,9 @@ pub(super) enum UnsetPropertyAction {
     /// undeclared name on an `#[AllowDynamicProperties]` class), where PHP's `unset()`
     /// really is a key removal.
     RemoveDynamic,
+    /// The receiver's runtime class is only known through a boxed `Mixed`/union value, so the
+    /// literal name still dispatches through the runtime class ladder.
+    RuntimeClass,
 }
 
 /// Selects the PHP-visible `unset()` behavior for a statically known object property operand.
@@ -550,7 +558,13 @@ pub(super) fn property_unset_action(
     property: &str,
     member: &Expr,
 ) -> Option<UnsetPropertyAction> {
-    let (class_name, _) = checked_object_expr_class(ctx, object, member)?;
+    let Some((class_name, _)) = checked_object_expr_class(ctx, object, member) else {
+        return matches!(
+            unset_operand_type(ctx, object).codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+        .then_some(UnsetPropertyAction::RuntimeClass);
+    };
     // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
     // `stdClass` declares no magic methods that could intercept it.
     if is_builtin_stdclass_name(&class_name) {
