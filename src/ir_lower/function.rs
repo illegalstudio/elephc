@@ -1748,13 +1748,52 @@ fn lower_body_into_function(
     )>,
     web: bool,
 ) -> Vec<Function> {
+    // The constructor calls this ordinary EIR function before allocating a coroutine.
+    // Reuse full lowering so reference/collector validation and exception cleanup stay shared.
+    let mut eager_validators = Vec::new();
+    if function.flags.is_generator && function.signature.as_ref().is_some_and(|signature|
+        super::object_boundaries::needs_parameter_guards(signature, classes, interfaces)) {
+        let mut validator = Function::new(crate::names::generator_parameter_guard_name(&function.name),
+            IrType::Void, PhpType::Void);
+        validator.params = function.params.clone();
+        validator.lexical_class = function.lexical_class.clone();
+        validator.display_name = Some(function.display_name.clone().unwrap_or_else(|| function.name.clone()));
+        validator.flags.is_internal = true;
+        validator.flags.is_synthetic = true;
+        validator.signature = function.signature.clone();
+        if let Some(signature) = &mut validator.signature {
+            signature.is_generator = false;
+            signature.return_type = PhpType::Void;
+            signature.declared_return = false;
+            signature.by_ref_return = false;
+        }
+        eager_validators.extend(lower_body_into_function(
+            &mut validator, None, data, &[], env.clone(), top_level_env.clone(), functions,
+            extern_functions, extern_globals, callable_param_sigs, return_alias_summaries,
+            fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
+            declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
+            throw_access_sites, builtin_call_types, array_push_property_plans, member_receiver_types,
+            boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
+            loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
+            retype_sites, mixed_storage_store_sites, loop_storage_scope.clone(), constants,
+            current_class.clone(), PhpType::Void, false, params, None, false,
+            all_global_var_names.clone(), None, source_path.clone(), None, web,
+        ));
+        eager_validators.push(validator);
+    }
     let owner_name = function.name.clone();
+    let eager_parameters = function.flags.is_generator;
     let function_by_ref_return = function.flags.by_ref_return;
     let by_ref_params = function
         .params
         .iter()
         .map(|param| param.by_ref)
         .collect::<Vec<_>>();
+    let reference_variadic = function.signature.as_ref().and_then(|signature| {
+        let name = signature.variadic.as_ref()?;
+        let index = signature.params.iter().position(|(candidate, _)| candidate == name)?;
+        signature.ref_params.get(index).copied().unwrap_or(false).then(|| name.clone())
+    });
     let mut builder = Builder::new(function);
     let entry = builder.create_named_block("entry", Vec::new());
     builder.set_entry(entry);
@@ -1811,6 +1850,8 @@ fn lower_body_into_function(
             && property_initializers.is_none() && !body.is_empty()
             && !crate::ir_lower::body_contains_eval_call(body)
     };
+    ctx.eval_reference_snapshots = crate::ir_lower::body_contains_eval_call(body)
+        || eval_scope_reads.is_some() || property_initializers.is_some();
     ctx.by_ref_return = function_by_ref_return;
     ctx.return_type_is_declared = return_type_is_declared;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
@@ -1822,6 +1863,9 @@ fn lower_body_into_function(
         if by_ref_params.get(index).copied().unwrap_or(false) {
             ctx.mark_ref_bound_local(name);
         }
+    }
+    if let Some(name) = reference_variadic {
+        ctx.mark_reference_marker_array_local(&name);
     }
     // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
     // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
@@ -1850,6 +1894,7 @@ fn lower_body_into_function(
     }
     seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
     ctx.lower_with_final_string_storage(|ctx| {
+        if !eager_parameters { super::object_boundaries::guard_parameters(ctx); }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
         } else if !super::throwable_constructors::lower(ctx) && !super::core_methods::lower(ctx, body) {
@@ -1875,7 +1920,9 @@ fn lower_body_into_function(
     // releases have been pruned, so codegen can consume EIR metadata instead of
     // maintaining a second producer allow-list (issue #595).
     ctx.finalize_value_ownership_metadata();
-    ctx.into_closures()
+    let mut closures = ctx.into_closures();
+    closures.extend(eager_validators);
+    closures
 }
 
 /// Seeds a self-recursive closure capture as a static callable local inside its body.

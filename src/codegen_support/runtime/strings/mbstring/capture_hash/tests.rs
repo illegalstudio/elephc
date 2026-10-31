@@ -62,6 +62,19 @@ pub(in crate::codegen_support::runtime::strings::mbstring) fn adapters(emitter: 
         if !arm { emitter.instruction("mov rdi, rax"); }                        // adapt the private runtime unary input to C
         emitter.instruction(&format!("{} {destination}", if arm { "b" } else { "jmp" })); // delegate ownership accounting to the C fixture
     }
+    for symbol in [
+        "__rt_tagged_reference_assignment_error_new",
+        "__rt_cleanup_preserve_exception",
+        "__rt_throw_current",
+    ] {
+        emitter.label_global(symbol);
+        emitter.instruction(if arm { "brk #0" } else { "ud2" });               // invalid marker writes are outside this ownership fixture
+    }
+    emitter.raw(&crate::codegen_support::data_section::comm_directive(
+        "_exc_value",
+        8,
+        emitter.target,
+    ));
     emitter.label_global("fixture_invoke");
     if arm {
         emitter.instruction("mov x9, x0");                                      // retain the protected operation pointer

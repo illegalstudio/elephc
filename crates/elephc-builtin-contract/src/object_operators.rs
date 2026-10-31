@@ -19,6 +19,13 @@ pub enum ObjectArithmetic {
     Pow,
 }
 
+/// PHP result domain produced by an internal arithmetic adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectArithmeticResult { Object, Number }
+
+/// PHP tries native binary handlers before falling back to numeric object conversion.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum ObjectOperandDispatch { Handler, NumericConversion }
 /// Bitwise operation supported by an internal class handler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObjectBitwise {
@@ -45,6 +52,26 @@ pub enum ObjectOrdering {
     Unordered = 2,
 }
 
+/// Native conversion exposed by an internal object class.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectCast { Int, Float, Array }
+
+/// Native property operation that takes precedence over PHP slots and magic methods.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectProperty { Get, Set, Isset, Unset, Probe, Empty, WriteFetch, WriteSelect, Update }
+
+/// Stable operation codes shared by compiled and eval native property updates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i64)]
+pub enum ObjectPropertyUpdate {
+    Add = 0, Sub = 1, Mul = 2, Div = 3, Mod = 4, Pow = 5, Concat = 6,
+    BitAnd = 7, BitOr = 8, BitXor = 9, ShiftLeft = 10, ShiftRight = 11,
+}
+
+/// Native dimension operations, independent of userland ArrayAccess method overrides.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObjectDimension { Get, Set, Isset, Unset, Append, WriteSelect }
+
 /// Instance adapters implementing an internal class's scalar casts.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassCasts {
@@ -58,11 +85,27 @@ pub struct ClassCasts {
     pub to_bool: Option<&'static str>,
 }
 
-/// Methods implementing an internal class's immutable value operators.
+/// Methods implementing an internal class's native operators, casts and clone protocol.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassOperators {
+    /// Native property adapters, independent of userland magic-method overrides.
+    pub properties: &'static [(ObjectProperty, &'static str)],
+    /// Native dimension adapters, including a distinct absent-offset append entry.
+    pub dimensions: &'static [(ObjectDimension, &'static str)],
+    /// Native clone handler after a shallow copy; replaces the userland clone callback.
+    pub native_clone: Option<&'static str>,
+    /// Native JSON projection without a PHP-visible JsonSerializable interface.
+    pub json: Option<&'static str>,
+    /// Native projection adapters selected independently of scalar coercion.
+    pub native_casts: &'static [(ObjectCast, &'static str)],
     /// Public compiler adapters taking left and right operands in PHP evaluation order.
     pub arithmetic: &'static [(ObjectArithmetic, &'static str)],
+    /// Whether arithmetic produces another class instance or a PHP integer/float.
+    pub arithmetic_result: ObjectArithmeticResult,
+    /// Whether binary adapters implement a native handler or numeric conversion fallback.
+    pub operand_dispatch: ObjectOperandDispatch,
+    /// Instance adapter for bitwise NOT, including a class-specific PHP refusal.
+    pub bit_not: Option<&'static str>,
     /// Public compiler adapters for `&`, `|`, and `^`.
     pub bitwise: &'static [(ObjectBitwise, &'static str)],
     /// Public compiler adapters for `<<` and `>>`.
@@ -83,6 +126,20 @@ pub struct ClassOperators {
 }
 
 impl ClassOperators {
+    /// Resolves a native dimension operation without selecting a userland protocol method.
+    pub fn dimension_method(&self, operation: ObjectDimension) -> Option<&'static str> {
+        self.dimensions.iter().find_map(|(op, method)| (*op == operation).then_some(*method))
+    }
+
+    /// Resolves a native property operation without selecting a user magic method.
+    pub fn property_method(&self, operation: ObjectProperty) -> Option<&'static str> {
+        self.properties.iter().find_map(|(op, method)| (*op == operation).then_some(*method))
+    }
+    /// Returns the reviewed instance adapter for a native conversion.
+    pub fn cast_method(&self, cast: ObjectCast) -> Option<&'static str> {
+        self.native_casts.iter().find_map(|(candidate, method)| (*candidate == cast).then_some(*method))
+    }
+
     /// Resolves a typed arithmetic operation independently of PHP class spelling.
     pub fn arithmetic_method(&self, operation: ObjectArithmetic) -> Option<&'static str> {
         self.arithmetic.iter().find_map(|(op, method)| (*op == operation).then_some(*method))
@@ -101,6 +158,11 @@ impl ClassOperators {
 
 /// Number adapters compile through ordinary EIR calls with fresh immutable results.
 pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
+    properties: &[],
+    dimensions: &[],
+    native_clone: None,
+    json: None,
+    native_casts: &[],
     arithmetic: &[
         (ObjectArithmetic::Add, "__elephc_add"),
         (ObjectArithmetic::Sub, "__elephc_sub"),
@@ -109,6 +171,9 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
         (ObjectArithmetic::Mod, "__elephc_mod"),
         (ObjectArithmetic::Pow, "__elephc_pow"),
     ],
+    arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
     bitwise: &[],
     shift: &[],
     compare: Some("__elephc_compare"),
@@ -127,6 +192,14 @@ pub const GMP_CASTS: ClassCasts = ClassCasts {
 
 /// GMP adapters run for every operand family so php-src's own diagnostics are preserved.
 pub const GMP_OPERATORS: ClassOperators = ClassOperators {
+    properties: &[],
+    dimensions: &[],
+    native_clone: None,
+    json: None,
+    native_casts: &[],
+    arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
     arithmetic: &[
         (ObjectArithmetic::Add, "__elephc_add"),
         (ObjectArithmetic::Sub, "__elephc_sub"),
@@ -150,6 +223,41 @@ pub const GMP_OPERATORS: ClassOperators = ClassOperators {
     accepts_any_operands: true,
 };
 
+/// SimpleXML uses native document truthiness rather than ordinary object truthiness.
+/// A shared static gives both public class entries the same stable contract identity.
+pub static SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
+    dimensions: &[(ObjectDimension::Get, "__elephc_dimension_get"),
+        (ObjectDimension::Set, "__elephc_dimension_set"),
+        (ObjectDimension::Isset, "__elephc_dimension_isset"),
+        (ObjectDimension::Unset, "__elephc_dimension_unset"),
+        (ObjectDimension::Append, "__elephc_append"),
+        (ObjectDimension::WriteSelect, "__elephc_dimension_select")],
+    properties: &[(ObjectProperty::Get, "__elephc_property_get"),
+        (ObjectProperty::Set, "__elephc_property_set"),
+        (ObjectProperty::Isset, "__elephc_property_isset"),
+        (ObjectProperty::Empty, "__elephc_property_empty"),
+        (ObjectProperty::WriteFetch, "__elephc_property_write_fetch"),
+        (ObjectProperty::WriteSelect, "__elephc_property_write_fetch"),
+        (ObjectProperty::Update, "__elephc_property_update"),
+        (ObjectProperty::Unset, "__elephc_property_unset"),
+        (ObjectProperty::Probe, "__elephc_property_probe")],
+    native_clone: Some("__elephc_clone_initialize"),
+    json: Some("__elephc_json"),
+    native_casts: &[(ObjectCast::Int, "__elephc_int"), (ObjectCast::Float, "__elephc_float"), (ObjectCast::Array, "__elephc_array")],
+    arithmetic: &[(ObjectArithmetic::Add, "__elephc_add"),
+        (ObjectArithmetic::Sub, "__elephc_sub"), (ObjectArithmetic::Mul, "__elephc_mul"),
+        (ObjectArithmetic::Div, "__elephc_div"), (ObjectArithmetic::Mod, "__elephc_mod"),
+        (ObjectArithmetic::Pow, "__elephc_pow")],
+    arithmetic_result: ObjectArithmeticResult::Number,
+    operand_dispatch: ObjectOperandDispatch::NumericConversion,
+    bit_not: Some("__elephc_bitnot"),
+    bitwise: &[],
+    shift: &[],
+    casts: None,
+    accepts_any_operands: false,
+    compare: Some("__elephc_compare"), boolean: Some("__elephc_bool"),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,7 +266,15 @@ mod tests {
     #[test]
     fn synthetic_operator_contract_resolves_only_declared_operations() {
         let operators = ClassOperators {
+            properties: &[],
+            dimensions: &[],
+            native_clone: None,
+            json: None,
+            native_casts: &[],
             arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],
+            arithmetic_result: ObjectArithmeticResult::Object,
+            operand_dispatch: ObjectOperandDispatch::Handler,
+            bit_not: None,
             bitwise: &[(ObjectBitwise::And, "synthetic_and")],
             shift: &[(ObjectShift::Left, "synthetic_shl")],
             compare: None,
@@ -168,6 +284,9 @@ mod tests {
         };
         assert_eq!(operators.arithmetic_method(ObjectArithmetic::Add), Some("synthetic_sum"));
         assert_eq!(operators.arithmetic_method(ObjectArithmetic::Mul), None);
+        assert_eq!(operators.dimension_method(ObjectDimension::Get), None);
+        assert_eq!(SIMPLEXML_OPERATORS.dimension_method(ObjectDimension::Append), Some("__elephc_append"));
+        assert_eq!(SIMPLEXML_OPERATORS.dimension_method(ObjectDimension::Set), Some("__elephc_dimension_set"));
         assert_eq!(operators.bitwise_method(ObjectBitwise::And), Some("synthetic_and"));
         assert_eq!(operators.shift_method(ObjectShift::Left), Some("synthetic_shl"));
     }

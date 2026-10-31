@@ -94,7 +94,9 @@ pub(super) fn check_static_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
     if target.dynamic_eval_target || target.prop_ty.is_php_array()
-        || matches!(&target.prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap"))
+        || target.prop_ty == PhpType::Mixed
+        || matches!(&target.prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap")
+            || crate::types::builtin_classes::has_native_dimensions(name, &checker.classes))
     {
         return Ok(());
     }
@@ -170,14 +172,16 @@ pub(super) fn check_static_property_array_assign(
         PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
         _ => false,
     };
-    if target.dynamic_eval_target || target.prop_ty.is_php_array() || mixed_elements {
+    if target.dynamic_eval_target || target.prop_ty.is_php_array() || mixed_elements
+        || target.prop_ty == PhpType::Mixed
+    {
         if !is_dynamic_eval_static_property_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }
         return Ok(());
     }
     if let PhpType::Object(class_name) = &target.prop_ty {
-        if checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if checker.object_type_supports_dimensions(class_name) {
             return Ok(());
         }
     }

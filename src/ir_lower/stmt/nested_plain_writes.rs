@@ -127,6 +127,17 @@ fn emit_object_append(
     ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
     value: LoweredValue, span: Span,
 ) {
+    if super::native_dimension_append::lower(ctx, parent, value, span, |ctx, parent, value| {
+        emit_array_access_append(ctx, parent, value, span);
+    }) { return; }
+    emit_array_access_append(ctx, parent, value, span);
+}
+
+/// Preserves ordinary ArrayAccess append and WeakMap rejection after the native XML guard.
+fn emit_array_access_append(
+    ctx: &mut LoweringContext<'_, '_>, parent: LoweredValue,
+    value: LoweredValue, span: Span,
+) {
     let weak_map = ctx.intern_class_name("WeakMap");
     let denied = ctx.emit_value(Op::InstanceOf, vec![parent.value], Some(Immediate::Data(weak_map)),
         PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
@@ -167,6 +178,7 @@ fn emit_object_append(
 /// Fetches one child with balanced, unwind-visible input and result owners.
 pub(super) fn fetch_parent(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, index: &Expr, span: Span,
+    key_already_diagnosed: bool,
 ) -> LoweredValue {
     let (receiver, receiver_owner) =
         super::nested_array_writes::root_static_update_receiver(ctx, receiver, span);
@@ -182,8 +194,18 @@ pub(super) fn fetch_parent(
         return receiver;
     }
     let child = ctx.emit_value(Op::RuntimeCall, vec![receiver.value, key.value],
-        Some(Immediate::RuntimeCall(RuntimeCallTarget::ArrayFetchForWrite)),
+        Some(Immediate::RuntimeCall(if key_already_diagnosed {
+            RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
+        } else { RuntimeCallTarget::ArrayFetchForWrite })),
         PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+    finish_parent_fetch(ctx, child, receiver_owner, key_owner, span)
+}
+
+/// Protects a selected owned child before retiring the published receiver and key owners.
+pub(super) fn finish_parent_fetch(
+    ctx: &mut LoweringContext<'_, '_>, child: LoweredValue,
+    receiver_owner: Option<LocalSlotId>, key_owner: Option<LocalSlotId>, span: Span,
+) -> LoweredValue {
     let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let slot = ctx.local_slots[&selected];
     ctx.store_call_argument_local(&selected, child, PhpType::Mixed, Some(span));

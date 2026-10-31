@@ -197,6 +197,7 @@ function never_called(): void {
     $p = new Plain();
     echo count($p);
 }
+
 echo "ok";
 "#,
     );
@@ -216,6 +217,19 @@ echo count($p);
         ),
         "{reached}"
     );
+}
+
+/// Object unions retain count's runtime TypeError instead of rejecting unreachable calls.
+#[test]
+fn test_count_non_countable_object_union_defers_to_run_time() {
+    let out = compile_and_run(r#"<?php
+function unreachableUnionCount(stdClass|false $value): int { return count($value); }
+function reachedUnionCount(stdClass|false $value): int { return count($value); }
+echo 'compiled|';
+try { reachedUnionCount(new stdClass()); }
+catch (TypeError $exception) { echo $exception->getMessage(); }
+"#);
+    assert_eq!(out, "compiled|count(): Argument #1 ($value) must be of type Countable|array, stdClass given");
 }
 
 /// Verifies counting a non-`Countable` object raises PHP's TypeError, naming the class.

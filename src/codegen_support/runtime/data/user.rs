@@ -676,15 +676,21 @@ pub(crate) fn emit_runtime_data_user(
     ] {
         out.push_str(&format!(".globl {table}\n{table}:\n"));
         if let Some(max_class_id) = max_class_id {
-            let method_key = php_symbol_key(method);
             for class_id in 0..=max_class_id {
+                let native = match method {
+                    "offsetGet" => Some(elephc_builtin_contract::ObjectDimension::Get),
+                    "offsetSet" => Some(elephc_builtin_contract::ObjectDimension::Set),
+                    "offsetUnset" => Some(elephc_builtin_contract::ObjectDimension::Unset),
+                    _ => None,
+                }.and_then(|op| class_name_by_id.get(&class_id).and_then(|name|
+                    crate::types::builtin_classes::native_dimension_method(name, op, classes)));
+                let method_key = php_symbol_key(native.unwrap_or(method));
                 let entry = class_info_by_id
                     .get(&class_id)
                     .filter(|class_info| {
-                        class_info
-                            .interfaces
-                            .iter()
-                            .any(|name| name.eq_ignore_ascii_case(interface))
+                        (class_info.interfaces.iter().any(|name| name.eq_ignore_ascii_case(interface))
+                            || (interface == "ArrayAccess" && class_name_by_id.get(&class_id)
+                                .is_some_and(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))))
                             && class_info
                                 .methods
                                 .get(&method_key)
@@ -694,6 +700,39 @@ pub(crate) fn emit_runtime_data_user(
                     .transpose()?
                     .unwrap_or_else(|| "0".to_string());
                 out.push_str(&format!("    .quad {}\n", entry));
+            }
+        }
+    }
+
+    out.push_str(".globl _class_offsetget_forwrite_ptrs\n_class_offsetget_forwrite_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let entry = class_name_by_id.get(&class_id)
+                .and_then(|name| crate::types::builtin_classes::spl_storage_write_fetch_owner(name, classes))
+                .map(|owner| source_instance_method_entry(owner, "__elephc_fetch_for_write", classes))
+                .transpose()?.unwrap_or_else(|| "0".into());
+            out.push_str(&format!("    .quad {entry}\n"));
+        }
+    }
+
+    // Native property projections retain PHP's own interface membership.
+    for (table, methods) in [
+        ("_class_array_projection_ptrs", &["__elephc_array"][..]),
+        ("_class_debug_projection_ptrs", &["__elephc_debug_info", "__elephc_debug_projection"][..]),
+    ] {
+        out.push_str(&format!(".globl {table}\n{table}:\n"));
+        if let Some(max_class_id) = max_class_id {
+            for class_id in 0..=max_class_id {
+                for method in methods {
+                    let key = php_symbol_key(method);
+                    let entry = class_name_by_id.get(&class_id)
+                        .filter(|name| crate::types::builtin_classes::has_native_dimensions(name, classes))
+                        .and_then(|name| classes.get(*name))
+                        .filter(|info| info.methods.contains_key(&key))
+                        .map(|info| source_instance_method_entry(info, &key, classes))
+                        .transpose()?.unwrap_or_else(|| "0".into());
+                    out.push_str(&format!("    .quad {entry}\n"));
+                }
             }
         }
     }
@@ -1324,10 +1363,11 @@ pub(crate) fn emit_runtime_data_user(
             .interfaces
             .iter()
             .any(|i| i == "JsonSerializable");
-        let flags: u64 = if implements_jsonserializable { 1 } else { 0 };
+        let native_projection = crate::types::builtin_classes::has_native_dimensions(class_name, classes);
+        let flags: u64 = if implements_jsonserializable || native_projection { 1 } else { 0 };
         out.push_str(&format!("    .quad {}\n", flags));
-        if implements_jsonserializable {
-            let key = php_symbol_key("jsonSerialize");
+        if implements_jsonserializable || native_projection {
+            let key = php_symbol_key(if implements_jsonserializable { "jsonSerialize" } else { "__elephc_json" });
             out.push_str(&format!(
                 "    .quad {}\n",
                 source_instance_method_entry(class_info, &key, classes)?,

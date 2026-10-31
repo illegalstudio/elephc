@@ -120,6 +120,46 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Fetches attached internal SPL storage without allowing a public offsetGet fallback.
+    fn spl_storage_fetch_for_write(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut output = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_spl_storage_write_v1(
+                0,
+                array.as_ptr(),
+                index.as_ptr(),
+                (&mut output as *mut *mut RuntimeCell).cast(),
+            )
+        };
+        if status == 1 {
+            return Err(EvalStatus::UnsupportedConstruct);
+        }
+        self.handle_native_cleanup_status(status)?;
+        Self::handle(output)
+    }
+
+    /// Mutates an attached child array through the same exception-contained native ABI.
+    fn spl_storage_array_set(
+        &mut self,
+        array: RuntimeCellHandle,
+        index: RuntimeCellHandle,
+        value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        let status = unsafe {
+            __elephc_eval_spl_storage_write_v1(
+                1,
+                array.as_ptr(),
+                index.as_ptr(),
+                value.as_ptr(),
+            )
+        };
+        self.handle_native_cleanup_status(status)
+    }
+
     /// Reads a boxed Mixed object property through the generated user helper.
     fn property_get(
         &mut self,

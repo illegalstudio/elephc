@@ -59,6 +59,14 @@ pub(in crate::interpreter) fn eval_native_property_get_authorized(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_native_property_get_for_container(object, declaring_class, property, false, context, values)
+}
+
+/// Allows unset container reads to skip uninitialized backing storage after getter hooks run.
+pub(super) fn eval_native_property_get_for_container(
+    object: RuntimeCellHandle, declaring_class: &str, property: &str, quiet: bool,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     if let Some(result) = eval_native_property_hook(
         object, declaring_class, property, None, context, values,
     )? {
@@ -73,6 +81,7 @@ pub(in crate::interpreter) fn eval_native_property_get_authorized(
     let initialized = eval_with_native_bridge_scope(declaring_class, context, || {
         values.property_is_initialized(object, property)
     })?;
+    if !initialized && quiet { return values.null(); }
     if !initialized && context.native_property_type(declaring_class, property).is_some() {
         return eval_throw_uninitialized_property_error(
             declaring_class,

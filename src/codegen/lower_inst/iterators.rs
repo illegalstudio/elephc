@@ -26,7 +26,7 @@
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{
-    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    abi, emit_box_current_value_as_mixed,
     emit_box_runtime_payload_as_mixed,
 };
 use crate::intrinsics::IntrinsicCall;
@@ -1445,10 +1445,8 @@ fn resolve_dynamic_object_iterator_source(
 
 /// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.
 ///
-/// `emit_box_current_owned_value_as_mixed` is the transfer: `__rt_mixed_from_value`
-/// retains the payload into a fresh Mixed cell, then the helper releases the
-/// original method-return owner. There is no user callback between those two
-/// steps, so the Mixed cell is the sole owner afterward. The iterator source
+/// The compiled return marker decides whether boxing transfers a return owner or
+/// retains a borrowed payload. The iterator source
 /// word is then loaded from that cell's payload. The previous aggregate pointer
 /// is overwritten without a matching release; the loop's source retain still
 /// owns the aggregate.
@@ -1474,7 +1472,7 @@ fn adopt_get_iterator_result(
             ctx.emitter.instruction(&format!("je {}", keep_original));          // skip replacement when getIterator() was not resolved
         }
     }
-    emit_box_current_owned_value_as_mixed(ctx.emitter, &return_ty.codegen_repr());
+    box_compiled_iterator_result(ctx, return_ty);
     let local_offset = ctx.local_offset(slot)?;
     abi::store_at_offset(ctx.emitter, result_reg, local_offset);
     abi::emit_load_from_address(
@@ -1801,11 +1799,31 @@ fn box_iterator_method_result_if_needed(
         return Ok(());
     };
     let result_ty = ctx.value_php_type(result)?;
-    if result_ty == PhpType::Mixed && return_ty.codegen_repr() != PhpType::Mixed {
+    if result_ty == PhpType::Mixed {
         // A `?ptr<T>` result keeps its union, so address 0 is PHP null.
-        emit_box_current_value_as_mixed(ctx.emitter, &crate::types::mixed_box_php_type(return_ty));
+        // Source-declared arrays already use Mixed storage. Their borrowed return
+        // still needs a foreach owner even when no representation conversion is needed.
+        let box_ty = crate::types::mixed_box_php_type(return_ty);
+        box_compiled_iterator_result(ctx, &box_ty);
     }
     Ok(())
+}
+
+/// Boxes a compiled iterator return without consuming an owner on borrowed return paths.
+fn box_compiled_iterator_result(ctx: &mut FunctionContext<'_>, return_ty: &PhpType) {
+    if return_ty.codegen_repr() != PhpType::Mixed {
+        let owned = ctx.next_label("iterator_value_owned");
+        let done = ctx.next_label("iterator_value_boxed");
+        crate::codegen_support::emit_box_current_php_return_as_mixed(
+            ctx.emitter, return_ty, &owned, &done,
+        );
+        return;
+    }
+    let done = ctx.next_label("iterator_value_boxed");
+    crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &done);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    crate::codegen_support::abi::emit_php_return_status(ctx.emitter, true);
 }
 
 /// Lowers object iterator advancement using PHP's Iterator method protocol.
@@ -1896,10 +1914,14 @@ fn emit_object_iterator_method_call(
     let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
-    if let Some(helper) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
-        .and_then(|intrinsic| intrinsic.runtime_helper())
+    if let Some((intrinsic, helper)) = IntrinsicCall::instance_method(&target.impl_class, &method_key)
+        .and_then(|intrinsic| intrinsic.runtime_helper().map(|helper| (intrinsic, helper)))
     {
         abi::emit_call_label(ctx.emitter, helper);
+        // Native SPL current/key helpers transfer a retained or fresh Mixed cell.
+        // They do not publish the private compiled-PHP marker themselves.
+        crate::codegen_support::abi::emit_php_return_status(ctx.emitter, matches!(intrinsic.kind(),
+            crate::intrinsics::IntrinsicCallKind::SplDllCurrent | crate::intrinsics::IntrinsicCallKind::SplDllKey));
     } else {
         emit_direct_resolved_method_call(ctx, &target)?;
     }
@@ -1946,6 +1968,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.instruction("cmp x10, x11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("b.ne {}", not_generator));        // fall back to interface dispatch for non-Generator iterators
             abi::emit_call_label(ctx.emitter, helper);
+            crate::codegen::return_ownership::emit_status(ctx.emitter, true);
             ctx.emitter.instruction(&format!("b {}", done));                    // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
         }
@@ -1955,6 +1978,7 @@ fn emit_generator_interface_fast_path(
             ctx.emitter.instruction("cmp r10, r11");                            // compare receiver class id with Generator
             ctx.emitter.instruction(&format!("jne {}", not_generator));         // fall back to interface dispatch for non-Generator iterators
             abi::emit_call_label(ctx.emitter, helper);
+            crate::codegen::return_ownership::emit_status(ctx.emitter, true);
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip generic interface dispatch after the fast path
             ctx.emitter.label(&not_generator);
         }
@@ -2090,6 +2114,8 @@ fn emit_generator_iterator_runtime_call(
     let receiver_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::load_at_offset(ctx.emitter, receiver_arg, offset - ITER_SOURCE_OFFSET_DELTA);
     abi::emit_call_label(ctx.emitter, helper);
+    // Runtime generator keys and values already transfer an owned Mixed cell.
+    crate::codegen::return_ownership::emit_status(ctx.emitter, true);
 }
 
 /// Lowers iterator cleanup for owned relocation anchors in the stack-resident state.

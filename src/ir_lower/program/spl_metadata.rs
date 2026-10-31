@@ -71,6 +71,8 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
     match class_name {
         "EmptyIterator" => &["current", "key", "next", "rewind", "valid"],
         "ArrayIterator" => &[
+            "__elephc_offset_index",
+            "__elephc_fetch_for_write",
             "current",
             "key",
             "next",
@@ -84,6 +86,8 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "count",
         ],
         "ArrayObject" => &[
+            "__elephc_offset_index",
+            "__elephc_fetch_for_write",
             "getIterator",
             "count",
             "offsetExists",

@@ -471,6 +471,10 @@ fn terminator_preserves_concat_state(term: &Terminator) -> bool {
 
 /// Returns whether `inst` is unconditionally non-inert regardless of operand or slot types.
 fn is_unconditional_concat_barrier(inst: &Instruction) -> bool {
+    if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
+        // These defaults include callbacks, but a typed operand proof can rule them out.
+        return false;
+    }
     !inst
         .effects
         .intersection(Effects::ALLOC_CONCAT | Effects::OUTPUT | Effects::MAY_WARN)
@@ -718,6 +722,13 @@ impl<'a> ConcatInertAnalysis<'a> {
             _ => {}
         }
 
+        // Proven container writes can be inert even though the opcode's default also
+        // covers unknown reference markers and destructor-bearing Mixed payloads.
+        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey)
+            && self.container_write_is_concat_inert(inst)
+        {
+            return true;
+        }
         if inst
             .effects
             .intersects(Effects::ALLOC_CONCAT | Effects::OUTPUT | Effects::MAY_WARN)
@@ -1220,7 +1231,7 @@ impl<'a> ConcatInertAnalysis<'a> {
         let Some(container_meta) = self.function.value(container) else {
             return false;
         };
-        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet) {
+        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
             let Some(&key) = inst.operands.get(1) else {
                 return false;
             };

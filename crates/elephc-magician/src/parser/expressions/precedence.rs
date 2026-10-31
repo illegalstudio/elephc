@@ -440,7 +440,9 @@ impl Parser {
         if !matches!(self.tokens.get(self.pos + 2), Some(TokenKind::RParen)) {
             return None;
         }
-        if ident_eq(name, "int") || ident_eq(name, "integer") {
+        if ident_eq(name, "array") {
+            Some(EvalCastType::Array)
+        } else if ident_eq(name, "int") || ident_eq(name, "integer") {
             Some(EvalCastType::Int)
         } else if ident_eq(name, "float") || ident_eq(name, "double") || ident_eq(name, "real") {
             Some(EvalCastType::Float)

@@ -35,12 +35,12 @@ use super::{
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
-    runtime_builtin_wrapper_sig, store_call_result,
+    runtime_builtin_wrapper_sig, store_compiled_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
 mod instance_expr;
-mod results;
+pub(super) mod results;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -1740,7 +1740,8 @@ fn runtime_static_method_descriptor_cases(
                 .get(&method_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
-            if !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
+            if !class_method_already_emitted(ctx, &impl_class, &method_key, true)
+                && !super::super::intrinsic_static_descriptor_entry_supported(&impl_class, &method_key) {
                 continue;
             }
             methods.push((
@@ -2410,7 +2411,7 @@ fn emit_runtime_array_instance_method_call(
     emit_direct_resolved_method_call(ctx, &resolved)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.sig.return_type)?;
+    store_compiled_call_result(ctx, inst, &target.sig.return_type, target.sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }

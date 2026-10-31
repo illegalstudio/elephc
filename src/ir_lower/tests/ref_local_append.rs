@@ -405,3 +405,75 @@ function read_unpromoted_ref_string(int $flag): void {
         assert!(!read.contains("__rt_mixed_cast_string"), "{name}: {read}");
     }
 }
+
+/// A narrowed object view unboxes the raw storage after the promoted branch has returned.
+#[test]
+fn ref_local_mixed_object_reads_unbox_on_all_targets() {
+    use crate::ir::{Immediate, Op, Ownership};
+    use crate::types::PhpType;
+
+    let source = r#"<?php
+class ReferenceViewObject { public string $name = 'value'; }
+function replace_ref_object(&$value): void { $value = new ReferenceViewObject(); }
+function read_unpromoted_ref_object(int $flag): void {
+    $value = new ReferenceViewObject();
+    if ($flag < 0) { replace_ref_object($value); return; }
+    echo $value->name;
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter()
+            .find(|function| function.name == "read_unpromoted_ref_object").unwrap();
+        let load = function.instructions.iter().find(|inst| inst.op == Op::LoadRefCell
+            && inst.result_php_type == PhpType::Object("ReferenceViewObject".into()))
+            .expect("flow-proven object read from conditionally promoted storage");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("local cell read"); };
+        assert_eq!(function.locals[slot.as_raw() as usize].php_type.codegen_repr(), PhpType::Mixed);
+        assert_eq!(function.value(load.result.unwrap()).unwrap().ownership, Ownership::Borrowed);
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=read_unpromoted_ref_object ").unwrap().1
+            .split_once("@endfn name=read_unpromoted_ref_object").unwrap().0;
+        let read = body.rsplit_once("op=load_ref_cell").unwrap().1
+            .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
+        assert_eq!(read.matches("__rt_mixed_unbox").count(), 1,
+            "{name}: the surviving raw branch must expose the object payload: {read}");
+    }
+}
+
+/// Unsetting a conditionally captured local retires the raw owner without consuming a live cell.
+#[test]
+fn ref_local_conditional_unset_keeps_representation_guard_on_all_targets() {
+    let source = r#"<?php
+class ConditionalUnsetObject { public string $name = 'kept'; }
+function conditionalUnsetOwner(int $flag): void {
+    $value = new ConditionalUnsetObject();
+    if ($flag > 0) {
+        $read = function() use (&$value): string { return $value->name; };
+    }
+    unset($value);
+    if ($flag > 0) { echo $read(); }
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "conditionalUnsetOwner").unwrap();
+        let retirement = function.instructions.iter().find(|inst| {
+            inst.op == crate::ir::Op::ReleaseRawLocalSlot
+        }).expect("conditional raw retirement must be explicit EIR");
+        assert_eq!(retirement.effects, crate::ir::Effects::all(),
+            "{name}: retiring the raw object may execute an arbitrary PHP destructor");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=conditionalUnsetOwner ").unwrap().1
+            .split_once("@endfn name=conditionalUnsetOwner").unwrap().0;
+        let unset = body.split_once("op=release_raw_local_slot").unwrap().1
+            .lines().take_while(|line| !line.contains("@src ")).collect::<Vec<_>>().join("\n");
+        let guard = unset.find("raw_local_cleanup_done").expect("raw cleanup must test cell state");
+        let release = unset.find("__rt_decref_").expect("raw object or boxed owner must retire");
+        assert!(guard < release, "{name}: live cells must bypass raw retirement: {unset}");
+    }
+}

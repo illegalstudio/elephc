@@ -411,6 +411,16 @@ fn test_bitwise_not_parses() {
     );
 }
 
+/// A discarded complement still reaches unary lowering and its runtime TypeError checks.
+#[test]
+fn test_bitwise_not_expression_statement_parses() {
+    let statements = parse_source("<?php ~$x;");
+    assert!(matches!(&statements[0].kind, StmtKind::ExprStmt(Expr {
+        kind: ExprKind::BitNot(operand), ..
+    }) if matches!(&operand.kind, ExprKind::Variable(name) if name == "x")));
+    assert!(parse_fails("<?php ~;"));
+}
+
 /// Verifies that `<?php echo $arr[0]();` parses as an ExprCall node whose callee is an
 /// ArrayAccess. This exercises callable expressions where the callee is a subscript result.
 #[test]

@@ -233,6 +233,7 @@ pub(super) fn eval_sync_type_supported(ty: &PhpType) -> bool {
     matches!(
         ty.codegen_repr(),
         PhpType::Int
+            | PhpType::TaggedScalar
             | PhpType::Bool
             | PhpType::Float
             | PhpType::Str
@@ -266,10 +267,12 @@ fn flush_eval_scope_locals_with_mask(
     for local in locals {
         let skip = access_mask_offset.map(|offset| {
             let skip = ctx.next_label("eval_scope_flush_unaccessed");
-            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, offset, &skip);
-            skip
+            (offset, skip)
         });
-        let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
+        if let Some((offset, skip)) = &skip {
+            emit_branch_if_eval_name_unaccessed(ctx.emitter, &local.name, *offset, skip);
+        }
+        let ty = ctx.load_eval_local_to_result(local.slot)?.codegen_repr();
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
         } else {
@@ -278,12 +281,32 @@ fn flush_eval_scope_locals_with_mask(
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED);
-        if let Some(skip) = skip {
+        emit_eval_scope_set(ctx, local, EVAL_SCOPE_FLAG_OWNED | EVAL_SCOPE_FLAG_NATIVE_SNAPSHOT);
+        emit_eval_native_local_type(ctx, local);
+        if let Some((_, skip)) = skip {
             ctx.emitter.label(&skip);
         }
     }
     Ok(())
+}
+
+/// Rejects invalid object-reference assignments inside eval, before a surrounding catch executes.
+fn emit_eval_native_local_type(ctx: &mut FunctionContext<'_>, local: &EvalSyncLocal) {
+    let expected = match &local.ty {
+        PhpType::Object(class) if !class.is_empty() => class.as_str(),
+        PhpType::Object(_) => "object",
+        _ => "",
+    };
+    let (name, name_len) = ctx.data.add_string(local.name.as_bytes());
+    let (ty, ty_len) = ctx.data.add_string(expected.as_bytes());
+    load_eval_scope_to_arg(ctx, 0);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), &name);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), name_len as i64);
+    abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), &ty);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), ty_len as i64);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_scope_native_type_v1");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Flushes only dynamic-eval globals selected by the parsed fragment's access mask.

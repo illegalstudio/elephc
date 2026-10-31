@@ -169,6 +169,7 @@ impl Function {
             ir_type,
             php_type,
             kind,
+            ref_cell_owner: None,
         });
         id
     }
@@ -273,6 +274,8 @@ pub struct LocalSlot {
     pub ir_type: IrType,
     pub php_type: PhpType,
     pub kind: LocalKind,
+    /// Hidden owner retired when eval detaches this PHP name from shared native storage.
+    pub ref_cell_owner: Option<LocalSlotId>,
 }
 
 /// Role of a local slot in PHP/runtime semantics.

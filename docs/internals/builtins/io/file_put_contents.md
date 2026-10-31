@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/file_put_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/file_put_contents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:716](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L716) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `non_heap`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `shared`
 - **Callable policy**: `static_only`

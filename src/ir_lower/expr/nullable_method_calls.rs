@@ -340,13 +340,16 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
     roots: &[(usize, crate::ir::LocalSlotId)],
     span: Span,
 ) {
-    let owned_object_result = result.is_some_and(|result| {
-        matches!(ctx.builder.value_php_type(result).codegen_repr(), PhpType::Object(_))
+    let independently_owned_result = result.is_some_and(|result| {
+        let representation = ctx.builder.value_php_type(result).codegen_repr();
+        let operation = ctx.builder.value_defining_op(result);
+        (matches!(representation, PhpType::Object(_))
+            && matches!(operation, Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
+            || representation == PhpType::Callable
+                && matches!(operation, Some(Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall)))
             && signature.is_some_and(|signature| !signature.by_ref_return)
-            && matches!(ctx.builder.value_defining_op(result),
-                Some(Op::Call | Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall))
     });
-    let guarded_result = result.filter(|_| owned_object_result && args.iter().any(|value| {
+    let guarded_result = result.filter(|_| independently_owned_result && args.iter().any(|value| {
         ctx.value_is_owning_temporary(LoweredValue {
             value: *value,
             ir_type: ctx.builder.value_type(*value),
@@ -458,7 +461,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                         && conditionally_releasable
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !owned_object_result && !callee_owns && !independently_boxed && result_reuses_arg {
+            if !independently_owned_result && !callee_owns && !independently_boxed && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
@@ -486,11 +489,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                 if let Some(result) = result {
                     let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
                     let result_repr = ctx.builder.value_php_type(result).codegen_repr();
-                    let owned_string_arg = arg_repr == PhpType::Str
-                        && matches!(
-                            ctx.builder.value_defining_op(lowered.value),
-                            Some(Op::EnsureOwned | Op::Acquire | Op::StrPersist)
-                        );
+                    // The enclosing gate includes provisional local reads and owned
+                    // user returns; final backend ownership still skips borrowed storage.
+                    let owned_string_arg = arg_repr == PhpType::Str;
                     let user_call_result = matches!(
                         ctx.builder.value_defining_op(result),
                         Some(
@@ -513,6 +514,9 @@ pub(super) fn release_owned_call_arg_temporaries_with_roots(
                     }
                     if owned_string_arg && user_call_result {
                         if result_repr == PhpType::Str {
+                            // A runtime view has no releasing owner of its own. Retire the
+                            // normalized cast it borrows unless that owner became the result.
+                            release_marked_cast_copies_unless_returned(ctx, lowered, result, span);
                             ctx.emit_void(
                                 Op::ReleaseUnlessAliases,
                                 vec![lowered.value, result],
@@ -633,7 +637,9 @@ pub(super) fn stabilize_borrowed_result_and_release_receiver(
     result: LoweredValue,
     span: Span,
 ) -> LoweredValue {
-    if !ctx.value_is_owning_temporary(receiver) {
+    let boxed_local_read = ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed
+        && ctx.value_needs_release_after_use(receiver);
+    if !ctx.value_is_owning_temporary(receiver) && !boxed_local_read {
         return result;
     }
     let result = if ctx.value_is_owning_temporary(result) {

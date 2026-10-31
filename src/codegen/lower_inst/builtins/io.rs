@@ -59,6 +59,7 @@ mod wrapper_dispatch;
 mod path_call_helpers;
 mod stream_dispatch_helpers;
 mod filter_helpers;
+mod filter_dispatch;
 mod stream_bucket_arch;
 mod close_crypto_arch;
 mod stream_read_helpers;

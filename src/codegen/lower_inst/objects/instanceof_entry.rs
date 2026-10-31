@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// Tests a boxed `is_a` subject through the same class metadata as named `instanceof`.
+pub(in crate::codegen::lower_inst) fn lower_mixed_is_a_literal_target(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+    class_name: &str,
+) -> Result<()> {
+    let normalized = class_name.trim_start_matches('\\');
+    let canonical = ctx.module.class_infos.keys().chain(ctx.module.interface_infos.keys())
+        .find(|name| name.eq_ignore_ascii_case(normalized))
+        .map(String::as_str).unwrap_or(normalized);
+    if let Some((target_id, target_kind)) = classify_named_target(ctx, canonical) {
+        ctx.load_value_to_reg(value, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
+        emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
+    } else {
+        emit_false(ctx);
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers named `instanceof` using runtime class/interface metadata.
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -35,7 +55,8 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         emit_incomplete_class_instanceof(ctx, value, &value_ty)?;
         return store_if_result(ctx, inst);
     }
-    if builtins::has_eval_context(ctx) {
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An escaped eval-declared object carries its owner independently of this AOT frame.
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }
     let Some((target_id, target_kind)) = classify_named_target(ctx, &class_name) else {
@@ -157,7 +178,7 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof_dynamic(
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
-    if builtins::has_eval_context(ctx) {
+    if ctx.module.required_runtime_features.eval_bridge {
         return builtins::lower_eval_object_is_a_dynamic(ctx, inst, value, target, false);
     }
     let value_ty = ctx.value_php_type(value)?;

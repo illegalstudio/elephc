@@ -105,7 +105,7 @@ pub(super) fn eval_static_property_get_with_result_ownership(
     })
 }
 
-/// Detaches an owned reference read and releases intermediate storage on success or failure.
+/// Detaches references and array boxes for value reads, preserving ordinary object identity.
 fn eval_owned_read<V: RuntimeValueOps>(
     context: &mut ElephcEvalContext,
     values: &mut V,
@@ -113,10 +113,14 @@ fn eval_owned_read<V: RuntimeValueOps>(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut owners = Vec::new();
     let result = read(context, values, &mut owners).and_then(|value| {
-        if values.is_reference(value)? {
-            owners.push(value);
-            values.copy_value(value)
+        // The getter owns a lease, but its boxed array can still be the property's box.
+        // Copy the box so a later COW write replaces only the by-value result's payload.
+        // Register the owner before probing, since a failed probe must release it too.
+        owners.push(value);
+        if values.is_reference(value)? || values.is_array_like(value)? {
+            copy_scope_value(value, context, values)
         } else {
+            owners.pop();
             Ok(value)
         }
     });

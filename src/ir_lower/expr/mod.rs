@@ -40,6 +40,7 @@ mod ref_place_args;
 mod boxed_user_sort;
 mod scalar_literals;
 mod numeric_binary;
+mod prepared_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::coerce_integer_arithmetic;
 use integer_destinations::lower_expr_for_parameter;
@@ -51,6 +52,9 @@ mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod ordinary_property_incdec;
+mod native_xml_updates;
+pub(crate) use native_xml_updates::lower_statement as lower_native_xml_property_update;
 mod string_offset_assign;
 mod assignment_rhs_capture;
 mod weak_map_places;
@@ -60,6 +64,10 @@ mod function_calls;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
+mod native_dimension_probes;
+mod unset_access_errors;
+use unset_access_errors::{is_unset_closure, require_unset_array_access, reject_unset_closure_property};
+mod native_xml_empty;
 mod callable_probes;
 mod descriptor_invoke;
 pub(crate) mod call_operand_owners;
@@ -113,7 +121,7 @@ mod method_calls;
 mod closure_binding;
 mod member_receivers;
 mod enum_interface_calls;
-mod enum_argument_guards;
+pub(crate) mod enum_argument_guards;
 mod enum_method_args;
 mod enum_static_args;
 mod enum_ref_args;
@@ -153,6 +161,7 @@ use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
 use native_isset::*;
+pub(crate) use native_isset::{ir_can_access_member, property_is_accessible_for_ir};
 use callable_probes::*;
 use descriptor_invoke::*;
 use call_operand_owners::*;
@@ -190,11 +199,15 @@ use closure_calls::*;
 use descriptor_calls::*;
 use object_construction::*;
 use property_access::*;
+pub(crate) use property_access::lower_property_write_receiver;
+pub(crate) use property_access::defer_native_property_write_receiver;
+pub(crate) use property_access::lower_native_dimension_write_select;
+pub(crate) use property_access::lower_native_dimension_incdec_select_from_values;
 use property_probes::*;
 use method_calls::*;
 use closure_binding::*;
 use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
-pub(crate) use member_receivers::lower_member_receiver_at_span;
+pub(crate) use member_receivers::refine_member_receiver_at_span;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;
@@ -256,7 +269,13 @@ pub(crate) use instanceof_coercions::{
 };
 pub(crate) use merge_temps::emit_bool_literal;
 pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
+pub(crate) use prepared_binary::lower_prepared_binary;
+pub(crate) use array_access::lower_array_access_from_values;
 pub(crate) use property_access::{
+    borrow_native_xml_property_receiver,
+    coerce_runtime_property_name,
+    lower_property_get_from_value,
+    lower_native_xml_property_write_fetch,
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
@@ -265,7 +284,7 @@ pub(crate) use property_fetch_for_write::{
     is_static_property_write_chain, lower_static_property_write_chain,
     lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
-    lower_nested_assignment_property_source,
+    lower_nested_assignment_property_source, nested_property_has_boxed_root,
 };
 pub(crate) use string_concat::string_value_needs_persistence;
 pub(crate) use string_concat::persist_pending_string;
@@ -307,7 +326,8 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => ctx.load_local(name, Some(expr.span)),
+        ExprKind::Variable(name) => super::scoped_writes::take_value(ctx, name, expr.span)
+            .unwrap_or_else(|| ctx.load_local(name, Some(expr.span))),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),

@@ -46,6 +46,25 @@ pub(super) fn emit_require_php_array(emitter: &mut Emitter, fail_label: &str) {
     }
 }
 
+/// Accepts either raw PHP array layout for the layout-neutral Mixed-element parameter ABI.
+/// The caller loads the borrowed boxed cell before this guard and owns any later acquisition.
+pub(super) fn emit_unbox_mixed_element_array(
+    emitter: &mut Emitter, param_type: &PhpType, fail_label: &str,
+) -> bool {
+    if !matches!(param_type.codegen_repr(), PhpType::Array(element)
+        if element.codegen_repr() == PhpType::Mixed) { return false; }
+    emit_require_php_array(emitter, fail_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, x1");                                  // borrow the checked packed or hash payload without changing its layout
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, rdi");                                // borrow the checked packed or hash payload without changing its layout
+        }
+    }
+    true
+}
+
 /// Borrows a normalized by-value string payload, returning false for non-string parameters.
 /// Magician applies PHP coercion before staging; its argument array roots the string for the call.
 /// Reference slots and object-field initialization must keep their separate owning conversion.

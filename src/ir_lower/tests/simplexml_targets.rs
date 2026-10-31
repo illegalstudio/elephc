@@ -1,0 +1,611 @@
+//! Purpose:
+//! SimpleXML compiler and ABI coverage for every supported target.
+//!
+//! Called from:
+//! - AST-to-EIR unit tests in CI, without linking native target archives.
+//!
+//! Key details:
+//! - Covers document factories, dimensions, casts, JSON, DOM import, and iteration.
+
+/// Prelude factories without eval locals can reach constructorless eval allocation on every ABI.
+#[test]
+fn simplexml_constructorless_factories_probe_active_eval_classes_on_every_target() {
+    let source = r#"<?php
+$source = $argc > 0 ? 'class EvalConstructorlessTargetXml extends SimpleXMLElement {} $root = new EvalConstructorlessTargetXml("<r><item/></r>"); echo get_class($root->item);' : '';
+eval($source);
+$native = new SimpleXMLElement('<r><item/></r>');
+echo get_class($native->item);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__elephc_eval_try_allocate_object_v1"), "{target}: missing eval allocation probe");
+        assert!(assembly.contains("__elephc_eval_class_string_relation_v1"), "{target}: missing eval subclass relation probe");
+    }
+}
+
+/// Nullable local returns check null before promoting compatible typed reference payloads.
+#[test]
+fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target() {
+    let source = include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php");
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for name in ["referenceReturnBoundaryXml", "presentReferenceBoundaryXml", "finallyReferenceBoundaryXml", "nullFinallyReferenceBoundaryXml"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+            let promotion = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
+                && matches!(&inst.result_php_type, crate::types::PhpType::Object(class) if class == "SimpleXMLElement"))
+                .unwrap_or_else(|| panic!("{target}: {name} must promote an object payload rather than its nullable box"));
+            assert!(guard < promotion, "{target}: {name} must reject null before changing representation");
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::AliasLocalRefCell),
+                "{target}: {name} must keep the source name attached for finally writes");
+            if name.contains("Finally") || name.starts_with("finally") {
+                let writes = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StoreRefCell
+                    && matches!(inst.result_php_type, crate::types::PhpType::Object(_))).collect::<Vec<_>>();
+                assert!(!writes.is_empty(), "{target}: {name} must update the returned cell");
+                for write in writes {
+                    assert!(matches!(function.value(write.operands[0]).unwrap().php_type,
+                        crate::types::PhpType::Object(_)),
+                        "{target}: {name} must not publish a nullable box as an object payload");
+                }
+                assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf),
+                    "{target}: {name} must check the replacement before unboxing");
+            }
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Nullable ordinary DOM values erase their class hint in guarded native boolean branches.
+#[test]
+fn ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid_on_every_target() {
+    let source = r#"<?php
+function ordinaryNullableDomTruthy(?DOMNode $node): bool { return (bool)$node; }
+$document = new DOMDocument();
+echo ordinaryNullableDomTruthy($document), ordinaryNullableDomTruthy(null);
+$xml = new SimpleXMLElement('<r/>');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "ordinaryNullableDomTruthy").unwrap();
+        let adapters = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::MethodCall
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "__elephc_bool")).collect::<Vec<_>>();
+        assert!(!adapters.is_empty(), "{target}: the native boolean branch must remain covered");
+        for adapter in adapters {
+            assert_eq!(function.value(adapter.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+                "{target}: the boxed native branch must not resolve the DOMNode method table");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Nullable native children bypass public ArrayAccess methods on every supported target.
+#[test]
+fn native_xml_child_reads_bypass_public_offset_get_on_every_target() {
+    let source = r#"<?php
+class NativeChildReadXml extends SimpleXMLElement implements ArrayAccess {
+    public function offsetGet(mixed $key): mixed { return 'public'; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetUnset(mixed $key): void {}
+}
+function nativeChildRead(NativeChildReadXml $xml): mixed { return $xml->item[0]; }
+function nativeNullableRead(?NativeChildReadXml $xml): mixed { return $xml[0]; }
+function nativeNullableCoalesce(?NativeChildReadXml $xml): mixed { return $xml[0] ?? 'absent'; }
+nativeNullableRead(null);
+echo nativeNullableCoalesce(null);
+function nativeChildLiteral(NativeChildReadXml $xml): mixed {
+    $children = ['node' => $xml->item];
+    $absent = [$xml->missing->child];
+    unset($children['node']['id']);
+    return $children['node'];
+}
+echo (string)nativeChildRead(new NativeChildReadXml('<r><item>native</item></r>'));
+echo (string)nativeChildLiteral(new NativeChildReadXml('<r><item id="old">native</item></r>'));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nativeChildRead").unwrap();
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::MethodCall && matches!(inst.immediate,
+                Some(crate::ir::Immediate::Data(name)) if
+                    module.data.strings[name.as_raw() as usize] == "__elephc_dimension_get")
+        }), "{target}: native syntax must select the native adapter before interface dispatch");
+        for name in ["nativeNullableRead", "nativeNullableCoalesce"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
+            let fallback = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::RuntimeCall)
+                .expect("null reads retain their warning-aware fallback");
+            assert_eq!(function.value(fallback.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+                "{target}: {name}: null fallback must erase nullable interface dispatch metadata");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Boxed write-select failures guard both final writes and intermediate property traversals.
+#[test]
+fn boxed_native_write_receivers_guard_null_on_every_target() {
+    let source = r#"<?php
+function nativeBoxedWrite(mixed $node): void { $node->leaf = 'value'; }
+function nativeBoxedNestedWrite(mixed $node): void { $node->child->leaf = 'value'; }
+function nativeBoxedCompound(mixed $node): void { $node->leaf .= 'value'; }
+function nativeBoxedDimensionWrite(mixed $node): void { $node[0]->leaf = 'value'; }
+function nativeBoxedBitnot(mixed $node): mixed { return ~$node; }
+function nativeTypedBitnot(SimpleXMLElement $node): mixed { return ~$node; }
+$xml = new SimpleXMLElement('<r/>');
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for name in ["nativeBoxedWrite", "nativeBoxedNestedWrite", "nativeBoxedCompound", "nativeBoxedDimensionWrite"] {
+            let function = module.functions.iter().find(|function| function.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::IsNull), "{target}: {name}");
+        }
+        let function = module.functions.iter().find(|f| f.name == "nativeBoxedDimensionWrite").unwrap();
+        let mut transferred_guards = 0;
+        for (guard_position, guard) in function.instructions.iter().enumerate() {
+            use crate::ir::{Immediate, LocalKind, Op, ValueDef};
+            if guard.op != Op::IsNull { continue; }
+            let value = guard.operands[0];
+            let Some(ValueDef::Instruction { inst, .. }) = function.value(value).map(|value| value.def) else { continue; };
+            let producer = function.instruction(inst).unwrap();
+            let Some(Immediate::LocalSlot(source)) = producer.immediate else { continue; };
+            if producer.op != Op::LoadLocal || function.locals[source.as_raw() as usize].kind != LocalKind::OwnedTemp { continue; }
+            transferred_guards += 1;
+            let protected = function.instructions[..guard_position].iter().enumerate().any(|(store_position, store)| {
+                let Some(Immediate::LocalSlot(owner)) = store.immediate else { return false; };
+                store.op == Op::StoreLocal && store.operands == [value]
+                    && function.instructions[store_position + 1..guard_position].iter().any(|push|
+                        push.op == Op::PushCallOperandOwner && push.immediate == Some(Immediate::LocalSlot(owner)))
+                    && !function.instructions[store_position + 1..guard_position].iter().any(|clear|
+                        matches!(clear.op, Op::UnsetLocal | Op::ReleaseLocalSlot)
+                            && clear.immediate == Some(Immediate::LocalSlot(owner)))
+            });
+            assert!(protected, "{target}: a transferred null-write receiver needs a live unwind owner\n{}",
+                crate::ir::print_function(function));
+        }
+        assert!(transferred_guards > 0, "{target}: fixture must exercise a transferred merge result");
+        for name in ["nativeBoxedBitnot", "nativeTypedBitnot"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
+                && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == "__elephc_bitnot")),
+                "{target}: {name} must retain the native refusal adapter");
+        }
+        let boxed = module.functions.iter().find(|f| f.name == "nativeBoxedBitnot").unwrap();
+        assert!(boxed.instructions.iter().any(|inst|
+            inst.op == crate::ir::Op::RuntimeCall && inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedBitNot))),
+            "{target}: boxed bitnot needs a typed scalar fallback");
+        let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(asm.contains("__rt_mixed_bit_not"), "{target}: fallback must reach the backend");
+    }
+}
+
+/// Compiles the same complete SimpleXML fixture through one supported target's emitter.
+fn verify_simplexml_target(target: &str) {
+    let source = [r###"<?php
+debug_backtrace();
+$counterXml = new SimpleXMLElement('<r>2</r>');
+$targetLiveDocument = new DOMDocument();
+$targetLiveDocument->loadXML('<r><a/><b/></r>');
+$targetLiveRoot = $targetLiveDocument->documentElement;
+$targetLiveA = $targetLiveRoot->childNodes->item(0);
+$targetLiveXml = simplexml_import_dom($targetLiveDocument);
+unset($targetLiveXml->b);
+var_dump($targetLiveA->nextSibling);
+$targetLiveXml->addChild('c', 'new');
+echo $targetLiveA->nextSibling->nodeName;
+var_dump($targetLiveRoot === $targetLiveDocument->documentElement, $targetLiveA === $targetLiveRoot->childNodes->item(0));
+$targetRawDocument = new DOMDocument();
+$targetRawDocument->loadHTML('<body><script>a<b</script></body>');
+$targetRawXml = simplexml_import_dom($targetRawDocument);
+$targetRawScript = $targetRawDocument->getElementsByTagName('script')->item(0);
+echo $targetRawScript->childNodes->item(0)->nodeName;
+$targetRawXml->body->script = 'c<d';
+echo $targetRawDocument->saveXML($targetRawScript), $targetRawScript->childNodes->item(0)->nodeName;
+$targetRawScript->nodeValue = 'e<f';
+$targetRawScript->textContent = 'g<h';
+$targetXPathXml = new SimpleXMLElement('<r xmlns:p="urn:p" a="1"><p:c>yes</p:c><!--r--></r>');
+echo count($targetXPathXml['a']->xpath('../p:c'));
+echo count($targetXPathXml->xpath('//comment()')[0]->xpath('../p:c'));
+var_dump($targetXPathXml->missing->registerXPathNamespace('q', 'urn:p'));
+$targetXPathXml->registerXPathNamespace('q', 'urn:p');
+$targetXPathClone = clone $targetXPathXml;
+echo count($targetXPathClone->xpath('//p:c'));
+class TargetXmlSaveDocument extends DOMDocument {
+    public function saveXML(mixed $node = null, int $options = 0): string { return parent::saveXML($node, $options); }
+}
+$saveDocument = new TargetXmlSaveDocument();
+$saveDocument->loadHTML('<html><body>target</body></html>');
+echo $saveDocument->saveXML();
+$targetHtmlBody = $saveDocument->getElementsByTagName('body')->item(0);
+$targetHtmlBody->setAttribute('title', 'é');
+$targetHtmlBefore = $saveDocument->saveXML();
+var_dump($targetHtmlBody->setAttribute('xmlns', 'urn:target'), $targetHtmlBody->setAttribute('xmlns', 'ignored'));
+$targetHtmlXml = simplexml_import_dom($saveDocument);
+var_dump($targetHtmlBefore === $saveDocument->saveXML(), $targetHtmlBody === $saveDocument->getElementsByTagName('body')->item(0));
+echo $targetHtmlBody->getAttribute('xmlns');
+echo count($targetHtmlXml->xpath('//body'));
+$targetXmlChildren = $saveDocument->documentElement->childNodes;
+echo $targetXmlChildren->item(0)->nodeName;
+echo $saveDocument->saveXML();
+$targetMetadataDocument = new DOMDocument();
+$targetMetadataDocument->loadXML('<r><![CDATA[q]]><?work data?></r>');
+$targetMetadataChildren = $targetMetadataDocument->documentElement->childNodes;
+echo $targetMetadataChildren->item(0)->nodeName;
+$targetMetadataPi = $targetMetadataChildren->item(1);
+if ($targetMetadataPi instanceof DOMProcessingInstruction) {
+    $targetMetadataPi->data = 'changed';
+    echo $targetMetadataPi->data;
+} else { throw new Error('expected processing instruction'); }
+$targetMetadataDocument->loadXML('<!--before--><?work data?><r/><!---->');
+echo $targetMetadataDocument->childNodes->length, $targetMetadataDocument->documentElement->previousSibling->nodeName;
+echo $targetMetadataDocument->saveXML($targetMetadataDocument);
+echo $targetMetadataDocument->textContent;
+$targetTextRoot = $targetMetadataDocument->documentElement;
+$targetTextRoot->nodeValue = 'A&amp;B';
+$targetTextRoot->textContent = 'A&amp;B';
+echo $targetTextRoot->nodeValue;
+$targetMetadataDocument->loadXML('<p:r xmlns:p="urn:p" p:a="1" xml:lang="it"><p:c/></p:r>');
+$targetQualifiedRoot = $targetMetadataDocument->documentElement;
+echo $targetQualifiedRoot->nodeName, $targetQualifiedRoot->childNodes->item(0)->nodeName;
+$targetQualifiedRoot->setAttribute('p:a', '3');
+$targetQualifiedRoot->setAttribute('xml:lang', 'en');
+echo $targetQualifiedRoot->getAttribute('p:a'), $targetQualifiedRoot->getAttribute('xml:lang');
+echo $targetMetadataDocument->getElementsByTagName('c')->length;
+try { $targetQualifiedRoot->setAttribute('', 'bad'); } catch (ValueError $error) { echo $error->getMessage(); }
+try { $targetQualifiedRoot->setAttribute('1bad', 'bad'); } catch (DOMException $error) { echo $error->getCode(); }
+interface TargetGuardedXmlView {}
+class TargetGuardedXml extends SimpleXMLElement implements TargetGuardedXmlView {
+    public string $label = 'before';
+}
+function targetGuardedXmlWrites(TargetGuardedXmlView $node): void {
+    if ($node instanceof TargetGuardedXml) {
+        $node->label = 'after';
+        $name = 'label'; $node->{$name} = 'dynamic';
+        unset($node->label); var_dump(isset($node->label));
+        $node->value = 'changed';
+        $name = 'value'; unset($node->{$name});
+        echo count($node->value);
+    }
+}
+targetGuardedXmlWrites(new TargetGuardedXml('<r><value>old</value></r>'));
+$targetNamespaceXml = new SimpleXMLElement('<r><a><b xmlns:p="urn:p"><p:c p:k="v"/></b></a></r>');
+$targetNamespaceXml->registerXPathNamespace('q', 'urn:p');
+$targetNamespaceChild = $targetNamespaceXml->xpath('//q:c')[0];
+$targetNamespaceXml->a->b = 't';
+$targetNamespaceXml->a = 't2';
+echo $targetNamespaceChild->asXML(), json_encode($targetNamespaceChild->getNamespaces());
+$targetBitwiseXml = new SimpleXMLElement('<r><n>3</n></r>');
+$targetBitwiseXml->addChild('tail:', 'v');
+$targetBitwiseXml->addChild('p:e', 'w', '');
+echo count($targetBitwiseXml->xpath('//e'));
+$targetBitwiseXml->n |= 4;
+$targetBitwiseXml->n >>= 1;
+echo $targetBitwiseXml->n & 6, 8 | $targetBitwiseXml->n, $targetBitwiseXml->n << 1;
+echo (new SimpleXMLElement('<r>3</r>')) | 4;
+$targetBinaryName = 'k' . chr($argc > 0 ? 233 : 234);
+$targetBitwiseXml[$targetBinaryName] = chr($argc > 0 ? 255 : 254);
+echo bin2hex((string)$targetBitwiseXml[$targetBinaryName]);
+try { $targetBitwiseXml->saveXML("out.xml\0.txt"); } catch (ValueError $error) { echo $error->getMessage(); }
+class TargetHookedCoalesceXml extends SimpleXMLElement {
+    public function __isset(string $name): bool { return true; }
+    public function __get(string $name): mixed { return 'wrong'; }
+    public function selfProbe(): mixed { return $this->missing ?? 'self-fallback'; }
+}
+function xmlNullableHookCoalesce(?TargetHookedCoalesceXml $node): mixed { return $node->missing ?? 'fallback'; }
+$hookedQuietXml = new TargetHookedCoalesceXml('<r/>');
+$hookedQuietXml->added ??= 'value';
+echo $hookedQuietXml->selfProbe(), xmlNullableHookCoalesce($hookedQuietXml);
+$quietPropertyName = 'added';
+var_dump(isset($hookedQuietXml->{$quietPropertyName}), isset($hookedQuietXml['id']));
+function xmlQuietScalarProbes(int $number): void {
+    var_dump(isset($number->a), empty($number->{xmlComputedTargetName()}));
+}
+xmlQuietScalarProbes($argc);
+class TargetXmlPresencePeer {
+    public function __isset(string $name): bool { return true; }
+    public function __get(string $name): mixed { return null; }
+}
+function xmlQuietUnionProbe(SimpleXMLElement|TargetXmlPresencePeer $node): bool { return isset($node->a); }
+var_dump(xmlQuietUnionProbe($counterXml), xmlQuietUnionProbe(new TargetXmlPresencePeer()));
+echo -$counterXml; $previousXml = $counterXml++; echo $counterXml, (string)$previousXml;
+$uriRoot = simplexml_load_file('data://text/plain;base64,PHIvPg==');
+class MixedXmlChildHolder { public mixed $child = null; }
+$holder = new MixedXmlChildHolder();
+try { $holder?->child->run(); } catch (Error $error) { echo 'caught'; }
+$xml = new SimpleXMLIterator('<r id="a"><item>42</item><item>3</item></r>');
+$xml->item[0] = '7';
+$xml['id'] = 'b';
+$xml->item[] = 9;
+function appendIntegerToXmlOrArray(mixed $container): void { $container[] = 9; }
+appendIntegerToXmlOrArray([]);
+$sax = xml_parser_create();
+xml_set_element_handler($sax, function ($parser, $name, $attributes) {}, null);
+$values = []; $index = [];
+echo xml_parse_into_struct($sax, '<r/>', $values, $index);
+$cloned = clone $xml;
+$cloned->item[0] = 'copy';
+echo (string)$xml->item[0], ':', (string)$cloned->item[0];
+$xml->addChild('p:child', 'value', 'urn:p');
+foreach ($xml->item as $key => $node) { echo $key, (string)$node, (int)$node, (float)$node; }
+var_dump((bool)$xml->missing);
+var_dump(empty($xml->item), empty($xml['id']), empty($xml?->missing));
+var_dump(empty($xml?->item['id']), empty($xml?->item->missing));
+function xmlUnionProbes(SimpleXMLElement|ArrayObject|null $node): void {
+    var_dump(isset($node['id']), empty($node['id']));
+    unset($node['id']);
+}
+xmlUnionProbes($xml);
+xmlUnionProbes(new ArrayObject(['id' => 'ordinary']));
+xmlUnionProbes(null);
+function exposeXmlProbeGlobal(): void { global $probeGlobalXml; echo $probeGlobalXml->getName(); }
+$probeGlobalXml = new SimpleXMLElement('<r id="global"/>');
+exposeXmlProbeGlobal();
+var_dump(isset($probeGlobalXml['id']));
+unset($probeGlobalXml['id']);
+class XmlEmptyScalarPeer { public string $text = '0'; }
+$peer = new XmlEmptyScalarPeer();
+var_dump(empty($peer?->text[0]));
+function xmlEmptyObjectParameter(object $node): bool { return empty($node->item); }
+var_dump(xmlEmptyObjectParameter($xml));
+function xmlErasedStringParameter(object $node): string { return (string)$node; }
+echo xmlErasedStringParameter($xml);
+function xmlWriteOpaqueParameter(mixed $node): void { $node->other[0] = 'value'; }
+xmlWriteOpaqueParameter($xml);
+function xmlAppendOpaqueParameter(mixed $node): void { $node[] = 'appended'; }
+xmlAppendOpaqueParameter($xml->item);
+function xmlMixedArithmetic(mixed $node): mixed { return $node + 1; }
+$otherNumber = new \BcMath\Number('1');
+echo xmlMixedArithmetic($xml->item[0]), xmlMixedArithmetic($otherNumber);
+class TargetZeroXml extends SimpleXMLElement {}
+function xmlMixedNegation(mixed $node): mixed { return -$node; }
+function xmlTypedNegation(SimpleXMLElement $node): mixed { return -$node; }
+function xmlSubclassNegation(TargetZeroXml $node): mixed { return -$node; }
+function xmlUnionNegation(SimpleXMLElement|null $node): mixed { return -$node; }
+$zeroXml = new TargetZeroXml('<r>0.0</r>');
+echo xmlMixedNegation($zeroXml), xmlTypedNegation($zeroXml), xmlSubclassNegation($zeroXml), xmlUnionNegation($zeroXml);
+echo xmlMixedNegation($otherNumber);
+class TargetScopedWriteName {
+    public function __toString(): string { return 'scoped'; }
+    public function __destruct() {}
+}
+function xmlScopedWriteName(): TargetScopedWriteName { return new TargetScopedWriteName(); }
+function xmlScopedLogicFallback(): bool { return true; }
+function xmlScopedWriteCaptures(mixed $node): void {
+    $node->{xmlScopedWriteName()}->leaf = 1;
+    $node->{xmlScopedWriteName()}->leaf += 1;
+    $node->indexed[xmlComputedTargetIndex()]->compound += 1 or xmlScopedLogicFallback();
+    for ($iteration = 0; $iteration < 2; $iteration++) { $node->{xmlScopedWriteName()}->leaf++; }
+    try { $node->{xmlScopedWriteName()}->leaf += throw new RuntimeException('scope'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+}
+xmlScopedWriteCaptures($xml);
+function xmlComputedTargetName(): string { return 'a'; }
+function xmlComputedTargetIndex(): int { return 0; }
+function xmlNullablePropertyReads(SimpleXMLElement $node): void {
+    var_dump($node->missing->child, $node->attributes()->missing);
+    $node->created->child = 'written';
+    $node->chain->middle->leaf = 'deep';
+    $node->dimension->middle['at'] = 'attribute';
+    $node->appended->middle[] = 'tail';
+    $name = 'middle'; $node->dynamic->{$name}->leaf = 'runtime';
+    $node->sum->middle->leaf += 1;
+    $node->increment->middle->leaf++;
+    $node->{xmlComputedTargetName()}->computed = 1;
+    $node->indexed[xmlComputedTargetIndex()]->compound += 1;
+    $node->indexed[xmlComputedTargetIndex()]->stepped++;
+    $node->indexed[0]->leaf = 1;
+    $node->indexed[1]->leaf = 2;
+    var_dump(++$node->counter, $node->counter++);
+    $node->attributes()->temporary += 1;
+    try { $node->thrown->leaf += throw new RuntimeException('rhs'); }
+    catch (RuntimeException $error) { echo $error->getMessage(); }
+    var_dump($node->created->child, $node->missing->child?->getName());
+}
+xmlNullablePropertyReads($xml);
+interface TargetXmlReceiver {}
+class TargetGuardedReadXml extends SimpleXMLElement implements TargetXmlReceiver {}
+function xmlGuardedInterfaceReads(TargetXmlReceiver $node, string $name): void {
+    if ($node instanceof TargetGuardedReadXml) {
+        echo $node->item, $node?->item, $node->$name ?? 'dynamic';
+        var_dump(isset($node->item), empty($node->missing));
+        echo $node->missing ?? 'fallback', $node?->missing ?? 'safe';
+    }
+}
+xmlGuardedInterfaceReads(new TargetGuardedReadXml('<r><item>guarded</item></r>'), 'item');
+echo (int)($xml->item[0] > 1), (int)($xml->item[0] == '7'), $xml <=> $xml->item;
+$xml->item[0] += 1;
+try { $xml->item[0][null] = 'invalid'; } catch (ValueError $error) { echo $error->getMessage(); }
+$xml->xpath('count(//item)');
+echo json_encode($xml), json_encode((array)$xml), $xml->asXML();
+var_dump($xml); print_r($xml); echo print_r($xml, true), var_export($xml, true);
+$doc = new DOMDocument(); $doc->loadXML('<r><v>shared</v></r>');
+$imported = simplexml_import_dom($doc);
+if ($imported instanceof SimpleXMLElement) { $imported->v = 'changed'; }
+echo $doc->saveXML();
+"###,
+        include_str!("../../../tests/fixtures/simplexml/iterator_arithmetic.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/typed_object_boundaries.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/generator_object_boundaries.php").trim_start_matches("<?php"),
+        include_str!("../../../tests/fixtures/simplexml/node_views.php").trim_start_matches("<?php"),
+    ].concat();
+    let module = super::lower_source_at_for_target(&source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap());
+    let cache = module.functions.iter().find(|function| function.name == "__elephc_dom_remember_in")
+        .expect("DOM cache writes must use a DOMDocument-typed helper");
+    assert!(cache.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::PropGetForWrite),
+        "{target}: cache insertion must target the document's attached array property");
+    assert!(!cache.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::RuntimeCall
+        && matches!(instruction.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings.get(id.as_raw() as usize).is_some_and(|name| name == "__elephc_dom_nodes"))),
+        "{target}: cache insertion must not use the stdClass-only mixed property fallback");
+    let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
+        .expect("mixed arithmetic fixture must remain reachable");
+    for class in ["SimpleXMLElement", "BcMath\\Number"] {
+        let method = elephc_builtin_contract::lookup_class(class).unwrap().operators.unwrap()
+            .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Add).unwrap();
+        let expected = format!("{class}::{method}");
+        assert!(arithmetic.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::StaticMethodCall
+                && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                    if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
+        }), "{target}: missing arithmetic adapter {expected}");
+    }
+    let adapter_positions = |class: &str| arithmetic.instructions.iter().enumerate().filter_map(|(position, inst)| {
+        (inst.op == crate::ir::Op::StaticMethodCall && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings.get(id.as_raw() as usize) == Some(&format!("{class}::__elephc_add"))))
+            .then_some(position)
+    }).collect::<Vec<_>>();
+    let native = adapter_positions("BcMath\\Number");
+    let conversion = adapter_positions("SimpleXMLElement");
+    assert_eq!(native.len(), 2, "{target}: both operands must offer their native handler");
+    assert_eq!(conversion.len(), 2, "{target}: both operands retain numeric conversion fallback");
+    assert!(native.iter().max() < conversion.iter().min(),
+        "{target}: both native handler candidates must precede XML numeric conversion");
+    for name in ["xmlMixedNegation", "xmlTypedNegation", "xmlSubclassNegation", "xmlUnionNegation"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let method = elephc_builtin_contract::lookup_class("SimpleXMLElement").unwrap().operators.unwrap()
+            .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Mul).unwrap();
+        let expected = format!("SimpleXMLElement::{method}");
+        assert!(function.instructions.iter().any(|inst| {
+            inst.op == crate::ir::Op::StaticMethodCall
+                && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                    if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
+        }), "{target}: {name} must preserve Number-class negative zero through {expected}");
+    }
+    let negate = module.functions.iter().find(|function| function.name == "xmlMixedNegation").unwrap();
+    let method = elephc_builtin_contract::lookup_class("BcMath\\Number").unwrap().operators.unwrap()
+        .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Sub).unwrap();
+    let expected = format!("BcMath\\Number::{method}");
+    assert!(negate.instructions.iter().any(|inst| {
+        inst.op == crate::ir::Op::StaticMethodCall && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings.get(id.as_raw() as usize) == Some(&expected))
+    }), "{target}: object-result classes retain their subtraction adapter");
+    let captures = module.functions.iter().find(|function| function.name == "xmlScopedWriteCaptures").unwrap();
+    let scoped_slots: Vec<_> = captures.locals.iter().filter(|slot| {
+        slot.name.as_deref().is_some_and(|name| name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX))
+            && captures.instructions.iter().any(|inst| inst.op == crate::ir::Op::PushCallOperandOwner
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id)))
+    }).collect();
+    assert!(!scoped_slots.is_empty(), "{target}: scoped captures need live unwind roots");
+    for slot in scoped_slots {
+        assert!(crate::ir::Ownership::php_type_needs_lifetime_tracking(&slot.php_type), "{target}");
+        for op in [crate::ir::Op::PopCallOperandOwner, crate::ir::Op::ReleaseLocalSlot] {
+            assert!(captures.instructions.iter().any(|inst| inst.op == op
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot.id))), "{target}: missing {op:?} for scoped capture");
+        }
+    }
+    let reference_parameter = module.functions.iter().find(|function| function.name == "acceptRefBoundaryXml")
+        .expect("typed object references must keep their callee-entry validator");
+    assert!(reference_parameter.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::InstanceOf),
+        "{target}: by-reference object parameters need a nominal class guard");
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let guard_name = crate::names::generator_parameter_guard_name("generatorBoundaryXml");
+    let guard = module.closures.iter().find(|function| function.name == guard_name)
+        .expect("generator parameters must have an ordinary eager EIR validator");
+    assert!(!guard.flags.is_generator && guard.flags.is_synthetic);
+    assert!(guard.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::IsNull));
+    let constructor = &assembly[assembly.find(&format!("{}:", crate::names::function_symbol("generatorBoundaryXml"))).unwrap()..];
+    let validation = constructor.find(&crate::names::function_symbol(&guard_name)).unwrap();
+    let allocation = constructor.find("__rt_fiber_construct").unwrap();
+    assert!(validation < allocation, "{target}: null validation must precede coroutine allocation");
+    for message in [
+        "acceptBoundaryXml(): Argument #1 ($node) must be of type SimpleXMLElement, null given",
+        "returnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
+        "referenceReturnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned",
+        "Cannot assign null to property BoundaryXmlBox::$node of type SimpleXMLElement",
+    ] {
+        assert!(assembly.contains(message), "{target}: missing native object boundary: {message}");
+    }
+    assert!(assembly.contains("__rt_gc_collect_cycles_explicit"), "{target}: shutdown retires native document cycles");
+    assert!(assembly.contains("__rt_sprintf_mixed_to_string"), "{target}: erased object string-context ABI");
+    assert!(assembly.contains("elephc_xml_sx_load"), "{target}: document parsing boundary");
+    assert!(assembly.contains("elephc_xml_sx_mutate"), "{target}: document mutation boundary");
+    assert!(assembly.contains("elephc_xml_sx_diagnostics"), "{target}: native diagnostic transfer boundary");
+    assert!(assembly.contains("elephc_xml_sx_load_dom"), "{target}: DOM structured parsing boundary");
+    assert!(assembly.contains("elephc_runtime_simplexml_stream_close_mode"), "{target}: stream cleanup C ABI boundary");
+    assert!(assembly.contains("elephc_xml_sx_load_stream"), "{target}: PHP stream parser boundary");
+    assert!(assembly.contains("elephc_xml_sx_load_file"), "{target}: native file parser boundary");
+    assert!(assembly.contains("elephc_xml_sx_compare"), "{target}: XML node comparison boundary");
+    assert!(assembly.contains("elephc_xml_sx_iterator"), "{target}: linear native iterator boundary");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_array")),
+        "{target}: native property projection body");
+    assert!(assembly.contains("_class_debug_projection_ptrs"), "{target}: native debug dispatch metadata");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_debug_projection")),
+        "{target}: owned native debug projection adapter");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_debug_info")),
+        "{target}: separate zero-argument native debug hook");
+    assert!(assembly.contains(&crate::names::method_symbol("SimpleXMLElement", "__elephc_clone_initialize")),
+        "{target}: native clone handler body");
+}
+
+/// Schedules target-sensitive SimpleXML fixtures independently under CI's ordinary timeout.
+macro_rules! target_test {
+    ($name:ident, $target:literal) => {
+        /// Verifies SimpleXML lowering and emitted calls on the selected supported target.
+        #[test]
+        fn $name() { verify_simplexml_target($target); }
+    };
+}
+target_test!(simplexml_target_macos, "macos-aarch64");
+target_test!(simplexml_target_ios, "ios-arm64");
+target_test!(simplexml_target_ios_sim, "ios-sim-arm64");
+target_test!(simplexml_target_linux_arm, "linux-aarch64");
+target_test!(simplexml_target_linux_x86, "linux-x86_64");
+
+/// Temporary native parents hand off independently owned children on every supported target.
+#[test]
+fn native_xml_temporary_parent_handoff_on_every_target() {
+    let source = r#"<?php
+interface TargetXmlHandoffMarker {}
+class TargetXmlHandoffNode extends SimpleXMLElement implements TargetXmlHandoffMarker {}
+class TargetXmlHandoffHolder implements TargetXmlHandoffMarker {
+    public SimpleXMLElement $items;
+    public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+}
+class TargetXmlHandoffNullableHolder {
+    public ?SimpleXMLElement $items;
+    public function __construct() { $this->items = (new SimpleXMLElement('<r><item>1</item></r>'))->item; }
+}
+function targetXmlHandoffNullableHolder(): mixed { return new TargetXmlHandoffNullableHolder(); }
+function targetXmlHandoffKnown(): TargetXmlHandoffNode { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffMixed(): mixed { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffObject(): object { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffInterface(): TargetXmlHandoffMarker { return new TargetXmlHandoffNode('<r><item>1</item></r>'); }
+function targetXmlHandoffHolder(): TargetXmlHandoffHolder { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffHolderMixed(): mixed { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffHolderObject(): object { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffHolderInterface(): TargetXmlHandoffMarker { return new TargetXmlHandoffHolder(); }
+function targetXmlHandoffErasedAppend(): void { targetXmlHandoffHolderMixed()->items[] = 2; }
+targetXmlHandoffKnown()->item[] = 2;
+targetXmlHandoffMixed()->item[] = 2;
+targetXmlHandoffObject()->item[0] = 3;
+targetXmlHandoffInterface()->item[0] += 2;
+targetXmlHandoffMixed()->item[0]++;
+targetXmlHandoffHolder()->items[] = 2;
+targetXmlHandoffErasedAppend();
+targetXmlHandoffHolderObject()->items[0] = 3;
+targetXmlHandoffHolderInterface()->items[0] .= 'x';
+targetXmlHandoffNullableHolder()->items[] = 2;
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "targetXmlHandoffErasedAppend").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGet
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "items")),
+            "{target}: erased temporary holders must select their declared XML child before mutation");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}

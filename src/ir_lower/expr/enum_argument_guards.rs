@@ -144,7 +144,7 @@ fn runtime_type(value: &Expr, expected: &PhpType, span: Span) -> Expr {
 }
 
 /// Produces PHP's `get_debug_type()` spelling for a runtime diagnostic.
-pub(super) fn runtime_debug_type(value: &Expr, span: Span) -> Expr {
+pub(crate) fn runtime_debug_type(value: &Expr, span: Span) -> Expr {
     runtime_type_with_bool_literals(value, true, span)
 }
 

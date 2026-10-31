@@ -29,6 +29,8 @@ pub(super) fn property_can_be_uninitialized(
     object: crate::ir::ValueId,
     property: &str,
 ) -> bool {
+    if native_property_method_for_value(ctx, object, property,
+        elephc_builtin_contract::ObjectProperty::Get).is_some() { return false; }
     let object_ty = ctx.builder.value_php_type(object);
     let Some(class_name) = property_probe_object_class(&object_ty) else {
         return false;

@@ -5,9 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the argument type (Array, AssocArray, Mixed, Union-of-countable, or
-//!   Countable Object) and returns `Int`. The Countable interface check delegates to
-//!   `cx.checker.class_implements_interface`.
+//! - `check` accepts arrays, dynamic values, and objects and returns `Int`. The runtime
+//!   validates Countable membership, including object members of a union.
 //! - `$mode` accepts `COUNT_NORMAL` (`0`) and `COUNT_RECURSIVE` (`1`); anything else raises
 //!   PHP's catchable `ValueError`. The guard lives in the backend
 //!   (`codegen::lower_inst::builtins::lower_count`) because `$mode` may be a runtime value.
@@ -56,10 +55,10 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 /// Validates the argument type and returns `Int`.
 ///
 /// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union with at least one
-/// countable member, or an Object that implements the `Countable` interface. Arity
+/// array or object member, or an Object. Arity
 /// enforcement (1 or 2 arguments) is handled by the registry's `check_arity`; `$mode`'s
 /// value range is a runtime `ValueError`, not a compile-time error, exactly like PHP.
-/// Returns a `CompileError` for non-countable types or non-Countable objects.
+/// Object countability is checked at runtime so unreachable calls remain compilable.
 ///
 /// The union rule used to require EVERY member to be countable, which refused
 /// `count(fgetcsv($h))` and `count(file($p))` — the ordinary shape for a builtin returning
@@ -67,13 +66,14 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 /// missing runtime `TypeError`, and relaxing it before the guard existed would have spread
 /// the silent zero instead of removing it (measured — `count($falseValue)` answered 0 where
 /// PHP is fatal). The guard now raises, so a union whose non-countable arm is taken behaves
-/// exactly like PHP. A union with NO countable member is still refused: that call cannot
-/// succeed, and a compile error beats a certain run-time fatal.
+/// exactly like PHP. Object members use the same runtime guard as a standalone object;
+/// scalar-only unions with no array member remain compile-time errors.
 pub(super) fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
-        PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
+        PhpType::Union(members) if members.iter().any(|member|
+            union_member_is_countable_array(member) || matches!(member, PhpType::Object(_))) => {
             Ok(PhpType::Int)
         }
         // A non-Countable object is accepted here and REFUSED AT RUN TIME, the way PHP does it.

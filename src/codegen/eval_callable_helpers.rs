@@ -615,7 +615,8 @@ fn eval_static_method_callable_cases(
                 .get(&method_key)
                 .map(String::as_str)
                 .unwrap_or(class_name);
-            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true)) {
+            if emitted_methods.contains(&(impl_class.to_string(), method_key.clone(), true))
+                || super::intrinsic_static_descriptor_entry_supported(impl_class, &method_key) {
                 candidates.push((
                     class_name.clone(),
                     method_name.clone(),

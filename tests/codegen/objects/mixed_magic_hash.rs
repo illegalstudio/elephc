@@ -1,0 +1,146 @@
+//! Purpose:
+//! Verifies dynamic property storage and magic access coexist through Mixed receivers.
+//!
+//! Called from:
+//! - The object codegen integration suite.
+//!
+//! Key details:
+//! - Opaque eval reserves native hash storage, including on the AOT fixture's classes.
+//! - Stored null and false entries remain real entries, and existing writes skip __set.
+
+use crate::support::*;
+
+/// A present dynamic key wins; a missing key invokes its class's getter or isset hook.
+#[test]
+fn test_mixed_magic_hash_entry_precedes_accessors_bundle() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class MixedHashMagic {
+    public static int $sets = 0;
+    public function __set(string $name, mixed $value): void {
+        self::$sets++;
+        $this->{$name} = $value;
+    }
+    public function __get(string $name): int { echo 'get:', $name, '|'; return 30; }
+    public function __isset(string $name): bool { echo 'isset:', $name, '|'; return true; }
+}
+
+function MixedHashExercise(mixed $object): void {
+    var_dump($object->storedNull, $object->storedFalse, $object->stored, $object->missing);
+    var_dump(isset($object->storedNull), isset($object->missing));
+    $object->stored = 8;
+    $object->another = 9;
+    echo $object->stored, ':', $object->another, ':', MixedHashMagic::$sets, "\n";
+}
+$object = new MixedHashMagic();
+$object->storedNull = null; $object->storedFalse = false; $object->stored = 5;
+MixedHashExercise($object);
+unset($object);
+"#;
+    let renamed = source.replace("MixedHash", "EvalMixedHash");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "get:missing|NULL\nbool(false)\nint(5)\nint(30)\nisset:missing|bool(false)\nbool(true)\n8:9:4\n";
+    assert_bundle_with(&[
+        BundleCase { name: "mixed_magic_hash_aot", source, expected },
+        BundleCase { name: "mixed_magic_hash_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Deprecated:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
+/// Getter reads copy reference results and retain borrowed static boxes before later cleanup.
+#[test]
+fn test_mixed_magic_hash_getter_return_owners_bundle() {
+    let source = r#"<?php
+class MixedGetterOwnerReference {
+    private mixed $data = ['a' => 1, 'b' => 2];
+    public function &__get(string $name): mixed { return $this->data; }
+    public function snapshot(): mixed { return $this->data; }
+}
+class MixedGetterOwnerBorrowed {
+    public static mixed $cache = null;
+    public function __get(string $name): mixed { return self::$cache; }
+}
+function MixedGetterOwnerRead(mixed $object): mixed { return $object->items; }
+$reference = new MixedGetterOwnerReference();
+for ($i = 0; $i < 3; $i++) {
+    $copy = MixedGetterOwnerRead($reference);
+    $copy['z'] = 9;
+    echo json_encode($copy), '|', json_encode($reference->snapshot()), "\n";
+    unset($copy);
+}
+MixedGetterOwnerBorrowed::$cache = [1, 2];
+$borrowed = new MixedGetterOwnerBorrowed();
+$first = MixedGetterOwnerRead($borrowed);
+$second = MixedGetterOwnerRead($borrowed);
+$first[0] = 9;
+echo json_encode($second), ':', json_encode(MixedGetterOwnerBorrowed::$cache), "\n";
+unset($first, $second);
+echo json_encode(MixedGetterOwnerBorrowed::$cache), "\n";
+MixedGetterOwnerBorrowed::$cache = null;
+unset($reference, $borrowed);
+$holder = new stdClass();
+$holder->rows = ['a' => 1];
+$holder->node = new stdClass();
+$node = $holder->node;
+$copy = $holder->rows;
+$copy['z'] = 9;
+$node->label = 'shared';
+echo json_encode($holder->rows), ':', $holder->node->label, "\n";
+unset($node, $copy, $holder);
+"#;
+    let renamed = source.replace("MixedGetterOwner", "EvalMixedGetterOwner");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = format!("{}[1,2]:[1,2]\n[1,2]\n{{\"a\":1}}:shared\n", "{\"a\":1,\"b\":2,\"z\":9}|{\"a\":1,\"b\":2}\n".repeat(3));
+    assert_bundle_with(&[
+        BundleCase { name: "mixed_getter_owners_aot", source, expected: &expected },
+        BundleCase { name: "mixed_getter_owners_eval", source: &eval, expected: &expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Deprecated:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}
+
+/// Reference-returning isset hooks expose their bool payload to every quiet probe.
+#[test]
+fn test_mixed_magic_hash_reference_isset_probes_bundle() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class ReferenceMagicProbe {
+    public bool $answer = false;
+    public function &__isset(string $name): bool { return $this->answer; }
+    public function __get(string $name): int { return 5; }
+}
+function ReferenceMagicProbeExercise(mixed $object): void {
+    var_dump(isset($object->missing), empty($object->missing), $object->missing ?? 'd');
+}
+$probe = new ReferenceMagicProbe();
+ReferenceMagicProbeExercise($probe);
+$probe->answer = true;
+ReferenceMagicProbeExercise($probe);
+unset($probe);
+"#;
+    let renamed = source.replace("ReferenceMagicProbe", "EvalReferenceMagicProbe");
+    let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "bool(false)\nbool(true)\nstring(1) \"d\"\nbool(true)\nbool(false)\nint(5)\n";
+    assert_bundle_with(&[
+        BundleCase { name: "reference_isset_aot", source, expected },
+        BundleCase { name: "reference_isset_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        out.stdout
+    });
+}

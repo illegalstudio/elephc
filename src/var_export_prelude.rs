@@ -25,8 +25,8 @@
 //!   `sprintf("%.{p}e", ...)` until `(float)` of the result equals the input, then
 //!   rebuilds the digit string per PHP's exponent thresholds — independent of the
 //!   default `(string)`/`echo` precision used elsewhere.
-//! - Objects are out of scope (PHP renders `\Class::__set_state(...)`); a non
-//!   scalar/array value renders as the empty string.
+//! - Objects use `\Class::__set_state(...)`; native XML objects export their
+//!   property projection instead of the prelude's private storage.
 //! - The `$return` flag is FLAG-AWARE at the call site, mirroring `print_r`: `name_resolver`
 //!   retargets a literal-flag call at [`RENDER_HELPER`] (`: string`) or [`ECHO_HELPER`]
 //!   (prints, returns `null`), and only a runtime flag keeps the two-mode `var_export` body
@@ -334,6 +334,7 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
                         s_assign("close", e_str("))")),
                     ]),
                     ),
+                    native_xml_export(),
                     s_assign("count", e_call("__elephc_object_prop_count", vec![e_var("value")])),
                     s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("count"))), Some(s_expr(e_post_inc("i"))), vec![
                         s_assign("name", e_call("__elephc_object_prop_name", vec![e_var("value"), e_var("i")])),
@@ -356,6 +357,37 @@ fn decl_fn_elephc_var_export_str() -> Stmt {
             s_return(e_str("")),
         ])
         .build()
+}
+
+/// Exports native XML properties without making ordinary var_export programs link XML.
+fn native_xml_export() -> Stmt {
+    s_if(
+        e_call("is_a", vec![e_var("value"), e_str("SimpleXMLElement")]),
+        vec![
+            s_assign("xml_properties", e_call("get_object_vars", vec![e_var("value")])),
+            s_foreach(e_var("xml_properties"), Some("xml_key"), "xml_value", vec![
+                s_assign("xml_key_text", e_cast(CastType::String, e_var("xml_key"))),
+                s_assign("xml_export_key", e_ternary(
+                    e_call("is_int", vec![e_var("xml_key")]),
+                    e_var("xml_key_text"),
+                    e_binop(e_binop(e_str("'"), BinOp::Concat,
+                        e_call("__elephc_var_export_escape", vec![e_var("xml_key_text")])), BinOp::Concat, e_str("'")),
+                )),
+                s_assign("out", e_binop(e_binop(e_binop(e_binop(e_var("out"), BinOp::Concat,
+                    e_var("pad")), BinOp::Concat, e_str("   ")), BinOp::Concat,
+                    e_var("xml_export_key")), BinOp::Concat, e_str(" => "))),
+                s_if(e_binop(e_call("is_array", vec![e_var("xml_value")]), BinOp::Or,
+                    e_call("is_object", vec![e_var("xml_value")])),
+                    vec![s_assign("out", e_binop(e_binop(e_binop(e_var("out"), BinOp::Concat,
+                        e_str("\n")), BinOp::Concat, e_var("pad")), BinOp::Concat, e_str("  ")))],
+                    vec![], None),
+                s_assign("out", e_binop(e_binop(e_var("out"), BinOp::Concat,
+                    e_call("__elephc_var_export_str", vec![e_var("xml_value"),
+                        e_binop(e_var("indent"), BinOp::Add, e_int(2))])), BinOp::Concat, e_str(",\n"))),
+            ]),
+            s_return(e_binop(e_binop(e_var("out"), BinOp::Concat, e_var("pad")), BinOp::Concat, e_var("close"))),
+        ], vec![], None,
+    )
 }
 
 /// `__elephc_var_export_echo` — transcribed from the PHP form.

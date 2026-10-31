@@ -573,7 +573,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **Database (mysqli)**: a documented `mysqli` / `mysqli_stmt` / `mysqli_result` subset for MySQL/MariaDB over the same pure-Rust client — buffered independent results, prepared statements, `multi_query`, `mysqli_report` error modes, and the full procedural `mysqli_*` alias surface
 - **Process control (PCNTL)**: `pcntl_fork`, wait/status helpers, `pcntl_exec`, signal handlers and async dispatch, masks, priorities, Linux affinity/namespaces, and macOS QoS; see the [PCNTL guide](docs/php/pcntl.md)
 - **Tokenizer**: `token_get_all`, `token_name`, `PhpToken` and all 154 PHP 8.5 constants, including `TOKEN_PARSE`; see the [Tokenizer guide](docs/php/tokenizer.md).
-- **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
+- **XML**: the complete function, class and constant inventory of `ext/xml` (the `XMLParser` SAX parser, every handler, incremental `xml_parse()`, `xml_parse_into_struct()`, libxml2's error codes) and `ext/xmlwriter` (`XMLWriter` with memory and URI output), plus SimpleXML (`SimpleXMLElement`, `SimpleXMLIterator`, parsing, mutation, namespaces and XPath), on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`, auto-linked or `--with-xml`), natively and inside `eval()`; see the [XML guide](docs/php/xml.md) for documented behavioral differences and [runtime limits](docs/php/xml.md#runtime-limits)
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
 - **Crypto**: `md5()`/`sha1()`/`hash()`/`hash_hmac()` hashing and OpenSSL-compatible symmetric ciphers (`openssl_encrypt()`/`openssl_decrypt()`, AES CBC/CTR/ECB/GCM) through a pure-Rust bridge with no system OpenSSL dependency
 - **Random**: PHP's `ext/random` — `mt_srand`/`srand`/`rand`/`mt_rand`/`mt_getrandmax`/`getrandmax`, `random_bytes`, `random_int`, `lcg_value`, `array_rand()`'s multi-key form, the `Random\Engine\Mt19937`, `PcgOneseq128XslRr64`, `Xoshiro256StarStar` and `Secure` engines, `Random\Randomizer` (`nextInt`, `nextFloat`, `getFloat`, `getInt`, `getBytes`, `getBytesFromString`, `shuffleArray`, `shuffleBytes`, `pickArrayKeys`), `Random\IntervalBoundary` and the `Random\*` exception hierarchy, matching php-src 8.5's streams, serialization and deprecations; see the [Random guide](docs/php/random.md)
@@ -587,9 +587,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (1146)
+### Built-in functions (1149)
 
-The generated builtin documentation currently exposes 1146 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, GMP, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
+The generated builtin documentation currently exposes 1149 PHP-visible entries across arrays, buffers, class introspection, databases, dates, filesystems, GMP, I/O, images, JSON, math/BCMath, multibyte strings, networking, process control, regex, SPL, streams, strings, types, web and XML, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from the shared contract in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -815,7 +815,7 @@ crates/
 ├── elephc-random/       # PHP ext/random engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-tls/          # TLS stream bridge
 ├── elephc-tz/           # IANA timezone bridge
-├── elephc-xml/          # ext/xml and ext/xmlwriter bridge over the catalog's static libxml2
+├── elephc-xml/          # XML parser, writer, and SimpleXML bridge over static libxml2
 └── elephc-web/          # Prefork HTTP server bridge
 ```
 

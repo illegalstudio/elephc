@@ -483,3 +483,50 @@ echo "consumers:", count(iterator_to_array(factory())), ",", $n, "\n";
     );
     assert_eq!(out, "consumers:2,7\n");
 }
+
+/// Runtime-owned Generator cells must not be retained as borrowed compiled PHP returns.
+#[test]
+fn test_generator_foreach_owned_cells_fit_bounded_heap_without_debug() {
+    let out = compile_and_run_with_heap_size(r#"<?php
+function ownedCellGenerator(): Generator {
+    for ($i = 0; $i < 20000; $i++) { yield $i => [$i]; }
+}
+function consumeOwnedIterator(Iterator $source): int {
+    $count = 0;
+    foreach ($source as $key => $value) { $count++; }
+    return $count;
+}
+$count = 0;
+foreach (ownedCellGenerator() as $key => $value) { $count++; }
+unset($key, $value);
+echo $count, ':', consumeOwnedIterator(ownedCellGenerator());
+"#, 1_048_576);
+    assert_eq!(out, "20000:20000");
+}
+
+/// Fresh yielded containers transfer their original owner before suspension or abandonment.
+#[test]
+fn test_generator_fresh_yield_values_heap_clean() {
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(r#"<?php
+class FreshYieldValue {
+    public function __destruct() { echo 'drop|'; }
+}
+function freshYieldBox(): mixed { return ['boxed']; }
+function freshYieldValues(): Generator {
+    yield freshYieldBox();
+    yield ['array'];
+    yield str_repeat('s', 40);
+    yield new FreshYieldValue();
+}
+foreach (freshYieldValues() as $value) {
+    echo is_object($value) ? get_class($value) : gettype($value), '|';
+}
+unset($value);
+$abandoned = freshYieldValues();
+$abandoned->rewind();
+unset($abandoned);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "array|array|string|FreshYieldValue|drop|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\nGenerator ownership assembly:\n{}", out.stderr, assembly);
+}

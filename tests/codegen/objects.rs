@@ -16,6 +16,8 @@ mod classes;
 mod gc_aliasing;
 #[path = "objects/magic_methods.rs"]
 mod magic_methods;
+#[path = "objects/mixed_magic_hash.rs"]
+mod mixed_magic_hash;
 #[path = "objects/cloning.rs"]
 mod cloning;
 #[path = "objects/debug_info_dumps.rs"]
@@ -28,6 +30,8 @@ mod property_access;
 mod constructor_promotion;
 #[path = "objects/static_properties.rs"]
 mod static_properties;
+#[path = "objects/static_mixed_dimensions.rs"]
+mod static_mixed_dimensions;
 #[path = "objects/static_false_writes.rs"]
 mod static_false_writes;
 #[path = "objects/nested_write_review.rs"]
@@ -44,3 +48,6 @@ mod nested_arrays;
 mod nullable_dispatch;
 #[path = "objects/mixed_sourced_typed_param_limitation.rs"]
 mod mixed_sourced_typed_param_limitation;
+
+#[path = "objects/computed_incdec.rs"]
+mod computed_incdec;

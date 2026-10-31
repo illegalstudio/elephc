@@ -19,7 +19,8 @@ use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
 mod builtins;
-mod object_operators;
+pub(in crate::interpreter) mod object_operators;
+pub(in crate::interpreter) mod simplexml_properties;
 pub(crate) use builtins::default_builtin_call;
 
 thread_local! {
@@ -28,10 +29,53 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// One PHP-visible parameter decoded from a native callable descriptor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeCallableParameterMetadata {
+    /// PHP parameter name, without `$`.
+    pub name: String,
+    /// Descriptor ABI type tag for the parameter's physical representation.
+    pub type_tag: u64,
+    /// Whether the PHP declaration passes this parameter by reference.
+    pub by_ref: bool,
+}
+
+/// The caller-visible argument shape carried by a native callable descriptor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeCallableSignatureMetadata {
+    /// PHP display name retained by the descriptor.
+    pub display_name: String,
+    /// Caller-visible regular parameters followed by the source variadic, when present.
+    pub parameters: Vec<NativeCallableParameterMetadata>,
+    /// Number of non-variadic parameters visible to PHP callers.
+    pub regular_param_count: usize,
+    /// Public index of the source-declared variadic parameter.
+    pub variadic_index: Option<usize>,
+}
+
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
     /// Boxes a borrowed persistent native callable descriptor for Reflection default factories.
     fn native_callable_from_raw(&mut self, _descriptor: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Decodes the public signature of a boxed native callable descriptor.
+    fn native_callable_signature(
+        &mut self,
+        _callback: RuntimeCellHandle,
+    ) -> Result<Option<NativeCallableSignatureMetadata>, EvalStatus> {
+        Ok(None)
+    }
+
+    /// Invokes a borrowed native callable and supplied argument box under an explicit native scope.
+    /// Implementors return an owned result and contain native exceptions below the Rust boundary.
+    fn invoke_native_callable(
+        &mut self,
+        _callback: RuntimeCellHandle,
+        _arguments: RuntimeCellHandle,
+        _invocation_scope: i64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
         Err(EvalStatus::UnsupportedConstruct)
     }
 
@@ -45,6 +89,20 @@ pub trait RuntimeValueOps {
     fn operator_method_call(&mut self, object: RuntimeCellHandle, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         self.method_call(object, method, args)
     }
+
+    /// Converts a borrowed value into an independently owned PHP array.
+    fn cast_array(&mut self, _value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Checks the shared native formatter recursion stack before invoking a debug hook.
+    fn debug_guard_find(&mut self, _object: RuntimeCellHandle) -> Result<bool, EvalStatus> { Ok(false) }
+
+    /// Pushes one native formatter receiver, returning the previous shared depth when supported.
+    fn debug_guard_push(&mut self, _object: RuntimeCellHandle) -> Result<Option<u64>, EvalStatus> { Ok(None) }
+
+    /// Restores a previously acquired native formatter recursion depth.
+    fn debug_guard_restore(&mut self, _depth: u64) -> Result<(), EvalStatus> { Ok(()) }
 
     /// Applies the shared internal-class handler before scalar runtime arithmetic.
     fn add(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -101,13 +159,7 @@ pub trait RuntimeValueOps {
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        if let Some(result) = object_operators::shift(self, op, left, right)? {
-            return Ok(result);
-        }
-        if let Some(result) = object_operators::bitwise(self, op, left, right)? {
-            return Ok(result);
-        }
-        self.bitwise(op, left, right)
+        object_operators::bitwise_result(self, op, left, right)
     }
 
     /// Applies the shared internal-class handler before scalar bitwise NOT.
@@ -318,6 +370,25 @@ pub trait RuntimeValueOps {
         index: RuntimeCellHandle,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Fetches an owned child cell attached to trusted internal SPL storage for mutation.
+    fn spl_storage_fetch_for_write(
+        &mut self,
+        _array: RuntimeCellHandle,
+        _index: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
+    /// Stores one element through the protected companion path for an attached SPL child cell.
+    fn spl_storage_array_set(
+        &mut self,
+        _array: RuntimeCellHandle,
+        _index: RuntimeCellHandle,
+        _value: RuntimeCellHandle,
+    ) -> Result<(), EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
 
     /// Reads one insertion-order element using the same ownership contract as array_get.
     /// Providers with distinct numeric string keys must override the normalized-key fallback.
@@ -726,7 +797,7 @@ pub trait RuntimeValueOps {
         slot: *mut *mut crate::value::RuntimeCell,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
-    /// Creates an invoker-only by-reference marker for a staged raw one-word slot.
+    /// Creates an invoker-only marker for raw storage whose source tag identifies its full layout.
     fn invoker_raw_ref_cell(
         &mut self,
         slot: *mut c_void,
@@ -1126,6 +1197,8 @@ pub(crate) const EVAL_TAG_NULL: u64 = 8;
 pub(super) const EVAL_TAG_RESOURCE: u64 = 9;
 pub(super) const EVAL_TAG_CALLABLE: u64 = 10;
 pub(super) const EVAL_TAG_INVOKER_REF_CELL: u64 = 11;
+/// Internal invoker source shape for a two-word nullable integer, never a PHP value tag.
+pub(super) const EVAL_INVOKER_TAGGED_SCALAR_SOURCE: u64 = 12;
 
 pub(super) const EVAL_REFLECTION_OWNER_CLASS: u64 = 0;
 pub(super) const EVAL_REFLECTION_OWNER_METHOD: u64 = 1;

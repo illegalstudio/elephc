@@ -16,6 +16,8 @@ eval_builtin! {
 
 use super::super::super::*;
 
+mod nullsafe;
+
 /// Evaluates PHP's `empty(...)` language construct over eval-visible values.
 pub(in crate::interpreter) fn eval_empty_declared_call(
     args: &[EvalExpr],
@@ -68,6 +70,9 @@ pub(in crate::interpreter) fn eval_empty_arg(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(empty) = nullsafe::evaluate(arg, context, scope, values)? {
+        return Ok(empty);
+    }
     if let EvalExpr::LoadVar(name) = arg {
         let Some(value) = visible_scope_cell(context, scope, name) else {
             return Ok(true);
@@ -76,6 +81,9 @@ pub(in crate::interpreter) fn eval_empty_arg(
     }
     if let EvalExpr::PropertyGet { object, property } = arg {
         let object = eval_expr(object, context, scope, values)?;
+        if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(property), None)? {
+            return Ok(empty);
+        }
         if !eval_property_isset_result(object, property, context, values)? {
             return Ok(true);
         }
@@ -83,8 +91,16 @@ pub(in crate::interpreter) fn eval_empty_arg(
         return Ok(!values.truthy(value)?);
     }
     if let EvalExpr::DynamicPropertyGet { object, property } = arg {
-        let object = eval_expr(object, context, scope, values)?;
-        let property = eval_dynamic_member_name(property, context, scope, values)?;
+        let (object, property) = if matches!(object.as_ref(), EvalExpr::LoadVar(_)) {
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            (eval_expr(object, context, scope, values)?, property)
+        } else {
+            let object = eval_expr(object, context, scope, values)?;
+            (object, eval_dynamic_member_name(property, context, scope, values)?)
+        };
+        if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(&property), None)? {
+            return Ok(empty);
+        }
         if !eval_property_isset_result(object, &property, context, values)? {
             return Ok(true);
         }
@@ -95,6 +111,9 @@ pub(in crate::interpreter) fn eval_empty_arg(
         let object = eval_expr(object, context, scope, values)?;
         if values.is_null(object)? {
             return Ok(true);
+        }
+        if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(property), None)? {
+            return Ok(empty);
         }
         if !eval_property_isset_result(object, property, context, values)? {
             return Ok(true);
@@ -108,6 +127,9 @@ pub(in crate::interpreter) fn eval_empty_arg(
             return Ok(true);
         }
         let property = eval_dynamic_member_name(property, context, scope, values)?;
+        if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(&property), None)? {
+            return Ok(empty);
+        }
         if !eval_property_isset_result(object, &property, context, values)? {
             return Ok(true);
         }
@@ -153,13 +175,23 @@ pub(in crate::interpreter) fn eval_empty_arg(
         return Ok(!values.truthy(value)?);
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
-        let array = eval_expr(array, context, scope, values)?;
-        let index = eval_expr(index, context, scope, values)?;
-        if values.type_tag(array)? == EVAL_TAG_OBJECT {
-            return eval_array_access_empty_result(array, index, context, values);
-        }
-        let value = values.array_get(array, index)?;
-        return Ok(!values.truthy(value)?);
+        let mut empty = false;
+        with_eval_void_operands(&[array.as_ref(), index.as_ref()], context, scope, values,
+            |args, context, _, values| {
+                let array = args[0].borrowed();
+                let index = args[1].borrowed();
+                if values.type_tag(array)? == EVAL_TAG_OBJECT {
+                    empty = eval_array_access_empty_result(array, index, context, values)?;
+                } else {
+                    let value = values.array_get(array, index)?;
+                    let answer = values.truthy(value).map(|truthy| !truthy);
+                    let released = eval_release_value(context, values, value);
+                    empty = answer?;
+                    released?;
+                }
+                Ok(())
+            })?;
+        return Ok(empty);
     }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.truthy(value)?)
@@ -176,6 +208,9 @@ fn eval_array_access_empty_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
+    if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, None, Some(index))? {
+        return Ok(empty);
+    }
     if !super::isset::eval_array_access_isset_result(object, index, context, values)? {
         return Ok(true);
     }

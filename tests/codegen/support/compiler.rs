@@ -317,6 +317,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     TestLinkRequirements,
 ) {
     elephc::codegen::set_null_repr(null_repr);
+    let frontend_phase = fixture_phase_timing("frontend");
     elephc::codegen::set_compile_profile(php_version, false);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -445,8 +446,11 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
+    drop(frontend_phase);
+    let eir_phase = fixture_phase_timing("eir");
     let mut ir_module =
         lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    drop(eir_phase);
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }
@@ -460,6 +464,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
+    let codegen_phase = fixture_phase_timing("codegen");
     let generated_user_asm = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
         &ir_module,
         gc_stats,
@@ -474,14 +479,17 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         false,
         elephc::codegen::WebIsolation::Worker,
     );
+    drop(codegen_phase);
     let mut runtime_features = ir_module.required_runtime_features;
     if let Ok(output) = &generated_user_asm {
         runtime_features.handler_state |= output.handler_state;
         runtime_features.object_clone |= output.object_clone;
     }
     let user_asm = generated_user_asm.map(|output| output.asm);
+    let runtime_phase = fixture_phase_timing("runtime-asm");
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);
+    drop(runtime_phase);
     let link_requirements = TestLinkRequirements::new(
         check_result.required_libraries,
         elephc::codegen::link_requirements_for_runtime_features(runtime_features),
@@ -864,6 +872,7 @@ pub(crate) fn compile_and_run_with_heap_debug(source: &str) -> ProgramOutput {
 /// runs the same binary at `$argc == 1` and `$argc == 2`, so both arms run under CI.
 pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<String> {
     compile_and_capture_per_argv(source, false, argvs)
+        .0
         .into_iter()
         .zip(argvs)
         .map(|(output, args)| {
@@ -879,6 +888,22 @@ pub(crate) fn compile_and_run_per_argv(source: &str, argvs: &[&[&str]]) -> Vec<S
         .collect()
 }
 
+/// Compiles once without heap debugging and captures each run, including nonzero exits.
+pub(crate) fn compile_and_run_capture_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, false, argvs).0
+}
+
+/// Captures ordinary executions and their exact assembly without enabling heap diagnostics.
+pub(crate) fn compile_and_run_capture_and_asm_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> (Vec<ProgramOutput>, String) {
+    compile_and_capture_per_argv(source, false, argvs)
+}
+
 /// Heap-debug counterpart of [`compile_and_run_per_argv`]: compiles `source` once with heap
 /// debugging and returns every run's captured output, one per argument vector, without asserting
 /// success, so a fixture can check each arm's output and leak summary.
@@ -886,6 +911,14 @@ pub(crate) fn compile_and_run_with_heap_debug_per_argv(
     source: &str,
     argvs: &[&[&str]],
 ) -> Vec<ProgramOutput> {
+    compile_and_capture_per_argv(source, true, argvs).0
+}
+
+/// Captures per-argument heap-debug runs and their shared assembly without recompiling.
+pub(crate) fn compile_and_run_with_heap_debug_and_asm_per_argv(
+    source: &str,
+    argvs: &[&[&str]],
+) -> (Vec<ProgramOutput>, String) {
     compile_and_capture_per_argv(source, true, argvs)
 }
 
@@ -894,7 +927,7 @@ fn compile_and_capture_per_argv(
     source: &str,
     heap_debug: bool,
     argvs: &[&[&str]],
-) -> Vec<ProgramOutput> {
+) -> (Vec<ProgramOutput>, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -914,12 +947,27 @@ fn compile_and_capture_per_argv(
         argvs,
     );
 
+    if heap_debug {
+        for output in &outputs {
+            super::diagnostics::preserve_heap_failure(source, &user_asm, output);
+        }
+    }
     let _ = fs::remove_dir_all(&dir);
-    outputs
+    (outputs, user_asm)
 }
 
 /// Returns the exact user assembly with a heap-debug fixture's output for target-specific CI diagnostics.
 pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramOutput, String) {
+    compile_heap_debug_with_asm(source, 8_388_608)
+}
+
+/// Runs a stress fixture with its required live heap while retaining all heap-debug checks.
+pub(crate) fn compile_and_run_with_heap_debug_sized(source: &str, heap_size: usize) -> ProgramOutput {
+    compile_heap_debug_with_asm(source, heap_size).0
+}
+
+/// Shares compilation, exact assembly capture and failure diagnostics across debug heap budgets.
+fn compile_heap_debug_with_asm(source: &str, heap_size: usize) -> (ProgramOutput, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -927,7 +975,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
     fs::create_dir_all(&dir).unwrap();
 
     let (user_asm, runtime_asm, required_libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, true);
+        compile_source_to_asm_with_options(source, &dir, heap_size, false, true);
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
@@ -938,6 +986,7 @@ pub(crate) fn compile_and_run_with_heap_debug_and_asm(source: &str) -> (ProgramO
         &[],
     );
 
+    super::diagnostics::preserve_heap_failure(source, &user_asm, &output);
     let _ = fs::remove_dir_all(&dir);
     (output, user_asm)
 }

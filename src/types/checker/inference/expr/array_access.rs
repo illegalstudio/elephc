@@ -75,7 +75,7 @@ impl Checker {
                 Ok(*value.clone())
             }
             PhpType::Object(class_name) => {
-                if self.object_type_implements_interface(class_name, "ArrayAccess") {
+                if self.object_type_supports_dimensions(class_name) {
                     Ok(self.array_access_offset_get_type(class_name))
                 } else {
                     Err(CompileError::new(expr.span, "Cannot index non-array"))
@@ -112,10 +112,7 @@ impl Checker {
                             result_members.push(*value.clone());
                         }
                         PhpType::Object(class_name) => {
-                            if self.object_type_implements_interface(
-                                class_name,
-                                "ArrayAccess",
-                            ) {
+                            if self.object_type_supports_dimensions(class_name) {
                                 saw_indexable_member = true;
                                 result_members
                                     .push(self.array_access_offset_get_type(class_name));
@@ -186,7 +183,8 @@ impl Checker {
             }
             // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
             // answer `false` / the default; only a probe context may do so.
-            PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
+            PhpType::Void | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Resource(_)
+                if self.null_probe_depth > 0 => Ok(PhpType::Void),
             _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
         }
     }

@@ -170,7 +170,7 @@ pub(super) fn check_array_assign(
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
         validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_supports_dimensions(class_name) {
             return Err(CompileError::new(
                 span,
                 "Object array assignment requires ArrayAccess",
@@ -363,12 +363,17 @@ pub(super) fn check_nested_array_assign(
             if matches!(array.kind, ExprKind::ArrayAccess { .. })
                 && members.iter().all(|member| matches!(member,
                     PhpType::Bool | PhpType::False | PhpType::Void)) => Ok(()),
+        PhpType::Union(members) if members.iter().all(|member| match member {
+            PhpType::Void => true,
+            PhpType::Object(name) => crate::types::builtin_classes::has_native_dimensions(name, &checker.classes),
+            _ => false,
+        }) => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
         )),
         PhpType::Object(class_name)
-            if checker.object_type_implements_interface(&class_name, "ArrayAccess") =>
+            if checker.object_type_supports_dimensions(&class_name) =>
         {
             Ok(())
         }
@@ -515,7 +520,7 @@ pub(super) fn check_array_push(
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         ));
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_supports_dimensions(class_name) {
             return Err(CompileError::new(
                 span,
                 "Object array push requires ArrayAccess",

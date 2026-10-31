@@ -95,6 +95,10 @@ pub(super) struct FakeOps {
     /// counter would keep advancing exactly as the buggy runtime's did.
     pub(super) inert_resources: std::collections::HashSet<i64>,
     pub(super) object_classes: HashMap<usize, String>,
+    /// Counts positional key lookups, which scan native associative arrays from their head.
+    pub(super) array_iter_key_calls: usize,
+    /// Counts provider copies that give PHP array values independent boxed storage.
+    pub(super) array_value_copy_calls: usize,
     /// Native clone calls recorded as `(declaring frame class, called class override)`.
     pub(super) native_clone_calls: Vec<(String, Option<String>)>,
     /// Physical clone argument shapes recorded as `(slot count, hidden collector length)`.

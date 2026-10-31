@@ -234,7 +234,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -450,7 +450,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -658,7 +658,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -1331,7 +1331,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-macos-aarch64-
 
@@ -1393,6 +1393,14 @@ jobs:
         env:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+          # Keep phase records for the consolidated XML eval catalog fixtures.
+          ELEPHC_FIXTURE_PHASE_TIMING: >-
+            test_simplexml_eval_access_owners_bundle,
+            test_simplexml_eval_projection_and_nullsafe_bundle,
+            test_simplexml_dynamic_property_and_write_fetch_bundle,
+            test_xml_eval_parser_and_callable_shapes_bundle,
+            test_xml_eval_writer_and_handler_registration_bundle,
+            test_dom_html_eval_catalog_and_registered_surface_bundle
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
@@ -1420,6 +1428,15 @@ jobs:
         with:
           name: junit-codegen-tests-macos-aarch64-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1454,7 +1471,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-x86_64-
 
@@ -1546,6 +1563,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   codegen-tests-linux-aarch64:
     name: Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-aarch64]
@@ -1577,7 +1603,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             libxml2-native-linux-aarch64-
 
@@ -1666,6 +1692,15 @@ jobs:
         with:
           name: junit-codegen-tests-linux-aarch64-${{ matrix.shard }}
           path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -2412,7 +2447,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/elephc-native
-          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
+          key: xml-native-${{ matrix.elephc_target }}-${{ hashFiles('examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/util.rs') }}
           restore-keys: |
             xml-native-${{ matrix.elephc_target }}-
 
@@ -2688,6 +2723,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-eval-codegen-tests-macos-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   eval-codegen-tests-linux-x86_64:
     name: Eval Codegen Tests (linux-x86_64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-x86_64]
@@ -2749,6 +2793,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-eval-codegen-tests-linux-x86_64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 7
+
   eval-codegen-tests-linux-aarch64:
     name: Eval Codegen Tests (linux-aarch64 ${{ matrix.shard }}/16)
     needs: [plan, build-archive-linux-aarch64]
@@ -2807,6 +2860,15 @@ jobs:
         with:
           name: junit-eval-codegen-tests-linux-aarch64-${{ matrix.shard }}
           path: target/nextest/ci/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failing fixture assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-diagnostics-eval-codegen-tests-linux-aarch64-${{ matrix.shard }}
+          path: target/codegen-diagnostics/
           if-no-files-found: ignore
           retention-days: 7
 
@@ -3347,7 +3409,21 @@ jobs:
           grep -F '  <title>Design Patterns &amp; Friends</title>' "$RUNNER_TEMP/xml.out"
           grep -F 'book 978-0-13-468599-1' "$RUNNER_TEMP/xml.out"
           grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
-          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out"
+          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out" || {
+            cat "$RUNNER_TEMP/xml.out"
+            exit 1
+          }
+
+      - name: Compile and run SimpleXML through the production resolver
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/simplexml/main.php
+          ./examples/simplexml/main > "$RUNNER_TEMP/simplexml.out"
+          grep -F 'A1: Notebook EUR 4.50' "$RUNNER_TEMP/simplexml.out"
+          grep -F 'B2: Pencil EUR 1.20' "$RUNNER_TEMP/simplexml.out"
+          grep -F 'Under EUR 2: Pencil' "$RUNNER_TEMP/simplexml.out"
 
       - name: Reinstall locked state offline
         shell: bash
@@ -3367,6 +3443,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/xml/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/simplexml/elephc.toml
 
   frame-assertions-release:
     name: Frame assertions (release)

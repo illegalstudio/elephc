@@ -156,7 +156,7 @@ fn native_argument_ownership_raw_string_slot_ledger() {
     }
 }
 
-/// Balances the sole live one-word heap slot owner before and after native replacement.
+/// Balances the sole live raw heap slot owner before and after native replacement.
 #[test]
 fn native_argument_ownership_raw_heap_slot_ledger() {
     for changed in [false, true] {
@@ -193,6 +193,7 @@ fn raw_string_ref_args(original: [u64; 2], current: [u64; 2]) -> BoundNativeFunc
             original,
             slot: Box::new(current),
             target: None,
+            force_writeback: false,
         }],
         named_keys: Vec::new(),
     }
@@ -204,7 +205,7 @@ fn raw_heap_ref_args(original: u64, current: u64) -> BoundNativeFunctionArgs {
         values: Vec::new(),
         ref_slots: vec![BoundNativeFunctionRefSlot::OwnedRawWord {
             original,
-            slot: Box::new(current),
+            slot: Box::new([current, 0]),
             target: None,
         }],
         named_keys: Vec::new(),

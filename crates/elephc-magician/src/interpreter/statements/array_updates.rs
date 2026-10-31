@@ -32,24 +32,25 @@ pub(super) fn eval_inc_dec_value(
     }
 }
 
-/// Keeps the old property value alive through the RHS and balances every compound-assignment operand.
+/// Reads the property after the evaluated RHS and balances every compound-assignment operand.
 pub(super) fn eval_property_compound_assign_result(
     object: RuntimeCellHandle,
     property: &str,
     op: EvalBinOp,
-    right: &EvalExpr,
+    right: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let current = eval_property_get_result(object, property, context, values)?;
+    validate_property_write_receiver(object, property, "assign", context, values)?;
+    if let Some(result) = super::super::runtime_ops::simplexml_properties::update(
+        values, object, property, op, right, false,
+    )? { return eval_release_value(context, values, result); }
+    let current = eval_write_property_get_result(object, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
-        with_eval_void_operands(&[right], context, scope, values, |args, context, _, values| {
-            let value = eval_binary_result(op, current, args[0], context, values)?;
+            let value = eval_binary_result(op, current, right, context, values)?;
             with_eval_value_lease(value, context, values, |value, context, values| {
                 eval_property_set_result(object, property, value, context, values)
             })
-        })
     })
 }
 
@@ -61,7 +62,18 @@ pub(super) fn eval_property_inc_dec_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let current = eval_property_get_result(object, property, context, values)?;
+    validate_property_write_receiver(object, property, "increment/decrement", context, values)?;
+    if super::super::runtime_ops::simplexml_properties::is_native(values, object, property)? {
+        let one = values.int(1)?;
+        return with_eval_value_lease(one, context, values, |one, context, values| {
+            let operation = if increment { EvalBinOp::Add } else { EvalBinOp::Sub };
+            let result = super::super::runtime_ops::simplexml_properties::update(
+                values, object, property, operation, one, false,
+            )?.ok_or(EvalStatus::RuntimeFatal)?;
+            eval_release_value(context, values, result)
+        });
+    }
+    let current = eval_write_property_get_result(object, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
         let value = eval_inc_dec_value(current, increment, values)?;
         with_eval_value_lease(value, context, values, |value, context, values| {
@@ -159,6 +171,11 @@ pub(super) fn eval_array_unset_element_stmt(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     match array {
+        EvalExpr::ArrayGet { .. } => {
+            return super::property_dimension_unset::eval_nested_dimension_unset(
+                array, index, context, scope, values,
+            );
+        }
         EvalExpr::LoadVar(name) => {
             let existing = scope_entry(context, scope, name)
                 .filter(|entry| entry.flags().is_visible())
@@ -176,15 +193,10 @@ pub(super) fn eval_array_unset_element_stmt(
             return Ok(());
         }
         EvalExpr::PropertyGet { object, property } => {
-            return with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                eval_property_array_unset_result(args[0], property, index, context, scope, values)
-            });
+            return eval_property_dimension_unset(object, DimensionProperty::Literal(property), index, context, scope, values);
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
-            return with_eval_void_operands(&[object], context, scope, values, |args, context, scope, values| {
-                let property = eval_dynamic_member_name(property, context, scope, values)?;
-                eval_property_array_unset_result(args[0], &property, index, context, scope, values)
-            });
+            return eval_property_dimension_unset(object, DimensionProperty::Dynamic(property), index, context, scope, values);
         }
         EvalExpr::StaticPropertyGet {
             class_name,
@@ -231,26 +243,6 @@ pub(super) fn eval_array_unset_element_stmt(
     }
     with_eval_void_operands(&[array], context, scope, values, |args, context, scope, values| {
         eval_array_access_unset_result(args[0], index, context, scope, values)
-    })
-}
-
-/// Releases the old property read and the rebuilt array after an indexed unset writes back.
-fn eval_property_array_unset_result(
-    object: RuntimeCellHandle,
-    property: &str,
-    index: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let array = eval_property_get_result(object, property, context, values)?;
-    with_eval_value_lease(array, context, values, |array, context, values| {
-        if let Some(replacement) = eval_array_unset_target_result(array, index, context, scope, values)? {
-            with_eval_value_lease(replacement, context, values, |replacement, context, values| {
-                eval_property_set_result(object, property, replacement, context, values)
-            })?;
-        }
-        Ok(())
     })
 }
 
@@ -303,7 +295,12 @@ pub(super) fn eval_array_access_unset_result(
         if !eval_array_access_object_matches(array, context, values)? {
             return Err(EvalStatus::RuntimeFatal);
         }
-        let result = eval_method_call_result(array, "offsetUnset", args.to_vec(), context, values)?;
+        let result = match super::super::runtime_ops::simplexml_properties::dimension(
+            values, array, elephc_builtin_contract::ObjectDimension::Unset, args.to_vec(),
+        )? {
+            Some(value) => value,
+            None => eval_method_call_result(array, "offsetUnset", args.to_vec(), context, values)?,
+        };
         eval_release_value(context, values, result)
     })
 }
@@ -365,198 +362,6 @@ pub(super) fn eval_array_element_reference_write(
             Ok(())
         }
         _ => write_back_method_ref_target(&target, value, context, values),
-    }
-}
-
-/// Writes an indexed property or appends to it while preserving COW and every operand's owner.
-pub(super) fn eval_property_array_write_result(
-    object: RuntimeCellHandle,
-    property: &str,
-    index: Option<&EvalExpr>,
-    op: Option<EvalBinOp>,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let mut operands = Vec::new();
-    let mut result = (|| {
-        let current = eval_property_get_result(object, property, context, values)?;
-        let current = if current.is_borrowed() { values.retain(current)? } else { current };
-        operands.push(current);
-        if values.type_tag(current)? == EVAL_TAG_OBJECT {
-            if !eval_array_access_object_matches(current, context, values)? {
-                return Err(EvalStatus::RuntimeFatal);
-            }
-            let append = index.is_none();
-            let index = match index {
-                Some(index) => eval_owned_expr(index, context, scope, values)?,
-                None => values.null()?,
-            };
-            operands.push(index);
-            let value = eval_property_array_set_value(current, index, op, value, context, scope, values)?;
-            let value = if value.is_borrowed() { values.retain(value)? } else { value };
-            operands.push(value);
-            if append { reject_weak_map_append(current, context, values)?; }
-            let returned = eval_method_call_result(current, "offsetSet", vec![index, value], context, values)?;
-            operands.push(returned);
-            return Ok(());
-        }
-        let index = match index {
-            Some(index) => eval_owned_array_set_index(index, context, scope, values)?,
-            None if values.is_array_like(current)? => eval_array_append_key(current, values)?,
-            None => values.int(0)?,
-        };
-        operands.push(index);
-        let array = if values.is_array_like(current)? {
-            values.array_clone_shallow(current)?
-        } else {
-            values.array_new(1)?
-        };
-        operands.push(array);
-        context.clone_array_element_aliases(current, array, None);
-        let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
-        let value = if value.is_borrowed() { values.retain(value)? } else { value };
-        operands.push(value);
-        eval_array_element_reference_write(array, index, value, context, values)?;
-        // Runtime setters mutate the receiver cell in place, retaining only the inserted value.
-        values.array_set(array, index, value)?;
-        eval_property_set_result(object, property, array, context, values)
-    })();
-    for operand in operands.into_iter().rev() {
-        let released = eval_release_value(context, values, operand);
-        if result.is_ok() { result = released; }
-    }
-    result
-}
-
-/// Computes the value written by a simple or compound property-array assignment.
-pub(super) fn eval_property_array_set_value(
-    array: RuntimeCellHandle,
-    index: RuntimeCellHandle,
-    op: Option<EvalBinOp>,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(op) = op else {
-        return eval_expr(value, context, scope, values);
-    };
-    let current = eval_array_get_result(array, index, context, values)?;
-    let current = if current.is_borrowed() { values.retain(current)? } else { current };
-    let result = with_eval_operands(&[value], context, scope, values, |args, context, _, values| {
-        eval_binary_result(op, current, args[0], context, values)
-    });
-    let released = eval_release_value(context, values, current);
-    match (result, released) {
-        (Err(status), _) => Err(status),
-        (Ok(result), Err(status)) => {
-            let _ = release_expr_result(result, context, values);
-            Err(status)
-        }
-        (Ok(result), Ok(())) => Ok(result),
-    }
-}
-
-/// Executes `Class::$property[] = value`, including ArrayAccess static-property values.
-pub(super) fn eval_static_property_array_append_result(
-    class_name: &str,
-    property: &str,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let array = eval_static_property_get_result(class_name, property, context, values)?;
-    if values.type_tag(array)? == EVAL_TAG_OBJECT {
-        if !eval_array_access_object_matches(array, context, values)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let array = if array.is_borrowed() { values.retain(array)? } else { array };
-        let mut operands = vec![array];
-        let mut result = (|| {
-            let value = eval_owned_expr(value, context, scope, values)?;
-            operands.push(value);
-            reject_weak_map_append(array, context, values)?;
-            let offset = values.null()?;
-            operands.push(offset);
-            let returned = eval_method_call_result(array, "offsetSet", vec![offset, value], context, values)?;
-            operands.push(returned);
-            Ok(())
-        })();
-        for operand in operands.into_iter().rev() {
-            let released = eval_release_value(context, values, operand);
-            if result.is_ok() { result = released; }
-        }
-        return result;
-    }
-    let array = if values.is_array_like(array)? {
-        let tag = values.type_tag(array)?;
-        if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-            return Err(EvalStatus::UnsupportedConstruct);
-        }
-        array
-    } else {
-        values.array_new(1)?
-    };
-    let array = eval_array_append_value(array, value, context, scope, values)?;
-    eval_static_property_set_result(class_name, property, array, context, values)
-}
-
-/// Executes `Class::$property[index] = value` and compound indexed static-property writes.
-pub(super) fn eval_static_property_array_set_result(
-    class_name: &str,
-    property: &str,
-    index: &EvalExpr,
-    op: Option<EvalBinOp>,
-    value: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let array = eval_static_property_get_result(class_name, property, context, values)?;
-    if values.type_tag(array)? == EVAL_TAG_OBJECT {
-        if !eval_array_access_object_matches(array, context, values)? {
-            return Err(EvalStatus::RuntimeFatal);
-        }
-        let index = eval_expr(index, context, scope, values)?;
-        let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
-        let result =
-            eval_method_call_result(array, "offsetSet", vec![index, value], context, values)?;
-        values.release(result)?;
-        return Ok(());
-    }
-    let index = eval_array_set_index(index, context, scope, values)?;
-    let array = if values.is_array_like(array)? {
-        array
-    } else {
-        values.array_new(1)?
-    };
-    let array = eval_array_set_target_for_index(array, index, values)?;
-    let value = eval_property_array_set_value(array, index, op, value, context, scope, values)?;
-    for declared in context.local_reference_types(array) {
-        validate_generic_local_element(Some(&declared), array, index, value, context, values)?;
-    }
-    let array = values.array_set(array, index, value)?;
-    eval_static_property_set_result(class_name, property, array, context, values)
-}
-
-/// Evaluates an array-set index and normalizes PHP integer-string keys.
-pub(super) fn eval_array_set_index(
-    index: &EvalExpr,
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let index = eval_expr(index, context, scope, values)?;
-    if values.type_tag(index)? != EVAL_TAG_STRING {
-        return Ok(index);
-    }
-    let bytes = values.string_bytes(index)?;
-    match eval_numeric_string_array_key(&bytes) {
-        Some(key) => values.int(key),
-        None => Ok(index),
     }
 }
 

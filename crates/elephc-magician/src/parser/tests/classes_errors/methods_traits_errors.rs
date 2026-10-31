@@ -10,6 +10,28 @@
 
 use super::super::support::*;
 
+/// Method reference-return declarations retain their flag without changing parameter metadata.
+#[test]
+fn parse_fragment_retains_method_reference_return_flags() {
+    let program = parse_fragment(br#"
+        class ReferenceMethods {
+            public function &offsetGet(mixed $key): mixed { return $this->slot; }
+            public function ordinary(mixed &$key): mixed { return $key; }
+        }
+    "#).expect("reference method declaration should parse");
+    let [EvalStmt::ClassDecl(class)] = program.statements() else {
+        panic!("expected one class declaration");
+    };
+    let [reference, ordinary] = class.methods() else {
+        panic!("expected both methods");
+    };
+    assert_eq!(reference.name(), "offsetGet");
+    assert!(reference.returns_by_ref());
+    assert_eq!(reference.parameter_is_by_ref(), &[false]);
+    assert!(!ordinary.returns_by_ref());
+    assert_eq!(ordinary.parameter_is_by_ref(), &[true]);
+}
+
 /// Verifies abstract and final class modifiers lower into dynamic class metadata.
 #[test]
 fn parse_fragment_accepts_abstract_and_final_class_members() {

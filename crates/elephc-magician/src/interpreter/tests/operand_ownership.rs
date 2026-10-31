@@ -187,10 +187,11 @@ fn native_function_ref_staging_releases_only_its_current_owner() {
                 let slot = if string {
                     BoundNativeFunctionRefSlot::RawString {
                         original: [original_word, 3], slot: Box::new([current_word, 3]), target: None,
+                        force_writeback: false,
                     }
                 } else {
                     BoundNativeFunctionRefSlot::OwnedRawWord {
-                        original: original_word, slot: Box::new(current_word), target: None,
+                        original: original_word, slot: Box::new([current_word, 0]), target: None,
                     }
                 };
                 let bound = BoundNativeFunctionArgs {
@@ -217,7 +218,7 @@ fn pending_throwables_own_their_cells_after_function_return_control() {
         let source = values.new_object("Exception").unwrap();
         let operand = if borrowed { source.borrowed() } else { source };
         let result = eval_declared_return_control_value(
-            None, None, None, EvalControl::Throw(operand), &mut context, &mut values,
+            "thrower", None, None, None, EvalControl::Throw(operand), &mut context, &mut values,
         );
         assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
         let thrown = context.take_pending_throw().unwrap();
@@ -806,38 +807,62 @@ fn materialized_value_cleanup_covers_success_and_failure() {
     }
 }
 
-/// A failed compound-assignment RHS releases the prior property read and the receiver lease.
+/// A failed compound RHS releases computed receivers without fetching property storage.
 #[test]
 fn failed_compound_property_rhs_releases_prior_operands() {
-    let mut values = FakeOps::default();
-    let mut context = ElephcEvalContext::new();
-    let mut scope = ElephcEvalScope::new();
-    let cell = values.int(5).unwrap();
-    let object = values.alloc(FakeValue::Object(vec![("n".into(), cell)]));
-    scope.set("box", object, ScopeCellOwnership::Owned);
-    let program = parse_fragment(b"$box->n += missing_compound_operand();").unwrap();
-    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-    assert_eq!(values.retains, vec![object]);
-    let operands = values.releases.iter().copied()
-        .filter(|released| *released == cell || *released == object).collect::<Vec<_>>();
-    assert_eq!(operands, vec![cell, object]);
-    assert_eq!(scope.visible_cell("box"), Some(object));
+    for computed in [false, true] {
+        for dynamic in [false, true] {
+            let mut values = FakeOps::default();
+            let mut context = ElephcEvalContext::new();
+            let mut scope = ElephcEvalScope::new();
+            let cell = values.int(5).unwrap();
+            let object = values.alloc(FakeValue::Object(vec![("n".into(), cell)]));
+            scope.set("box", object, ScopeCellOwnership::Owned);
+            let choose = values.int(1).unwrap();
+            scope.set("choose", choose, ScopeCellOwnership::Owned);
+            let receiver = if computed { "($choose ? $box : $box)" } else { "$box" };
+            let property = if dynamic { "{\"n\"}" } else { "n" };
+            let source = format!("{receiver}->{property} += missing_compound_operand();");
+            let program = parse_fragment(source.as_bytes()).unwrap();
+            assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+            assert_eq!(values.releases.iter().filter(|value| **value == cell).count(), 0);
+            assert_eq!(values.retains.iter().filter(|value| **value == object).count(), usize::from(computed));
+            assert_eq!(values.releases.iter().filter(|value| **value == object).count(), usize::from(computed));
+            assert_eq!(values.cell_owners[&(cell.as_ptr() as usize)], 1);
+            assert_eq!(values.cell_owners[&(object.as_ptr() as usize)], 1);
+            let names = values.values.iter().filter(|(_, value)| matches!(value, FakeValue::String(name) if name == "n"))
+                .collect::<Vec<_>>();
+            assert_eq!(names.len(), usize::from(dynamic));
+            for (id, _) in names { assert_eq!(values.cell_owners[id], 0, "retire the staged name"); }
+            assert_eq!(scope.visible_cell("box"), Some(object));
+        }
+    }
 }
 
-/// A failed indexed-property RHS releases the copied array, original read, key, and receiver.
+/// A failed RHS retires its key and computed receiver without fetching property storage.
 #[test]
 fn failed_property_array_rhs_releases_prior_operands() {
-    let mut values = FakeOps::default();
-    let mut context = ElephcEvalContext::new();
-    let mut scope = ElephcEvalScope::new();
-    let array = values.array_new(0).unwrap();
-    let object = values.alloc(FakeValue::Object(vec![("items".into(), array)]));
-    scope.set("box", object, ScopeCellOwnership::Owned);
-    let program = parse_fragment(b"$box->items[0] = missing_array_operand();").unwrap();
-    assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
-    assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 1);
-    assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), 1);
-    assert_eq!(scope.visible_cell("box"), Some(object));
+    for computed in [false, true] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let array = values.array_new(0).unwrap();
+        let object = values.alloc(FakeValue::Object(vec![("items".into(), array)]));
+        scope.set("box", object, ScopeCellOwnership::Owned);
+        let choose = values.int(1).unwrap();
+        scope.set("choose", choose, ScopeCellOwnership::Owned);
+        let source = if computed { "($choose ? $box : $box)->items[0] = missing_array_operand();" }
+            else { "$box->items[0] = missing_array_operand();" };
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        assert!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).is_err());
+        assert_eq!(values.releases.iter().filter(|cell| **cell == array).count(), 0);
+        assert_eq!(values.retains.iter().filter(|cell| **cell == object).count(), usize::from(computed));
+        assert_eq!(values.releases.iter().filter(|cell| **cell == object).count(), usize::from(computed));
+        let keys = values.values.iter().filter(|(_, value)| matches!(value, FakeValue::Int(0))).collect::<Vec<_>>();
+        assert!(!keys.is_empty(), "the key was evaluated before the failed RHS");
+        for (id, _) in keys { assert_eq!(values.cell_owners[id], 0, "retire the staged key"); }
+        assert_eq!(scope.visible_cell("box"), Some(object));
+    }
 }
 
 /// Shallow copies release iteration cells and abandon partial arrays if insertion fails.
@@ -953,4 +978,52 @@ fn mixed_native_reference_slots_remain_pointer_sized() {
     assert!(!read.is_borrowed());
     assert_eq!(values.releases, vec![old]);
     assert_eq!(values.retains, vec![replacement, replacement]);
+}
+
+/// Eval functions, constructors and methods retire the default Boolean's construction lease.
+#[test]
+fn dynamic_callable_defaults_release_their_binding_owners() {
+    let program = parse_fragment(br#"
+function ownedDefaultFunction(bool $flag = false): bool { return $flag; }
+class OwnedDefaultMethod {
+    public function __construct(bool $flag = false) {}
+    public function value(bool $flag = false): bool { return $flag; }
+    public static function staticValue(bool $flag = false): bool { return $flag; }
+}
+echo (int)ownedDefaultFunction(), "|";
+$probe = new OwnedDefaultMethod();
+echo (int)$probe->value(), "|", (int)OwnedDefaultMethod::staticValue(), "|";
+"#).unwrap();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    values.release(result).unwrap();
+    assert_eq!(values.output, "0|0|0|");
+    let defaults = values.values.iter().filter(|(_, value)| **value == FakeValue::Bool(false))
+        .map(|(cell, _)| *cell).collect::<Vec<_>>();
+    assert_eq!(defaults.len(), 4);
+    for cell in defaults { assert_eq!(values.cell_owners.get(&cell), Some(&0)); }
+}
+
+/// Failure after an omitted default releases that default while preserving caller arguments.
+#[test]
+fn dynamic_callable_binding_failure_releases_prepared_defaults() {
+    let mut context = ElephcEvalContext::new();
+    let mut values = FakeOps::default();
+    let caller = values.int(7).unwrap();
+    let result = bind_evaluated_function_args_with_ref_mode(
+        "ownedDefaultFailure", &["flag".into(), "target".into()],
+        &[Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Bool], false)),
+          Some(EvalParameterType::new(vec![EvalParameterTypeVariant::Class("MissingTarget".into())], true))],
+        &[Some(EvalExpr::Const(EvalConst::Bool(false))), Some(EvalExpr::Const(EvalConst::Null))], &[false, false], &[false, false],
+        vec![EvaluatedCallArg { name: Some("target".into()), value: caller.borrowed(), ref_target: None }],
+        EvalByRefBindingMode::RequireTarget, &mut context, &mut values,
+    );
+    assert!(matches!(result, Err(EvalStatus::RuntimeFatal)));
+    assert_eq!(values.cell_owners.get(&(caller.as_ptr() as usize)), Some(&1));
+    let defaults = values.values.iter().filter(|(_, value)| **value == FakeValue::Bool(false))
+        .map(|(cell, _)| *cell).collect::<Vec<_>>();
+    assert_eq!(defaults.len(), 1);
+    assert_eq!(values.cell_owners.get(&defaults[0]), Some(&0));
 }

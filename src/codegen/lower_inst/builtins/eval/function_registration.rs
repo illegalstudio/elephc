@@ -125,7 +125,7 @@ pub(super) fn register_eval_native_function(
     for (registered_index, physical_index) in visible_indexes.into_iter().enumerate() {
         // `source_declared_param_indexes` only yields in-range indexes, so this loop registers exactly
         // the parameter count emitted above even for a malformed signature.
-        let Some((param_name, _)) = registration.signature.params.get(physical_index) else {
+        let Some((param_name, param_type)) = registration.signature.params.get(physical_index) else {
             debug_assert!(false, "visible parameter indexes must address a declared parameter");
             continue;
         };
@@ -151,6 +151,9 @@ pub(super) fn register_eval_native_function(
                 .get(physical_index)
                 .copied()
                 .unwrap_or(false),
+            matches!(if is_variadic {
+                match param_type { PhpType::Array(element) => element.codegen_repr(), _ => param_type.codegen_repr() }
+            } else { param_type.codegen_repr() }, PhpType::TaggedScalar),
             is_variadic,
         );
         if let Some(type_spec) = param_type_specs

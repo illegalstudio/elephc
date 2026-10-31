@@ -11,6 +11,27 @@ sidebar:
 `src/codegen_support/runtime/eval_scope.rs`, and
 `crates/elephc-magician/`.
 
+Dynamic eval scope flushes mark imported native snapshots clean with the private
+scope-set flag `SCOPE_FLAG_NATIVE_SNAPSHOT`. Interpreter assignments, in-place
+reference writes and unset markers carry the existing dirty bit. Dynamic local
+reload skips clean snapshots even when the conservative access mask selects every
+name or two names share a mask bit. This prevents a stale snapshot from replacing a
+property changed through another native alias. AOT eval scope writes remain dirty;
+literal scope reload keeps its existing path. Eval barriers preserve the payload
+types of already-bound native references rather than widening shared cells to Mixed.
+
+Owned property value reads detach array boxes even when the getter already returned
+an owning lease. Retaining the same property box is insufficient: a COW write replaces
+the payload in that box. The copy preserves array and callable metadata; object reads
+keep their shared identity. Write-context property fetches retain their attached path.
+
+Constructorless native allocation probes dynamic classes through the private
+`__elephc_eval_try_allocate_object_v1` ABI when Magician is linked. Prelude
+factories with no eval local borrow the context of the active interpreter-to-native
+frame. The existing dynamic allocator initializes defaults and registers the new
+object in that context without invoking its constructor. A missing context or class
+returns the normal class-lookup miss; an escaping Throwable keeps the outcome ABI.
+
 Eval is an experimental hybrid feature. Ordinary elephc source and eligible
 literal eval fragments are compiled ahead of time. Only fragments that require
 runtime parsing or dynamic symbol behavior use the optional Magician
@@ -89,6 +110,17 @@ completed EIR module. This accounts for actual local-slot types and supported
 static function/method targets before setting `RuntimeFeatures::eval_bridge`.
 Consequently, the presence of `EvalLiteralCall` alone does not imply that the
 binary links Magician.
+
+When a module does link Magician, named and dynamic object-relation predicates
+recover eval-created object owners by runtime identity before consulting a
+caller context. Context-free native values probe the global eval registry only
+when the requested class, interface, enum, trait or alias is registered there;
+ordinary native names use generated class metadata directly. This preserves
+eval aliases without cloning the complete global declaration registry for each
+native `instanceof`, `is_a()` or `is_subclass_of()` probe. The owner lookup uses
+the process-local dynamic-object registry, so eval-enabled modules pay that
+lookup even for native values in exchange for distinguishing an eval object's
+PHP-visible class from its native backing allocation.
 
 ## EIR representation
 
@@ -281,6 +313,20 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+Dynamic callable binders borrow the caller's evaluated arguments and own any
+materialized defaults, coercions or variadic collectors. They retire those
+internal owners after the activation scope has preserved its return value and
+completed reference writeback. A failed binding releases every prepared owner.
+
+The final ABI owner of an eval context also releases its stored static locals,
+static properties and materialized class constants. Generated
+`__elephc_eval_context_free` calls Rust's `__elephc_eval_context_free_v2`, which
+returns an owned destructor exception after retiring every detached batch. The
+native adapter propagates that exception after Rust returns. Destructor dispatch
+stays registered during these releases, and nested ABI owner releases cannot
+free the context while the batch is running. Retained callback owners and PCNTL
+registrations continue to defer final reclamation.
+
 Cycle collection uses `__elephc_eval_gc_collect_cycles_v2(Throwable **out)`:
 native exceptions are caught below the Rust activation and returned as an owned
 boxed Throwable. The destructor callback installed through
@@ -290,6 +336,13 @@ or two for an escaping exception. Native code propagates that exception only
 after the callback returns from Rust. These versioned symbols have no legacy
 aliases, so incompatible prebuilt Magician archives fail at link time instead
 of calling a different argument ABI. The eval-context layout version is separate.
+
+Scalar bitwise NOT uses `__elephc_eval_value_bit_not_v1(value, result_out)`.
+Its native handler contains both TypeError and exceptions from float-conversion
+diagnostic callbacks below the Rust activation. Status zero publishes an owned
+Mixed result; status two leaves a pending Throwable for the interpreter's normal
+catch machinery. The callback restores exception, call-frame, diagnostic, and
+GC suppression state before returning. There is no unprotected legacy alias.
 
 The Rust-only `RuntimeCellHandle` records whether an expression borrows a stored
 cell or transfers an owner. Native C-ABI arguments and by-reference slots remain
@@ -334,6 +387,13 @@ writeback target for an AOT by-reference method, constructor, reflection, or
 callable invocation. This mode is separate from the nested-write fetch, which
 COW-normalizes the outer container and detaches the selected zval before
 mutation.
+
+Native instance and static methods returning by reference publish a reference-cell
+address in the integer result register. The eval bridge copies the referenced
+value into an owned Mixed result before retiring the transferred cell lease,
+using the descriptor invoker's shared conversion. It does not read the by-value
+ownership marker for these returns. Eval receives a value copy rather than a
+binding to the native reference cell.
 
 ## Runtime generic specialization
 
@@ -413,6 +473,8 @@ Earlier format changes also invalidated stored parse errors for valid comparison
 The format guard covers the combined serialized IR and its corresponding type sources.
 Retained token streams distinguish reserved words used as qualified-name segments, so
 entries written before that token variant was introduced must also be rejected.
+Format 24 also retains method reference-return flags and generic dimension-write
+statements; older entries cannot describe that combined layout.
 
 Native callable defaults retain array-unpack operands through a private array-element marker.
 Registration validates and normalizes that marker before execution; it is not public PHP syntax.
@@ -439,6 +501,48 @@ execution. Large one-off fragments bypass it instead of occupying global cache
 capacity. Included files have their own memo (`parse_script_cached`), with the
 same cap: a file starts in HTML mode and a fragment in PHP mode, so the same
 bytes parse to different programs and must never share a key.
+
+`EvalStmt::DimensionWrite` carries a complete receiver expression, an optional
+index, a compound operator, and the RHS. Magician prepares computed roots and
+keys before evaluating the RHS, then resolves live variable and property storage.
+The dimension writer retains every traversed parent, applies native object
+handlers directly, and propagates copied array replacements back through their
+index, property, static-property, or local attachment. Ordinary overloaded dimensions
+returning a non-object insert a discard attachment and emit an indirect-modification
+notice: the disposable copy never goes back through `offsetSet`. Failed native
+write-select results also discard replacements, without duplicating their notice.
+Object-handle children preserve shared mutation. Inherited builtin `ArrayObject`
+and `ArrayIterator` getters keep write-through storage, including eval subclasses;
+writeback uses the builtin storage method rather than an eval `offsetSet` override.
+A native subclass overriding `offsetSet` raises an explicit unsupported-write Error
+when a nested array replacement needs writeback, because its bridge has no separate
+non-virtual entry. For ordinary overloaded dimensions, by-reference `offsetGet`
+runs once and object results retain the identity path. A non-object result raises
+`Error: Unsupported dimension write: by-reference offsetGet`, for both eval and
+native methods, after its selected owner has joined reverse cleanup. Absent array children autovivify without read warnings; all
+intermediate owners retire in reverse order on normal completion and failure.
+A temporary array without an attachment is refused before mutation. The parser shares these mutation tails with `for`
+clauses, and the property-hook and static-local visitors cover the new statement.
+
+Nested `UnsetArrayElement` receivers reuse `PreparedWriteReceiver`: computed roots
+and inner keys are captured first, the final key runs once, and
+`finish_property_unset_receiver` then selects live storage without creating missing
+dimensions. Object leaves use the captured key with the existing unset adapter;
+array leaves raise an explicit unsupported-storage Error. Captures retire in reverse
+order even when key evaluation or an unset handler throws.
+Dimension hops distinguish quiet nulls and deprecated false values from invalid
+scalar containers. The AOT unset traversal applies the same check before its quiet
+offset read, protecting a temporary parent across diagnostic callbacks and throws.
+Both traversals carry the next fetch kind to distinguish string offsets used as
+objects from those used as arrays. Eval validates object indexability before its
+read bridge, and compiled closure cells use the same catchable object-as-array Error.
+Object leaves keep native adapters or eval-aware public ArrayAccess method dispatch
+after an interface check. Property-container fetches reject compiled and eval-backed
+Closure identities after converting the name; final property removal stays quiet.
+Closure offset errors use their known class name before ordinary class lookup,
+including when compiled callable cells share a function with opaque eval.
+Receiver, converted-name and result owners remain published through these checks
+and through normal cleanup.
 
 ## Runtime script cache
 

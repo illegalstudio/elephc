@@ -15,6 +15,22 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
+    /// Accepts scalar names and objects with PHP's public string conversion contract.
+    pub(crate) fn valid_dynamic_property_name_type(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Str | PhpType::Int | PhpType::Mixed => true,
+            PhpType::Object(class) => self.object_type_implements_interface(class, "Stringable")
+                || self.classes.get(class).is_some_and(|info| {
+                    let key = crate::names::php_symbol_key("__toString");
+                    info.methods.get(&key).is_some_and(|sig| sig.return_type == PhpType::Str)
+                        && info.method_visibilities.get(&key)
+                            == Some(&crate::parser::ast::Visibility::Public)
+                }),
+            PhpType::Union(members) => members.iter().all(|member| self.valid_dynamic_property_name_type(member)),
+            _ => false,
+        }
+    }
+
     /// Infers the type of a property access expression (`$obj->prop`).
     ///
     /// Returns the declared property type on class/object, handles `Mixed`
@@ -140,7 +156,8 @@ impl Checker {
         }
         // `isset($n->p)` / `$n->p ?? $d` reach through a null receiver in PHP and answer
         // `false` / the default; only a probe context may do so.
-        if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
+        if self.null_probe_depth > 0 && matches!(obj_ty,
+            PhpType::Void | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Resource(_)) {
             return Ok(PhpType::Void);
         }
         Err(CompileError::new(
@@ -200,15 +217,10 @@ impl Checker {
         }
 
         let property_ty = self.infer_type(property, env)?;
-        // NOT relaxed for `int|float`, deliberately. Accepting it here only moves the refusal:
-        // the lowering has no arm for a boxed runtime property name and answers
-        // `dynamic_prop_set with runtime property name PHP type Mixed`, which is the same gap a
-        // genuinely `mixed` name hits. The checker's message is the better one until the backend
-        // grows that arm.
-        if !matches!(property_ty, PhpType::Str | PhpType::Int | PhpType::Mixed) {
+        if !self.valid_dynamic_property_name_type(&property_ty) {
             return Err(CompileError::new(
                 property.span,
-                "Dynamic property name must be string or integer",
+                "Dynamic property name must be string or integer, or a Stringable object",
             ));
         }
 
@@ -222,6 +234,7 @@ impl Checker {
 
         match obj_ty {
             PhpType::Object(_) | PhpType::Union(_) | PhpType::Mixed => Ok(PhpType::Mixed),
+            _ if self.null_probe_depth > 0 && !nullsafe => Ok(PhpType::Void),
             _ if nullsafe => {
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")?;
                 Ok(PhpType::Mixed)
@@ -249,6 +262,11 @@ impl Checker {
             return Ok(PhpType::Mixed);
         }
         if let Some(class_info) = self.classes.get(class_name) {
+            if !property.starts_with("__elephc_")
+                && crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes)
+            {
+                return Ok(PhpType::Object(class_name.to_string()));
+            }
             if let Some(visibility) = class_info.property_visibilities.get(property) {
                 // `property_visibilities` answers for the PHYSICAL slot table, which still carries
                 // a strict ancestor's private slot under its plain name. php 7.4 removed shadow
@@ -296,6 +314,9 @@ impl Checker {
                 return Ok(PhpType::Mixed);
             }
             if let Some(sig) = class_info.methods.get("__get") {
+                if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
+                    return Ok(PhpType::Object(class_name.to_string()));
+                }
                 return Ok(sig.return_type.clone());
             }
             if class_info.allow_dynamic_properties {
@@ -308,6 +329,9 @@ impl Checker {
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
+        }
+        if class_name.is_empty() || self.interfaces.contains_key(class_name) {
+            return Ok(PhpType::Mixed);
         }
         if self.awaits_generic_instantiation(class_name) {
             // Resolved by this round, spliced by the next one. `Mixed` keeps the rest of this

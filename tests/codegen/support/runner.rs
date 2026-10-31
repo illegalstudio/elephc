@@ -161,7 +161,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
         package: "elephc-xml",
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
     },
 ];
 
@@ -213,6 +213,8 @@ impl std::ops::Deref for TestLinkRequirements {
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    let _phase = fixture_phase_timing("assemble");
+    if let Some(phase) = &_phase { phase.assembly_input(asm); }
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -220,13 +222,17 @@ pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     cmd.arg("-o").arg(obj_path).arg("-");
     cmd.stdin(Stdio::piped());
     let mut child = cmd.spawn().expect("failed to spawn assembler");
-    child
+    let written = child
         .stdin
         .as_mut()
         .expect("assembler stdin missing")
-        .write_all(asm.as_bytes())
-        .expect("failed to feed assembler");
+        .write_all(asm.as_bytes());
+    if let Err(error) = written {
+        super::diagnostics::preserve_assembler_failure(asm);
+        panic!("failed to feed assembler: {error}");
+    }
     let status = child.wait().expect("failed to wait for assembler");
+    if !status.success() { super::diagnostics::preserve_assembler_failure(asm); }
     assert!(status.success(), "assembler failed");
 }
 
@@ -304,6 +310,7 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// shared on-disk cache behind it answers them across processes, which is what nextest's
 /// process-per-test model needs for the cache to pay off at all.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    let _phase = fixture_phase_timing("runtime-obj");
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -1094,6 +1101,7 @@ pub(crate) fn link_binary(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
+    let _phase = fixture_phase_timing("link");
     let plan = test_link_plan(requirements, extra_link_paths, extra_frameworks);
     let actual_link_libs = named_libraries(&plan);
 
@@ -1568,6 +1576,7 @@ fn run_binary_with_env_and_args(
     env: &[(&str, &std::ffi::OsStr)],
     args: &[&str],
 ) -> Output {
+    let _phase = fixture_phase_timing("run");
     let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")

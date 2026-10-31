@@ -104,7 +104,7 @@ fn promote_unsafe_eval_scope_access_to_full(
             &next,
         );
         if matches!(local.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            ctx.load_local_to_result(local.slot)?;
+            ctx.load_eval_local_to_result(local.slot)?;
             emit_branch_if_mixed_numeric_scalar(ctx.emitter, &next);
         }
         emit_branch_to_eval_scope_label(ctx, &full);

@@ -15,6 +15,7 @@ mod call_operand_scope;
 mod frame;
 pub(crate) mod immediate;
 mod registers;
+mod php_return;
 mod strings;
 mod symbols;
 #[cfg(test)]
@@ -40,6 +41,7 @@ pub(crate) use call_operand_scope::{
     CALL_OPERAND_OWNER_RECORD_BYTES,
     emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
     emit_push_call_operand_owner, emit_unlink_call_operand_owner_at_stack,
+    emit_link_call_operand_owner_in_frame, emit_unlink_call_operand_owner_in_frame,
 };
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,
@@ -71,6 +73,7 @@ pub use symbols::{
 pub use symbols::{emit_load_symbol_to_local_slot, emit_store_local_slot_to_symbol};
 pub use values::{
     emit_branch_if_equal_wide, emit_branch_if_int_result_nonzero, emit_branch_if_int_result_zero,
+    emit_branch_if_not_equal_wide, emit_branch_if_zero_wide,
     emit_decref_if_refcounted,
     emit_decref_preserving_exception, emit_extend_int_result,
     emit_float_result_double_to_single, emit_float_result_single_to_double,
@@ -81,3 +84,8 @@ pub use values::{
     emit_store, emit_unary_cleanup_preserving_exception, emit_write_stdout,
 };
 pub(crate) use values::refcount_release_helper;
+
+pub(crate) use php_return::{
+    emit_php_return_status, emit_store_php_return_status, emit_load_php_return_status,
+    emit_branch_if_php_return_owned,
+};

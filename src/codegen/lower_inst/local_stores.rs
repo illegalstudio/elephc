@@ -14,8 +14,11 @@ use crate::ir::RuntimeCallTarget;
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let reset_concat_after_store =
-        inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
+    // Parking a call operand can happen after a sibling scratch string was evaluated.
+    // Only an ordinary PHP assignment ends the concat lifetime, not a temporary owner store.
+    let reset_concat_after_store = ctx.local_kind(slot)? == LocalKind::PhpLocal
+        && inst.span.is_some_and(|span| span.line > 0)
+        && value_is_acquire_of_str_concat(ctx, value)?;
     ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
@@ -332,7 +335,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
     Ok(())
 }
 
-/// Snapshots the returned cell address, leases it when it is managed, and retires a superseded lease.
+/// Snapshots the returned cell address and replaces only this return site's previous managed lease.
 ///
 /// The instruction produces TWO distinct things, and keeping them apart is the whole point:
 ///
@@ -340,7 +343,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
 ///   that snapshot, so a `finally` that rebinds the returned variable and falls through cannot
 ///   make the validated address and the returned reference disagree.
 /// - Its `ReturnRefCell` slot is the optional MANAGED lease, used only for cleanup. The
-///   retained replacement is published into it before the superseded lease is retired, because
+///   retained replacement is published before any previous execution's lease is retired, because
 ///   that retirement can run a throwing payload destructor.
 ///
 /// `__rt_reference_cell_owner` answers zero for every address that is not an exact live managed
@@ -648,6 +651,20 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
     ctx.emitter.label(&scalar);
     abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     ctx.emitter.label(done);
+}
+
+/// Retires an unpromoted local owner without consuming the payload of a shared reference cell.
+pub(super) fn lower_release_raw_local_slot(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? == LocalKind::PhpLocal && ctx.has_dynamic_ref_cell_state(slot) {
+        let offset = ctx.local_offset(slot)?;
+        let ty = ctx.local_php_type(slot)?;
+        crate::codegen::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+    }
+    Ok(())
 }
 
 /// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.

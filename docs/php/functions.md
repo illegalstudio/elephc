@@ -581,6 +581,12 @@ semantics:
 - Returning a place that is neither a variable nor a property, such as an array element
   read or the result of another call. PHP returns a reference to those places; this
   lowering has no cell to transfer for them.
+- Coercing a fresh local from a different storage representation while returning it by
+  reference inside `try`/`finally`, such as a `mixed` local returned as `int` or `string`.
+  These conversions can throw before the reference exists, so their handlers need a
+  recovery path. Nullable-object staging is the narrow exception: the function must have
+  no `catch`, and every `finally` must first rebind the staged local from an independent,
+  call-free expression before any other use. Other protected coercion shapes are rejected.
 - Outside the native enum interface dispatch described above, capturing a reference with
   `$x = &f()` from a call the compiler cannot resolve to a by-reference return. A named
   function, a method, a static method, and a closure whose
@@ -661,6 +667,28 @@ try {
 Both the compile-time rejection and the run-time `Error` are compiler subset limits, not
 PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
 condition.
+
+Runtime-selected callable reference arguments must also match the selected parameter's
+physical storage. Fresh local arguments use boxed storage so an untyped reference can change
+their value type. A selected inline `?int` reference parameter cannot alias that box and raises
+a catchable `Error`: `Unsupported reference argument: caller storage does not match the
+selected parameter layout`. Compatible existing nullable-integer aliases remain usable.
+The same refusal applies to a runtime-selected `iterable &$items` parameter when its argument
+is a fresh array or object local boxed for unknown-signature dispatch, including a runtime-named
+method call. An existing alias whose storage is already raw `Iterable` remains supported. This
+limit belongs to calls whose signature is unknown at compile time.
+Class-typed object reference parameters adapt boxed unknown-signature locals that contain
+objects, and callable descriptors that preserve a raw object slot, including closures, also
+accept existing object aliases. The callee validates the declared class or interface, including
+`self`, `parent`, subclasses, interface implementations and eval-declared objects. A mismatched
+object raises the ordinary catchable argument `TypeError` before the function body runs. A
+direct alias whose storage does not match the selected descriptor, or a boxed non-object payload
+selected into a raw object slot, is refused earlier with the physical-layout `Error`, because it
+cannot safely enter that reference slot.
+When such an alias reaches a by-reference variadic parameter, writes of `int` and `null` succeed;
+other writes raise `Unsupported assignment through a nullable integer reference: value must be
+int or null` before changing the slot. These diagnostics describe compiler limits, including
+when PHP would allow an ordinary local reference to change type.
 
 ## Variadic functions
 

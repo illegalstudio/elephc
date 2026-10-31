@@ -248,19 +248,6 @@ pub(super) fn emit_aarch64_numeric(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the round wrapper frame
     emitter.instruction("ret");                                                 // return the boxed round result to Rust
 
-    label_c_global(emitter, "__elephc_eval_value_bit_not");
-    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame for the cast helper call
-    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across the cast
-    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
-    emitter.instruction("bl __rt_mixed_cast_int");                              // cast the boxed operand to a PHP integer
-    emitter.instruction("mvn x1, x0");                                          // compute bitwise complement of the integer payload
-    emitter.instruction("mov x2, xzr");                                         // integer payloads do not use a high word
-    emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
-    emitter.instruction("bl __rt_mixed_from_value");                            // box the bitwise NOT result into a Mixed cell
-    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #16");                                     // release the bitwise NOT wrapper frame
-    emitter.instruction("ret");                                                 // return the boxed bitwise NOT result to Rust
-
     label_c_global(emitter, "__elephc_eval_value_bitwise");
     emitter.instruction("sub sp, sp, #48");                                     // allocate wrapper slots for right operand, opcode, and left integer
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across helper calls

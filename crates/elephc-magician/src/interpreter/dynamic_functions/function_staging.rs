@@ -8,6 +8,7 @@
 //! - Each staged reference owns its current payload independently of the caller.
 //! - Partial staging releases markers, payload leases, and transferred value arguments.
 //! - PHP array declarations use boxed slots because native callees can change the array layout.
+//! - Compiled nullable integers use an explicit two-word payload/tag slot, never a boxed payload address.
 //! - The caller's container keys ride along untouched: staging replaces a by-reference argument's
 //!   VALUE with a marker cell but never changes how many entries there are or their order, so the
 //!   `named_keys` vector stays index-aligned with `values`.
@@ -15,7 +16,7 @@
 use super::*;
 
 /// Transfers value arguments or prepares reference markers, rolling back partial staging on errors.
-pub(super) fn stage_native_function_invoker_args(
+pub(in crate::interpreter) fn stage_native_function_invoker_args(
     function: &NativeFunction,
     variadic_index: Option<usize>,
     bound_args: &mut [BoundMethodArg],
@@ -49,7 +50,7 @@ pub(super) fn stage_native_function_invoker_args(
                 (None, EvalByRefBindingMode::RequireTarget) => return Err(EvalStatus::RuntimeFatal),
             };
             let (marker, slot) = stage_native_function_ref_arg(
-                function.param_type(param_index), original, target, values,
+                function.param_type(param_index), function.param_tagged_scalar_ref(param_index), original, target, values,
             )?;
             staged.values.push(marker);
             staged.ref_slots.push(slot);
@@ -69,18 +70,40 @@ pub(super) fn stage_native_function_invoker_args(
 }
 
 /// Creates one reference marker and retires an acquired payload if marker allocation fails.
-fn stage_native_function_ref_arg(
+pub(in crate::interpreter) fn stage_native_function_ref_arg(
     param_type: Option<&EvalParameterType>,
+    tagged_scalar: bool,
     original: RuntimeCellHandle,
     target: Option<EvalReferenceTarget>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, BoundNativeFunctionRefSlot), EvalStatus> {
+    if tagged_scalar {
+        let tag = values.type_tag(original)?;
+        if !matches!(tag, EVAL_TAG_INT | EVAL_TAG_NULL) { return Err(EvalStatus::RuntimeFatal); }
+        let original = [values.raw_value_word(original)?, tag];
+        let mut slot = Box::new(original);
+        let marker = values.invoker_raw_ref_cell(
+            (slot.as_mut() as *mut [u64; 2]).cast(), EVAL_INVOKER_TAGGED_SCALAR_SOURCE,
+        )?;
+        return Ok((marker, BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target }));
+    }
     match native_function_raw_ref_kind(param_type) {
         Some(NativeFunctionRawRefKind::Scalar { tag }) => {
             let original = values.raw_value_word(original)?;
-            let mut slot = Box::new(original);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut u64).cast(), tag)?;
-            Ok((marker, BoundNativeFunctionRefSlot::RawWord { tag, original, slot, target }))
+            // Generated marker writers publish the complete two-word source slot even for
+            // scalar tags. Keep the second word addressable so a typed by-ref variadic cannot
+            // write past this Rust allocation after its marker enters an Array(Mixed) collector.
+            let mut slot = Box::new([original, 0]);
+            let marker = values.invoker_raw_ref_cell(
+                (slot.as_mut() as *mut [u64; 2]).cast(), tag,
+            )?;
+            Ok((marker, BoundNativeFunctionRefSlot::RawWord {
+                tag,
+                original,
+                slot,
+                target,
+                force_writeback: false,
+            }))
         }
         Some(NativeFunctionRawRefKind::String) => {
             let ptr = values.raw_value_word(original)?;
@@ -98,15 +121,18 @@ fn stage_native_function_ref_arg(
                 }
             };
             Ok((marker, BoundNativeFunctionRefSlot::RawString {
-                original: [retained.0, retained.1], slot, target,
+                original: [retained.0, retained.1],
+                slot,
+                target,
+                force_writeback: false,
             }))
         }
         Some(NativeFunctionRawRefKind::OwnedHeap) => {
             let tag = values.type_tag(original)?;
             let original = values.raw_value_word(original)?;
             let retained = values.retain_raw_heap_word(original)?;
-            let mut slot = Box::new(retained);
-            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut u64).cast(), tag);
+            let mut slot = Box::new([retained, 0]);
+            let marker = values.invoker_raw_ref_cell((slot.as_mut() as *mut [u64; 2]).cast(), tag);
             let marker = match marker {
                 Ok(marker) => marker,
                 Err(status) => {

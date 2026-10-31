@@ -2,7 +2,7 @@
 title: "xml_set_object() - internals"
 description: "Compiler internals for xml_set_object(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1101
+  order: 1104
 ---
 
 ## `xml_set_object()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1360](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1360) (`xml_set_object`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1366](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1366) (`xml_set_object`)
 - **Function symbol**: `xml_set_object()`
 
 

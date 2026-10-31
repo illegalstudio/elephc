@@ -19,6 +19,35 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(result) = native_xml_updates::lower_assignment(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+    ) { return result; }
+    if let Some(result) = crate::ir_lower::stmt::lower_nested_property_compound_expression(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr.span,
+    ) { return result; }
+    let mut old_capture = None;
+    let result = lower_ordinary_assignment_expr(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr, &mut old_capture,
+    );
+    super::ordinary_property_incdec::finish_old_capture(ctx, old_capture, result, expr.span)
+}
+
+/// Lowers an ordinary write while keeping a boxed scalar snapshot alive through every return.
+fn lower_ordinary_assignment_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    result_target: Option<&Expr>,
+    prelude: &[Stmt],
+    conditional_value_temp: Option<&str>,
+    expr: &Expr,
+    old_capture: &mut Option<crate::ir::LocalSlotId>,
+) -> LoweredValue {
+    let incdec = super::ordinary_property_incdec::captured_arithmetic(
+        target, value, result_target, prelude, conditional_value_temp,
+    );
+    let mut value = value;
+    let mut prefix_readback = false;
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }
@@ -33,8 +62,35 @@ pub(super) fn lower_assignment_expr(
     );
     let mut compound_receiver = None;
     for (position, stmt) in prelude.iter().enumerate() {
+        if position + 1 == prelude.len() {
+            if let Some((operation, old)) = incdec {
+                if super::ordinary_property_incdec::scalar_operand(ctx, old)
+                    && (result_target.is_some()
+                        || super::ordinary_property_incdec::plain_prefix_readback(ctx, target)) {
+                    value = operation;
+                    prefix_readback = result_target.is_none();
+                    continue;
+                }
+            }
+        }
+        if let Some(update) = buffer_update.as_ref() {
+            if compound_receiver.is_none() && update.read_position() == position {
+                crate::ir_lower::stmt::guard_property_expression_update(ctx, update, expr.span);
+            }
+        }
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
+            continue;
+        }
+        if let Some((_, old)) = incdec {
+            if let Some(slot) = super::ordinary_property_incdec::lower_old_capture(
+                ctx, target, stmt, old, expr.span,
+            ) {
+                *old_capture = Some(slot);
+                continue;
+            }
+        }
+        if conditional_value_temp.is_none() && lower_property_write_prelude(ctx, target, stmt, expr.span) {
             continue;
         }
         if let Some(update) = buffer_update.as_ref() {
@@ -49,6 +105,7 @@ pub(super) fn lower_assignment_expr(
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
     let target = compound_receiver.as_ref().map(|receiver| &receiver.target).unwrap_or(target);
+    let result_target = result_target.or_else(|| prefix_readback.then_some(target));
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
@@ -507,7 +564,16 @@ pub(super) fn lower_dynamic_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let (mut receiver, property, value) = if is_static_property_write_chain(object) {
+    if native_xml_updates::lower_plain_dynamic(ctx, object, property, value, span) { return; }
+    lower_dynamic_property_assign_prepared(ctx, object, property, value, span);
+}
+
+/// Emits a dynamic property assignment after any source-order receiver staging.
+pub(super) fn lower_dynamic_property_assign_prepared(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, value: &Expr, span: Span,
+) {
+    let (mut receiver, property, value) = if is_static_property_write_chain(object)
+        || defer_native_property_write_receiver(ctx, object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
@@ -524,7 +590,8 @@ pub(super) fn lower_dynamic_property_assign(
         receiver.finish_operand_window(ctx, property_pins, span);
         (receiver, property, value)
     } else {
-        let object = lower_member_receiver_at_span(ctx, object, span);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+        let object = refine_member_receiver_at_span(ctx, object, span);
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
@@ -568,13 +635,15 @@ pub(super) fn lower_dynamic_property_assign(
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         borrowed
     } else { value };
-    ctx.emit_void(
-        Op::DynamicPropSet,
-        vec![object.value, property.value, store_value.value],
-        None,
-        Op::DynamicPropSet.default_effects(),
-        Some(span),
-    );
+    if !crate::ir_lower::stmt::lower_native_dynamic_property_set(ctx, object, property, store_value, span) {
+        ctx.emit_void(
+            Op::DynamicPropSet,
+            vec![object.value, property.value, store_value.value],
+            None,
+            Op::DynamicPropSet.default_effects(),
+            Some(span),
+        );
+    }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
     if ctx.value_is_owning_temporary(property) {
@@ -629,14 +698,20 @@ pub(super) fn lower_inc_dec(
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
-    if crate::types::object_operators::operator_class(&existing_type).is_some() {
+    let op = if increment { BinOp::Add } else { BinOp::Sub };
+    if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+        &op, &existing_type, &PhpType::Int, ctx.classes,
+    ) {
         let return_old = if post {
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
         } else { old };
         let one = lower_int_literal(ctx, 1, expr);
-        let op = if increment { BinOp::Add } else { BinOp::Sub };
-        if let Some(new) = object_operators::lower_object_binary_values(ctx, old, &op, one, expr) {
-            ctx.store_local(name, new, existing_type, Some(expr.span));
+        let new = object_operators::lower_object_binary_values(ctx, old, &op, one, expr)
+            .or_else(|| object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
+                |ctx| lower_str_inc_dec(ctx, old, increment, expr)));
+        if let Some(new) = new {
+            let stored_type = if plan.result_type(&op).is_int_float_union() { PhpType::Mixed } else { existing_type };
+            ctx.store_local(name, new, stored_type, Some(expr.span));
             return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
         }
     }

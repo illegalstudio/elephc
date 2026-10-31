@@ -14,12 +14,14 @@
 //! - `CatchBind` produces an owned SSA value; its following storage opcode determines
 //!   which local lifecycle, if any, participates in cleanup (issue #448).
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::ir::{
     BlockId, Function, Immediate, InstId, LocalSlotId, Op, Terminator, ValueDef, ValueId,
 };
 use crate::types::PhpType;
+
+mod ref_cell_payloads;
 
 /// Cached local-slot facts for one EIR function.
 pub(super) struct LocalSlotAnalysis {
@@ -29,6 +31,8 @@ pub(super) struct LocalSlotAnalysis {
     ref_cell_slots_before_inst: HashSet<(InstId, LocalSlotId)>,
     release_ops_with_possible_ref_cell: HashSet<InstId>,
     owned_parameter_slots: HashSet<LocalSlotId>,
+    owned_mixed_ref_cell_slots: HashSet<LocalSlotId>,
+    stable_ref_cell_payload_types: HashMap<LocalSlotId, PhpType>,
 }
 
 impl LocalSlotAnalysis {
@@ -75,12 +79,19 @@ impl LocalSlotAnalysis {
                 &initially_ref_cell_slots,
                 &ever_ref_cell_slots,
             );
+        let definite_ref_cell_slots_before_inst =
+            analyze_definite_ref_cell_states(function, &initially_ref_cell_slots);
         let owned_parameter_slots = owned_parameter_slots(
             function,
             &stored_slots,
             &ever_ref_cell_slots,
         );
         let dynamic_ref_cell_slots = dynamic_ref_cell_slots(function, &ever_ref_cell_slots);
+        let owned_mixed_ref_cell_slots = ref_cell_payloads::owned_mixed_slots(function);
+        let stable_ref_cell_payload_types = ref_cell_payloads::stable_payload_types(
+            function,
+            &definite_ref_cell_slots_before_inst,
+        );
         Self {
             stored_slots,
             ever_ref_cell_slots,
@@ -88,6 +99,8 @@ impl LocalSlotAnalysis {
             ref_cell_slots_before_inst,
             release_ops_with_possible_ref_cell,
             owned_parameter_slots,
+            owned_mixed_ref_cell_slots,
+            stable_ref_cell_payload_types,
         }
     }
 
@@ -124,6 +137,16 @@ impl LocalSlotAnalysis {
     /// Returns whether the frame owns this by-value parameter for its whole lifetime.
     pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
         self.owned_parameter_slots.contains(&slot)
+    }
+
+    /// Identifies cells allocated by this frame with a boxed payload and no external rebinding.
+    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
+        self.owned_mixed_ref_cell_slots.contains(&slot)
+    }
+
+    /// Returns the stable physical payload type shared by every reference binding of this slot.
+    pub(super) fn stable_ref_cell_payload_type(&self, slot: LocalSlotId) -> Option<&PhpType> {
+        self.stable_ref_cell_payload_types.get(&slot)
     }
 }
 
@@ -264,6 +287,83 @@ fn analyze_release_local_slot_states(
     (releases, ref_cell_slots_before_inst)
 }
 
+/// Finds instruction inputs where every reachable CFG path already stores a ref-cell pointer.
+fn analyze_definite_ref_cell_states(
+    function: &Function,
+    initially_ref_cell_slots: &HashSet<LocalSlotId>,
+) -> HashSet<(InstId, LocalSlotId)> {
+    if function.blocks.is_empty() {
+        return HashSet::new();
+    }
+    let entry_index = function.entry.as_raw() as usize;
+    if entry_index >= function.blocks.len() {
+        return HashSet::new();
+    }
+
+    let mut block_inputs = vec![None::<HashSet<LocalSlotId>>; function.blocks.len()];
+    let mut block_outputs = vec![None::<HashSet<LocalSlotId>>; function.blocks.len()];
+    block_inputs[entry_index] = Some(initially_ref_cell_slots.clone());
+    let mut worklist = VecDeque::from([function.entry]);
+    for handler in exception_handler_blocks(function) {
+        let handler_index = handler.as_raw() as usize;
+        if handler_index >= block_inputs.len() {
+            continue;
+        }
+        block_inputs[handler_index] = Some(initially_ref_cell_slots.clone());
+        if handler != function.entry {
+            worklist.push_back(handler);
+        }
+    }
+
+    while let Some(block_id) = worklist.pop_front() {
+        let block_index = block_id.as_raw() as usize;
+        let Some(mut state) = block_inputs[block_index].clone() else {
+            continue;
+        };
+        let block = &function.blocks[block_index];
+        for inst_id in &block.instructions {
+            apply_ref_cell_transfer(function, *inst_id, &mut state);
+        }
+        if block_outputs[block_index].as_ref() == Some(&state) {
+            continue;
+        }
+        block_outputs[block_index] = Some(state.clone());
+        let Some(terminator) = block.terminator.as_ref() else {
+            continue;
+        };
+        for successor in terminator_successors(terminator) {
+            let successor_index = successor.as_raw() as usize;
+            if successor_index >= block_inputs.len() {
+                continue;
+            }
+            let changed = if let Some(input) = &mut block_inputs[successor_index] {
+                let previous = input.clone();
+                input.retain(|slot| state.contains(slot));
+                *input != previous
+            } else {
+                block_inputs[successor_index] = Some(state.clone());
+                true
+            };
+            if changed {
+                worklist.push_back(successor);
+            }
+        }
+    }
+
+    let mut definite_ref_cell_slots_before_inst = HashSet::new();
+    for block in &function.blocks {
+        let Some(mut state) = block_inputs[block.id.as_raw() as usize].clone() else {
+            continue;
+        };
+        for inst_id in &block.instructions {
+            definite_ref_cell_slots_before_inst
+                .extend(state.iter().map(|slot| (*inst_id, *slot)));
+            apply_ref_cell_transfer(function, *inst_id, &mut state);
+        }
+    }
+    definite_ref_cell_slots_before_inst
+}
+
 /// Returns blocks entered through runtime exception-handler edges that are absent
 /// from ordinary EIR terminators.
 fn exception_handler_blocks(function: &Function) -> HashSet<BlockId> {
@@ -360,7 +460,7 @@ fn owned_parameter_slots(
                 // An incoming cell is borrowed. Once `unset()` detaches it, however, a later
                 // store can make this same frame slot own a raw value on only some CFG paths.
                 // The representation flag guards cleanup on paths that still hold the cell.
-                return (stored_slots.contains(&slot)
+                return ((stored_slots.contains(&slot) || eval_can_replace_locals)
                     && by_ref_parameter_can_detach(function, slot))
                     .then_some(slot);
             }
@@ -415,7 +515,8 @@ fn dynamic_ref_cell_slots(
 
 /// Returns whether `unset()` can change an incoming reference slot into raw local storage.
 fn by_ref_parameter_can_detach(function: &Function, slot: LocalSlotId) -> bool {
-    function.instructions.iter().any(|inst| {
+    function.locals.iter().any(|local| local.kind == crate::ir::LocalKind::EvalScope)
+        || function.instructions.iter().any(|inst| {
         inst.op == Op::UnsetLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
     })
 }
@@ -427,7 +528,7 @@ mod tests {
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
 
-    /// Eval replacement requires a by-value parameter owner even without explicit EIR stores.
+    /// Eval replacement owns every visible parameter because a by-ref binding can detach.
     #[test]
     fn eval_scope_makes_visible_by_value_parameters_owned() {
         for by_ref in [false, true] {
@@ -440,7 +541,7 @@ mod tests {
             function.add_local(Some("scope".to_string()), IrType::I64, PhpType::Int, LocalKind::EvalScope);
             let analysis = LocalSlotAnalysis::new(&function);
             assert!(!analysis.has_store(slot));
-            assert_eq!(analysis.owns_parameter_slot(slot), !by_ref);
+            assert!(analysis.owns_parameter_slot(slot));
         }
     }
 
@@ -541,6 +642,94 @@ mod tests {
         let analysis = LocalSlotAnalysis::new(&function);
         assert!(analysis.release_may_observe_ref_cell(InstId::from_raw(1)));
         assert!(analysis.inst_may_observe_ref_cell(InstId::from_raw(1), slot));
+    }
+
+    /// A merge is not definitely promoted when one predecessor still carries raw storage.
+    #[test]
+    fn partial_predecessor_promotion_is_not_definite_at_merge() {
+        let mut function = Function::new(
+            "partial_predecessor_promotion".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let slot = function.add_local(
+            Some("x".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let owner = function.add_local(
+            None,
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::RefCell,
+        );
+        let merge;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            let promoted = builder.create_named_block("promoted", Vec::new());
+            let raw = builder.create_named_block("raw", Vec::new());
+            merge = builder.create_named_block("merge", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let cond = builder.emit_const_bool(true);
+            builder.terminate(Terminator::CondBr {
+                cond,
+                then_target: promoted,
+                then_args: Vec::new(),
+                else_target: raw,
+                else_args: Vec::new(),
+            });
+            builder.position_at_end(promoted);
+            builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Mixed,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: Vec::new(),
+            });
+            builder.position_at_end(raw);
+            builder.terminate(Terminator::Br {
+                target: merge,
+                args: Vec::new(),
+            });
+            builder.position_at_end(merge);
+            builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Mixed,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::ReleaseLocalSlot,
+                Vec::new(),
+                Some(Immediate::LocalSlot(slot)),
+                IrType::Void,
+                PhpType::Mixed,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let merge_instructions = &function.block(merge).expect("merge block exists").instructions;
+        let definite =
+            analyze_definite_ref_cell_states(&function, &initially_ref_cell_slots(&function));
+        assert!(!definite.contains(&(merge_instructions[0], slot)));
+        assert!(definite.contains(&(merge_instructions[1], slot)));
     }
 
     /// Verifies runtime exception-handler edges conservatively preserve ref-cell
@@ -680,6 +869,249 @@ mod tests {
         assert!(analysis.ever_stores_ref_cell_pointer(slot));
         assert!(!analysis.has_dynamic_ref_cell_state(slot));
         assert!(!analysis.owns_parameter_slot(slot));
+        assert_eq!(analysis.stable_ref_cell_payload_type(slot), Some(&PhpType::Mixed));
+    }
+
+    /// Concrete incoming reference cells retain their raw payload ABI.
+    #[test]
+    fn concrete_by_ref_parameter_is_not_treated_as_mixed_payload_storage() {
+        let mut function = Function::new(
+            "concrete_by_ref_parameter".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Object),
+            php_type: PhpType::Object("ReferenceValue".to_string()),
+            by_ref: true,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("ReferenceValue".to_string()),
+            LocalKind::PhpLocal,
+        );
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(
+            analysis.stable_ref_cell_payload_type(slot),
+            Some(&PhpType::Object("ReferenceValue".to_string()))
+        );
+    }
+
+    /// Rebinding an incoming Mixed reference adopts the external cell's payload ABI.
+    #[test]
+    fn rebound_mixed_by_ref_parameter_is_not_treated_as_stable_mixed_payload_storage() {
+        let mut function = Function::new(
+            "rebound_mixed_by_ref_parameter".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let source = function.add_local(
+            Some("source".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Object),
+            PhpType::Object("ReferenceValue".to_string()),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: slot,
+                    second: source,
+                }),
+                IrType::Void,
+                PhpType::Object("ReferenceValue".to_string()),
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(analysis.stable_ref_cell_payload_type(slot), None);
+    }
+
+    /// A concrete alias keeps its cell ABI after eval widens the target's frame slot to Mixed.
+    #[test]
+    fn widened_local_alias_preserves_concrete_ref_cell_payload_type() {
+        let mut function = Function::new(
+            "widened_local_alias".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let target = function.add_local(
+            Some("target".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let source = function.add_local(
+            Some("source".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: target,
+                    second: source,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
+    }
+
+    /// A promotion follows the target slot ABI even when its hidden owner widened independently.
+    #[test]
+    fn promoted_callable_uses_target_payload_type_instead_of_owner_storage() {
+        let mut function = Function::new(
+            "promoted_callable".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let target = function.add_local(
+            Some("callback".to_string()),
+            IrType::I64,
+            PhpType::Callable,
+            LocalKind::PhpLocal,
+        );
+        let owner = function.add_local(
+            Some("callback#ref".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::RefCell,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: target,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Callable,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(
+            analysis.stable_ref_cell_payload_type(target),
+            Some(&PhpType::Callable)
+        );
+        assert!(!analysis.owns_mixed_ref_cell_payload(target));
+    }
+
+    /// An idempotent promotion does not override a transferred cell's concrete payload ABI.
+    #[test]
+    fn adopted_string_alias_ignores_idempotent_promotion_owner_type() {
+        let mut function = Function::new(
+            "adopted_string_alias".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        let target = function.add_local(
+            Some("target".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        let source = function.add_local(
+            Some("source".to_string()),
+            IrType::Str,
+            PhpType::Str,
+            LocalKind::PhpLocal,
+        );
+        let owner = function.add_local(
+            Some("source#ref".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::RefCell,
+        );
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let cell = builder.emit_const_i64(0);
+            builder.emit(
+                Op::AdoptRefCellPtr,
+                vec![cell],
+                Some(Immediate::LocalSlotPair {
+                    first: source,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::PromoteLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: source,
+                    second: owner,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.emit(
+                Op::AliasLocalRefCell,
+                Vec::new(),
+                Some(Immediate::LocalSlotPair {
+                    first: target,
+                    second: source,
+                }),
+                IrType::Void,
+                PhpType::Str,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(analysis.stable_ref_cell_payload_type(source), Some(&PhpType::Str));
+        assert_eq!(analysis.stable_ref_cell_payload_type(target), Some(&PhpType::Str));
     }
 
     /// Verifies AArch64 cleanup guards skip raw release when the runtime slot is a cell.

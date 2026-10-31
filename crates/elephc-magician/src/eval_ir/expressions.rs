@@ -341,9 +341,10 @@ pub enum EvalBinOp {
     Spaceship,
 }
 
-/// Scalar cast targets supported by runtime eval expressions.
+/// PHP cast targets supported by runtime eval expressions.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalCastType {
+    Array,
     Int,
     Float,
     String,

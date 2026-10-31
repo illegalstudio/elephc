@@ -44,13 +44,16 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     }
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
+    bit_not::emit(emitter);
     array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
     lifecycle::emit(emitter);
     output::emit(emitter);
+    debug::emit(emitter);
     array_next_index::emit(emitter);
     callable_adapter::emit(emitter);
+    spl_storage_write::emit(emitter);
     if features.mbstring || features.eval_bridge { string_literal::emit(emitter); }
 }
 
@@ -95,8 +98,10 @@ mod array_iter_value;
 pub(crate) mod array_next_index;
 mod reference_values;
 mod callable_adapter;
+mod spl_storage_write;
 mod lifecycle;
 mod output;
+mod debug;
 mod mbstring;
 pub(crate) mod string_literal;
 mod aarch64_casts;
@@ -126,6 +131,7 @@ mod resources;
 mod backtrace;
 mod gc_boundary;
 mod release_boundary;
+mod bit_not;
 mod scope_release;
 
 #[allow(unused_imports)]

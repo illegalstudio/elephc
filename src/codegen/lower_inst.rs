@@ -69,6 +69,7 @@ mod property_values;
 mod receiver_place;
 mod runtime_calls;
 mod runtime_array_liveness;
+mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
@@ -100,9 +101,13 @@ mod method_call_types;
 mod method_dispatch;
 mod method_intrinsics;
 mod method_resolution;
+mod reference_return_dispatch;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
 mod null_parameter_guard_tests;
+#[cfg(test)]
+#[path = "lower_inst/mixed_unbox_ownership_tests.rs"]
+mod mixed_unbox_ownership_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
@@ -227,6 +232,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::ReleaseRawLocalSlot => local_stores::lower_release_raw_local_slot(ctx, &inst),
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),

@@ -19,6 +19,7 @@ mod class_declarations;
 mod class_resolution;
 mod closure_binding;
 mod dispatch;
+mod dimension_writes;
 mod dynamic_method_execution;
 mod enum_declarations;
 mod exceptions;
@@ -36,6 +37,11 @@ mod native_property_unset;
 mod native_static_dispatch;
 mod property_constant_validation;
 mod property_dispatch;
+mod property_dimension_writes;
+mod property_append_fetch;
+mod property_dimension_guards;
+mod property_dimension_unset;
+mod property_write_receivers;
 mod property_validation;
 mod abstract_setter;
 mod readonly_property_writes;
@@ -47,14 +53,16 @@ mod static_property_access;
 mod trait_declarations;
 
 use super::*;
+use property_write_receivers::{prepare_property_write_receiver, finish_property_write_receiver,
+    eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands};
 use crate::context::{
     NativeCallableArrayDefaultElement, NativeCallableArrayDefaultKey,
     NativeCallableObjectDefaultArg, NativeCallableSignature,
-    push_native_frame_called_class_override,
+    push_native_frame_called_class_override, push_native_frame_context,
 };
 
 use abstract_requirements::*;
-use array_append::{eval_array_append_owned_value_with_type, eval_array_append_value};
+use array_append::eval_array_append_owned_value_with_type;
 pub(crate) use array_updates::*;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
 // re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
@@ -88,6 +96,11 @@ use native_property_unset::*;
 pub(in crate::interpreter) use native_static_dispatch::*;
 use property_constant_validation::*;
 use property_dispatch::*;
+use property_dimension_unset::{eval_property_dimension_unset, eval_missing_unset_property};
+use property_dimension_writes::{
+    eval_property_dimension_write, DimensionProperty,
+    eval_static_property_array_append_result, eval_static_property_array_set_result,
+};
 pub(in crate::interpreter) use property_validation::*;
 pub(in crate::interpreter) use abstract_setter::*;
 use readonly_property_writes::*;

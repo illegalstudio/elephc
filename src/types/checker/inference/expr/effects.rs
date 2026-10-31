@@ -35,7 +35,15 @@ use super::null_coalesce::{
 ///
 /// A `string` stays `mixed`: `"9"++` is `int(10)`, `"a"++` is `"b"` and `""++` is `"1"`, so the
 /// result genuinely spans three types and none of them is knowable here.
-fn incremented_local_type(current: Option<&PhpType>) -> Option<PhpType> {
+fn incremented_local_type(checker: &Checker, current: Option<&PhpType>) -> Option<PhpType> {
+    if let Some(ty) = current {
+        if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+            &BinOp::Add, ty, &PhpType::Int, &checker.classes,
+        ) {
+            let result = plan.result_type(&BinOp::Add);
+            if result.is_int_float_union() { return Some(result); }
+        }
+    }
     match current {
         Some(PhpType::Int) => Some(PhpType::Union(vec![PhpType::Int, PhpType::Float])),
         Some(PhpType::Str) => Some(PhpType::Mixed),
@@ -108,7 +116,7 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                if let Some(updated) = incremented_local_type(self, old_ty.as_ref()) {
                     env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
@@ -118,7 +126,7 @@ impl Checker {
                 let result_ty = self.infer_type(expr, env)?;
                 // Same retype as the pre-form: only the RESULT differs, and it was already
                 // computed above against the type the local held before the update.
-                if let Some(updated) = incremented_local_type(old_ty.as_ref()) {
+                if let Some(updated) = incremented_local_type(self, old_ty.as_ref()) {
                     env.insert(name.clone(), updated);
                 }
                 Ok(result_ty)
@@ -353,7 +361,7 @@ impl Checker {
                         }
                         if is_empty {
                             let probe = null_probe::begin_null_probe_root(self, arg, env);
-                            let effects = self.infer_type_with_assignment_effects(arg, env);
+                            let effects = self.infer_null_probe_operand_with_effects(arg, env);
                             null_probe::end_null_probe_root(probe, env);
                             effects?;
                             continue;

@@ -8,6 +8,8 @@
 //! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
 
 use super::*;
+mod mixed_dimension;
+mod opaque_property_dimension;
 
 mod property_elements;
 use property_elements::*;
@@ -66,6 +68,8 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || mixed_dimension::supports(ctx, array)
+                || opaque_property_dimension::supports(ctx, array)
                 || unset_array_access_property_array_type(ctx, array).is_some()
                 || unset_array_access_has_array_access_property_receiver(ctx, array)
                 || unset_array_access_static_php_array_receiver(ctx, array).is_some()
@@ -127,14 +131,7 @@ pub(super) fn unset_array_access_has_object_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
 ) -> bool {
-    let ty = match &array.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| infer_expr_type_syntactic(array)),
-        _ => infer_expr_type_syntactic(array),
-    };
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, array);
     type_satisfies_array_access_for_ir(ctx, &ty)
 }
 
@@ -160,6 +157,36 @@ pub(super) fn lower_unset_array_access(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let can_gate = super::unset_collection::key_has_no_callbacks(ctx, index);
+    if matches!(array.kind, ExprKind::Variable(_))
+        && unset_array_access_has_object_receiver(ctx, array)
+    {
+        let (key, key_temp) = evaluate_once(ctx, index, expr);
+        let owner = key_temp
+            .as_ref()
+            .filter(|name| Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+            .map(|name| ctx.local_slots[name]);
+        if let Some(slot) = owner {
+            register_owned_call_operand(ctx, slot, expr.span);
+        }
+        let removed = lower_unset_array_access_from_key(ctx, array, &key, expr, can_gate);
+        if let Some(slot) = owner {
+            unregister_owned_call_operand(ctx, slot, expr.span);
+        }
+        release_evaluated_once(ctx, key_temp, expr.span);
+        removed
+    } else {
+        lower_unset_array_access_from_key(ctx, array, index, expr, can_gate)
+    }
+}
+
+/// Selects storage after object-variable key side effects and returns a safe collection gate.
+fn lower_unset_array_access_from_key(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+    can_gate: bool,
+) -> Option<LoweredValue> {
     if let ExprKind::PropertyAccess { object, property } = &array.kind {
         if let Some(property_ty) = unset_array_access_property_array_type(ctx, array) {
             if let Some(message) = readonly_property_element_unset_message(ctx, object, property) {
@@ -176,6 +203,14 @@ pub(super) fn lower_unset_array_access(
     }
     if let Some((receiver, property)) = unset_array_access_static_php_array_receiver(ctx, array) {
         lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
+        return None;
+    }
+    if opaque_property_dimension::supports(ctx, array) {
+        opaque_property_dimension::lower(ctx, array, index, expr);
+        return None;
+    }
+    if mixed_dimension::supports(ctx, array) {
+        mixed_dimension::lower(ctx, array, index, expr);
         return None;
     }
     if let ExprKind::Variable(name) = &array.kind {
@@ -203,15 +238,16 @@ pub(super) fn lower_unset_array_access(
             _ => {}
         }
     }
-    let synthetic = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(array.clone()),
-            method: "offsetUnset".to_string(),
-            args: vec![index.clone()],
-        },
-        expr.span,
+    let ty = array_cast_source::array_cast_source_type_for_ir(ctx, array);
+    let object = lower_expr(ctx, array);
+    native_dimension_probes::lower(
+        ctx,
+        object,
+        &ty,
+        index,
+        elephc_builtin_contract::ObjectDimension::Unset,
+        expr,
     );
-    lower_expr(ctx, &synthetic);
     None
 }
 
@@ -311,6 +347,7 @@ pub(super) fn unset_property_access_has_direct_lowering(
     property: &str,
     member: &Expr,
 ) -> bool {
+    if needs_native_xml_property_dispatch(ctx, object, property) { return true; }
     matches!(
         property_unset_action(ctx, object, property, member),
         Some(
@@ -330,6 +367,11 @@ pub(super) fn lower_unset_property_access(
     property: &str,
     expr: &Expr,
 ) {
+    if needs_native_xml_property_dispatch(ctx, object, property) {
+        let object = lower_member_receiver(ctx, object, expr);
+        lower_boxed_xml_property_unset(ctx, object, property, expr);
+        return;
+    }
     let action = property_unset_action(ctx, object, property, expr);
     match action {
         Some(UnsetPropertyAction::Magic) => {
@@ -391,26 +433,18 @@ pub(super) fn unset_dynamic_property_access_has_direct_lowering(
     )
 }
 
-/// Returns an unset operand's type from local storage or a known user/extern signature.
-///
-/// Same shape as `unset_array_access_has_object_receiver`: the checker's local type is the
-/// authority for a plain variable. User/extern calls retain their declared result type so an
-/// effectful string name can be classified without evaluating it. Builtins keep their existing
-/// syntactic hints, since a generic contract can be wider than its checked string result.
+/// Predicts unset receiver/member results while preserving narrow builtin name hints.
 fn unset_operand_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
     match &expr.kind {
-        ExprKind::Variable(name) => ctx
-            .local_types
-            .get(name)
-            .cloned()
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned()
             .unwrap_or_else(|| infer_expr_type_syntactic(expr)),
         ExprKind::FunctionCall { name, .. }
-            if ctx.functions.contains_key(name.as_str())
-                || ctx.extern_functions.contains_key(name.as_str()) =>
+            if ctx.functions.contains_key(name.as_str()) || ctx.extern_functions.contains_key(name.as_str()) =>
         {
             call_return_type(ctx, name.as_str(), &[])
         }
-        _ => infer_expr_type_syntactic(expr),
+        ExprKind::FunctionCall { .. } => infer_expr_type_syntactic(expr),
+        _ => super::array_cast_source::array_cast_source_type_for_ir(ctx, expr),
     }
 }
 
@@ -430,6 +464,17 @@ pub(super) fn lower_unset_dynamic_property_access(
     let property = crate::ir_lower::expr::property_access::coerce_runtime_property_name(
         ctx, property, expr.span,
     );
+    let ty = ctx.builder.value_php_type(object.value);
+    if ctx.classes.contains_key("SimpleXMLElement")
+        && (matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+            || matches!(ty.codegen_repr(), PhpType::Object(ref class)
+                if class.is_empty() || ctx.interfaces.contains_key(class))
+            || singular_object_class(&ty).is_some_and(|(class, _)|
+                crate::types::builtin_classes::has_native_dimensions(class, ctx.classes)))
+    {
+        lower_boxed_xml_dynamic_property_unset(ctx, object, property, expr);
+        return;
+    }
     // The removal CAN THROW: a name this scope may not reach raises php's catchable access
     // `Error`. Retiring the owning temporaries only afterwards meant a caught refusal skipped
     // both releases and leaked the receiver and the key. Pinning parks them for the window the
@@ -557,6 +602,9 @@ pub(super) fn property_unset_action(
         return Some(UnsetPropertyAction::RemoveDynamic);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    if crate::types::builtin_classes::native_property_method(&class_name, property,
+        elephc_builtin_contract::ObjectProperty::Unset, ctx.classes).is_some()
+    { return Some(UnsetPropertyAction::Magic); }
     // php 7.4 removed shadow properties: a strict ancestor's `private $p` is not in this class's
     // by-name table, so `unset($child->p)` removes the DISTINCT dynamic entry of that name and
     // leaves the ancestor's slot alone. The accessibility ladder below still answers for that
@@ -608,7 +656,10 @@ pub(super) fn lower_magic_property_unset(
         ExprKind::StringLiteral(property.to_string()),
         expr.span,
     )];
-    lower_method_call_with_receiver(ctx, object, "__unset", &args, Op::MethodCall, expr);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Unset).unwrap_or("__unset");
+    // Preserve the receiver selected by the runtime-subclass or native-property guard.
+    lower_method_call_with_receiver_direct(ctx, object, method, &args, Op::MethodCall, expr);
 }
 
 /// Lowers `__unset` for nullable receivers, doing nothing when the receiver is null.
@@ -651,7 +702,10 @@ pub(super) fn lower_nullable_magic_property_unset(
         ExprKind::StringLiteral(property.to_string()),
         expr.span,
     )];
-    lower_method_call_with_receiver(ctx, object, "__unset", &args, Op::MethodCall, expr);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Unset).unwrap_or("__unset");
+    // Preserve the receiver selected by the runtime-subclass or native-property guard.
+    lower_method_call_with_receiver_direct(ctx, object, method, &args, Op::MethodCall, expr);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);

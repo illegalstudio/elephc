@@ -110,6 +110,7 @@ pub(super) fn register_eval_native_function_param_flags(
     function_name_len: usize,
     param_index: usize,
     is_by_ref: bool,
+    is_tagged_scalar_ref: bool,
     is_variadic: bool,
 ) {
     load_eval_context_source_to_arg(ctx, context_source, 0);
@@ -131,7 +132,7 @@ pub(super) fn register_eval_native_function_param_flags(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 4),
-        if is_by_ref { 1 } else { 0 },
+        i64::from(is_by_ref) | (i64::from(is_by_ref && is_tagged_scalar_ref) << 1),
     );
     abi::emit_load_int_immediate(
         ctx.emitter,

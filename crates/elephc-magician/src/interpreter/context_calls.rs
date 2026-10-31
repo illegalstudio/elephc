@@ -175,6 +175,28 @@ pub fn execute_context_try_new_object_outcome(
     }
 }
 
+/// Attempts to allocate an eval class without invoking its PHP constructor.
+pub fn execute_context_try_allocate_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    let mut scope = ElephcEvalScope::new();
+    let result = (|| {
+        if let Some(message) = eval_reflection_eval_instantiation_error_message(name, context) {
+            return eval_throw_error(&message, context, values);
+        }
+        let Some(class) = context.class(name).cloned() else { return Ok(None); };
+        eval_dynamic_class_allocate_object(&class, context, &mut scope, values).map(Some)
+    })();
+    match result {
+        Ok(value) => Ok(value.map(EvalOutcome::Value)),
+        Err(EvalStatus::UncaughtThrowable) => context.take_pending_throw()
+            .map(EvalOutcome::Throwable).map(Some).ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
 /// Calls a method on a value that may be an eval-created object.
 pub fn execute_context_method_call_outcome(
     context: &mut ElephcEvalContext,
@@ -357,37 +379,6 @@ pub fn execute_context_object_is_a(
         || values.object_is_a(object, &resolved_target_class, exclude_self),
         Ok,
     )
-}
-
-/// Tests an object relation when the target is a runtime string or object cell.
-pub fn execute_context_object_is_a_dynamic(
-    context: &mut ElephcEvalContext,
-    object: RuntimeCellHandle,
-    target: RuntimeCellHandle,
-    exclude_self: bool,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    let target_class = match values.type_tag(target)? {
-        EVAL_TAG_STRING => {
-            let bytes = values.string_bytes(target)?;
-            let target = String::from_utf8(bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
-            target.trim_start_matches('\\').to_string()
-        }
-        EVAL_TAG_OBJECT => {
-            let identity = values.object_identity(target)?;
-            if let Some(class) = context.dynamic_object_class(identity) {
-                class.name().to_string()
-            } else {
-                let class_name = values.object_class_name(target)?;
-                let bytes = values.string_bytes(class_name);
-                values.release(class_name)?;
-                let class_name = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
-                class_name.trim_start_matches('\\').to_string()
-            }
-        }
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    execute_context_object_is_a(context, object, &target_class, exclude_self, values)
 }
 
 /// Tests whether a method or property exists through eval dynamic metadata.

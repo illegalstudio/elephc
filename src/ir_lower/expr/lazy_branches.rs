@@ -168,6 +168,11 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
         let object = lower_member_receiver(ctx, object, value);
+        if native_property_method_for_value(ctx, object.value, property,
+            elephc_builtin_contract::ObjectProperty::Probe).is_some()
+        {
+            return lower_property_probe_from_value(ctx, object, property, value);
+        }
         if property_can_be_uninitialized(ctx, object.value, property)
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);

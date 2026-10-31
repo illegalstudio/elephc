@@ -12,6 +12,101 @@ use super::support::*;
 
 mod argument_ownership;
 
+/// Same-cell native writeback dirties the local or global snapshot without replacing its owner.
+#[test]
+fn native_same_cell_reference_writeback_marks_the_owning_snapshot_dirty() {
+    for through_method in [false, true] {
+        for through_global in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            let mut local = ElephcEvalScope::new();
+            let mut global = ElephcEvalScope::new();
+            let mut values = FakeOps::default();
+            let value = values.string("updated").unwrap();
+            let owner = if through_global { &mut global } else { &mut local };
+            owner.set_from_aot("text", value, crate::scope::ScopeCellOwnership::Owned);
+            owner.mark_name_clean("text");
+            if through_global {
+                assert!(context.set_global_scope(&mut global));
+                local.mark_global_alias("text");
+            }
+            let target = EvalReferenceTarget::Variable { scope: &mut local, name: "text".into() };
+            if through_method {
+                write_back_method_ref_target(&target, value, &mut context, &mut values).unwrap();
+            } else {
+                let argument = BoundMethodArg {
+                    value, ref_target: Some(target), variadic_ref_targets: Vec::new(),
+                };
+                write_back_native_callable_ref_args(&[argument], &mut context, &mut values).unwrap();
+            }
+            let owner = if through_global { &global } else { &local };
+            assert!(owner.entry("text").unwrap().flags().dirty);
+            assert_eq!(owner.visible_cell("text"), Some(value));
+            assert!(values.releases.is_empty(), "writeback must preserve the original scope owner");
+        }
+    }
+}
+
+/// Native object contracts reject assignments before an interpreted catch or later statement runs.
+#[test]
+fn native_object_snapshot_contract_is_checked_before_assignment() {
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let initialize = parse_fragment(b"class NativeScopeNode {} $node = new NativeScopeNode();").unwrap();
+    execute_program_with_context(&mut context, &initialize, &mut scope, &mut values).unwrap();
+    let original = scope.visible_cell("node").unwrap();
+    scope.set_native_storage_type("node".into(), Some(EvalParameterType::new(
+        vec![EvalParameterTypeVariant::Class("NativeScopeNode".into())], false,
+    )));
+    let program = parse_fragment(b"try { $node = null; } catch (TypeError $error) { echo 'caught'; } unset($error);").unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    assert_eq!(scope.visible_cell("node"), Some(original));
+    assert_eq!(values.output, "caught");
+    let program = parse_fragment(b"unset($node); $node = 3;").unwrap();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    assert_eq!(values.get(scope.visible_cell("node").unwrap()), FakeValue::Int(3));
+}
+
+/// Array writes dirty imported snapshots, including paths that keep the same runtime box.
+#[test]
+fn native_array_snapshots_mark_element_mutations_dirty() {
+    for source in ["$items[0] = 4;", "$items[] = 3;", "$items[0] += 1;", "unset($items[1]);"] {
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        let initialize = parse_fragment(b"$items = [1, 2];").unwrap();
+        execute_program_with_context(&mut context, &initialize, &mut scope, &mut values).unwrap();
+        scope.mark_all_clean();
+        let original = scope.visible_cell("items").unwrap();
+        let program = parse_fragment(source.as_bytes()).unwrap();
+        execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+        assert!(scope.entry("items").unwrap().flags().dirty, "{source}: mutation lost its reload marker");
+        if matches!(source, "$items[0] = 4;" | "$items[] = 3;") {
+            assert_eq!(scope.visible_cell("items"), Some(original), "{source}: must exercise the same-box shortcut");
+        }
+    }
+}
+
+/// A local global-alias write marks the global snapshot that native reload actually reads.
+#[test]
+fn native_global_array_snapshot_marks_in_place_alias_writes_dirty() {
+    let mut context = ElephcEvalContext::new();
+    let mut local = ElephcEvalScope::new();
+    let mut global = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let array = values.array_new(1).unwrap();
+    let key = values.int(0).unwrap();
+    let value = values.int(1).unwrap();
+    values.array_set(array, key, value).unwrap();
+    global.set_from_aot("items", array, crate::scope::ScopeCellOwnership::Owned);
+    global.mark_name_clean("items");
+    assert!(context.set_global_scope(&mut global));
+    let program = parse_fragment(b"global $items; $items[] = 2;").unwrap();
+    execute_program_with_context(&mut context, &program, &mut local, &mut values).unwrap();
+    assert!(global.entry("items").unwrap().flags().dirty);
+    assert_eq!(global.visible_cell("items"), Some(array));
+}
+
 /// Verifies eval fragments can dispatch registered native AOT functions.
 #[test]
 fn execute_program_calls_registered_native_function() {
@@ -29,6 +124,34 @@ fn execute_program_calls_registered_native_function() {
         .expect("execute eval ir");
 
     assert_eq!(result, expected);
+}
+
+/// A global native factory can recover its interpreter context across ordinary helper frames.
+#[test]
+fn native_global_call_exposes_and_retires_its_active_context() {
+    /// Returns the result only while the global native call exposes the expected context.
+    unsafe extern "C" fn probe(
+        descriptor: *mut std::ffi::c_void,
+        _args: *mut crate::value::RuntimeCell,
+        _invocation_scope: i64,
+    ) -> *mut crate::value::RuntimeCell {
+        let (expected_context, result) = unsafe {
+            &*(descriptor
+                as *const (*mut ElephcEvalContext, *mut crate::value::RuntimeCell))
+        };
+        assert_eq!(crate::context::native_frame_active_eval_context(), Some(*expected_context));
+        *result
+    }
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let expected = values.int(42).unwrap();
+    let mut descriptor = (&mut context as *mut ElephcEvalContext, expected.as_ptr());
+    let native = NativeFunction::new(std::ptr::from_mut(&mut descriptor).cast(), probe, 0);
+    assert!(context.define_native_function("native_context_probe", native).is_ok());
+    let program = parse_fragment(b"return native_context_probe();").unwrap();
+    assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap(), expected);
+    assert_eq!(crate::context::native_frame_active_eval_context(), None);
 }
 
 /// Verifies registered native AOT function return types are enforced after dispatch.

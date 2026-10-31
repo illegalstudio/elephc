@@ -743,16 +743,23 @@ pub(super) fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionCont
     abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
 }
 
-/// Unboxes a guarded Mixed value into an owned concrete heap representation.
+/// Unboxes a guarded Mixed value according to its explicit EIR ownership contract.
 ///
 /// Flow-sensitive checking proves the value has the requested type before this op is emitted;
-/// the runtime helper extracts its payload and this result takes its own reference so retaining
-/// stores and later cleanup have a balanced ownership ledger.
+/// Owning results take a payload reference. Borrowed class-dispatch receivers retain their
+/// enclosing boxed owner's lifetime without acquiring an extra, untracked reference.
 pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     load_value_to_first_int_arg(ctx, value)?;
     let result_ty = inst.result_php_type.codegen_repr();
-    emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+    let borrowed = inst.result.is_some_and(|result|
+        ctx.function.value(result).is_some_and(|value| value.ownership == Ownership::Borrowed));
+    if borrowed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+        move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    } else {
+        emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+    }
     store_if_result(ctx, inst)
 }
 

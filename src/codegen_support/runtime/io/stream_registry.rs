@@ -2,11 +2,12 @@
 //! Releases the owned strings stored in userspace stream wrapper and filter registrations.
 //!
 //! Called from:
-//! - Wrapper unregistration and the executable's normal shutdown path.
+//! - Wrapper unregistration, full legacy request resets, and executable shutdown.
 //!
 //! Key details:
 //! - A retired row is cleared before releasing either string, so reuse cannot observe stale owners.
 //! - Filter registrations remain available until shutdown, after user close callbacks finish.
+//! - Application orphan pruning preserves registrations across requests.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -98,4 +99,25 @@ fn emit_cleanup(emitter: &mut Emitter) {
     }
     // -- restore the executable's shutdown frame after all registry owners retire --
     epilogue(emitter);
+}
+
+/// Every target clears both registration tuples before releasing either owned string.
+#[test]
+fn stream_registration_shutdown_retires_owned_names_on_all_targets() {
+    use crate::codegen_support::platform::Target;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let mut emitter = Emitter::new(Target::parse(name).unwrap());
+        emit_stream_registry(&mut emitter);
+        let assembly = emitter.output();
+        assert!(assembly.contains("_user_wrappers"), "{name}: wrapper names");
+        assert!(assembly.contains("_user_filter_registry"), "{name}: filter names");
+        assert_eq!(assembly.matches("__rt_heap_free_safe").count(), 2, "{name}: one release per owner in shared retirement");
+        assert_eq!(assembly.lines().filter(|line| {
+            let line = line.trim_start();
+            (line.starts_with("bl ") || line.starts_with("call "))
+                && line.contains("__rt_stream_registry_retire")
+        }).count(), 2, "{name}: both tables call shared retirement");
+        let clear = if name == "linux-x86_64" { "mov QWORD PTR [rax + 24], 0" } else { "str xzr, [x0, #24]" };
+        assert!(assembly.find(clear).unwrap() < assembly.find("__rt_heap_free_safe").unwrap(), "{name}: retire before free");
+    }
 }

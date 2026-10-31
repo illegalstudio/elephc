@@ -49,7 +49,7 @@ pub(super) fn lower_interface_method_call(
     let return_ty = iterators::emit_interface_dispatch_call(ctx, &normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args)
 }
@@ -234,7 +234,7 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     let return_ty = iterators::emit_interface_dispatch_call(ctx, normalized, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_ref_arg_writebacks(ctx, &call_args)?;
     abi::emit_jump(ctx.emitter, &done_label);

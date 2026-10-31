@@ -21,11 +21,18 @@ pub(super) fn emit_property_unset_helper(
     super::unset_boundary::emit(module, emitter);
     let slots = slots
         .iter()
-        .filter(|slot| slot.is_declared || slot_supports_untyped_unset_marker(slot))
+        .filter(|slot| slot.is_reference || slot.is_declared || slot_supports_untyped_unset_marker(slot))
         .cloned()
         .collect::<Vec<_>>();
     let fail = "__elephc_eval_value_typed_property_unset_miss";
     let done = "__elephc_eval_value_typed_property_unset_done";
+    let reference_error = "__rt_eval_reference_property_unset_error";
+    if slots.iter().any(|slot| slot.is_reference) {
+        let (message, length) = data.add_string(b"Unsupported unset(): by-reference property");
+        crate::codegen_support::runtime::reference_cells::emit_reference_escape_error(
+            emitter, reference_error, &message, length as i64,
+        );
+    }
     emitter.blank();
     emitter.label_global("__rt_eval_typed_property_unset");
     match module.target.arch {
@@ -67,6 +74,12 @@ pub(super) fn emit_property_unset_helper(
     abi::emit_jump(emitter, fail);
     for slot in &slots {
         emitter.label(&slot_body_label(module, slot, "unset"));
+        // Native unset lowering also refuses reference properties. Do not replace their
+        // cell pointer or alter a live alias while reporting that unsupported shape.
+        if slot.is_reference {
+            abi::emit_jump(emitter, reference_error);
+            continue;
+        }
         emit_unset_slot(emitter, slot);
         abi::emit_load_int_immediate(emitter, abi::int_result_reg(emitter), 1);
         abi::emit_jump(emitter, done);

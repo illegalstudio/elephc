@@ -2,7 +2,7 @@
 title: "xml_parser_set_option() - internals"
 description: "Compiler internals for xml_parser_set_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1094
+  order: 1097
 ---
 
 ## `xml_parser_set_option()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1576](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1576) (`xml_parser_set_option`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1582](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1582) (`xml_parser_set_option`)
 - **Function symbol**: `xml_parser_set_option()`
 
 

@@ -25,6 +25,7 @@ pub(super) fn lower(
     target: RuntimeCallTarget,
 ) -> Result<()> {
     match target {
+        RuntimeCallTarget::SplStorageHasAttachedWriteFetch => super::spl_storage_write_fetch::lower(ctx, inst),
         RuntimeCallTarget::WeakObjectId => {
             let receiver = expect_operand(inst, 0)?;
             ctx.load_value_to_result(receiver)?;
@@ -54,6 +55,15 @@ pub(super) fn lower(
         RuntimeCallTarget::ExceptionCatchHostReplacement => {
             lower_exception_catch_host_replacement(ctx, inst)
         }
+        RuntimeCallTarget::PropertyHashRead => {
+            super::objects::lower_property_hash_read(ctx, inst)
+        }
+        RuntimeCallTarget::PropertyHashContains => {
+            super::objects::lower_property_hash_contains(ctx, inst)
+        }
+        RuntimeCallTarget::PropertyHashFetchForWrite => {
+            super::objects::lower_property_hash_fetch_for_write(ctx, inst)
+        }
         RuntimeCallTarget::ArrayFetchForWrite
         | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst, false)
@@ -73,6 +83,12 @@ pub(super) fn lower(
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, true)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
+        RuntimeCallTarget::MixedBitNot => {
+            let value = expect_operand(inst, 0)?;
+            ctx.load_value_to_result(value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_bit_not");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::MixedCellResolveForWrite => lower_mixed_cell_resolve_for_write(ctx, inst),
         RuntimeCallTarget::ArrayUnpackToHash => lower_array_unpack_to_hash(ctx, inst),
         RuntimeCallTarget::ExceptionGuardOwned => super::exception_instructions::lower_guard_owned(ctx, inst),

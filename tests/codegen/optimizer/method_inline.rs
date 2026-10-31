@@ -16,7 +16,7 @@
 use super::*;
 
 /// Runs one mode with strict heap validation and the installed PHP oracle when requested.
-fn run(source: &str, optimized: bool, php_compatible: bool) -> String {
+fn run(source: &str, optimized: bool, php_compatible: bool) -> (String, String) {
     let dir = make_cli_test_dir("elephc_method_inline");
     let path = dir.join("main.php");
     fs::write(&path, source).unwrap();
@@ -36,14 +36,20 @@ fn run(source: &str, optimized: bool, php_compatible: bool) -> String {
         assert!(php.status.success(), "{}", String::from_utf8_lossy(&php.stderr));
         assert_eq!(output.stdout, php.stdout, "real PHP output");
     }
+    let assembly = fs::read_to_string(path.with_extension("s")).unwrap_or_default();
     fs::remove_dir_all(dir).unwrap();
-    String::from_utf8(output.stdout).unwrap()
+    (String::from_utf8(output.stdout).unwrap(), assembly)
 }
 
 /// Asserts that both optimizer modes print `expected`.
 fn assert_both_modes(source: &str, php_compatible: bool, expected: &str) {
     for optimized in [false, true] {
-        assert_eq!(run(source, optimized, php_compatible), expected, "--ir-opt={optimized}");
+        let (output, assembly) = run(source, optimized, php_compatible);
+        let symbols = ["_main".into(), elephc::names::function_symbol("show"),
+            elephc::names::function_symbol("combine"), elephc::names::method_symbol("LocalLabel", "wrap"),
+            elephc::names::method_symbol("LocalLabel", "measure")];
+        assert_eq!(output, expected, "--ir-opt={optimized}\n{}",
+            crate::support::selected_function_assembly(&assembly, &symbols));
     }
 }
 

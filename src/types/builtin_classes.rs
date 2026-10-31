@@ -22,6 +22,19 @@ use std::sync::OnceLock;
 
 use elephc_builtin_contract::{classes, lookup_class, ClassKind, ClassRoute, PhpModule};
 
+/// Selects internal SPL storage only when the actual offset getter is inherited unchanged.
+pub(crate) fn spl_storage_write_fetch_owner<'a>(
+    name: &str, classes: &'a HashMap<String, super::ClassInfo>,
+) -> Option<&'a super::ClassInfo> {
+    let info = classes.get(name.trim_start_matches('\\'))?;
+    let owner = info.method_declaring_classes.get("offsetget").map_or(name.trim_start_matches('\\'), String::as_str);
+    if !["ArrayObject", "ArrayIterator"].iter().any(|candidate| owner.eq_ignore_ascii_case(candidate)) {
+        return None;
+    }
+    classes.get(owner).filter(|info| info.is_internal
+        && info.methods.contains_key("__elephc_fetch_for_write"))
+}
+
 /// Returns the PHP spellings of every builtin class-like name, internal helpers included.
 pub(crate) fn builtin_class_like_names() -> impl Iterator<Item = &'static str> {
     classes().iter().map(|class| class.name)
@@ -60,6 +73,84 @@ pub(crate) fn class_names_in_module(module: PhpModule) -> &'static [&'static str
 /// PHP-visible class-like owned by one of `modules`.
 pub(crate) fn is_class_like_in_modules(name: &str, modules: &[PhpModule]) -> bool {
     lookup_class(name).is_some_and(|class| !class.internal && modules.contains(&class.module))
+}
+
+/// Recognizes internal dimension handlers without declaring the PHP ArrayAccess interface.
+/// Subclasses inherit the native handler, while unrelated same-named user classes do not.
+pub(crate) fn has_native_dimensions(name: &str, classes: &HashMap<String, super::ClassInfo>) -> bool {
+    let mut current = Some(name.trim_start_matches('\\'));
+    for _ in 0..=classes.len() {
+        let Some(name) = current else { return false; };
+        let Some(info) = classes.get(name) else { return false; };
+        if info.is_internal && lookup_class(name).is_some_and(|class| class.module == PhpModule::Simplexml) {
+            return true;
+        }
+        current = info.parent.as_deref();
+    }
+    false
+}
+
+/// Recognizes non-null object sinks which can receive a nullable native XML property read.
+pub(crate) fn native_object_sink_needs_null_guard(
+    ty: &super::PhpType, classes: &HashMap<String, super::ClassInfo>,
+    interfaces: &HashMap<String, super::InterfaceInfo>,
+) -> bool {
+    if let super::PhpType::Union(members) = ty {
+        return !members.iter().any(native_boundary_accepts_null)
+            && members.iter().any(|member| native_object_sink_needs_null_guard(member, classes, interfaces));
+    }
+    if *ty == super::PhpType::Iterable {
+        return classes.keys().any(|candidate| has_native_dimensions(candidate, classes));
+    }
+    let super::PhpType::Object(name) = ty.codegen_repr() else { return false; };
+    if has_native_dimensions(&name, classes) { return true; }
+    (name.is_empty() || name.eq_ignore_ascii_case("object") || interfaces.contains_key(&name))
+        && classes.keys().any(|candidate| has_native_dimensions(candidate, classes))
+}
+
+/// Nullable and mixed union arms accept PHP null without narrowing it to an object.
+fn native_boundary_accepts_null(ty: &super::PhpType) -> bool {
+    match ty {
+        super::PhpType::Void | super::PhpType::Mixed | super::PhpType::TaggedScalar => true,
+        super::PhpType::Union(members) => members.iter().any(native_boundary_accepts_null),
+        _ => false,
+    }
+}
+
+/// Resolves a native dimension adapter through the declaring internal ancestor.
+pub(crate) fn native_dimension_method(
+    name: &str, operation: elephc_builtin_contract::ObjectDimension,
+    classes: &HashMap<String, super::ClassInfo>,
+) -> Option<&'static str> {
+    let mut current = Some(name.trim_start_matches('\\'));
+    for _ in 0..=classes.len() {
+        let info = classes.get(current?)?;
+        if info.is_internal {
+            if let Some(method) = lookup_class(current?).and_then(|class| class.operators)
+                .and_then(|operators| operators.dimension_method(operation)) { return Some(method); }
+        }
+        current = info.parent.as_deref();
+    }
+    None
+}
+
+/// Resolves a native property adapter while reserving the prelude's own storage names.
+pub(crate) fn native_property_method(
+    name: &str, property: &str, operation: elephc_builtin_contract::ObjectProperty,
+    classes: &HashMap<String, super::ClassInfo>,
+) -> Option<&'static str> {
+    if property.starts_with("__elephc_") { return None; }
+    let mut current = Some(name.trim_start_matches('\\'));
+    for _ in 0..=classes.len() {
+        let info = classes.get(current?)?;
+        if info.is_internal {
+            if let Some(method) = lookup_class(current?).and_then(|class| class.operators)
+                .and_then(|operators| operators.property_method(operation))
+            { return Some(method); }
+        }
+        current = info.parent.as_deref();
+    }
+    None
 }
 
 /// Checks inherited PHP internal clone restrictions without rejecting user declarations.

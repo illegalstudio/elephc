@@ -646,6 +646,11 @@ pub(super) fn eval_closure_object_method_result(
                 values,
             )
         }
+        EvalClosureObjectTarget::NativeDescriptor { .. } => eval_closure_call_warning_null(
+            "Cannot rebind scope of closure created from function",
+            values,
+        )
+        .map(Some),
         EvalClosureObjectTarget::Named(name) => {
             if context.closure(&name).is_some() {
                 let callable = EvaluatedCallable::BoundClosure {
@@ -751,6 +756,9 @@ pub(super) fn eval_closure_object_invoke_result(
                 owner_context,
                 values,
             );
+        }
+        EvalClosureObjectTarget::NativeDescriptor { callback, display_name } => {
+            EvaluatedCallable::NativeDescriptor { callback, display_name }
         }
         EvalClosureObjectTarget::Named(name) => EvaluatedCallable::Named {
             display_name: name.clone(),

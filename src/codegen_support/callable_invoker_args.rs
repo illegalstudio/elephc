@@ -18,6 +18,60 @@ use crate::types::PhpType;
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
 pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
+/// Internal source layout for inline nullable integers, matching tagged-scalar property metadata.
+pub(crate) const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = 12;
+
+/// Roots a nullable-reference refusal before retiring its owned rejected Mixed value.
+/// Leaves the accumulated exception pending so callers can finish their own owner cleanup.
+pub(crate) fn emit_tagged_scalar_ref_assignment_pending_error(emitter: &mut Emitter, value: &str) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, value);
+    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error_new");
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    abi::emit_pop_reg(emitter, result);
+    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", result);
+}
+
+/// Branches before publication so inline nullable-integer references only receive int or null.
+pub(crate) fn emit_tagged_scalar_ref_assignment_guard(
+    emitter: &mut Emitter, tag: &str, valid: &str, invalid: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {tag}, #0"));                     // integer payloads fit the existing nullable-integer slot
+            emitter.instruction(&format!("b.eq {valid}"));                      // publish the replacement only after validating its actual PHP tag
+            emitter.instruction(&format!("cmp {tag}, #8"));                     // null uses the same two-word scalar storage
+            emitter.instruction(&format!("b.eq {valid}"));                      // preserve the distinction between null and integer zero
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {tag}, 0"));                      // integer payloads fit the existing nullable-integer slot
+            emitter.instruction(&format!("je {valid}"));                        // publish the replacement only after validating its actual PHP tag
+            emitter.instruction(&format!("cmp {tag}, 8"));                      // null uses the same two-word scalar storage
+            emitter.instruction(&format!("je {valid}"));                        // preserve the distinction between null and integer zero
+        }
+    }
+    abi::emit_jump(emitter, invalid);
+}
+
+/// Reads a tagged scalar's actual PHP tag, branching to boxing with an already-zero high word.
+pub(crate) fn emit_tagged_scalar_ref_source(
+    emitter: &mut Emitter, source_tag: &str, storage: &str, box_label: &str, ordinary_label: &str,
+) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {source_tag}, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // identify inline nullable-integer reference storage
+            emitter.instruction(&format!("b.ne {ordinary_label}"));             // other source layouts keep their existing decoding
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {source_tag}, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // identify inline nullable-integer reference storage
+            emitter.instruction(&format!("jne {ordinary_label}"));              // other source layouts keep their existing decoding
+        }
+    }
+    abi::emit_load_from_address(emitter, source_tag, storage, 8);
+    abi::emit_jump(emitter, box_label);
+    emitter.label(ordinary_label);
+}
+
 /// Clones a boxed runtime Mixed argument container into a normalized boxed Mixed container.
 pub(crate) fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
     dest_reg: &str,

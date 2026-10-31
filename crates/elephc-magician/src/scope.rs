@@ -142,6 +142,8 @@ impl ScopeEntry {
 pub struct ElephcEvalScope {
     entries: HashMap<String, ScopeEntry>,
     local_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    native_storage_types: HashMap<String, crate::eval_ir::EvalParameterType>,
+    native_detached_names: HashSet<String>,
     aot_visible_names: HashSet<String>,
     global_aliases: HashMap<String, String>,
     reference_targets: HashMap<String, EvalReferenceTarget>,
@@ -154,6 +156,8 @@ impl ElephcEvalScope {
         Self {
             entries: HashMap::new(),
             local_types: HashMap::new(),
+            native_storage_types: HashMap::new(),
+            native_detached_names: HashSet::new(),
             aot_visible_names: HashSet::new(),
             global_aliases: HashMap::new(),
             reference_targets: HashMap::new(),
@@ -176,13 +180,33 @@ impl ElephcEvalScope {
         self.local_types.remove(name);
     }
 
+    /// Refreshes a native reference contract, which ends when eval unsets the imported name.
+    pub(crate) fn set_native_storage_type(&mut self, name: String, ty: Option<crate::eval_ir::EvalParameterType>) {
+        self.native_storage_types.remove(&name);
+        if let Some(ty) = ty { self.native_storage_types.insert(name, ty); }
+    }
+
+    /// Remembers name detachment independently of a later present-value scope entry.
+    pub(crate) fn native_name_detached(&self, name: &str) -> bool {
+        self.native_detached_names.contains(name)
+    }
+
+    /// Starts a fresh native snapshot after the previous detachment has been reloaded.
+    pub(crate) fn clear_native_name_detachment(&mut self, name: &str) {
+        self.native_detached_names.remove(name);
+    }
+
     /// Collects explicit contracts from every visible name sharing this PHP reference group.
     pub(crate) fn local_type_contracts(&self, name: &str) -> Vec<crate::eval_ir::EvalParameterType> {
         let mut types = self.local_type(name).cloned().into_iter().collect::<Vec<_>>();
+        if let Some(ty) = self.native_storage_types.get(name).filter(|ty| !types.contains(ty)) {
+            types.push(ty.clone());
+        }
         if let Some(entry) = self.entry(name).filter(|entry| entry.flags().is_visible() && entry.flags().by_ref) {
             for (alias, alias_entry) in &self.entries {
                 if alias_entry.flags().is_visible() && alias_entry.flags().by_ref && alias_entry.cell() == entry.cell() {
                     if let Some(ty) = self.local_type(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
+                    if let Some(ty) = self.native_storage_types.get(alias).filter(|ty| !types.contains(ty)) { types.push(ty.clone()); }
                 }
             }
         }
@@ -342,6 +366,8 @@ impl ElephcEvalScope {
     pub fn unset(&mut self, name: impl Into<String>) -> Option<RuntimeCellHandle> {
         self.bump_generation();
         let name = name.into();
+        self.native_storage_types.remove(&name);
+        if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         self.reference_targets.remove(&name);
         let previous = self
             .entries
@@ -355,6 +381,8 @@ impl ElephcEvalScope {
         name: impl Into<String>,
     ) -> Option<RuntimeCellHandle> {
         let name = name.into();
+        self.native_storage_types.remove(&name);
+        if self.aot_visible_names.contains(&name) { self.native_detached_names.insert(name.clone()); }
         let Some(entry) = self.entries.get(&name).copied() else {
             return self.unset(name);
         };
@@ -491,6 +519,11 @@ impl ElephcEvalScope {
             .iter()
             .filter_map(|(name, entry)| entry.flags().dirty.then_some(name.as_str()))
             .collect()
+    }
+
+    /// Marks one imported native snapshot clean without changing other pending writes.
+    pub fn mark_name_clean(&mut self, name: &str) {
+        if let Some(entry) = self.entries.get_mut(name) { entry.mark_clean(); }
     }
 
     /// Clears dirty flags after native code reloads or invalidates affected locals.

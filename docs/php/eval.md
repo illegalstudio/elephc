@@ -186,6 +186,11 @@ makes it one shared value everywhere.
 | Includes | `include`, `include_once`, `require`, and `require_once` execute local filesystem paths from inside fragments. |
 | Namespaces | Both `namespace Name;` and `namespace Name { ... }` forms are supported, including simple and grouped `use`, `use function`, and `use const` declarations. |
 
+Opaque eval rejects indexed increment/decrement, including `$a[0]++`,
+`--Store::$items[0]`, and `$object->items[$key]--`. Use indexed `+=` and `-=`
+for numeric updates. Compiled code supports indexed increment/decrement,
+including PHP's distinct null and alphanumeric string behavior.
+
 `foreach` supports value-only and key-value iteration over indexed and
 associative arrays, plus eval-declared and generated/AOT `Iterator` and
 `IteratorAggregate` objects. Eval associative arrays preserve PHP insertion
@@ -235,6 +240,35 @@ runtime include-execution history.
 
 Supported unary operators are `+`, `-`, `!`, and integer bitwise `~`.
 
+Nested array writes and appends keep their storage path, including
+`$rows["items"][] = $value` and `$registry->handlers["save"][] = $handler`.
+Property writes can use indexed object receivers such as `$views[0]->name`.
+Object dimensions returned by a method remain writable, including
+`$xml->attributes()["id"] = "new"`. Array replacements preserve copied snapshots.
+A temporary array with no variable or property to receive its replacement raises
+`Error`; native object dimensions keep their shared object identity. A by-value
+`ArrayAccess::offsetGet()` array result is a disposable copy: nested writes emit
+an indirect-modification notice and do not call `offsetSet()`. Builtin `ArrayObject`
+and `ArrayIterator` getters retain writable storage, including inherited eval
+subclasses. A by-reference `offsetGet()` runs once: an object result retains
+identity mutation, while a non-object result raises an explicit unsupported-write
+`Error` because its reference attachment cannot yet be represented. A native subclass overriding
+`offsetSet()` also raises an unsupported-write `Error` when a nested array must be
+written back; eval subclasses can use the builtin storage implementation directly.
+
+Nested object unsets such as `unset($rows[firstKey()][lastKey()])` evaluate
+computed keys in source order before selecting live variable storage. A computed
+root such as `rows()` is captured before those keys. Missing intermediate
+dimensions remain quiet. An array leaf requiring nested array writeback raises
+an explicit unsupported-storage `Error`.
+String and numeric intermediate containers throw PHP's offset errors; `false`
+emits its array-conversion deprecation and `null` remains quiet.
+The string-offset error distinguishes a following property from a following
+dimension. Non-indexable objects, including closures, raise a catchable `Error`.
+Fetching a Closure property as an unset container raises
+`Cannot create dynamic property Closure::$name` after converting the name.
+Unsetting its final property name remains quiet.
+
 Supported binary operators are:
 
 | Category | Operators |
@@ -262,9 +296,9 @@ global user functions support positional, named, and spread arguments inside
 eval fragments. String keys in unpacked argument arrays bind as named
 parameters. Direct calls and variable-function calls can also invoke registered
 AOT global user functions when their by-reference parameters use generated
-`mixed`/union-style boxed storage or one-word scalar raw storage (`int`, `bool`,
-or `float`), string raw storage, or one-word heap raw storage (`array`,
-`iterable`, and object/class parameters). Nullable scalar, native-only ABI
+`mixed`/union, array, object, or class boxed storage; two-word scalar raw storage
+(`int`, `bool`, or `float`); two-word string raw storage; or two-word raw heap
+storage for `iterable`. Nullable scalar, native-only ABI
 layouts, and other unsupported raw-storage by-reference free-function
 parameters remain metadata-only until the function bridge has typed
 staging/writeback for those ABI layouts.
@@ -341,6 +375,9 @@ satisfies PHP visibility. Generated AOT bridge dispatch can invoke
 object, and supported union/intersection object shapes, with by-reference method
 and constructor parameters limited to the staged scalar/nullable
 scalar/Mixed/array/iterable/object slice.
+Ordinary value reads from generated/AOT methods declared with `&` copy the
+referenced value, including scalar, array and object results. Binding that return
+to an eval reference remains unsupported.
 
 Post-barrier native direct calls and string-literal `call_user_func()` callbacks
 currently accept simple positional arguments. Post-barrier
@@ -531,11 +568,12 @@ through `isInternal()`, `isUserDefined()`, `isClosure()`,
 `isGenerator()`, `isVariadic()`, `isStatic()`,
 `hasTentativeReturnType()`, and `getTentativeReturnType()`.
 `returnsReference()` reports the reflected declaration: `true` for a compiled
-`function &f()` or `function &m()`, for an eval-declared `&get` property
+`function &f()` or `function &m()`, for an eval-declared `function &m()` or `&get` property
 hook, and for an abstract or interface `&get` hook contract, whether eval or
-compiled code declares it. Eval code itself cannot declare a by-reference
-function, method, or closure (the fragment is rejected), so those report
-`false`. `hasReturnType()`
+compiled code declares it. Eval retains method reference-return declarations for
+reflection and dimension-write validation. Binding a method return as a reference
+remains unsupported. Eval code cannot declare a by-reference free function or
+closure (the fragment is rejected). `hasReturnType()`
 and `getReturnType()` expose retained eval return type metadata for supported
 named, nullable, union, and intersection declarations, including `void` and
 `never` as builtin non-nullable named types.
@@ -758,9 +796,9 @@ generated/AOT free functions with positional variadic tails when the generated
 signature has no by-reference parameters. Direct, variable-function,
 first-class callable, `Closure::fromCallable()`, and `call_user_func_array()`
 paths can additionally invoke generated/AOT free functions whose by-reference
-parameters use boxed Mixed/union storage or one-word scalar raw storage
-(`int`, `bool`, or `float`), string raw storage, or one-word heap raw storage
-(`array`, `iterable`, and object/class parameters), including positional
+parameters use boxed Mixed/union, array, object, or class storage; two-word
+scalar raw storage (`int`, `bool`, or `float`); two-word string raw storage; or
+two-word raw heap storage for `iterable`, including positional
 `&...` variadic tails when the tail arguments have lvalue/ref-cell storage.
 Registered generated/AOT free-function parameter
 names, declared types, return types, by-reference and variadic flags,
@@ -1222,6 +1260,13 @@ updates, but eval `fclose()` still closes only eval-managed streams. Native loca
 synchronized into eval remain retained until the next synchronization or context
 release, which can delay last-owner resource retirement.
 
+Materializing an eval scope refuses a visible native reference with unboxed indexed-array or associative-array
+values, such as an alias of an `array<int>` or `array<string, int>` property or parameter. Normalizing those values
+would invalidate the native layout shared by other aliases, so compilation reports
+`Unsupported eval: native reference $name has unboxed array elements`. Already boxed whole-local
+array aliases remain supported. For a literal fragment using scope helpers, the check applies
+only to the names that fragment writes; unrelated native aliases do not trigger it.
+
 Dynamic fragments and literal fragments outside the current AOT eligibility
 rules execute through the `elephc_magician` interpreter bridge. Eligible
 literal fragments instead use the normal AST -> EIR -> native codegen pipeline,
@@ -1232,10 +1277,12 @@ object construction, fail at runtime with an eval fatal diagnostic.
 The fragment subset is broad but not the full elephc language surface. Eval
 retains `ReflectionFunction` closure metadata for common
 `Closure::fromCallable()` targets, including bound free functions, object
-methods, static methods, and invokable objects. Advanced native callable
-descriptors and full PHP `Closure` APIs, such as arbitrary scope mutation and
-reflection over every first-class callable shape, are still outside eval
-fragments. Runtime/AOT free-function, object-method, static-method, and
+methods, static methods, and invokable objects. Registered generated/AOT native
+callable descriptors support direct and variable calls, `call_user_func()`,
+`call_user_func_array()`, first-class callable syntax, and
+`Closure::fromCallable()`. Full PHP `Closure` APIs, such as arbitrary scope
+mutation, and reflection over every first-class callable shape are still outside
+eval fragments. Runtime/AOT free-function, object-method, static-method, and
 constructor fallback from eval
 can bind registered names, defaults, and positional variadic tails; method,
 static-method, and constructor fallback can also bind by-reference lvalue
@@ -1243,9 +1290,9 @@ metadata. Generated AOT bridge dispatch supports visibility-checked method,
 static-method, and constructor signatures whose generated ABI storage is
 scalar/string, callable descriptor, boxed Mixed/union, array/hash, iterable, or
 object, plus free-function signatures using the descriptor invoker ABI when
-by-reference parameters, if any, use boxed Mixed/union storage or raw one-word
-scalar storage (`int`, `bool`, or `float`), string raw storage, or one-word heap
-storage (`array`, `iterable`, and object/class parameters), including
+by-reference parameters, if any, use boxed Mixed/union, array, object, or class
+storage; two-word scalar raw storage (`int`, `bool`, or `float`); two-word string
+raw storage; or two-word raw heap storage for `iterable`, including
 positional `&...` variadic tail element writeback.
 Registered type specs validate nullable and union members, intersection object
 parameters, and intersection object returns before or after the generated AOT
@@ -1281,7 +1328,7 @@ by-reference and variadic parameter flags, and generated/AOT
 class/method/property/class-constant attributes are exposed for registered
 metadata slices, while unsupported native-only bridge shapes and raw-storage
 by-reference free-function bridge shapes beyond the current
-Mixed/scalar/string/one-word heap slice remain metadata-only rather than
+Mixed/scalar/string/iterable slice remain metadata-only rather than
 invocable through eval.
 
 The type checker and AST optimizer conservatively treat every `eval()` call as

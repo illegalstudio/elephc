@@ -191,3 +191,214 @@ fn test_this_property_element_increment_retains_php_incdec() {
     assert!(matches!(&array.kind, ExprKind::PropertyAccess { object, property }
         if matches!(object.kind, ExprKind::This) && property == "arr"));
 }
+
+/// Computed write hops are captured independently instead of reading missing receiver storage.
+#[test]
+fn test_computed_property_write_statements_preserve_writable_traversal() {
+    for source in [
+        "<?php $x->a[k()]->c .= f();", "<?php $x->a[k()]->c++;",
+        "<?php $x->{g()}->b->c += 1;",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::ExprStmt(expression) = &statements[0].kind else {
+            panic!("computed property statement must retain expression write semantics: {source}");
+        };
+        let ExprKind::Assignment { target, prelude, .. } = &expression.kind else {
+            panic!("expected assignment: {source}");
+        };
+        assert!(matches!(target.kind, ExprKind::PropertyAccess { .. }), "{source}");
+        assert!(prelude.iter().any(|statement| matches!(&statement.kind,
+            StmtKind::Assign { value, .. } if matches!(value.kind, ExprKind::FunctionCall { .. }))), "{source}");
+    }
+}
+
+/// Append preparation evaluates only the computed name before selecting its property container.
+#[test]
+fn test_computed_property_append_keeps_receiver_chain() {
+    let statements = parse_source("<?php $x->{g()}->list[] = f();");
+    let StmtKind::Synthetic(prelude) = &statements[0].kind else { panic!("expected captured name"); };
+    assert!(matches!(&prelude[0].kind, StmtKind::Assign { value, .. }
+        if matches!(value.kind, ExprKind::FunctionCall { .. })));
+    assert!(matches!(&prelude.last().unwrap().kind, StmtKind::PropertyArrayPush { object, .. }
+        if matches!(object.kind, ExprKind::DynamicPropertyAccess { .. })));
+}
+
+/// Plain computed storage writes keep their RHS inline rather than in a frame-lived capture.
+#[test]
+fn test_computed_plain_property_statements_keep_inline_rhs() {
+    for source in ["<?php $x->{g()}->c = f();", "<?php $x->a[k()]->c = f();"] {
+        let statements = parse_source(source);
+        let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected captured key"); };
+        assert!(matches!(&body.last().unwrap().kind, StmtKind::PropertyAssign { value, .. }
+            if matches!(value.kind, ExprKind::FunctionCall { .. })), "{source}");
+    }
+}
+
+/// Call roots run once before the RHS while property and dimension fetches remain writable.
+#[test]
+fn test_call_rooted_property_statements_capture_only_the_root() {
+    for source in [
+        "<?php make()->children()[key()]->mark = rhs();",
+        "<?php make()->children()[key()]->item[0] = rhs();",
+        "<?php make()->children()[key()]->item[] = rhs();",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected root capture: {source}"); };
+        let StmtKind::Assign { name, value } = &body[0].kind else { panic!("expected root value: {source}"); };
+        assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX), "{source}");
+        assert!(matches!(value.kind, ExprKind::MethodCall { .. }), "{source}");
+        let (object, value) = match &body.last().unwrap().kind {
+            StmtKind::PropertyAssign { object, value, .. }
+            | StmtKind::PropertyArrayAssign { object, value, .. }
+            | StmtKind::PropertyArrayPush { object, value, .. } => (object, value),
+            other => panic!("expected property write, got {other:?}: {source}"),
+        };
+        assert!(matches!(value.kind, ExprKind::FunctionCall { .. }), "{source}");
+        assert!(matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(&array.kind, ExprKind::Variable(root) if root == name)), "{source}");
+    }
+}
+
+/// Compound statement captures preserve the call root without fetching its indexed receiver.
+#[test]
+fn test_call_rooted_property_updates_keep_delayed_traversal() {
+    let statements = parse_source("<?php make()->children()[key()]->mark .= rhs();");
+    let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected update expression"); };
+    let ExprKind::Assignment { target, prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    let StmtKind::Assign { name, value } = &prelude[0].kind else { panic!("expected root capture"); };
+    assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX));
+    assert!(matches!(value.kind, ExprKind::MethodCall { .. }));
+    assert!(matches!(&target.kind, ExprKind::PropertyAccess { object, .. }
+        if matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(&array.kind, ExprKind::Variable(root) if root == name))));
+}
+
+/// Nested appends retain their planner's root and key captures before either is referenced.
+#[test]
+fn test_call_rooted_nested_append_defines_its_root_and_key() {
+    let statements = parse_source("<?php make()->items[k()][] = rhs();");
+    let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected nested append"); };
+    let StmtKind::Assign { name: root, value } = &body[0].kind else { panic!("expected root capture"); };
+    assert!(matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "make"));
+    let StmtKind::Assign { name: key, value } = &body[1].kind else { panic!("expected key capture"); };
+    assert!(matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "k"));
+    let StmtKind::Assign { name: bucket, value } = &body[2].kind else { panic!("expected bucket capture"); };
+    assert!(matches!(&value.kind, ExprKind::ArrayAccess { array, index }
+        if matches!(&array.kind, ExprKind::PropertyAccess { object, property }
+            if property == "items" && matches!(&object.kind, ExprKind::Variable(name) if name == root))
+        && matches!(&index.kind, ExprKind::Variable(name) if name == key)));
+    assert!(matches!(&body[3].kind, StmtKind::ArrayPush { array, value }
+        if array == bucket && matches!(&value.kind, ExprKind::FunctionCall { name, .. } if name == "rhs")));
+    assert!(matches!(&body[4].kind, StmtKind::PropertyArrayAssign { object, index, value, .. }
+        if matches!(&object.kind, ExprKind::Variable(name) if name == root)
+            && matches!(&index.kind, ExprKind::Variable(name) if name == key)
+            && matches!(&value.kind, ExprKind::Variable(name) if name == bucket)));
+}
+
+/// Statement incdec captures the call root while retaining native write-context traversal.
+#[test]
+fn test_call_rooted_property_incdec_keeps_delayed_traversal() {
+    for source in [
+        "<?php $doc->children()[0]->mark++;", "<?php $doc->children()[0]->mark--;",
+        "<?php ++$doc->children()[0]->mark;", "<?php --$doc->children()[0]->mark;",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected scoped incdec: {source}"); };
+        let ExprKind::Assignment { target, prelude, .. } = &expression.kind else { panic!("expected assignment: {source}"); };
+        let StmtKind::Assign { name, value } = &prelude[0].kind else { panic!("expected root capture: {source}"); };
+        assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX), "{source}");
+        assert!(matches!(value.kind, ExprKind::MethodCall { .. }), "{source}");
+        assert!(matches!(&target.kind, ExprKind::PropertyAccess { object, .. }
+            if matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+                if matches!(&array.kind, ExprKind::Variable(root) if root == name))), "{source}");
+    }
+}
+
+/// Computed element increments keep the PHP incdec kernel instead of numeric arithmetic.
+#[test]
+fn test_computed_property_element_increment_retains_php_incdec() {
+    let statements = parse_source("<?php $obj->arr[k()]++;");
+    let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected captured key"); };
+    let StmtKind::PropertyArrayAssign { value, .. } = &body.last().unwrap().kind else { panic!("expected element writeback"); };
+    let ExprKind::Assignment { value, .. } = &value.kind else { panic!("expected captured increment"); };
+    assert!(matches!(value.kind, ExprKind::PreIncrement(_)));
+}
+
+/// Prefix updates accept call-rooted places and keep rejecting bare call results.
+#[test]
+fn test_prefix_call_rooted_property_element_statements() {
+    for source in [
+        "<?php ++receiver()->items[0];", "<?php --receiver()->items[0];",
+        "<?php ++\\receiver()->{name()}[0];", "<?php --(receiver())->items[0];",
+    ] {
+        let statements = parse_source(source);
+        assert_eq!(statements.len(), 1, "{source}");
+        assert!(matches!(&statements[0].kind, StmtKind::Synthetic(_)
+            | StmtKind::ExprStmt(Expr { kind: ExprKind::Assignment { .. }, .. })),
+            "{source}: expected an attached place update, got {statements:?}");
+    }
+    for source in ["<?php ++receiver();", "<?php --receiver();"] {
+        assert!(parse_fails(source), "{source}");
+    }
+}
+
+/// Statement write captures carry a dedicated scope tag while expression captures keep theirs.
+#[test]
+fn test_computed_statement_capture_scope_does_not_escape_to_expressions() {
+    let statements = parse_source("<?php $root->{g()}->value += f();");
+    let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected update"); };
+    let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    assert!(prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+        if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))));
+    let statements = parse_source("<?php echo ($root->{g()}->value += f());");
+    let StmtKind::Echo(expression) = &statements[0].kind else { panic!("expected expression context"); };
+    let ExprKind::Assignment { prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+        if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))));
+}
+
+/// Low-precedence logic keeps expression captures outside a top-level statement scope.
+#[test]
+fn test_computed_assignment_logic_does_not_leave_scoped_captures() {
+    for operator in ["or", "and", "xor"] {
+        for target in ["$root->rows[k()]->value", "f()->rows[k()]", "$this->registry()->hits[k()]"] {
+            for assignment in ["+=", ".=", "??="] {
+                let source = format!("<?php {target} {assignment} 1 {operator} f();");
+                let statements = parse_source(&source);
+                let StmtKind::ExprStmt(expression) = &statements[0].kind else { panic!("expected logic expression"); };
+                let ExprKind::BinaryOp { left, .. } = &expression.kind else { panic!("expected wrapping logic"); };
+                let ExprKind::Assignment { prelude, .. } = &left.kind else { panic!("expected nested assignment"); };
+                assert!(!prelude.iter().any(|stmt| matches!(&stmt.kind, StmtKind::Assign { name, .. }
+                    if name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX))), "{source}");
+            }
+        }
+    }
+}
+
+/// Indexed updates capture only their computed root and keep a writable statement target.
+#[test]
+fn test_call_rooted_property_element_updates_keep_delayed_traversal() {
+    for source in [
+        "<?php $doc->children()[0]->mark[0] .= rhs();",
+        "<?php $doc->children()[0]->mark[0] += rhs();",
+        "<?php $doc->children()[0]->mark[0]++;",
+        "<?php $doc->children()[0]->mark[0]--;",
+        "<?php ++$doc->children()[0]->mark[0];",
+        "<?php --$doc->children()[0]->mark[0];",
+    ] {
+        let statements = parse_source(source);
+        let StmtKind::Synthetic(body) = &statements[0].kind else { panic!("expected captured update: {source}"); };
+        let StmtKind::Assign { name, value } = &body[0].kind else { panic!("expected root capture: {source}"); };
+        assert!(name.starts_with(elephc::parser::ast::SCOPED_WRITE_TEMP_PREFIX), "{source}");
+        assert!(matches!(value.kind, ExprKind::MethodCall { .. }), "{source}");
+        let StmtKind::PropertyArrayAssign { object, value, .. } = &body.last().unwrap().kind else {
+            panic!("expected element write: {source}");
+        };
+        assert!(matches!(&object.kind, ExprKind::ArrayAccess { array, .. }
+            if matches!(&array.kind, ExprKind::Variable(root) if root == name)), "{source}");
+        if source.contains("++") || source.contains("--") {
+            let ExprKind::Assignment { value, .. } = &value.kind else { panic!("expected PHP incdec: {source}"); };
+            assert!(matches!(value.kind, ExprKind::PreIncrement(_) | ExprKind::PreDecrement(_)), "{source}");
+        } else { assert!(matches!(value.kind, ExprKind::BinaryOp { .. }), "{source}"); }
+    }
+}

@@ -22,6 +22,8 @@ use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
+mod class_string_relation;
+
 /// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
 ///
 /// Reference PHP honors `$base` only when `$value` is a string, so the subject's checker type
@@ -646,11 +648,23 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
-    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_))
-        && super::has_eval_context(ctx)
+    if matches!(ctx.value_php_type(object)?, PhpType::Str)
+        && optional_const_string_operand(ctx, object)?.is_none()
     {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+            return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
+        }
+    }
+    if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {
+        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
+            if ctx.module.required_runtime_features.eval_bridge {
+                return super::lower_eval_object_is_a(ctx, inst, object, &target_class, exclude_self);
+            }
+            if !exclude_self {
+                return super::super::objects::lower_mixed_is_a_literal_target(
+                    ctx, inst, object, &target_class,
+                );
+            }
         }
     }
     // `$allow_string` decides whether a string first operand names a class, and the two builtins

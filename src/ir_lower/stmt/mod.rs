@@ -47,6 +47,9 @@ mod loops;
 mod array_write_core;
 mod buffer_element_updates;
 mod nested_array_writes;
+mod nested_property_updates;
+mod nested_runtime_property_updates;
+pub(crate) use nested_property_updates::lower_nested_property_compound_expression;
 mod nested_write_guards;
 mod nested_scalar_writes;
 mod static_false_parent;
@@ -61,11 +64,14 @@ mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
 mod property_array_writes;
+mod native_dimension_append;
+mod native_dimension_incdec;
 pub(crate) mod property_write_receiver;
 mod metadata_control;
 mod nested_append;
 mod nested_write_sources;
 mod nested_plain_writes;
+mod nested_spl_writes;
 mod nested_false_errors;
 mod return_coercions;
 mod repr_fixpoint;
@@ -90,18 +96,24 @@ use declarations::*;
 use instance_property_writes::*;
 use static_property_writes::*;
 use property_array_writes::*;
+pub(crate) use property_array_writes::{
+    guard_property_dimension_fetch, PropertyDimensionFetchMode,
+};
 use metadata_control::*;
 use return_coercions::*;
 use static_property_helpers::*;
 
 pub(crate) use control_exit::{
     lower_throw_access_error, lower_throw_access_error_expr, lower_throw_access_error_expr_as,
+    lower_throw_access_exception,
+    lower_throw_access_error_message,
 };
 pub(crate) use control_exit::terminate_return;
 // Shared with `crate::ir_lower::expr::unset`, which needs the same runtime-subclass accessor peel
 // for `__unset` that the write path needs for `__set`.
 pub(crate) use instance_property_writes::{
     borrow_receiver_as_runtime_class, emit_receiver_instanceof, magic_accessor_subclasses,
+    lower_native_dynamic_property_set,
 };
 pub(super) use typed_foreach::coerce_typed_assign_value;
 pub(crate) use typed_foreach::promote_by_ref_foreach_source;
@@ -123,7 +135,7 @@ pub(in crate::ir_lower) use string_offset_writes::{
     lower_string_offset_write, StringOffsetWriteResult,
 };
 pub(crate) use property_array_writes::lower_property_array_assign_with_diagnosed_key;
-pub(crate) use buffer_element_updates::{lower_buffer_expression_update, BufferExpressionUpdate};
+pub(crate) use buffer_element_updates::{guard_property_expression_update, lower_buffer_expression_update, BufferExpressionUpdate};
 pub(crate) use static_property_writes::lower_static_property_array_assign_with_diagnosed_key;
 pub(crate) use nested_array_writes::lower_nested_array_assign_after_read;
 pub(super) use array_write_storage::{
@@ -169,7 +181,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     predeclare_loop_array_pointer_cursors(ctx, stmt);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
-        StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),
+        StmtKind::Assign { name, value } => {
+            lower_assign(ctx, name, value, stmt.span);
+            super::scoped_writes::register_store(ctx, name, stmt.span);
+        }
         StmtKind::RefAssign { target, source } => lower_ref_assign(ctx, target, source, stmt.span),
         StmtKind::If {
             condition,
@@ -256,7 +271,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
         // before mutation; every other synthetic group keeps ordinary block lowering.
         StmtKind::Synthetic(body) => {
-            if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
+            if let Some(boundary) = super::scoped_writes::begin_group(ctx, body) {
+                lower_block(ctx, body);
+                super::scoped_writes::finish(ctx, Some(boundary), stmt.span);
+            } else if !nested_append::try_lower_array_root(ctx, body, stmt.span) {
                 match nested_append::recognize(ctx, body) {
                     Some(group) => nested_append::lower(ctx, &group, stmt.span),
                     None => {
@@ -280,8 +298,12 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
         StmtKind::Break(level) => lower_break(ctx, *level),
         StmtKind::Continue(level) => lower_continue(ctx, *level),
         StmtKind::ExprStmt(expr) => {
+            let boundary = super::scoped_writes::begin_expression(ctx, expr);
             let value = lower_expr(ctx, expr);
-            release_expr_statement_result(ctx, value, expr.span);
+            if !ctx.builder.insertion_block_is_terminated() {
+                release_expr_statement_result(ctx, value, expr.span);
+            }
+            super::scoped_writes::finish(ctx, boundary, expr.span);
         }
         StmtKind::NamespaceDecl { name: _ } => lower_noop(ctx, stmt.span),
         StmtKind::NamespaceBlock { name: _, body } => lower_block(ctx, body),

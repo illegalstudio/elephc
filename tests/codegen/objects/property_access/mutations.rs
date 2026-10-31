@@ -1200,6 +1200,83 @@ echo $c->readP() . ":" . $c->readC();
     assert_eq!(out, "10:2;10:20");
 }
 
+/// Prefix increment returns the value after coercion to an ordinary declared property type.
+#[test]
+fn test_typed_string_property_prefix_increment_returns_stored_string() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class TypedPrefixResult { public string $value = '5'; }
+$object = new TypedPrefixResult();
+var_dump(++$object->value, $object->value);
+$dynamic = new TypedPrefixResult();
+var_dump(++$dynamic->{'value'}, $dynamic->value);
+class HookPrefixResult {
+    public int $back = 5;
+    public int $value {
+        get { echo 'G'; return $this->back; }
+        set { echo 'S'; $this->back = $value; }
+    }
+}
+class MagicPrefixResult {
+    public int $back = 5;
+    public function __get(string $name): int { echo 'G'; return $this->back; }
+    public function __set(string $name, mixed $value): void { echo 'S'; $this->back = (int)$value; }
+}
+$hook = new HookPrefixResult();
+var_dump(++$hook->value, $hook->back);
+$magic = new MagicPrefixResult();
+var_dump(++$magic->value, $magic->back);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n".repeat(2)
+        + "GSint(6)\nint(6)\nGSint(6)\nint(6)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed ordinary statement operands expire at their uses even without XML capability.
+#[test]
+fn test_computed_property_statement_capture_destructors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScopedNameResult {
+    public function __toString(): string { echo 'name|'; return 'child'; }
+    public function __destruct() { echo '~name|'; }
+}
+class ScopedTextResult {
+    public function __toString(): string { echo 'text|'; return 'x'; }
+    public function __destruct() { echo '~text|'; }
+}
+function scopedNameResult(): ScopedNameResult { return new ScopedNameResult(); }
+function scopedTextResult(): ScopedTextResult { return new ScopedTextResult(); }
+function scopedCaptureRun(): void {
+    $root = new stdClass(); $root->child = new stdClass(); $root->child->value = 'p';
+    $root->{scopedNameResult()}->value .= scopedTextResult();
+    echo 'after|';
+}
+scopedCaptureRun();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "name|~name|text|~text|after|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Wrapping logic around a computed property assignment must not require a missing scope.
+#[test]
+fn test_computed_property_assignment_low_precedence_logic() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ComputedLogicNode { public int $count = 0; public ?int $maybe = null; }
+function computedLogicKey(): int { return 0; }
+function computedLogicFallback(string $name): bool { echo $name, '|'; return true; }
+$rows = [new ComputedLogicNode()];
+$rows[computedLogicKey()]->count += 1 or computedLogicFallback('or');
+$rows[computedLogicKey()]->count += 1 and computedLogicFallback('and');
+$rows[computedLogicKey()]->count += 1 xor computedLogicFallback('xor');
+$rows[computedLogicKey()]->maybe ??= 1 or computedLogicFallback('coalesce');
+var_dump($rows[0]->count, $rows[0]->maybe);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "and|xor|int(3)\nint(1)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A property name computed for one access (`$o->{(string) $mixed}`) is a
 /// temporary string the access only reads. Neither the write nor the read
 /// released it, so each access leaked one block.

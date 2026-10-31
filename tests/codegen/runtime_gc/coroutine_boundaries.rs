@@ -156,3 +156,52 @@ long boundary_unpark_count(void) { return count; }
 "#);
     assert_eq!(out, "caught|2");
 }
+
+
+/// First-class native coroutine methods preserve their PHP method ABI and transfer owners once.
+#[test]
+fn test_gc_coroutine_first_class_native_transfers() {
+    let source = r###"<?php
+$pause = Fiber::suspend(...);
+$fiber = new Fiber(static function() use ($pause): void {
+    $value = $pause(str_repeat('s', 17));
+    echo strlen($value), '|';
+});
+echo strlen($fiber->start()), '|';
+$resume = $fiber->resume(...);
+$resume(str_repeat('r', 23));
+echo $fiber->isTerminated() ? 'done' : 'bad';
+unset($pause, $resume, $fiber);
+"###;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert_eq!(out.stdout, "17|23|done");
+}
+
+/// Yield transfer consumes owned results while normalized source copies retain their own lifetime.
+#[test]
+fn test_gc_generator_normalized_cast_yield_owners() {
+    let source = r###"<?php
+function MergeNormalizedYield(int $key): Generator {
+    $values = ['a'];
+    $text = str_repeat('g', 3);
+    for ($i = 0; $i < 2; $i++) {
+        yield strtoupper((string)$text);
+        yield trim((string)$text);
+        $text = @$values[$key];
+    }
+}
+$first = MergeNormalizedYield($argc + 5); echo $first->current(), '|'; unset($first);
+$second = MergeNormalizedYield($argc + 5); echo $second->current(), '|';
+$second->next(); echo $second->current(), '|'; unset($second);
+foreach (MergeNormalizedYield($argc + 5) as $value) { echo $value, '|'; }
+unset($value);
+"###;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    assert_eq!(out.stdout, "GGG|GGG|ggg|GGG|ggg|||");
+}

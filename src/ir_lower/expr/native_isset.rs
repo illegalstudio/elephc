@@ -23,13 +23,26 @@ pub(super) fn lower_native_isset_offset_probe(
     lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr)
 }
 
-/// Lowers nullable native array/hash `isset` without evaluating the offset on null receivers.
+/// Lowers nullable native array/hash `isset` while evaluating the offset even on null receivers.
 pub(super) fn lower_nullable_native_isset_offset_probe(
     ctx: &mut LoweringContext<'_, '_>,
     array_value: LoweredValue,
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    let (array_value, receiver_owner) = root_owned_call_operand(ctx, array_value, expr.span);
+    let receiver_type = ctx.builder.value_php_type(array_value.value);
+    let borrowed = if Ownership::php_type_needs_lifetime_tracking(&receiver_type) {
+        let borrowed = ctx.emit_value(Op::Borrow, vec![array_value.value], None, receiver_type,
+            Op::Borrow.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { array_value };
+    let (index, index_temp) = evaluate_once(ctx, index, expr);
+    let key_owner = index_temp.as_ref().filter(|name|
+        Ownership::php_type_needs_lifetime_tracking(&ctx.local_type(name)))
+        .map(|name| ctx.local_slots[name]);
+    if let Some(slot) = key_owner { register_owned_call_operand(ctx, slot, expr.span); }
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![array_value.value],
@@ -57,20 +70,19 @@ pub(super) fn lower_nullable_native_isset_offset_probe(
     });
 
     ctx.builder.position_at_end(null_block);
-    // A concrete container projected from a widened Mixed local owns the lease created by that
-    // projection. The probe arm retires it after `ArrayIsset` / `HashIsset`; the null arm skips
-    // the probe, so it must retire the same receiver here instead of leaking one lease.
-    release_owning_receiver_temporary(ctx, array_value, expr.span);
     let false_value = emit_bool_literal(ctx, false, Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(probe_block);
-    let checked = lower_native_isset_offset_probe_from_value(ctx, array_value, index, expr);
+    let checked = lower_native_isset_offset_probe_from_value(ctx, borrowed, &index, expr);
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, checked, expr.span);
     branch_to(ctx, merge);
 
     ctx.builder.position_at_end(merge);
+    if let Some(slot) = key_owner { unregister_owned_call_operand(ctx, slot, expr.span); }
+    release_evaluated_once(ctx, index_temp, expr.span);
+    if let Some(slot) = receiver_owner { retire_owned_call_operand(ctx, slot, expr.span); }
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
@@ -188,7 +200,8 @@ pub(super) fn array_access_expr_supports_native_isset_probe(
         _ => infer_expr_type_syntactic(array),
     }
     .codegen_repr();
-    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Int
+        | PhpType::Float | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar)
 }
 
 /// Lowers `isset($object->property)` without performing a normal property read first.
@@ -198,6 +211,10 @@ pub(super) fn lower_lazy_property_isset_operand(
     property: &str,
     arg: &Expr,
 ) -> Option<LoweredValue> {
+    if needs_native_xml_property_dispatch(ctx, object, property) {
+        let object = lower_member_receiver(ctx, object, arg);
+        return Some(lower_boxed_xml_property_isset(ctx, object, property, arg));
+    }
     match property_isset_action(ctx, object, property, arg)? {
         IssetPropertyAction::Fallback => None,
         IssetPropertyAction::Magic => {
@@ -237,6 +254,9 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
+    if crate::types::builtin_classes::native_property_method(&class_name, property,
+        elephc_builtin_contract::ObjectProperty::Isset, ctx.classes).is_some()
+    { return Some(IssetPropertyAction::Magic); }
     if class_info.allow_dynamic_properties {
         return Some(IssetPropertyAction::Fallback);
     }
@@ -302,7 +322,7 @@ fn isset_object_expr_type(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Optio
 }
 
 /// Returns whether a named property can use normal `isset()` value probing.
-pub(super) fn property_is_accessible_for_ir(
+pub(crate) fn property_is_accessible_for_ir(
     ctx: &LoweringContext<'_, '_>,
     class_name: &str,
     class_info: &crate::types::ClassInfo,
@@ -325,7 +345,7 @@ pub(super) fn property_is_accessible_for_ir(
 }
 
 /// Checks PHP member visibility from the current lowering class scope.
-pub(super) fn ir_can_access_member(
+pub(crate) fn ir_can_access_member(
     ctx: &LoweringContext<'_, '_>,
     declaring_class: &str,
     visibility: &Visibility,
@@ -362,8 +382,9 @@ pub(super) fn lower_magic_property_isset(
         ExprKind::StringLiteral(property.to_string()),
         arg.span,
     )];
-    let result =
-        lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Isset).unwrap_or("__isset");
+    let result = lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, arg);
     ctx.truthy_consuming(result, Some(arg.span))
 }
 
@@ -410,8 +431,9 @@ pub(super) fn lower_nullable_magic_property_isset(
         ExprKind::StringLiteral(property.to_string()),
         arg.span,
     )];
-    let result =
-        lower_method_call_with_receiver(ctx, object, "__isset", &args, Op::MethodCall, arg);
+    let method = native_property_method_for_value(ctx, object.value, property,
+        elephc_builtin_contract::ObjectProperty::Isset).unwrap_or("__isset");
+    let result = lower_method_call_with_receiver(ctx, object, method, &args, Op::MethodCall, arg);
     let result = ctx.truthy_consuming(result, Some(arg.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, result, arg.span);
     branch_to(ctx, merge);

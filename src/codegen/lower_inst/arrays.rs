@@ -14,7 +14,7 @@ use crate::codegen::{
     emit_box_runtime_payload_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag,
 };
-use crate::codegen::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
+use crate::codegen::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
 use crate::codegen::platform::Arch;
 use crate::codegen::sentinels::TAGGED_SCALAR_ARRAY_VALUE_TYPE;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
@@ -1255,10 +1255,12 @@ pub(super) fn lower_array_set_mixed_key(
         )));
     }
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    let helper = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
-        "__rt_array_set_mixed_key_already_diagnosed"
-    } else {
-        "__rt_array_set_mixed_key"
+    let helper = match (mixed_key_storeback_retires_source(ctx, array)?,
+        matches!(inst.immediate, Some(Immediate::Bool(true)))) {
+        (true, true) => "__rt_array_set_mixed_key_owned_refusal_already_diagnosed",
+        (true, false) => "__rt_array_set_mixed_key_owned_refusal",
+        (false, true) => "__rt_array_set_mixed_key_already_diagnosed",
+        (false, false) => "__rt_array_set_mixed_key",
     };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -2508,11 +2510,15 @@ pub(super) fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     let mixed_cell_label = ctx.next_label("array_get_mixed_ref_cell");
     let box_label = ctx.next_label("array_get_mixed_ref_box");
     let done_label = ctx.next_label("array_get_mixed_ref_done");
+    let ordinary_label = ctx.next_label("array_get_mixed_ref_not_tagged_scalar");
 
     abi::emit_load_from_address(ctx.emitter, ref_cell_reg, mixed_reg, 8);
     abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 16);
     abi::emit_load_from_address(ctx.emitter, lo_reg, ref_cell_reg, 0);
     abi::emit_load_int_immediate(ctx.emitter, hi_reg, 0);
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
+        ctx.emitter, tag_reg, ref_cell_reg, &box_label, &ordinary_label,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter
@@ -3150,6 +3156,8 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
+    let tagged_label = ctx.next_label("mixed_array_set_ref_tagged_scalar");
+    let published_label = ctx.next_label("mixed_array_set_ref_raw_published");
 
     ctx.emitter.instruction("cmp x1, #0");                                      // reject negative indexes before checking for by-reference markers
     ctx.emitter.instruction(&format!("b.lt {}", runtime_label));                // let the runtime setter drop ignored negative-index writes
@@ -3181,6 +3189,8 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
         &format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
+    ctx.emitter.instruction(&format!("cmp x12, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores an inline nullable integer
+    ctx.emitter.instruction(&format!("b.eq {tagged_label}"));                   // write the replacement PHP tag into its second word
     // Release the concrete occupant this write replaces. The caller ref-cell holds a raw
     // pointer for an array, hash, object or string, and overwriting it orphans that occupant.
     // `__rt_decref_any` validates the pointer against the managed heap window, so a `.rodata`
@@ -3206,6 +3216,23 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
     ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
     ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
     ctx.emitter.instruction("str x12, [x10, #8]");                              // write the replacement high word through the caller ref-cell
+    ctx.emitter.instruction(&format!("b {published_label}"));                   // ordinary raw pairs already published their high word
+    ctx.emitter.label(&tagged_label);
+    let scalar_valid = ctx.next_label("mixed_array_set_ref_tagged_valid");
+    let scalar_invalid = ctx.next_label("mixed_array_set_ref_tagged_invalid");
+    ctx.emitter.instruction("ldr x12, [x2]");                                   // validate the actual PHP tag before touching caller storage
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        ctx.emitter, "x12", &scalar_valid, &scalar_invalid,
+    );
+    ctx.emitter.label(&scalar_invalid);
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(ctx.emitter, "x2");
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+    ctx.emitter.label(&scalar_valid);
+    ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement nullable-integer payload
+    ctx.emitter.instruction("str x12, [x10]");                                  // publish the new scalar payload
+    ctx.emitter.instruction("ldr x12, [x2]");                                   // load the replacement PHP tag instead of its unused high payload
+    ctx.emitter.instruction("str x12, [x10, #8]");                              // preserve null versus integer zero in the tagged slot
+    ctx.emitter.label(&published_label);
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while freeing only the Mixed wrapper
     ctx.emitter.instruction("mov x0, x2");                                      // pass the consumed fresh Mixed wrapper to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
@@ -3243,6 +3270,8 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let done_label = ctx.next_label("mixed_array_set_done");
+    let tagged_label = ctx.next_label("mixed_array_set_ref_tagged_scalar");
+    let published_label = ctx.next_label("mixed_array_set_ref_raw_published");
 
     ctx.emitter.instruction("cmp rsi, 0");                                      // reject negative indexes before checking for by-reference markers
     ctx.emitter.instruction(&format!("jl {}", runtime_label));                  // let the runtime setter drop ignored negative-index writes
@@ -3276,6 +3305,8 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
         &format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))
     );                                                                          // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
+    ctx.emitter.instruction(&format!("cmp r11, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores an inline nullable integer
+    ctx.emitter.instruction(&format!("je {tagged_label}"));                     // write the replacement PHP tag into its second word
     // See the AArch64 arm: release the replaced concrete occupant, range-checked so a
     // `.rodata` string the ownership analysis must not free is skipped.
     let release_occupant = ctx.next_label("ref_marker_release_occupant");
@@ -3301,6 +3332,23 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
     ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // write the replacement high word through the caller ref-cell
+    ctx.emitter.instruction(&format!("jmp {published_label}"));                 // ordinary raw pairs already published their high word
+    ctx.emitter.label(&tagged_label);
+    let scalar_valid = ctx.next_label("mixed_array_set_ref_tagged_valid");
+    let scalar_invalid = ctx.next_label("mixed_array_set_ref_tagged_invalid");
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdx]");                        // validate the actual PHP tag before touching caller storage
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        ctx.emitter, "r11", &scalar_valid, &scalar_invalid,
+    );
+    ctx.emitter.label(&scalar_invalid);
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(ctx.emitter, "rdx");
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
+    ctx.emitter.label(&scalar_valid);
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement nullable-integer payload
+    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // publish the new scalar payload
+    ctx.emitter.instruction("mov r11, QWORD PTR [rdx]");                        // load the replacement PHP tag instead of its unused high payload
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // preserve null versus integer zero in the tagged slot
+    ctx.emitter.label(&published_label);
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("mov rax, rdx");                                    // pass the consumed fresh Mixed wrapper to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");

@@ -236,7 +236,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if is_user_function {
         let return_alias = user_return_alias
             .expect("a user function call resolved its return-alias summary before its arguments");
-        let evaluation_intermediates = finish_user_call_argument_evaluation(ctx, &mut operands);
+        let evaluation_intermediates = finish_user_call_argument_evaluation(ctx, &mut operands, &php_type);
         let roots = root_user_call_operands(
             ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
         );
@@ -429,7 +429,7 @@ pub(super) fn emit_builtin_call_value(
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),
             };
-            // `substr()` can return an interior view into its source string. When source-order
+            // Substring and trim calls can return interior views into their source string. When source-order
             // evaluation transferred a pinned temporary into the final call operand, letting
             // that pin flow through the result would either leak its base allocation forever
             // or free an interior pointer. Persist the view before retiring the base owner so
@@ -437,9 +437,13 @@ pub(super) fn emit_builtin_call_value(
             let stabilizes_evaluation_pin = matches!(
                 def.spec.semantics.lowering,
                 crate::builtins::semantics::BuiltinLowering::Runtime(
-                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr)
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Substr
+                        | crate::ir::RuntimeFnId::Trim | crate::ir::RuntimeFnId::Ltrim
+                        | crate::ir::RuntimeFnId::Rtrim | crate::ir::RuntimeFnId::Chop)
                         | crate::ir::RuntimeCallTarget::ProfiledFunction {
-                            target: crate::ir::RuntimeFnId::Substr,
+                            target: crate::ir::RuntimeFnId::Substr | crate::ir::RuntimeFnId::Trim
+                                | crate::ir::RuntimeFnId::Ltrim | crate::ir::RuntimeFnId::Rtrim
+                                | crate::ir::RuntimeFnId::Chop,
                             ..
                         },
                 ),
@@ -590,10 +594,12 @@ pub(super) fn emit_builtin_call_value(
     if is_eval {
         ctx.mark_eval_executed();
         if eval_needs_barrier {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, None);
             ctx.apply_eval_barrier();
         } else if let Some(write_names) = eval_literal
             .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
         {
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, Some(&write_names));
             ctx.apply_eval_scope_barrier(&write_names);
         }
     }

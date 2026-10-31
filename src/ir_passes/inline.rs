@@ -322,7 +322,7 @@ fn callee_contains_a_loop(callee: &Function) -> bool {
 /// `receiver` is true for a statically bound method body, whose `$this` parameter is the
 /// one object `callee_is_inline_safe` accepts.
 fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: bool) -> bool {
-    if callee.flags.is_generator || callee.flags.is_fiber_wrapper {
+    if callee.flags.is_generator || callee.flags.is_fiber_wrapper || callee.flags.by_ref_return {
         return false;
     }
     // A by-value container parameter is privatized on entry into an owning shadow slot
@@ -864,6 +864,10 @@ fn transplant_callee_body(
             host.no_epilogue_cleanup_slots.insert(new_id);
         }
         local_map.insert(local.id, new_id);
+    }
+    for local in &callee.locals {
+        host.locals[local_map[&local.id].as_raw() as usize].ref_cell_owner =
+            local.ref_cell_owner.map(|owner| local_map[&owner]);
     }
 
     // Create blocks + their param values (defs use final block ids).

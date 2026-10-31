@@ -29,7 +29,7 @@ pub(in crate::interpreter) fn eval_user_wrapper_stream_cast_result(
         return Ok(None);
     };
     let cast_as = values.int(cast_as)?;
-    let result = eval_dynamic_method_with_values(
+    let result = eval_dynamic_method_with_owned_values(
         &declaring_class,
         &info.class_name,
         &stream_cast,

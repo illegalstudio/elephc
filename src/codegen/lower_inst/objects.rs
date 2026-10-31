@@ -178,7 +178,9 @@ mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
+mod runtime_magic_reads;
 mod dynamic_property_read_entry;
+mod unset_property_reads;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;
@@ -189,6 +191,7 @@ mod property_resolution;
 mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
+mod property_hash_fetch_for_write;
 mod property_stores;
 mod property_hook_writes;
 mod property_store_values;
@@ -221,6 +224,8 @@ use property_defaults::*;
 use known_property_reads::*;
 #[allow(unused_imports)]
 use mixed_property_reads::*;
+#[allow(unused_imports)]
+use runtime_magic_reads::*;
 #[allow(unused_imports)]
 use dynamic_property_read_entry::*;
 #[allow(unused_imports)]
@@ -261,12 +266,13 @@ pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new_without_constructor_mixed,
 };
 pub(super) use fixed_new::lower_object_new;
-pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
+pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic, lower_mixed_is_a_literal_target};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_hash_fetch_for_write::{lower_property_hash_contains, lower_property_hash_fetch_for_write, lower_property_hash_read};
 pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
 pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
 pub(super) use property_resolution::{

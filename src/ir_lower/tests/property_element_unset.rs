@@ -214,3 +214,62 @@ Cache::forget("a");
     );
     assert_eq!(error.span.line, 4, "the refusal names the unset line");
 }
+
+/// XML adapters coexist with upstream property storage removal on all five target ABIs.
+#[test]
+fn property_element_unset_native_xml_protocol_on_every_target() {
+    let source = r#"<?php
+class NativeXmlUnsetHolder {
+    public mixed $boxed;
+    public SimpleXMLElement $typed;
+    public readonly mixed $fixed;
+    public function __construct(SimpleXMLElement $xml) {
+        $this->boxed = $xml; $this->typed = $xml; $this->fixed = $xml;
+    }
+}
+class NativeXmlUnsetRefGetter {
+    public mixed $payload;
+    public function &__get(string $name): mixed { return $this->payload; }
+}
+$xml = new SimpleXMLElement('<r a="1" b="2" c="3"/>');
+$holder = new NativeXmlUnsetHolder($xml);
+unset($holder->boxed['a'], $holder->typed['b'], $holder->fixed['c']);
+$factory = simplexml_load_string('<r><a>1</a><a>2</a></r>'); unset($factory->a[0]);
+function removeOpaqueXmlField(object $holder): void { unset($holder->typed['id']); }
+function removeNullableXmlField(?NativeXmlUnsetHolder $holder): void { unset($holder->typed['id']); }
+removeOpaqueXmlField($holder); removeNullableXmlField($holder);
+$getter = new NativeXmlUnsetRefGetter(); $getter->payload = $xml; removeOpaqueXmlField($getter);
+$name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
+function typedNativeXmlUnsetLocal(): void {
+    $value = new SimpleXMLElement('<r><a/></r>');
+    unset($value->a->b[0], $value->absent[1], $value->a[2]->b[0]);
+    $items = [new SimpleXMLElement('<list><b/></list>')];
+    unset($items[3]->a->b[0], $items[3][0]->b[0], $items[0]->b[0]);
+    $bag = new ArrayObject([new SimpleXMLElement('<bag><b/></bag>')]); unset($bag[0]->b[0]);
+}
+typedNativeXmlUnsetLocal();
+$callback = function (): mixed { return []; };
+try { unset($callback()['id']); } catch (Error $error) {}
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let quiet_reads = module.functions.iter().flat_map(|function| &function.instructions)
+            .filter(|inst| inst.immediate == Some(crate::ir::Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::QuietRead)))
+            .collect::<Vec<_>>();
+        assert!(!quiet_reads.is_empty(), "{name}: opaque holder must fetch quietly");
+        for inst in quiet_reads {
+            assert!(inst.effects.contains(crate::ir::Effects::WRITES_HEAP), "{name}: quiet fetch may create a null field");
+        }
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let table = assembly.split_once("_class_offsetunset_ptrs:\n").expect("offset unset table").1;
+        let table = table.split(".globl").next().unwrap();
+        let class_id = module.class_infos["SimpleXMLElement"].class_id as usize;
+        let entry = table.lines().filter(|line| line.trim_start().starts_with(".quad "))
+            .nth(class_id).expect("native class row");
+        let expected = crate::names::method_symbol("SimpleXMLElement", "__elephc_dimension_unset");
+        assert!(entry.contains(&expected), "{name}: native unset table entry missing: {entry}");
+    }
+}

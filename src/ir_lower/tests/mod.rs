@@ -16,6 +16,11 @@ use crate::ir::{print_module, Terminator};
 
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
+mod computed_property_update_owners;
+mod property_dimension_fetch_modes;
+mod alias_call_string_owners;
+mod method_receiver_owners;
+mod conditional_assignment_owners;
 mod borrowed_string_reads;
 mod buffer_element_updates;
 mod ref_local_append;
@@ -44,17 +49,21 @@ mod closure_scope_variants;
 mod corpus;
 mod debug_info;
 mod descriptor_ownership;
+mod descriptor_reference_layouts;
 mod descriptor_unpack_keys;
 mod destructor_catch_preservation;
 mod dom_html_review;
 mod dynamic_spreads;
 mod effects;
+mod container_store_effects;
 mod method_receiver_roots;
 mod enum_argument_boundaries;
 mod enum_review;
 mod enum_result_owners;
 mod string_append;
 mod eval_ownership;
+mod eval_native_reference_layout;
+mod eval_typed_array_boundaries;
 mod eval_default_helpers;
 mod default_review_boundaries;
 mod exhaustive;
@@ -93,7 +102,10 @@ mod reference_cells;
 mod reference_detach;
 mod reference_property_payload;
 mod reflection_mirror_ownership;
+mod reflection_branch_targets;
 mod reference_return_boundaries;
+mod reference_return_siblings;
+mod reference_override_results;
 mod callable_operand_owners;
 mod capture_view_owners;
 mod static_properties;
@@ -106,6 +118,8 @@ mod throwable_constructors;
 mod mixed_throw_errors;
 mod hosted_exception_discard;
 mod xml_parser_arguments;
+mod simplexml_targets;
+mod native_property_child_probes;
 
 /// Runs frontend, type checking, optimization, and EIR lowering for a source string.
 fn lower_source(source: &str) -> crate::ir::Module {
@@ -217,6 +231,8 @@ fn try_lower_source_at_for_target(
     .expect("autoload failed");
     let ast = crate::dom_html_prelude::inject_after_autoload(ast, &mut prelude_inventory)
         .expect("autoload DOM prelude injection failed");
+    let ast = crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)
+        .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.

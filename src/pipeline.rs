@@ -305,6 +305,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     timings.record_since("autoload-prelude-probe", phase_started);
     let autoloaded = |group: &str| autoloaded_preludes.contains(group);
 
+    // Decide XML usage while the AST still contains only user and resolved-include code.
+    // Opaque eval pulls in the large core prelude below; running XML's namespace-aware DOM
+    // receiver analysis after that injection needlessly rescans thousands of declarations for
+    // every eval program, even though compiler preludes cannot introduce user XML usage.
+    let xml_used = with_crates.contains("xml")
+        || autoloaded("xml")
+        || crate::xml_prelude::program_uses_surface(&ast);
+
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
@@ -576,11 +584,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // preludes; `--with-xml` forces the injection for opaque dynamic use.
     crate::progress::phase("xml-prelude");
     let phase_started = Instant::now();
-    let ast = crate::xml_prelude::inject_if_used(
-        ast,
-        with_crates.contains("xml") || autoloaded("xml"),
-        &mut prelude_inventory,
-    );
+    let ast = if xml_used {
+        crate::xml_prelude::inject_if_used(ast, true, &mut prelude_inventory)
+    } else {
+        ast
+    };
     timings.record_since("xml-prelude", phase_started);
     let phase_started = Instant::now();
     let fileinfo_force = with_crates.contains("fileinfo") || autoloaded("fileinfo");

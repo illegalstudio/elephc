@@ -236,14 +236,7 @@ pub(super) fn eval_reflection_string_array_to_vec(
     array: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<String>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut result = Vec::with_capacity(len);
-    for position in 0..len {
-        let key = values.int(position as i64)?;
-        let value = values.array_get(array, key)?;
-        result.push(eval_reflection_string_arg(value, values)?);
-    }
-    Ok(result)
+    crate::interpreter::builtins::eval_runtime_string_array_to_vec(array, values)
 }
 
 /// Returns member metadata for one ReflectionClass member-array entry.

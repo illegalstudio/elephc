@@ -123,13 +123,16 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    if super::native_dimension_append::lower(ctx, array_value, value, span, |ctx, array, value| {
+        ctx.emit_void(op, vec![array.value, value.value], None, op.default_effects(), Some(span));
+    }) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        // A concrete object read from final Mixed storage owns its unboxed lease.
+        // Finalization removes this release when the local still lends a concrete value.
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        return;
+    }
+    ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     release_persisted_string_operand(ctx, value, span);
 }

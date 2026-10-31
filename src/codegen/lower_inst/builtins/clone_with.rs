@@ -726,9 +726,38 @@ fn clone_hook_candidates(ctx: &FunctionContext<'_>) -> Result<Vec<CloneHookCandi
             }
             owner = info.parent.as_deref();
         }
+        if let Some(method) = native_clone_method(ctx, runtime_class) {
+            let target = resolve_method_call_target(ctx, runtime_class, method, 1)?;
+            if let Some(candidate) = candidates.last_mut().filter(|candidate|
+                candidate.class_id == runtime_info.class_id)
+            {
+                // Native storage replaces the user callback while preserving its access check.
+                candidate.target = target;
+            } else {
+                candidates.push(CloneHookCandidate {
+                    class_id: runtime_info.class_id,
+                    class_name: runtime_class.clone(),
+                    declaring_class: runtime_class.clone(),
+                    visibility: Visibility::Public,
+                    target,
+                });
+            }
+        }
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
     Ok(candidates)
+}
+
+/// Finds a reviewed native-storage clone handler on the class or its ancestors.
+fn native_clone_method(ctx: &FunctionContext<'_>, class: &str) -> Option<&'static str> {
+    let mut current = Some(class);
+    while let Some(name) = current {
+        if let Some(method) = elephc_builtin_contract::lookup_class(name)
+            .and_then(|class| class.operators).and_then(|ops| ops.native_clone)
+        { return Some(method); }
+        current = ctx.module.class_infos.get(name).and_then(|info| info.parent.as_deref());
+    }
+    None
 }
 
 /// Dispatches the cloned receiver's dense class id to its resolved hook branch.

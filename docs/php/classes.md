@@ -418,7 +418,7 @@ echo $child->value . ":" . $child->parentValue(); // 5:1
 
 A property can define **hooks** that run when it is read or written, replacing hand-written getter and setter methods. The hooks live in a `{ ... }` block after the property name. Reading the property runs its `get` hook; assigning to it runs its `set` hook.
 
-A `get`-only property is **virtual** — it has no stored value of its own and is read-only. The short form `get => expr;` returns `expr`; the block form `get { ... }` runs statements and returns a value:
+A property whose hooks never access its own backing slot is **virtual** and has no stored value. A virtual `get`-only property is read-only. A backed getter without a setter keeps ordinary writes to its stored value. The short form `get => expr;` returns `expr`; the block form `get { ... }` runs statements and returns a value:
 
 ```php
 <?php
@@ -487,7 +487,7 @@ echo $n->value; // Ada
 
 Rules:
 
-- A property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error.
+- A virtual property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error. A backed getter-only property retains its implicit write operation.
 - Hooked properties cannot have a default value and cannot be `static`, `final`, or `readonly`.
 - Each hook may be declared at most once per property.
 - `set => expr;` is equivalent to assigning `expr` to the property's own backing slot.

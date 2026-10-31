@@ -548,7 +548,10 @@ fn emit_generator_function(
             max_params
         )));
     }
-    emit_generator_constructor(emitter, entry_label, &callback_label, &param_types);
+    let guard_name = crate::names::generator_parameter_guard_name(&function.name);
+    let guard_symbol = module.closures.iter().find(|helper| helper.name == guard_name)
+        .map(|helper| function_symbol(&helper.name));
+    emit_generator_constructor(emitter, entry_label, &callback_label, &param_types, guard_symbol.as_deref());
     emit_endfn_marker(emitter, &function.name);
     emit_generator_body(
         module,
@@ -640,6 +643,7 @@ fn emit_generator_constructor(
     entry_label: &str,
     callback_label: &str,
     param_types: &[PhpType],
+    parameter_guard: Option<&str>,
 ) {
     use crate::codegen::runtime::{FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET};
     let target = emitter.target;
@@ -673,6 +677,10 @@ fn emit_generator_constructor(
             false,
             &mut cursor,
         );
+    }
+
+    if let Some(guard) = parameter_guard {
+        emit_generator_argument_call(emitter, guard, param_types);
     }
 
     // -- allocate the Generator coroutine object --
@@ -846,7 +854,6 @@ fn emit_generator_callback(
         Arch::X86_64 => "r12",
     };
     let result_reg = abi::int_result_reg(emitter); // x0 / rax
-    let assignments = abi::build_outgoing_arg_assignments_for_target(target, param_types, 0);
 
     emitter.blank();
     emitter.comment(&format!(
@@ -913,12 +920,32 @@ fn emit_generator_callback(
         }
     }
 
-    // -- forward the unboxed parameters to the body through the normal call ABI --
-    // Push each parameter onto the temporary call stack in source order, then let
-    // `materialize_outgoing_args` place them into argument registers and the caller-stack
-    // overflow area exactly as an ordinary call would. This routes parameters beyond the
-    // ABI register budget (e.g. a 7th integer parameter on x86_64 SysV) through the stack
-    // instead of dropping them.
+    // Forward spilled parameters through the same ABI used by the eager validator.
+    emit_generator_argument_call(emitter, body_label, param_types);
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(                                                // park the body return value for getReturn()
+                &format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)
+            );
+            emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!(                                       // park the body return value for getReturn()
+                "mov QWORD PTR [r12 + {}], rax",
+                GEN_RETURN_VALUE_OFFSET
+            ));
+            emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
+        }
+    }
+    abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
+    abi::emit_frame_restore(emitter, frame_size);
+    abi::emit_return(emitter);
+}
+
+/// Calls an EIR generator validator or body using spilled parameters and the shared target ABI.
+fn emit_generator_argument_call(emitter: &mut Emitter, label: &str, param_types: &[PhpType]) {
+    let target = emitter.target;
+    let assignments = abi::build_outgoing_arg_assignments_for_target(target, param_types, 0);
     for (idx, ty) in param_types.iter().enumerate() {
         let slot = gen_param_slot(idx);
         match gen_param_kind(ty) {
@@ -959,35 +986,9 @@ fn emit_generator_callback(
     };
     abi::emit_reserve_temporary_stack(emitter, call_pad);
 
-    // -- run the body, park its return value, and yield a null fiber transfer value --
-    match target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(&format!("bl {}", body_label));                 // run the generator body to completion; x0 = boxed return value
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!("call {}", body_label));               // run the generator body to completion; rax = boxed return value
-        }
-    }
-    abi::emit_release_temporary_stack(emitter, call_pad); // drop the ARM64 nested-call alignment pad
-    abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop any stack-passed parameters after the body returns
-    match target.arch {
-        Arch::AArch64 => {
-            emitter.instruction(                                                // park the body return value for getReturn()
-                &format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)
-            );
-            emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
-        }
-        Arch::X86_64 => {
-            emitter.instruction(&format!(                                       // park the body return value for getReturn()
-                "mov QWORD PTR [r12 + {}], rax",
-                GEN_RETURN_VALUE_OFFSET
-            ));
-            emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
-        }
-    }
-    abi::load_at_offset(emitter, gen_cache, GEN_SAVE_OFF); // restore the caller's callee-saved generator-object cache register
-    abi::emit_frame_restore(emitter, frame_size);
-    abi::emit_return(emitter);
+    abi::emit_call_label(emitter, label);
+    abi::emit_release_temporary_stack(emitter, call_pad);
+    abi::emit_release_temporary_stack(emitter, overflow_bytes);
 }
 
 /// Returns the runtime metadata entry label for an EIR class-method function.
@@ -1426,7 +1427,11 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.label(&block_label);
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
-        lower_inst::lower_instruction(ctx, *inst_id)?;
+        lower_inst::lower_instruction(ctx, *inst_id).map_err(|error| {
+            CodegenIrError::invalid_module(format!(
+                "{error} (function {}, instruction {inst_id:?})", ctx.function.name,
+            ))
+        })?;
         if ctx.uses_pcntl_async_signals() {
             abi::emit_call_label(ctx.emitter, "__rt_pcntl_async_dispatch_preserving");
         }

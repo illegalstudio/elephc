@@ -11,6 +11,127 @@
 use super::super::*;
 use super::support::*;
 
+/// Native nullable-integer references stage both words and dirty the caller on tag-only changes.
+#[test]
+fn native_nullable_integer_reference_staging_preserves_payload_and_tag() {
+    for (before, after) in [(None, Some(3)), (Some(3), None), (Some(3), Some(7))] {
+        let mut values = FakeOps::default();
+        let mut context = ElephcEvalContext::new();
+        let mut scope = ElephcEvalScope::new();
+        let original = match before { Some(value) => values.int(value).unwrap(), None => values.null().unwrap() };
+        scope.set_from_aot("value", original, ScopeCellOwnership::Owned);
+        scope.mark_name_clean("value");
+        let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+        assert!(function.set_param_type(0, EvalParameterType::new(vec![EvalParameterTypeVariant::Int], true)));
+        assert!(function.set_param_by_ref(0, true));
+        assert!(function.set_param_tagged_scalar_ref(0, true));
+        let mut bound = bind_evaluated_native_function_args(&function, vec![EvaluatedCallArg {
+            name: None, value: original.borrowed(),
+            ref_target: Some(EvalReferenceTarget::Variable { scope: &mut scope, name: "value".into() }),
+        }], &mut context, &mut values).unwrap();
+        let BoundNativeFunctionRefSlot::TaggedScalar { slot, .. } = &mut bound.ref_slots[0] else {
+            panic!("nullable integers must expose a full payload/tag slot");
+        };
+        assert_eq!(**slot, [before.unwrap_or(0) as u64, if before.is_some() { EVAL_TAG_INT } else { EVAL_TAG_NULL }]);
+        let address = (slot.as_mut() as *mut [u64; 2]) as usize;
+        let read = eval_invoker_slot_ref_target_value(address, EVAL_INVOKER_TAGGED_SCALAR_SOURCE, &mut values).unwrap();
+        assert_eq!(values.get(read), before.map_or(FakeValue::Null, FakeValue::Int));
+        values.release(read).unwrap();
+        let replacement = match after { Some(value) => values.int(value).unwrap(), None => values.null().unwrap() };
+        write_back_invoker_slot_ref_target(address, EVAL_INVOKER_TAGGED_SCALAR_SOURCE, replacement, &mut values).unwrap();
+        values.release(replacement).unwrap();
+        write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+        assert_eq!(values.get(scope.visible_cell("value").unwrap()), after.map_or(FakeValue::Null, FakeValue::Int));
+        assert!(scope.entry("value").unwrap().flags().dirty);
+        for marker in bound.values { values.release(marker).unwrap(); }
+        let current = scope.visible_cell("value").unwrap();
+        values.release(current).unwrap();
+        assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+    }
+}
+
+/// Native scalar references reserve both words written by concrete invoker markers.
+#[test]
+fn native_scalar_reference_staging_reserves_a_full_marker_slot() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let original = values.int(3).unwrap();
+    scope.set_from_aot("value", original, ScopeCellOwnership::Owned);
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+    assert!(function.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Int], false),
+    ));
+    assert!(function.set_param_by_ref(0, true));
+    let mut bound = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg {
+            name: None,
+            value: original.borrowed(),
+            ref_target: Some(EvalReferenceTarget::Variable {
+                scope: &mut scope,
+                name: "value".into(),
+            }),
+        }],
+        &mut context,
+        &mut values,
+    ).unwrap();
+    let BoundNativeFunctionRefSlot::RawWord { slot, .. } = &mut bound.ref_slots[0] else {
+        panic!("integer references must use a raw scalar marker slot");
+    };
+    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
+    assert_eq!(**slot, [3, 0]);
+    slot[0] = 7;
+    slot[1] = u64::MAX;
+    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+    assert_eq!(values.get(scope.visible_cell("value").unwrap()), FakeValue::Int(7));
+    for marker in bound.values { values.release(marker).unwrap(); }
+    let current = scope.visible_cell("value").unwrap();
+    values.release(current).unwrap();
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+}
+
+/// Native iterable references reserve the tag word written beside their owned heap pointer.
+#[test]
+fn native_iterable_reference_staging_reserves_a_full_marker_slot() {
+    let mut values = FakeOps::default();
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let original = values.array_new(0).unwrap();
+    scope.set_from_aot("value", original, ScopeCellOwnership::Owned);
+    let mut function = NativeFunction::new(std::ptr::null_mut(), fake_native_return_descriptor, 1);
+    assert!(function.set_param_type(
+        0,
+        EvalParameterType::new(vec![EvalParameterTypeVariant::Iterable], false),
+    ));
+    assert!(function.set_param_by_ref(0, true));
+    let mut bound = bind_evaluated_native_function_args(
+        &function,
+        vec![EvaluatedCallArg {
+            name: None,
+            value: original.borrowed(),
+            ref_target: Some(EvalReferenceTarget::Variable {
+                scope: &mut scope,
+                name: "value".into(),
+            }),
+        }],
+        &mut context,
+        &mut values,
+    ).unwrap();
+    let BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } = &mut bound.ref_slots[0] else {
+        panic!("iterable references must expose a full raw heap marker slot");
+    };
+    assert_eq!(std::mem::size_of_val(slot.as_ref()), 16);
+    assert_eq!(**slot, [original.as_ptr() as u64, 0]);
+    slot[1] = u64::MAX;
+    write_back_native_function_ref_args(&bound, &mut context, &mut values).unwrap();
+    for marker in bound.values { values.release(marker).unwrap(); }
+    let current = scope.visible_cell("value").unwrap();
+    values.release(current).unwrap();
+    assert_eq!(values.cell_owners.values().sum::<usize>(), 0);
+}
+
 /// Deferred default trees retire allocated prefixes and restore lexical scope on every failure.
 #[test]
 fn native_default_expression_releases_partial_arrays_and_restores_scope() {
@@ -281,10 +402,11 @@ fn native_ref_cleanup_consumes_every_slot_after_a_release_error() {
                 BoundNativeFunctionRefSlot::RawString {
                     original: [string.as_ptr() as u64, 6],
                     slot: Box::new([string.as_ptr() as u64, 6]), target: None,
+                    force_writeback: false,
                 },
                 BoundNativeFunctionRefSlot::OwnedRawWord {
                     original: array.as_ptr() as u64,
-                    slot: Box::new(array.as_ptr() as u64), target: None,
+                    slot: Box::new([array.as_ptr() as u64, 0]), target: None,
                 },
                 BoundNativeFunctionRefSlot::Mixed {
                     original: mixed, slot: Box::new(mixed.as_ptr()), target: None,

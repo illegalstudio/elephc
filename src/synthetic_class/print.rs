@@ -565,13 +565,27 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
         // A parser-generated group (multi-argument `echo`, destructuring, the empty no-op that
         // positions a `default:` written before a case) prints as its statements; an empty
         // group prints nothing.
-        StmtKind::Synthetic(body) => body
+        StmtKind::Synthetic(body) => nested_append_statement(body, depth).unwrap_or_else(|| body
             .iter()
             .map(|inner| statement(inner, depth))
             .collect::<Vec<_>>()
-            .join("\n"),
+            .join("\n")),
         other => panic!("print: unmodelled statement {:?}", truncate(other)),
     }
+}
+
+/// Reconstructs a nested append instead of emitting its unspellable compiler-local bindings.
+fn nested_append_statement(body: &[Stmt], depth: usize) -> Option<String> {
+    let [read, push, write] = body else { return None; };
+    let StmtKind::Assign { name, value: target } = &read.kind else { return None; };
+    if !name.starts_with(crate::parser::ast::NESTED_APPEND_TEMP_PREFIX)
+        || !crate::names::is_generated_local_name(name) { return None; }
+    let StmtKind::ArrayPush { array, value } = &push.kind else { return None; };
+    if array != name { return None; }
+    let temporary = Expr::new(ExprKind::Variable(name.clone()), write.span);
+    let expected = crate::parser::stmt::assignment_target_store_stmt(target.clone(), temporary, write.span).ok()?;
+    if write.kind != expected { return None; }
+    Some(format!("{}{}[] = {};", pad(depth), at(target, ATOM), expression(value)))
 }
 
 /// A `{ … }` body, one statement per line.
@@ -674,6 +688,9 @@ fn type_expr(ty: &TypeExpr) -> String {
         TypeExpr::Ptr(None) => "ptr".to_string(),
         TypeExpr::Named(name) => name_source(name),
         TypeExpr::Array(inner) => format!("array<{}>", type_expr(inner)),
+        TypeExpr::AssocArray { key, value } => {
+            format!("array<{}, {}>", type_expr(key), type_expr(value))
+        }
         // Rendered structurally so the round trip holds: `printing_round_trips` re-parses
         // everything this prints, and `Box<int>` parses back to the same type.
         TypeExpr::GenericClass { name, args } => format!(
@@ -1032,7 +1049,53 @@ mod tests {
             rest = &after[close..];
         }
         cleaned.push_str(rest);
-        cleaned
+        normalize_generated_append_bindings(&cleaned)
+    }
+
+    /// Alpha-normalizes only generated append bindings while retaining distinct binding identities.
+    fn normalize_generated_append_bindings(rendered: &str) -> String {
+        let mut rest = rendered;
+        let mut normalized = String::new();
+        let mut bindings = std::collections::HashMap::new();
+        let prefix = format!("\"{}", crate::parser::ast::NESTED_APPEND_TEMP_PREFIX);
+        while let Some(start) = rest.find(&prefix) {
+            let end = start + 1 + rest[start + 1..].find('"').expect("debug name closes");
+            let name = &rest[start + 1..end];
+            let binding_field = ["name: ", "array: ", "Variable("]
+                .iter().any(|field| rest[..start].ends_with(field));
+            normalized.push_str(&rest[..start + 1]);
+            if binding_field && crate::names::is_generated_local_name(name) {
+                let next = bindings.len();
+                let index = *bindings.entry(name.to_string()).or_insert(next);
+                normalized.push_str(&format!("__elephc_napp_binding_{index}#gen"));
+            } else { normalized.push_str(name); }
+            rest = &rest[end..];
+        }
+        normalized.push_str(rest);
+        normalized
+    }
+
+    /// Generated binding normalization preserves mismatched uses and literal string contents.
+    #[test]
+    fn nested_append_binding_normalization_keeps_identity() {
+        let original = "name: \"__elephc_napp_1_2_0#gen\", Variable(\"__elephc_napp_1_2_0#gen\")";
+        let moved = "name: \"__elephc_napp_9_8_0#gen\", Variable(\"__elephc_napp_9_8_0#gen\")";
+        let mismatched = "name: \"__elephc_napp_9_8_0#gen\", Variable(\"__elephc_napp_9_8_1#gen\")";
+        assert_eq!(normalize_generated_append_bindings(original), normalize_generated_append_bindings(moved));
+        assert_ne!(normalize_generated_append_bindings(original), normalize_generated_append_bindings(mismatched));
+        let literal = "StringLiteral(\"__elephc_napp_1_2_0#gen\")";
+        assert_eq!(normalize_generated_append_bindings(literal), literal);
+        let user = "name: \"__elephc_napp_1_2_0\"";
+        assert_eq!(normalize_generated_append_bindings(user), user);
+    }
+
+    /// Nested appends round-trip through source without exposing parser-generated local markers.
+    #[test]
+    fn printing_round_trips_nested_appends() {
+        let tokens = crate::lexer::tokenize("<?php function append() { $rows['a'][] = 1; $rows['b'][] = 2; }").unwrap();
+        let program = crate::parser::parse_internal(&tokens).unwrap();
+        assert!(!print_program(&program).contains("#gen"));
+        round_trip("nested appends", &program);
     }
 
     /// Prints `program`, re-parses the result, and asserts the two ASTs are the same one.
@@ -1158,6 +1221,12 @@ mod tests {
     #[test]
     fn printing_round_trips_bcmath_number() {
         round_trip("bcmath", &crate::bcmath_prelude::bcmath_declarations());
+    }
+
+    /// Associative projections in the SimpleXML prelude preserve their key and value types.
+    #[test]
+    fn printing_round_trips_simplexml() {
+        round_trip("simplexml", &crate::simplexml_prelude::declarations());
     }
 
     /// Round-trips nested matches, grouped labels, missing defaults and the empty form.

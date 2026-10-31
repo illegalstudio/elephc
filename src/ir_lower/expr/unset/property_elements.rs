@@ -410,15 +410,10 @@ pub(super) fn lower_unset_array_access_property_offset(
     let fetched = lower_expr(ctx, &fetch);
     let guarded_from = owners.len();
     let container = park_lowered_unset_operand(ctx, fetched, array.span, &mut owners);
-    let call = Expr::new(
-        ExprKind::MethodCall {
-            object: Box::new(container),
-            method: "offsetUnset".to_string(),
-            args: vec![key],
-        },
-        expr.span,
-    );
-    lower_expr(ctx, &call);
+    let object = lower_expr(ctx, &container);
+    let source_type = ctx.builder.value_php_type(object.value);
+    native_dimension_probes::lower(ctx, object, &source_type, &key,
+        elephc_builtin_contract::ObjectDimension::Unset, expr);
     if let Some(join_block) = join_block {
         // The container slot is written only on the initialized path, so it is retired there.
         for slot in owners.split_off(guarded_from).into_iter().rev() {
@@ -443,7 +438,7 @@ pub(super) fn lower_unset_array_access_property_offset(
 /// side effect and sees what PHP's delayed fetch sees. Anything else is lowered once and parked
 /// by [`park_lowered_unset_operand`]. The caller retires every slot pushed onto `owners` after
 /// the operation.
-fn park_unset_operand(
+pub(super) fn park_unset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     operand: &Expr,
     owners: &mut Vec<crate::ir::LocalSlotId>,
@@ -469,7 +464,7 @@ fn park_unset_operand(
 /// The value is retained into a hidden temporary registered as a call-operand owner, so a
 /// throwing `offsetUnset()` releases it on unwind, and an owning source temporary is released
 /// right away. The slot is pushed onto `owners` for the caller to retire.
-fn park_lowered_unset_operand(
+pub(super) fn park_lowered_unset_operand(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,

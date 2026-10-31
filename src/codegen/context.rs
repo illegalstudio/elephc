@@ -66,10 +66,13 @@ pub(crate) struct FunctionContext<'a> {
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     callable_reachability: CallableReachabilityAnalysis,
+    /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
+    raw_reference_call_results: HashSet<ValueId>,
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     exception_guard_offsets: HashMap<ValueId, usize>,
+    return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
@@ -192,10 +195,14 @@ impl<'a> FunctionContext<'a> {
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
+            raw_reference_call_results: function.instructions.iter()
+                .filter(|inst| inst.op == Op::AdoptRefCellPtr)
+                .filter_map(|inst| inst.operands.first().copied()).collect(),
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             exception_guard_offsets: layout.exception_guard_offsets,
+            return_owner_guard_offsets: layout.return_owner_guard_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
@@ -221,6 +228,12 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn exception_guard_offset(&self, token: ValueId) -> Result<usize> {
         self.exception_guard_offsets.get(&token).copied().ok_or_else(||
             CodegenIrError::invalid_module(format!("missing exception guard token {}", token.as_raw())))
+    }
+
+    /// Returns stable cleanup storage for a pending reference-return lease.
+    pub(super) fn return_owner_guard_offset(&self, slot: LocalSlotId) -> Result<usize> {
+        self.return_owner_guard_offsets.get(&slot).copied().ok_or_else(||
+            CodegenIrError::invalid_module(format!("missing return owner guard {}", slot.as_raw())))
     }
 
     /// Returns a module-unique local label carrying a readable but lossy prefix.
@@ -560,6 +573,11 @@ impl<'a> FunctionContext<'a> {
         self.local_analysis.ever_stores_ref_cell_pointer(slot)
     }
 
+    /// Returns whether this frame exclusively promotes the slot into an owned boxed cell.
+    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
+        self.local_analysis.owns_mixed_ref_cell_payload(slot)
+    }
+
     /// Returns whether this deferred release may execute while the slot stores a ref-cell pointer.
     pub(super) fn release_local_slot_may_observe_ref_cell(&self, inst: InstId) -> bool {
         self.local_analysis.release_may_observe_ref_cell(inst)
@@ -883,6 +901,42 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
+    /// Loads an eval-synchronized local using its runtime raw/ref-cell state.
+    ///
+    /// Eval flushes every visible binding from one instruction, while an attached native alias
+    /// may have arrived through a path the instruction-local may-analysis cannot prove. The
+    /// frame state word is authoritative for these synchronization boundaries.
+    pub(super) fn load_eval_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
+        let ty = self.local_php_type(slot)?;
+        if !self.local_slot_ever_stores_ref_cell_pointer(slot) {
+            return self.load_raw_local_to_result(slot);
+        }
+        let Some(state_offset) = self.ref_cell_state_offset(slot) else {
+            return self.load_ref_cell_local_to_result(slot);
+        };
+        let ref_cell = self.next_label("eval_local_load_ref_cell");
+        let done = self.next_label("eval_local_load_done");
+        let state_reg = abi::secondary_scratch_reg(self.emitter);
+        abi::load_at_offset(self.emitter, state_reg, state_offset);
+        match self.emitter.target.arch {
+            Arch::AArch64 => {
+                self.emitter
+                    .instruction(&format!("cbnz {state_reg}, {ref_cell}"));      // follow an attached native reference cell during eval flush
+            }
+            Arch::X86_64 => {
+                self.emitter
+                    .instruction(&format!("test {state_reg}, {state_reg}"));    // inspect the authoritative eval-time representation flag
+                self.emitter.instruction(&format!("jne {ref_cell}"));           // follow an attached native reference cell during eval flush
+            }
+        }
+        self.load_raw_local_to_result(slot)?;
+        self.emit_branch(&done);
+        self.emitter.label(&ref_cell);
+        self.load_ref_cell_local_to_result(slot)?;
+        self.emitter.label(&done);
+        Ok(ty)
+    }
+
     /// Loads a local slot using its raw frame representation without consulting ref-cell state.
     pub(super) fn load_raw_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let ty = self.local_php_type(slot)?;
@@ -895,7 +949,22 @@ impl<'a> FunctionContext<'a> {
     fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let storage_ty = self.local_php_type(slot)?;
         let payload_ty = self.ref_cell_payload_type(slot)?;
-        reject_multiword_ref_cell_local(&payload_ty, "load")?;
+        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
+        super::lower_inst::coerce_loaded_local_to_result_type(
+            self,
+            &payload_ty,
+            &storage_ty,
+        )?;
+        Ok(storage_ty)
+    }
+
+    /// Loads a reference cell's physical payload without coercing it to the logical slot type.
+    pub(super) fn load_ref_cell_payload_to_result(
+        &mut self,
+        slot: LocalSlotId,
+        payload_ty: &PhpType,
+    ) -> Result<()> {
+        reject_multiword_ref_cell_local(payload_ty, "load")?;
         let offset = self.local_offset(slot)?;
         let pointer_reg = abi::symbol_scratch_reg(self.emitter);
         abi::load_at_offset(self.emitter, pointer_reg, offset);
@@ -921,12 +990,7 @@ impl<'a> FunctionContext<'a> {
                 abi::emit_load_from_address(self.emitter, abi::int_result_reg(self.emitter), pointer_reg, 0);
             }
         }
-        super::lower_inst::coerce_loaded_local_to_result_type(
-            self,
-            &payload_ty,
-            &storage_ty,
-        )?;
-        Ok(storage_ty)
+        Ok(())
     }
 
     /// Stores the current result register(s) into the SSA value's home.
@@ -1486,26 +1550,26 @@ impl<'a> FunctionContext<'a> {
         )
     }
 
+    /// Returns whether lowering explicitly adopts this call's transferred cell before using it.
+    pub(super) fn call_result_transfers_reference(&self, result: ValueId) -> bool {
+        self.raw_reference_call_results.contains(&result)
+    }
+
     /// Returns the payload shape of a cell pointer stored in this local slot.
     ///
     /// A detach-capable by-reference parameter can widen its raw frame storage after a
     /// conditional `unset()`, while the caller's still-attached cell keeps the ABI shape from
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
-    fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
-        if let Some(param) = self
-            .function
-            .params
-            .get(slot.as_raw() as usize)
-            .filter(|param| param.by_ref)
-        {
-            return Ok(param.php_type.clone());
+    pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        if let Some(ty) = self.local_analysis.stable_ref_cell_payload_type(slot) {
+            return Ok(ty.clone());
         }
         self.local_php_type(slot)
     }
 
     /// Stores the current result register(s) through a local ref-cell pointer slot.
-    fn store_current_result_to_ref_cell_local(
+    pub(super) fn store_current_result_to_ref_cell_local(
         &mut self,
         slot: LocalSlotId,
         target_ty: &PhpType,
@@ -1700,6 +1764,11 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if let Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(runtime))) = inst.immediate {
+            // Case transforms persist their result before returning. A consuming
+            // container must take that owner instead of copying and abandoning it.
+            return Ok(runtime.returns_owned_string());
+        }
         Ok(matches!(
             inst.op,
             Op::Acquire

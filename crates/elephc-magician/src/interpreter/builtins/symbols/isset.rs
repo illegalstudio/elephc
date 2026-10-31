@@ -134,32 +134,50 @@ pub(in crate::interpreter) fn eval_isset_arg(
         return eval_static_property_isset_result(&class_name, &property, context, values);
     }
     if let EvalExpr::ArrayGet { array, index } = arg {
-        let array = eval_expr(array, context, scope, values)?;
-        let index = eval_expr(index, context, scope, values)?;
-        if values.type_tag(array)? == EVAL_TAG_OBJECT {
-            return eval_array_access_isset_result(array, index, context, values);
-        }
-        let value = values.array_get(array, index)?;
-        return Ok(!values.is_null(value)?);
+        let mut exists = false;
+        with_eval_void_operands(&[array.as_ref(), index.as_ref()], context, scope, values,
+            |args, context, _, values| {
+                let array = args[0].borrowed();
+                let index = args[1].borrowed();
+                if values.type_tag(array)? == EVAL_TAG_OBJECT {
+                    exists = eval_array_access_isset_result(array, index, context, values)?;
+                } else {
+                    let value = values.array_get(array, index)?;
+                    let answer = values.is_null(value).map(|null| !null);
+                    let released = eval_release_value(context, values, value);
+                    exists = answer?;
+                    released?;
+                }
+                Ok(())
+            })?;
+        return Ok(exists);
     }
     let value = eval_expr(arg, context, scope, values)?;
     Ok(!values.is_null(value)?)
 }
 
-/// Evaluates `isset($object[$key])` through `ArrayAccess::offsetExists()`.
+/// Evaluates `isset($object[$key])` while borrowing its caller-owned receiver and key.
+/// The enclosing probe owns cleanup; ordinary empty reuses the same key for offsetGet.
 pub(in crate::interpreter) fn eval_array_access_isset_result(
     object: RuntimeCellHandle,
     index: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    if !eval_array_access_object_matches(object, context, values)? {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let result = eval_method_call_result(object, "offsetExists", vec![index], context, values)?;
-    let exists = values.truthy(result)?;
-    values.release(result)?;
-    Ok(exists)
+    let result = match super::super::super::runtime_ops::simplexml_properties::dimension(
+        values, object, elephc_builtin_contract::ObjectDimension::Isset, vec![index.borrowed()],
+    )? {
+        Some(value) => value,
+        None => {
+            if !eval_array_access_object_matches(object, context, values)? {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            eval_method_call_result(object.borrowed(), "offsetExists", vec![index.borrowed()], context, values)?
+        }
+    };
+    let exists = values.truthy(result);
+    let released = eval_release_value(context, values, result);
+    exists.and_then(|exists| released.map(|()| exists))
 }
 
 /// Returns whether an object operand implements the eval-visible `ArrayAccess` contract.

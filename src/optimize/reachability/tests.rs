@@ -1419,3 +1419,41 @@ fn curl_prelude_dispatches_only_user_callables() {
 fn has_dynamic_hazard(usage: &super::usage::Usage) -> bool {
     usage.hazards.dynamic_function || usage.hazards.dynamic_method || usage.hazards.dynamic_class
 }
+
+/// Object-only class probes do not retain unrelated classes through a dynamic-name hazard.
+#[test]
+fn scan_object_class_probes_preserve_class_pruning() {
+    for source in [
+        "<?php echo is_a($object, 'A');",
+        "<?php echo is_a($object, 'A', false);",
+        "<?php echo is_subclass_of($object, 'A', false);",
+        "<?php $object = new A(); echo is_subclass_of($object, 'A');",
+        "<?php echo is_a(new A(), 'A', true);",
+        "<?php class A { public function check(): bool { return is_subclass_of($this, 'A'); } }",
+        "<?php echo is_a(allow_string: false, class: 'A', object_or_class: $object);",
+    ] {
+        let usage = scan_program(&parse(source));
+        assert!(!usage.hazards.dynamic_class, "{source}");
+        assert!(usage.classes.contains(&php_symbol_key("A")), "{source}");
+    }
+    for probe in ["is_a($object, 'A')", "is_subclass_of($object, 'A')"] {
+        let source = format!("<?php class A {{}} class Unused {{}} $object = new A(); var_dump({probe});");
+        let (program, _) = prune(&source);
+        assert!(!has_class(&program, "Unused"), "{probe}");
+    }
+}
+
+/// String-enabled probes still conservatively retain dynamically selected class declarations.
+#[test]
+fn scan_string_class_probes_keep_dynamic_lookup_hazards() {
+    for source in [
+        "<?php echo is_a($argv[1], 'A', true);",
+        "<?php echo is_subclass_of($argv[1], 'A');",
+    ] {
+        assert!(scan_program(&parse(source)).hazards.dynamic_class, "{source}");
+    }
+    let usage = scan_program(&parse("<?php echo is_a('Child', 'Base', true);"));
+    assert!(!usage.hazards.dynamic_class);
+    assert!(usage.classes.contains(&php_symbol_key("Child")));
+    assert!(usage.classes.contains(&php_symbol_key("Base")));
+}

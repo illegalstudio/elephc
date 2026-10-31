@@ -28,6 +28,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_values(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(
+                *callback,
+                positional_args(evaluated_args),
+                context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             if let Some(closure) = context.closure(name).cloned() {
                 return eval_closure_with_evaluated_args(
@@ -253,6 +261,14 @@ pub(super) fn eval_evaluated_callable_with_call_user_func_values(
                 values,
             )
         }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(
+                *callback,
+                positional_args(evaluated_args),
+                context,
+                values,
+            )
+        }
         EvaluatedCallable::Named { name, .. } => {
             eval_named_callable_with_call_user_func_values(name, evaluated_args, context, values)
         }
@@ -387,6 +403,14 @@ pub(in crate::interpreter) fn eval_evaluated_callable_with_by_value_call_args(
                 callback,
                 evaluated_args,
                 owner_context,
+                values,
+            )
+        }
+        EvaluatedCallable::NativeDescriptor { callback, .. } => {
+            eval_native_descriptor_with_call_args(
+                *callback,
+                evaluated_args,
+                context,
                 values,
             )
         }

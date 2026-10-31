@@ -8,6 +8,161 @@
 //! Key details:
 //! - ArrayIterator and ArrayObject preserve insertion-order keys through Mixed keys/values storage.
 
+/// Opaque eval mutates attached SPL cells without replaying a stale offsetSet copy.
+#[test]
+fn test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class EvalSplReplacement { public string $label = 'new'; }
+class EvalSplRetired {
+    public function __destruct() {
+        global $evalSpl;
+        echo $evalSpl['x'][0]->label, '|';
+        $evalSpl['x'] = ['retargeted'];
+    }
+}
+class EvalSplSetter extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+}
+$evalSpl = new ArrayObject(['x' => [new EvalSplRetired()]]);
+$evalSetter = new EvalSplSetter(['x' => [1]]);
+$source = $argc > 0 ? '$evalSpl["x"][0] = new EvalSplReplacement();
+$evalSetter["x"][] = 2;
+return json_encode($evalSpl->getArrayCopy()) . "|" . json_encode($evalSetter->getArrayCopy());' : '';
+echo eval($source);
+unset($evalSetter, $evalSpl);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "new|{\"x\":[\"retargeted\"]}|{\"x\":[1,2]}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Interface erasure preserves attached SPL writes and ordinary value/reference getters.
+#[test]
+fn test_spl_nested_writes_through_array_access_interface_preserve_user_getters() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class InterfaceNestedValue implements ArrayAccess {
+    public mixed $items = [1];
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return $this->items; }
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+    public function offsetUnset(mixed $key): void {}
+}
+class InterfaceNestedReference implements ArrayAccess {
+    public mixed $items;
+    public function __construct() { $this->items = new ArrayObject([1]); }
+    public function offsetExists(mixed $key): bool { return true; }
+    public function &offsetGet(mixed $key): mixed { return $this->items; }
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+    public function offsetUnset(mixed $key): void {}
+}
+class InterfaceNestedSetter extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-set|'; }
+}
+function interfaceNestedKey(): string { echo 'key|'; return 'x'; }
+function interfaceNestedWrite(ArrayAccess $receiver): void { $receiver[interfaceNestedKey()][] = 2; }
+$object = new ArrayObject(['x' => [1]]); interfaceNestedWrite($object);
+echo json_encode($object->getArrayCopy()), '|';
+$iterator = new ArrayIterator(['x' => [1]]); interfaceNestedWrite($iterator);
+echo json_encode($iterator->getArrayCopy()), '|';
+$setter = new InterfaceNestedSetter(['x' => [1]]); interfaceNestedWrite($setter);
+echo json_encode($setter->getArrayCopy()), '|';
+set_error_handler(function(int $severity, string $message, string $file, int $line): bool { return true; });
+$value = new InterfaceNestedValue(); interfaceNestedWrite($value);
+restore_error_handler(); echo json_encode($value->items), '|';
+$reference = new InterfaceNestedReference(); interfaceNestedWrite($reference);
+echo json_encode($reference->items->getArrayCopy());
+unset($reference, $value, $setter, $iterator, $object);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "key|{\"x\":[1,2]}|key|{\"x\":[1,2]}|key|{\"x\":[1,2]}|key|[1]|key|[1,2]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Destructors observe published nested replacements, even when throwing or retargeting the parent.
+#[test]
+fn test_spl_and_mixed_nested_overwrite_publication_survives_destructor_reentry() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class NestedPublicationNew { public string $label = 'new'; }
+class SplPublicationOld {
+    public bool $throwing = false; public bool $retarget = false;
+    public function __destruct() {
+        global $splPublication;
+        echo $splPublication['x'][0]->label, '|';
+        if ($this->retarget) { $splPublication['x'] = ['retargeted']; }
+        if ($this->throwing) { throw new Exception('retired'); }
+    }
+}
+class MixedPublicationOld {
+    public bool $throwing = false; public bool $retarget = false;
+    public function __destruct() {
+        global $mixedPublication;
+        echo $mixedPublication['x'][0]->label, '|';
+        if ($this->retarget) { $mixedPublication['x'] = ['retargeted']; }
+        if ($this->throwing) { throw new Exception('retired'); }
+    }
+}
+function makeSplPublication(bool $throwing, bool $retarget): ArrayObject {
+    $old = new SplPublicationOld(); $old->throwing = $throwing; $old->retarget = $retarget;
+    return new ArrayObject(['x' => [$old]]);
+}
+function makeMixedPublication(bool $throwing, bool $retarget): mixed {
+    $old = new MixedPublicationOld(); $old->throwing = $throwing; $old->retarget = $retarget;
+    return ['x' => [$old]];
+}
+$splPublication = makeSplPublication(false, false);
+$splPublication['x'][0] = new NestedPublicationNew(); echo $splPublication['x'][0]->label, '|';
+unset($splPublication);
+$splPublication = makeSplPublication(true, false);
+try { $splPublication['x'][0] = new NestedPublicationNew(); }
+catch (Exception $error) { echo $error->getMessage(), '|'; unset($error); }
+echo $splPublication['x'][0]->label, '|'; unset($splPublication);
+$splPublication = makeSplPublication(false, true);
+$splPublication['x'][0] = new NestedPublicationNew(); echo $splPublication['x'][0], '|';
+unset($splPublication);
+$mixedPublication = makeMixedPublication(false, false);
+$mixedPublication['x'][0] = new NestedPublicationNew(); echo $mixedPublication['x'][0]->label, '|';
+unset($mixedPublication);
+$mixedPublication = makeMixedPublication(true, false);
+try { $mixedPublication['x'][0] = new NestedPublicationNew(); }
+catch (Exception $error) { echo $error->getMessage(), '|'; unset($error); }
+echo $mixedPublication['x'][0]->label, '|'; unset($mixedPublication);
+$mixedPublication = makeMixedPublication(false, true);
+$mixedPublication['x'][0] = new NestedPublicationNew(); echo $mixedPublication['x'][0], '|';
+unset($mixedPublication);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "new|new|new|retired|new|new|retargeted|new|new|new|retired|new|new|retargeted|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Attached SPL writes detach snapshots and clones, including missing and runtime-boxed parents.
+#[test]
+fn test_spl_nested_writes_preserve_storage_snapshots_and_getter_overrides() {
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
+class NestedStorageSetter extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'unexpected-setter|'; }
+}
+class NestedStorageGetter extends ArrayObject {
+    public function offsetGet(mixed $key): mixed { echo 'get|'; return parent::offsetGet($key); }
+}
+function nestedStorageBox(): mixed { return new ArrayIterator(['x' => [1]]); }
+$a = new ArrayObject(['x' => [1]]); $snapshot = $a->getArrayCopy(); $clone = clone $a;
+$a['x'][] = 2; $a['missing']['n'] = 3;
+echo json_encode($a->getArrayCopy()), '|', json_encode($snapshot), '|', json_encode($clone->getArrayCopy()), '|';
+$iterator = nestedStorageBox(); $iterator['x'][] = 4; $iterator['missing']['n'] = 5;
+echo json_encode($iterator->getArrayCopy()), '|';
+$setter = new NestedStorageSetter(['x' => [1]]); $setter['x'][] = 6;
+echo json_encode($setter->getArrayCopy()), '|';
+set_error_handler(function(int $severity, string $message, string $file, int $line): bool { return true; });
+$getter = new NestedStorageGetter(['x' => [1]]); $getter['x'][] = 7;
+restore_error_handler(); echo json_encode($getter->getArrayCopy());
+unset($getter, $setter, $iterator, $clone, $snapshot, $a);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"x\":[1,2],\"missing\":{\"n\":3}}|{\"x\":[1]}|{\"x\":[1]}|{\"x\":[1,4],\"missing\":{\"n\":5}}|{\"x\":[1,6]}|get|{\"x\":[1]}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 use crate::support::*;
 
 /// Verifies that storage classes are declared and implement contracts.

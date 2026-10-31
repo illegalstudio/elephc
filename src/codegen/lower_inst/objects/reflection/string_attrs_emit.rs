@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh constant and default-property maps transfer ownership into their Mixed slots.
 
 use super::*;
 
@@ -234,13 +235,13 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     emit_reflection_constant_array(ctx, members)?;
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -268,13 +269,13 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     emit_reflection_default_property_array(ctx, members);
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -297,13 +298,23 @@ pub(super) fn emit_reflection_static_property_array_property_by_name(
         .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
     let low_offset = reflection_property_offset(class_info, property_name)?;
     let high_offset = low_offset + 8;
+    let field_type = class_info.properties.iter().find(|(name, _)| name == property_name)
+        .map(|(_, ty)| ty.codegen_repr())
+        .ok_or_else(|| CodegenIrError::missing_entry("property", 0))?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_decref_if_refcounted(ctx.emitter, &field_type);
     emit_reflection_static_property_array(ctx, members);
+    if field_type == PhpType::Mixed {
+        let assoc_type = PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        };
+        emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
+    }
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);

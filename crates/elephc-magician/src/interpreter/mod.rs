@@ -30,6 +30,7 @@ mod generics;
 mod include_exec;
 mod operands;
 mod libc_shims;
+mod null_object_boundaries;
 mod reflection;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
@@ -83,10 +84,13 @@ use generics::*;
 use include_exec::*;
 use operands::*;
 use libc_shims::*;
+use null_object_boundaries::*;
 use reflection::*;
 use return_type_compat::*;
 use return_values::*;
-pub use runtime_ops::RuntimeValueOps;
+pub use runtime_ops::{
+    NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
+};
 use runtime_ops::*;
 #[cfg(not(test))]
 pub(crate) use pcntl_escape::value_contains_foreign_pcntl_callable;

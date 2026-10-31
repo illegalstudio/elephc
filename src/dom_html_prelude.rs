@@ -18,10 +18,14 @@
 //!   flag and no `elephc-dom` crate.
 //! - Delivered as parsed PHP (like mysqli), not a native builtin, so every
 //!   supported target gets the same walk with no new assembly.
+//! - Attribute-name validation and DOMException remain available without libxml2.
 
 mod detect;
+mod attributes;
 mod entities;
+mod node_cache;
 mod surface;
+mod text;
 
 use std::sync::OnceLock;
 
@@ -32,12 +36,26 @@ use crate::parser::ast::Program;
 /// reused for every injecting compile.
 static PARSED_PRELUDE: OnceLock<Program> = OnceLock::new();
 
+/// Identifies actual DOM class references for XML receiver detection before injection.
+pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> bool {
+    detect::program_uses_dom_html(program)
+}
+
 /// Tokenizes and parses the DOM HTML prelude exactly once.
 fn parsed_prelude() -> Program {
     PARSED_PRELUDE
         .get_or_init(|| {
-            let source = format!("<?php\n{}\n{}", entities::SRC, surface::SRC);
-            let tokens = crate::lexer::tokenize(&source).expect("dom html prelude must tokenize");
+            let source = format!("<?php\n{}\n{}\n{}\n{}\n{}", entities::SRC, attributes::SRC, node_cache::SRC, text::SRC, surface::SRC);
+            // The root source owns identity zero. Giving the cached prelude its own identity keeps
+            // equal line/column pairs from colliding in span-keyed checker maps once a user program
+            // grows to the same coordinates as a declaration or helper in this source.
+            let source_id = crate::span::Span::fresh_synthetic_source_id();
+            let tokens = crate::lexer::tokenize_with_mode_and_source_id(
+                &source,
+                crate::source::SourceMode::Php,
+                source_id,
+            )
+            .expect("dom html prelude must tokenize");
             crate::parser::parse_internal(&tokens).expect("dom html prelude must parse")
         })
         .clone()
@@ -69,7 +87,7 @@ fn inject_if_used_on_compiler_stack(
     let mut combined = parsed_prelude();
     inventory.record_program("dom-html", &combined);
     combined.extend(program);
-    combined
+    crate::core_prelude::ensure_weak_reference(combined, inventory)
 }
 
 /// Discovers DOM references loaded by autoload without reinjecting an existing prelude.
@@ -87,7 +105,7 @@ pub fn inject_after_autoload(
         let mut combined = crate::name_resolver::resolve(parsed_prelude())?;
         inventory.record_program("dom-html", &combined);
         combined.extend(program);
-        Ok(combined)
+        Ok(crate::core_prelude::ensure_weak_reference(combined, inventory))
     })
 }
 
@@ -134,6 +152,8 @@ mod tests {
         let program = parse_resolved("<?php namespace App; use DOMDocument as Doc; new Doc();");
         let program = inject_after_autoload(program, &mut inventory).unwrap();
         assert!(inventory.groups.contains_key("dom-html"));
+        assert!(inventory.groups.contains_key("core"));
+        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
         let len = program.len();
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), len);
 
@@ -141,6 +161,24 @@ mod tests {
         let program = parse_resolved("<?php class DOMDocument {} new DOMDocument();");
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), 2);
         assert!(inventory.groups.is_empty());
+    }
+
+    /// DOM injection supplies its weak-cache dependency even without a user WeakReference mention.
+    #[test]
+    fn dom_injection_declares_weak_cache_dependency_once() {
+        let tokens = crate::lexer::tokenize("<?php new DOMDocument();").unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let program = inject_if_used(program, false, &mut inventory);
+        assert!(inventory.groups.contains_key("core"));
+        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
+    }
+
+    /// Cached DOM declarations cannot share span identity with the entry source.
+    #[test]
+    fn dom_prelude_spans_use_a_synthetic_source_identity() {
+        let prelude = parsed_prelude();
+        assert!(prelude.iter().all(|stmt| stmt.span.source_id() != 0));
     }
 
     /// The prelude must declare the Termwind node types and its private traversal helper.
@@ -156,6 +194,7 @@ mod tests {
         assert_eq!(
             declared,
             vec![
+                "DOMException",
                 "DOMNode",
                 "__ElephcDOMNodeListIterator",
                 "DOMNodeList",

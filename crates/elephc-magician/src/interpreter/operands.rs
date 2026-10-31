@@ -27,7 +27,7 @@ pub(in crate::interpreter) fn eval_echo_expr(
     })
 }
 
-/// Applies a unary operation while consuming its source and any synthetic zero operand.
+/// Applies a unary operation while consuming its source and any synthetic numeric operand.
 pub(in crate::interpreter) fn eval_unary_expr(
     op: EvalUnaryOp,
     expr: &EvalExpr,
@@ -38,9 +38,17 @@ pub(in crate::interpreter) fn eval_unary_expr(
     with_eval_operands(&[expr], context, scope, values, |args, _, _, values| {
         match op {
             EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
-                if op == EvalUnaryOp::Negate && values.type_tag(args[0])? == EVAL_TAG_FLOAT {
-                    let bits = values.raw_value_word(args[0])? ^ (1_u64 << 63);
-                    return values.raw_word_value(EVAL_TAG_FLOAT, bits);
+                if op == EvalUnaryOp::Negate {
+                    let tag = values.type_tag(args[0])?;
+                    if tag == EVAL_TAG_FLOAT {
+                        let bits = values.raw_value_word(args[0])? ^ (1_u64 << 63);
+                        return values.raw_word_value(EVAL_TAG_FLOAT, bits);
+                    }
+                    if tag == EVAL_TAG_OBJECT {
+                        if let Some(result) = runtime_ops::object_operators::negate(values, args[0])? {
+                            return Ok(result);
+                        }
+                    }
                 }
                 let zero = values.int(0)?;
                 let result = if op == EvalUnaryOp::Plus {
@@ -92,6 +100,26 @@ pub(in crate::interpreter) fn release_expr_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if value.is_borrowed() { Ok(()) } else { eval_release_value(context, values, value) }
+}
+
+/// Retires synthesized caller operands after a borrowing method binder has finished.
+pub(in crate::interpreter) fn finish_synthesized_method_arguments(
+    result: Result<RuntimeCellHandle, EvalStatus>, owners: Vec<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut cleanup = Ok(());
+    for owner in owners.into_iter().rev() {
+        let released = release_expr_result(owner, context, values);
+        if cleanup.is_ok() { cleanup = released; }
+    }
+    match (result, cleanup) {
+        (Err(status), _) => Err(status),
+        (Ok(value), Err(status)) => {
+            let _ = release_expr_result(value, context, values);
+            Err(status)
+        }
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 /// Compares borrowed values and releases the comparison cell after reading its truthiness.

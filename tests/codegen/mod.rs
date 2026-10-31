@@ -41,6 +41,8 @@ mod lfc;
 mod benchmarks;
 mod echo_vars;
 mod eval;
+mod eval_reference_returns;
+mod descriptor_reference_layouts;
 mod eval_generics;
 mod symbol_catalog;
 mod core_classes;
@@ -138,6 +140,7 @@ mod locals_retype;
 mod stack_guard;
 mod zval;
 
+mod simplexml;
 mod fileinfo;
 mod fileinfo_autoload;
 mod fileinfo_reflection;

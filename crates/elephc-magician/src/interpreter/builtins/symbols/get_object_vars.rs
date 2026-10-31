@@ -68,6 +68,11 @@ pub(in crate::interpreter) fn eval_get_object_vars_result(
     if values.type_tag(*object)? != EVAL_TAG_OBJECT {
         return Err(EvalStatus::RuntimeFatal);
     }
+    if runtime_ops::simplexml_properties::is_native(values, *object, "")? {
+        if let Some(result) = runtime_ops::object_operators::numeric_cast(
+            values, *object, elephc_builtin_contract::ObjectCast::Array,
+        )? { return Ok(result); }
+    }
     let Ok(identity) = values.object_identity(*object) else {
         return eval_public_object_vars_result(*object, values);
     };

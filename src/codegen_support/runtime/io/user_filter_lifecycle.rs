@@ -8,6 +8,7 @@
 //! Key details:
 //! - Both table roots detach before PHP callbacks can reenter or throw.
 //! - Each direction has an exception guard, including while another direction closes.
+//! - Shared instances receive one close callback while both direction owners retire.
 //! - A refused onCreate rolls back only the provisional object's roots, without onClose.
 //! - The descriptor is returned unchanged for the caller's remaining native teardown.
 //! - During fclose, a separate descriptor guard completes native close when PHP cleanup throws.
@@ -27,8 +28,8 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     abi::emit_jump(emitter, "__rt_user_filter_reject_fd");
     emitter.label_global("__rt_user_filter_reject_fd");
     // -- detach both direction owners before publishing their exceptional cleanup --
-    // Frame112: fd0, objects8/16, rejected object24, guards32/64, caller linkage96.
-    abi::emit_frame_prologue(emitter, 112);
+    // Frame128: fd0, objects8/16, rejected object24, XML policy32, guards48/80, linkage112.
+    abi::emit_frame_prologue(emitter, 128);
     abi::emit_store_to_address(emitter, arg, frame, 0);
     abi::emit_store_to_address(emitter, selected, frame, 24);
     emitter.instruction(if arm { "add x10, x0, x0" } else { "lea r10, [rdi + rdi]" }); // derive the read-direction table index
@@ -56,25 +57,54 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
         emitter.label(&saved);
         abi::emit_store_to_address(emitter, result, frame, 8 + direction * 8);
     }
+    // -- consume this resource's XML failure policy before any destructor can reenter --
+    abi::emit_load_from_address(emitter, result, frame, 0);
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_load_symbol_to_reg(emitter, if arm { "x11" } else { "r11" }, "_simplexml_unwind_stream", 0);
+    emitter.instruction(if arm { "cmp x0, x11" } else { "cmp rax, r11" });      // compare stable resource identities rather than reusable descriptors
+    if arm {
+        emitter.instruction("cset x11, eq");                                    // remember only this resource's pending XML read failure
+    } else {
+        emitter.instruction("sete cl");                                         // materialize the resource-specific cleanup decision
+        emitter.instruction("movzx ecx, cl");                                   // clear the remaining policy bits before storing the flag
+    }
+    let policy = if arm { "x11" } else { "rcx" };
+    abi::emit_store_to_address(emitter, policy, frame, 32);
+    emitter.instruction(if arm { "cmp x11, #0" } else { "test rcx, rcx" });     // unrelated filter resources keep their ordinary close callbacks
+    emitter.instruction(if arm { "b.eq __rt_user_filter_policy_ready" } else { "jz __rt_user_filter_policy_ready" }); // consume suppression only on the matching resource
+    if arm {
+        abi::emit_store_reg_to_symbol(emitter, "xzr", "_simplexml_unwind_stream", 0);
+    } else {
+        emitter.instruction("xor r11d, r11d");                                  // clear the shared policy before callbacks can reuse this descriptor
+        abi::emit_store_reg_to_symbol(emitter, "r11", "_simplexml_unwind_stream", 0);
+    }
+    emitter.label("__rt_user_filter_policy_ready");
     abi::emit_load_from_address(emitter, result, frame, 8);
     abi::emit_load_from_address(emitter, if arm { "x11" } else { "r11" }, frame, 16);
     emitter.instruction(if arm { "orr x0, x0, x11" } else { "or rax, r11" });   // plain descriptors need no ownership guard publication
     emitter.instruction(if arm { "cmp x0, #0" } else { "test rax, rax" });      // avoid guard-chain work when both user-filter slots are empty
     emitter.instruction(&format!("{} __rt_user_filter_retire_done", if arm { "b.eq" } else { "jz" })); // return the descriptor directly when no user objects exist
-    for (object, guard, x86_guard) in [(8, 32, 64), (16, 64, 32)] {
+    for (object, guard, x86_guard) in [(8, 48, 64), (16, 80, 32)] {
         abi::emit_load_from_address(emitter, result, frame, object);
         guards::guard(emitter, guard, x86_guard);
     }
     // -- run close hooks with both owners protected from escaping exceptions --
-    for (direction, object, guard, x86_guard) in [(0, 8, 32, 64), (1, 16, 64, 32)] {
+    for (direction, object, guard, x86_guard) in [(0, 8, 48, 64), (1, 16, 80, 32)] {
         let release = format!("__rt_user_filter_retire_{direction}");
         abi::emit_load_from_address(emitter, arg, frame, object);
         emitter.instruction(if arm { "cmp x0, #0" } else { "test rdi, rdi" });  // empty direction slots have no lifecycle callback
         emitter.instruction(&format!("{} {release}", if arm { "b.eq" } else { "jz" })); // retire even the empty guard in normal order
+        if direction == 1 {
+            abi::emit_load_from_address(emitter, if arm { "x9" } else { "r9" }, frame, 8);
+            emitter.instruction(if arm { "cmp x0, x9" } else { "cmp rdi, r9" }); // a shared instance already received its read-direction close hook
+            emitter.instruction(&format!("{} {release}", if arm { "b.eq" } else { "je" })); // retire the second owner without repeating the callback
+        }
         abi::emit_load_from_address(emitter, if arm { "x9" } else { "r9" }, frame, 24);
         emitter.instruction(if arm { "cmp x9, #0" } else { "test r9, r9" });    // rejected creation never invokes the close hook
         emitter.instruction(&format!("{} {release}", if arm { "b.ne" } else { "jnz" })); // roll back without observing onClose
-        abi::emit_load_symbol_to_reg(emitter, if arm { "x9" } else { "r9" }, "_stream_close_silent", 0);
+        abi::emit_load_symbol_to_reg(emitter, if arm { "x11" } else { "r11" }, "_stream_close_silent", 0);
+        abi::emit_load_from_address(emitter, if arm { "x9" } else { "r9" }, frame, 32);
+        emitter.instruction(if arm { "orr x9, x9, x11" } else { "or r9, r11" }); // merge saved resource policy after symbol addressing borrows scratch registers
         emitter.instruction(if arm { "cmp x9, #0" } else { "test r9, r9" });    // honor pending native-extension unwinding
         emitter.instruction(&format!("{} {release}", if arm { "b.ne" } else { "jnz" })); // skip PHP hooks while still releasing ownership
         emitter.instruction(if arm { "ldr x10, [x0]" } else { "mov r10, QWORD PTR [rdi]" }); // resolve the instance's class id
@@ -93,7 +123,7 @@ pub(crate) fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     // -- restore the caller's descriptor and native frame --
     emitter.label("__rt_user_filter_retire_done");
     abi::emit_load_from_address(emitter, result, frame, 0);
-    abi::emit_frame_restore(emitter, 112);
+    abi::emit_frame_restore(emitter, 128);
     abi::emit_return(emitter);
     emit_close_fd_guard(emitter);
 }

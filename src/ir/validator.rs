@@ -10,6 +10,7 @@
 //!   later passes can assume table IDs, branch args, and value types are sound.
 
 mod string_append;
+mod reference_results;
 
 use std::collections::{HashMap, HashSet};
 
@@ -95,6 +96,8 @@ pub enum ValidationError {
         actual: Option<IrType>,
     },
     NeverFunctionReturns,
+    InvalidReferenceOwner { local: LocalSlotId, owner: LocalSlotId },
+    InvalidReferenceCallResult { inst: InstId, operand: ValueId },
 }
 
 /// Validates every function stored in a module.
@@ -117,13 +120,51 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
 /// Validates one function and all of its function-local tables.
 pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
     validate_function_shape(function)?;
+    for local in &function.locals {
+        if let Some(owner) = local.ref_cell_owner {
+            if function.locals.get(owner.as_raw() as usize)
+                .is_none_or(|slot| slot.kind != LocalKind::RefCell || slot.id == local.id)
+            {
+                return Err(ValidationError::InvalidReferenceOwner { local: local.id, owner });
+            }
+        }
+    }
     validate_value_table(function)?;
     validate_instruction_placement(function)?;
     let dominators = compute_dominators(function);
     validate_instructions(function, &dominators)?;
     validate_terminators(function, &dominators)?;
     string_append::validate_transfers(function)?;
+    reference_results::validate_transfers(function)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod reference_owner_metadata_tests {
+    use super::*;
+
+    /// Invalid lease metadata fails before a backend can detach or release an unrelated slot.
+    #[test]
+    fn native_reference_owner_metadata_requires_a_distinct_ref_cell_slot() {
+        let mut function = Function::new("native_owner_metadata".into(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = crate::ir::Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", vec![]);
+            builder.position_at_end(entry);
+            builder.terminate(Terminator::Return { value: None });
+        }
+        let local = function.add_local(Some("value".into()), IrType::I64, PhpType::Int, LocalKind::PhpLocal);
+        let owner = function.add_local(Some("lease".into()), IrType::I64, PhpType::Int, LocalKind::RefCell);
+        function.locals[local.as_raw() as usize].ref_cell_owner = Some(owner);
+        assert_eq!(validate_function(&function), Ok(()));
+        for invalid in [local, LocalSlotId::from_raw(900)] {
+            function.locals[local.as_raw() as usize].ref_cell_owner = Some(invalid);
+            assert_eq!(validate_function(&function), Err(ValidationError::InvalidReferenceOwner { local, owner: invalid }));
+        }
+        function.locals[local.as_raw() as usize].ref_cell_owner = Some(owner);
+        function.locals[owner.as_raw() as usize].kind = LocalKind::OwnedTemp;
+        assert_eq!(validate_function(&function), Err(ValidationError::InvalidReferenceOwner { local, owner }));
+    }
 }
 
 /// Validates block existence, IDs, entry placement, and terminators.
@@ -586,7 +627,7 @@ fn validate_instruction_immediate(
         }),
         StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner
+        | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
         | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
@@ -830,7 +871,7 @@ fn validate_opcode_rules(
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell
-        | ReleaseLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
+        | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner => {
             check_count(inst_id, inst, 0, "0")
         }
         AcquireRefCell => {

@@ -12,6 +12,8 @@ use super::*;
 /// Lowers a plain PHP local assignment.
 pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
+    let carries_reference_markers = matches!(&value.kind,
+        ExprKind::Variable(source) if ctx.local_may_contain_reference_markers(source));
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The type
     // checker injects the variable as `Void` and emits a warning. At the
@@ -135,6 +137,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
         php_type
     };
     ctx.store_local(name, lowered, php_type, Some(span));
+    if carries_reference_markers {
+        ctx.mark_reference_marker_array_local(name);
+    } else {
+        ctx.clear_reference_marker_array_local(name);
+    }
     let callable_result = if direct_closure {
         ctx.take_pending_static_callable_result()
     } else {

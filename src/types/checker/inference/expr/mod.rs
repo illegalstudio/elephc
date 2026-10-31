@@ -164,6 +164,9 @@ impl Checker {
     /// to the `ArrayAccess` interface. Used when indexing an `Object` that
     /// implements `ArrayAccess`.
     fn array_access_offset_get_type(&self, class_name: &str) -> PhpType {
+        if crate::types::builtin_classes::has_native_dimensions(class_name, &self.classes) {
+            return PhpType::Union(vec![PhpType::Object(class_name.to_string()), PhpType::Void]);
+        }
         self.classes
             .get(class_name)
             .and_then(|class_info| class_info.methods.get("offsetget"))
@@ -531,6 +534,16 @@ impl Checker {
                 name, storage
             ),
         ))
+    }
+
+    /// Rejects native object counters whose referenced or static storage cannot change shape.
+    fn reject_unboxable_native_incdec(&self, name: &str, ty: &PhpType, span: Span) -> Result<(), CompileError> {
+        let storage = if self.active_ref_params.contains(name) { "a by-reference parameter" }
+            else if self.active_statics.contains(name) { "a static local" }
+            else { return Ok(()); };
+        Err(CompileError::new(span, &format!(
+            "Cannot increment/decrement ${name} of type {ty}: it is {storage}, and the native operator replaces the object with a number, which that storage cannot hold. Copy it into a plain local first.",
+        )))
     }
 
     /// Records that `name` is a local whose `++` / `--` can RETYPE it, in the function-like

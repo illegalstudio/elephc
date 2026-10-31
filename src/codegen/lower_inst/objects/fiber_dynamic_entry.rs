@@ -319,6 +319,13 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     }
 
     ctx.emitter.label(&fallback_label);
+    if crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        let missing = ctx.next_label("dynamic_new_no_ctor_eval_missing");
+        builtins::lower_eval_constructorless_fallback(ctx, &missing)?;
+        ctx.store_result_value(result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&missing);
+    }
     emit_dynamic_new_class_not_found_fatal(ctx);
 
     ctx.emitter.label(&non_string_label);

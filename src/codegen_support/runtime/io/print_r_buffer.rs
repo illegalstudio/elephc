@@ -1,8 +1,8 @@
 //! Purpose:
-//! Emits the `print_r` capture helpers: `__rt_pr_append`, `__rt_pr_write`, `__rt_pr_finish`
-//! and the buffer plumbing behind them (`__rt_pr_base`, `__rt_pr_reserve`, `__rt_pr_release`,
-//! `__rt_pr_flush_deferred`). These let `print_r($value, true)` render into an in-memory buffer
-//! instead of stdout, then return the captured bytes as an owned heap string.
+//! Emits the `print_r` return-mode capture helpers: `__rt_pr_append`,
+//! `__rt_pr_write`, and `__rt_pr_finish`. These let `print_r($value, true)`
+//! render into an in-memory buffer instead of stdout, then return the captured
+//! bytes as an owned heap string.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
@@ -12,21 +12,13 @@
 //! - `__rt_stdout_write` tail-calls `__rt_pr_append` when `_print_r_mode` is set
 //!   so codegen-side scalar/literal writes are captured too.
 //! - The `print_r` builtin codegen (`crate::codegen::lower_inst::builtins::debug`)
-//!   calls `__rt_pr_finish` to materialize the returned string and
-//!   `__rt_pr_flush_deferred` to write out a deferred echo-mode capture.
+//!   calls `__rt_pr_finish` to materialize the returned string.
 //!
 //! Key details:
-//! - `_print_r_mode` (0 = write through, 1 = return-mode capture, 2 = deferred echo-mode capture),
-//!   `_print_r_off` (byte count), `_print_r_base` / `_print_r_cap` (the active buffer) live in the
-//!   fixed runtime data section and default to zero.
-//! - THE BUFFER GROWS. A zero `_print_r_base` means the static 64 KiB `_print_r_buf`, a zero
-//!   `_print_r_cap` means 65536. `__rt_pr_append` calls `__rt_pr_reserve` when a write would pass
-//!   the capacity; that moves the capture to a malloc'ed block (doubling, or the exact need when
-//!   larger), so a `print_r` result of any size is returned whole. The common small case never
-//!   leaves the static buffer. `__rt_pr_release` frees the block and returns to the static buffer
-//!   once the capture is finished or flushed.
-//! - `__rt_pr_write` is the walker-ABI wrapper that branches on mode (syscall vs. append);
-//!   `__rt_pr_finish` persists the buffer through `__rt_str_persist`, releases it and resets the state.
+//! - Capture mode, byte count, raw pointer, and capacity default to zero.
+//! - Appends grow raw heap storage geometrically; finish persists once through
+//!   the standard string metadata hooks, frees the buffer, and clears state.
+//! - The write indirection selects capture or the existing output-buffer/web path.
 //! - Return ABI of `__rt_pr_finish` matches the platform string result registers
 //!   (AArch64 x1=ptr, x2=len; x86_64 rax=ptr, rdx=len) so the caller stores it
 //!   directly as a `Str` value.
@@ -34,335 +26,118 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
-/// Parks (`restore == false`) or reloads (`restore == true`) the registers a print_r walker may still
-/// need after `__rt_pr_append` returns but that the deferred-mode flush path would clobber.
-///
-/// `__rt_pr_append` itself only touches scratch registers every walker already treats as lost, yet the
-/// overflow path calls `__rt_pr_flush_deferred` / `__rt_pr_write`, which reach output buffers, the heap
-/// and `write(2)`. The spill keeps that rare path as transparent as the common one.
-fn spill_walker_registers(emitter: &mut Emitter, restore: bool) {
-    match (emitter.target.arch, restore) {
-        (Arch::AArch64, false) => {
-            emitter.instruction("sub sp, sp, #80");                             // reserve the walker-register spill area
-            emitter.instruction("stp x0, x1, [sp]");                            // park the argument registers
-            emitter.instruction("stp x2, x3, [sp, #16]");                       // park x2/x3
-            emitter.instruction("stp x4, x5, [sp, #32]");                       // park x4/x5
-            emitter.instruction("stp x6, x7, [sp, #48]");                       // park x6/x7
-            emitter.instruction("stp x8, x15, [sp, #64]");                      // park x8 and x15
-        }
-        (Arch::AArch64, true) => {
-            emitter.instruction("ldp x0, x1, [sp]");                            // reload the argument registers
-            emitter.instruction("ldp x2, x3, [sp, #16]");                       // reload x2/x3
-            emitter.instruction("ldp x4, x5, [sp, #32]");                       // reload x4/x5
-            emitter.instruction("ldp x6, x7, [sp, #48]");                       // reload x6/x7
-            emitter.instruction("ldp x8, x15, [sp, #64]");                      // reload x8 and x15
-            emitter.instruction("add sp, sp, #80");                             // release the spill area
-        }
-        (Arch::X86_64, false) => {
-            emitter.instruction("push rdi");                                    // park rdi
-            emitter.instruction("push rsi");                                    // park rsi
-            emitter.instruction("push r8");                                     // park r8
-            emitter.instruction("sub rsp, 8");                                  // keep the stack 16-byte aligned for the call
-        }
-        (Arch::X86_64, true) => {
-            emitter.instruction("add rsp, 8");                                  // drop the alignment pad
-            emitter.instruction("pop r8");                                      // reload r8
-            emitter.instruction("pop rsi");                                     // reload rsi
-            emitter.instruction("pop rdi");                                     // reload rdi
-        }
-    }
-}
-
-/// Emits `__rt_pr_base`: returns the address of the active capture buffer.
-///
-/// No inputs. Output: AArch64 x0 / x86_64 rax = `_print_r_base`, or the static `_print_r_buf`
-/// while the capture has not outgrown it. Clobbers only the result register.
-pub fn emit_pr_base(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_base ---");
-    emitter.label_global("__rt_pr_base");
-    if emitter.target.arch == Arch::X86_64 {
-        abi::emit_symbol_address(emitter, "rax", "_print_r_base");
-        emitter.instruction("mov rax, QWORD PTR [rax]");                        // load the heap capture block, if any
-        emitter.instruction("test rax, rax");                                   // has the capture outgrown the static buffer?
-        emitter.instruction("jnz __rt_pr_base_ready");                          // yes: use the heap block
-        abi::emit_symbol_address(emitter, "rax", "_print_r_buf");
-        emitter.label("__rt_pr_base_ready");
-        emitter.instruction("ret");                                             // return the buffer address in rax
-        return;
-    }
-    abi::emit_symbol_address(emitter, "x0", "_print_r_base");
-    emitter.instruction("ldr x0, [x0]");                                        // load the heap capture block, if any
-    emitter.instruction("cbnz x0, __rt_pr_base_ready");                         // outgrown the static buffer: use the heap block
-    abi::emit_symbol_address(emitter, "x0", "_print_r_buf");
-    emitter.label("__rt_pr_base_ready");
-    emitter.instruction("ret");                                                 // return the buffer address in x0
-}
-
-/// Emits `__rt_pr_reserve`: make the capture buffer able to hold `needed` bytes in total.
-///
-/// Input: AArch64 x0 / x86_64 rdi = required total capacity in bytes. No result. Moves the capture
-/// from the static buffer to a malloc'ed block, or reallocs the block, to `max(2 * capacity,
-/// needed)` bytes while preserving the first `_print_r_off` bytes. Clobbers caller-saved registers.
-/// A failed allocation ends in the runtime's allocation-overflow fatal.
-pub fn emit_pr_reserve(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_reserve ---");
-    emitter.label_global("__rt_pr_reserve");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("push rbp");                                        // save the caller frame pointer
-        emitter.instruction("mov rbp, rsp");                                    // establish the helper frame
-        emitter.instruction("sub rsp, 16");                                     // room for the new capacity and the new block
-        emitter.instruction("and rsp, -16");                                    // align the stack for the libc calls
-        abi::emit_symbol_address(emitter, "r9", "_print_r_cap");
-        emitter.instruction("mov rcx, QWORD PTR [r9]");                         // current capacity
-        emitter.instruction("test rcx, rcx");                                   // zero means the static 64 KiB buffer
-        emitter.instruction("jnz __rt_pr_reserve_cap_x86");                     // explicit capacity recorded
-        emitter.instruction("mov ecx, 65536");                                  // static buffer capacity
-        emitter.label("__rt_pr_reserve_cap_x86");
-        emitter.instruction("cmp rdi, rcx");                                    // does the request fit?
-        emitter.instruction("jbe __rt_pr_reserve_done_x86");                    // yes: nothing to do
-        emitter.instruction("add rcx, rcx");                                    // doubled capacity
-        emitter.instruction("cmp rdi, rcx");                                    // is the doubled capacity enough?
-        emitter.instruction("cmova rcx, rdi");                                  // no: use the exact need
-        emitter.instruction("mov QWORD PTR [rbp - 8], rcx");                    // remember the new capacity
-        abi::emit_symbol_address(emitter, "r9", "_print_r_base");
-        emitter.instruction("mov rdi, QWORD PTR [r9]");                         // current heap block, if any
-        emitter.instruction("test rdi, rdi");                                   // still in the static buffer?
-        emitter.instruction("jnz __rt_pr_reserve_realloc_x86");                 // grow the heap block in place
-        emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                    // new capacity
-        emitter.bl_c("malloc");                                                 // allocate the first heap block
-        emitter.instruction("test rax, rax");                                   // allocation failed?
-        emitter.instruction("jz __rt_pr_reserve_fail_x86");                     // report the allocation overflow
-        emitter.instruction("mov QWORD PTR [rbp - 16], rax");                   // remember the new block
-        abi::emit_symbol_address(emitter, "r9", "_print_r_off");
-        emitter.instruction("mov rdx, QWORD PTR [r9]");                         // bytes captured so far
-        abi::emit_symbol_address(emitter, "rsi", "_print_r_buf");
-        emitter.instruction("mov rdi, rax");                                    // destination = new block
-        emitter.bl_c("memcpy");                                                 // carry the captured prefix over
-        emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                   // reload the new block
-        emitter.instruction("jmp __rt_pr_reserve_publish_x86");                 // publish it
-        emitter.label("__rt_pr_reserve_realloc_x86");
-        emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                    // new capacity
-        emitter.bl_c("realloc");                                                // grow the heap block
-        emitter.instruction("test rax, rax");                                   // reallocation failed?
-        emitter.instruction("jz __rt_pr_reserve_fail_x86");                     // report the allocation overflow
-        emitter.label("__rt_pr_reserve_publish_x86");
-        abi::emit_symbol_address(emitter, "r9", "_print_r_base");
-        emitter.instruction("mov QWORD PTR [r9], rax");                         // publish the heap block
-        abi::emit_symbol_address(emitter, "r9", "_print_r_cap");
-        emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                    // reload the new capacity
-        emitter.instruction("mov QWORD PTR [r9], rcx");                         // publish the capacity
-        emitter.label("__rt_pr_reserve_done_x86");
-        emitter.instruction("mov rsp, rbp");                                    // release the helper frame
-        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
-        emitter.instruction("ret");                                             // return to the appender
-        emitter.label("__rt_pr_reserve_fail_x86");
-        emitter.instruction("jmp __rt_alloc_overflow");                         // fatal: the capture cannot grow
-        return;
-    }
-    emitter.instruction("sub sp, sp, #32");                                     // allocate the helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_print_r_cap");
-    emitter.instruction("ldr x1, [x9]");                                        // current capacity
-    emitter.instruction("cbnz x1, __rt_pr_reserve_cap");                        // explicit capacity recorded
-    emitter.instruction("mov x1, #65536");                                      // zero means the static 64 KiB buffer
-    emitter.label("__rt_pr_reserve_cap");
-    emitter.instruction("cmp x0, x1");                                          // does the request fit?
-    emitter.instruction("b.ls __rt_pr_reserve_done");                           // yes: nothing to do
-    emitter.instruction("lsl x2, x1, #1");                                      // doubled capacity
-    emitter.instruction("cmp x0, x2");                                          // is the doubled capacity enough?
-    emitter.instruction("csel x2, x0, x2, hi");                                 // no: use the exact need
-    emitter.instruction("str x2, [sp, #8]");                                    // remember the new capacity
-    abi::emit_symbol_address(emitter, "x9", "_print_r_base");
-    emitter.instruction("ldr x10, [x9]");                                       // current heap block, if any
-    emitter.instruction("cbnz x10, __rt_pr_reserve_realloc");                   // grow the heap block in place
-    emitter.instruction("mov x0, x2");                                          // new capacity
-    emitter.bl_c("malloc");                                                     // allocate the first heap block
-    emitter.instruction("cbz x0, __rt_pr_reserve_fail");                        // report the allocation overflow
-    emitter.instruction("str x0, [sp, #0]");                                    // remember the new block
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");
-    emitter.instruction("ldr x2, [x9]");                                        // bytes captured so far
-    abi::emit_symbol_address(emitter, "x1", "_print_r_buf");
-    emitter.bl_c("memcpy");                                                     // carry the captured prefix over (x0 = new block)
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the new block
-    emitter.instruction("b __rt_pr_reserve_publish");                           // publish it
-    emitter.label("__rt_pr_reserve_realloc");
-    emitter.instruction("mov x0, x10");                                         // current heap block
-    emitter.instruction("ldr x1, [sp, #8]");                                    // new capacity
-    emitter.bl_c("realloc");                                                    // grow the heap block
-    emitter.instruction("cbz x0, __rt_pr_reserve_fail");                        // report the allocation overflow
-    emitter.label("__rt_pr_reserve_publish");
-    abi::emit_symbol_address(emitter, "x9", "_print_r_base");
-    emitter.instruction("str x0, [x9]");                                        // publish the heap block
-    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the new capacity
-    abi::emit_symbol_address(emitter, "x9", "_print_r_cap");
-    emitter.instruction("str x1, [x9]");                                        // publish the capacity
-    emitter.label("__rt_pr_reserve_done");
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return to the appender
-    emitter.label("__rt_pr_reserve_fail");
-    emitter.instruction("b __rt_alloc_overflow");                               // fatal: the capture cannot grow
-}
-
-/// Emits `__rt_pr_release`: free a grown capture block and fall back to the static buffer.
-///
-/// No inputs and no result. Clobbers caller-saved registers.
-pub fn emit_pr_release(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_release ---");
-    emitter.label_global("__rt_pr_release");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("push rbp");                                        // save the caller frame pointer
-        emitter.instruction("mov rbp, rsp");                                    // establish the helper frame
-        emitter.instruction("and rsp, -16");                                    // align the stack for the libc call
-        abi::emit_symbol_address(emitter, "r9", "_print_r_base");
-        emitter.instruction("mov rdi, QWORD PTR [r9]");                         // heap capture block, if any
-        emitter.instruction("test rdi, rdi");                                   // still on the static buffer?
-        emitter.instruction("jz __rt_pr_release_done_x86");                     // nothing to free
-        emitter.instruction("mov QWORD PTR [r9], 0");                           // forget the block before freeing it
-        abi::emit_symbol_address(emitter, "r9", "_print_r_cap");
-        emitter.instruction("mov QWORD PTR [r9], 0");                           // back to the static capacity
-        emitter.bl_c("free");                                                   // release the grown block
-        emitter.label("__rt_pr_release_done_x86");
-        emitter.instruction("mov rsp, rbp");                                    // release the helper frame
-        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
-        emitter.instruction("ret");                                             // return to the caller
-        return;
-    }
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
-    abi::emit_symbol_address(emitter, "x9", "_print_r_base");
-    emitter.instruction("ldr x0, [x9]");                                        // heap capture block, if any
-    emitter.instruction("cbz x0, __rt_pr_release_done");                        // still on the static buffer: nothing to free
-    emitter.instruction("str xzr, [x9]");                                       // forget the block before freeing it
-    abi::emit_symbol_address(emitter, "x9", "_print_r_cap");
-    emitter.instruction("str xzr, [x9]");                                       // back to the static capacity
-    emitter.bl_c("free");                                                       // release the grown block
-    emitter.label("__rt_pr_release_done");
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return to the caller
-}
-
-/// Emits `__rt_pr_append`: append `len` bytes from `buf` to the capture buffer at
-/// `_print_r_off` and advance the offset. No mode check. A write that would pass the buffer
-/// capacity first grows it through `__rt_pr_reserve`, so no capture is ever truncated.
-///
-/// Inputs: AArch64 x0=buf, x1=len / x86_64 rdi=buf, rsi=len. No result.
+/// Appends bytes into growable raw capture storage without a fixed output-size clamp.
+/// Inputs are a C-ABI source pointer and byte length; zero bytes require no allocation.
 pub fn emit_pr_append(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_pr_append_linux_x86_64(emitter);
-        return;
-    }
-
     emitter.blank();
-    emitter.comment("--- runtime: pr_append ---");
     emitter.label_global("__rt_pr_append");
-
-    // -- set up a frame and spill the incoming buf/len across the helper calls --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate the append-helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the append-helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the source byte pointer
-    emitter.instruction("str x1, [sp, #8]");                                    // save the source byte length
-
-    // -- grow the buffer when the write would pass its capacity --
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x10, [x9]");                                       // load the current append offset
-    emitter.instruction("add x0, x10, x1");                                     // total bytes needed after this write
-    abi::emit_symbol_address(emitter, "x9", "_print_r_cap");                    // materialize the address of the capacity global
-    emitter.instruction("ldr x11, [x9]");                                       // load the recorded capacity
-    emitter.instruction("cbnz x11, __rt_pr_append_cap");                        // explicit capacity recorded
-    emitter.instruction("mov x11, #65536");                                     // zero means the static 64 KiB buffer
-    emitter.label("__rt_pr_append_cap");
-    emitter.instruction("cmp x0, x11");                                         // does the write fit?
-    emitter.instruction("b.ls __rt_pr_append_fits");                            // yes: copy straight in
-    spill_walker_registers(emitter, false);
-    emitter.instruction("bl __rt_pr_reserve");                                  // grow the capture buffer to the needed size
-    spill_walker_registers(emitter, true);
-    emitter.label("__rt_pr_append_fits");
-    emitter.instruction("bl __rt_pr_base");                                     // x0 = active capture buffer
-    emitter.instruction("mov x11, x0");                                         // keep the buffer base for the copy loop
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x10, [x9]");                                       // reload the append offset
-
-    // -- copy len bytes from buf to buf_base + off (byte loop) --
-    emitter.label("__rt_pr_append_loop");
-    emitter.instruction("ldr x12, [sp, #8]");                                   // reload the remaining byte count
-    emitter.instruction("cbz x12, __rt_pr_append_done");                        // no more bytes → finish
-    emitter.instruction("ldr x13, [sp, #0]");                                   // reload the current source cursor
-    emitter.instruction("ldrb w14, [x13]");                                     // load the next source byte
-    emitter.instruction("strb w14, [x11, x10]");                                // store the byte at buf_base + off
-    emitter.instruction("add x10, x10, #1");                                    // advance the destination offset
-    emitter.instruction("add x13, x13, #1");                                    // advance the source cursor
-    emitter.instruction("str x13, [sp, #0]");                                   // save the advanced source cursor
-    emitter.instruction("sub x12, x12, #1");                                    // decrement the remaining count
-    emitter.instruction("str x12, [sp, #8]");                                   // save the decremented remaining count
-    emitter.instruction("b __rt_pr_append_loop");                               // continue copying
-
+    abi::emit_frame_prologue(emitter, 80);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    abi::load_at_offset(emitter, result, 16);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_pr_append_done");
+    for (symbol, offset) in [("_print_r_ptr", 24), ("_print_r_off", 32), ("_print_r_cap", 40)] {
+        abi::emit_load_symbol_to_reg(emitter, result, symbol, 0);
+        abi::store_at_offset(emitter, result, offset);
+    }
+    abi::load_at_offset(emitter, result, 24);
+    abi::store_at_offset(emitter, result, 56);
+    abi::load_at_offset(emitter, result, 32);
+    abi::load_at_offset(emitter, scratch, 16);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("adds x0, x0, x10");                            // check the required capture size before any narrowing allocation
+            emitter.instruction("b.cs __rt_pr_append_overflow");                // reject a wrapped byte count through the shared fatal path
+        }
+        Arch::X86_64 => {
+            emitter.instruction("add rax, r10");                                // check the required capture size before any narrowing allocation
+            emitter.instruction("jc __rt_pr_append_overflow");                  // reject a wrapped byte count through the shared fatal path
+        }
+    }
+    abi::store_at_offset(emitter, result, 48);
+    abi::load_at_offset(emitter, result, 40);
+    abi::load_at_offset(emitter, scratch, 48);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, x10");                                 // reuse an allocation that already fits the complete append
+            emitter.instruction("b.hs __rt_pr_append_ready");                   // existing capacity avoids another allocation
+            emitter.instruction("cmp x0, #64");                                 // start small captures with a bounded minimum allocation
+            emitter.instruction("b.hs __rt_pr_append_grow");                    // preserve an existing larger capacity
+            emitter.instruction("mov x0, #64");                                 // seed geometric growth for an empty capture
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, r10");                                // reuse an allocation that already fits the complete append
+            emitter.instruction("jae __rt_pr_append_ready");                    // existing capacity avoids another allocation
+            emitter.instruction("cmp rax, 64");                                 // start small captures with a bounded minimum allocation
+            emitter.instruction("jae __rt_pr_append_grow");                     // preserve an existing larger capacity
+            emitter.instruction("mov rax, 64");                                 // seed geometric growth for an empty capture
+        }
+    }
+    emitter.label("__rt_pr_append_grow");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, x10");                                 // stop doubling once the pending append fits
+            emitter.instruction("b.hs __rt_pr_append_allocate");                // allocate the selected capacity
+            emitter.instruction("adds x0, x0, x0");                             // double geometrically without wrapping
+            emitter.instruction("b.cs __rt_pr_append_overflow");                // reject capacity overflow instead of looping
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, r10");                                // stop doubling once the pending append fits
+            emitter.instruction("jae __rt_pr_append_allocate");                 // allocate the selected capacity
+            emitter.instruction("add rax, rax");                                // double geometrically without wrapping
+            emitter.instruction("jc __rt_pr_append_overflow");                  // reject capacity overflow instead of looping
+        }
+    }
+    abi::emit_jump(emitter, "__rt_pr_append_grow");
+    emitter.label("__rt_pr_append_allocate");
+    abi::store_at_offset(emitter, result, 40);
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    abi::store_at_offset(emitter, result, 56);
+    abi::load_at_offset(emitter, result, 32);
+    abi::emit_branch_if_int_result_zero(emitter, "__rt_pr_append_ready");
+    load_capture_argument(emitter, 0, 56);
+    load_capture_argument(emitter, 1, 24);
+    load_capture_argument(emitter, 2, 32);
+    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memcpy"));
+    emitter.label("__rt_pr_append_ready");
+    load_capture_argument(emitter, 0, 56);
+    abi::load_at_offset(emitter, scratch, 32);
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction("add x0, x0, x10"),                // append after the previously captured prefix
+        Arch::X86_64 => emitter.instruction("add rdi, r10"),                    // append after the previously captured prefix
+    }
+    load_capture_argument(emitter, 1, 8);
+    load_capture_argument(emitter, 2, 16);
+    abi::emit_call_label(emitter, &emitter.target.extern_symbol("memmove"));
+    for (offset, symbol) in [(56, "_print_r_ptr"), (40, "_print_r_cap"), (48, "_print_r_off")] {
+        abi::load_at_offset(emitter, result, offset);
+        abi::emit_store_reg_to_symbol(emitter, result, symbol, 0);
+    }
+    abi::load_at_offset(emitter, result, 24);
+    abi::load_at_offset(emitter, scratch, 56);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, x10");                                 // only a growth allocation retires the old raw buffer
+            emitter.instruction("b.eq __rt_pr_append_done");                    // an in-place append keeps its allocation
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, r10");                                // only a growth allocation retires the old raw buffer
+            emitter.instruction("je __rt_pr_append_done");                      // an in-place append keeps its allocation
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
     emitter.label("__rt_pr_append_done");
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("str x10, [x9]");                                       // store the advanced append offset
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the append-helper frame
-    emitter.instruction("ret");                                                 // return to caller
+    abi::emit_frame_restore(emitter, 80);
+    abi::emit_return(emitter);
+    emitter.label("__rt_pr_append_overflow");
+    abi::emit_jump(emitter, "__rt_heap_allocation_failed");
 }
 
-/// Emits the Linux x86_64 variant of `__rt_pr_append`.
-fn emit_pr_append_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_append ---");
-    emitter.label_global("__rt_pr_append");
-
-    emitter.instruction("push rbp");                                            // save the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the append-helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // allocate the append-helper frame
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source byte pointer
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source byte length
-
-    // -- grow the buffer when the write would pass its capacity --
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov rdi, QWORD PTR [r9]");                             // load the current append offset
-    emitter.instruction("add rdi, rsi");                                        // total bytes needed after this write
-    abi::emit_symbol_address(emitter, "r9", "_print_r_cap");                    // materialize the address of the capacity global
-    emitter.instruction("mov rcx, QWORD PTR [r9]");                             // load the recorded capacity
-    emitter.instruction("test rcx, rcx");                                       // zero means the static 64 KiB buffer
-    emitter.instruction("jnz __rt_pr_append_cap_x86");                          // explicit capacity recorded
-    emitter.instruction("mov ecx, 65536");                                      // static buffer capacity
-    emitter.label("__rt_pr_append_cap_x86");
-    emitter.instruction("cmp rdi, rcx");                                        // does the write fit?
-    emitter.instruction("jbe __rt_pr_append_fits_x86");                         // yes: copy straight in
-    spill_walker_registers(emitter, false);
-    emitter.instruction("call __rt_pr_reserve");                                // grow the capture buffer to the needed size
-    spill_walker_registers(emitter, true);
-    emitter.label("__rt_pr_append_fits_x86");
-    emitter.instruction("call __rt_pr_base");                                   // rax = active capture buffer
-    emitter.instruction("mov r11, rax");                                        // keep the buffer base for the copy loop
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // reload the append offset
-
-    emitter.label("__rt_pr_append_loop_x86");
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the remaining byte count
-    emitter.instruction("test rcx, rcx");                                       // any bytes left to copy?
-    emitter.instruction("jz __rt_pr_append_done_x86");                          // no more bytes → finish
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the current source cursor
-    emitter.instruction("mov dl, BYTE PTR [rax]");                              // load the next source byte
-    emitter.instruction("mov BYTE PTR [r11 + r10], dl");                        // store the byte at buf_base + off
-    emitter.instruction("add r10, 1");                                          // advance the destination offset
-    emitter.instruction("add rax, 1");                                          // advance the source cursor
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the advanced source cursor
-    emitter.instruction("sub rcx, 1");                                          // decrement the remaining count
-    emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save the decremented remaining count
-    emitter.instruction("jmp __rt_pr_append_loop_x86");                         // continue copying
-
-    emitter.label("__rt_pr_append_done_x86");
-    abi::emit_symbol_address(emitter, "r9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("mov QWORD PTR [r9], r10");                             // store the advanced append offset
-    emitter.instruction("add rsp, 32");                                         // release the append-helper frame
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return to caller
+/// Reloads one append spill into the selected target C argument register.
+fn load_capture_argument(emitter: &mut Emitter, index: usize, offset: usize) {
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
 }
 
 /// Emits `__rt_pr_write`: the print_r walker terminal-write indirection.
@@ -464,134 +239,47 @@ fn emit_pr_write_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to caller
 }
 
-/// Emits `__rt_pr_flush_deferred`: write out the text of a deferred echo-mode `print_r`.
-///
-/// Does nothing unless `_print_r_mode` is 2. Otherwise it switches the mode back to 0, sends the
-/// buffered bytes through `__rt_pr_write` (so output buffers and `ob_start` callbacks see them
-/// exactly as a streaming `print_r` would have delivered them), resets the offset and releases a
-/// grown buffer. No inputs and no result; clobbers caller-saved registers.
-pub fn emit_pr_flush_deferred(emitter: &mut Emitter) {
+/// Releases an abandoned raw capture and clears its process-global state.
+fn emit_pr_abort(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: pr_flush_deferred ---");
-    emitter.label_global("__rt_pr_flush_deferred");
-    if emitter.target.arch == Arch::X86_64 {
-        emitter.instruction("push rbp");                                        // preserve the caller frame pointer and align rsp for the write call
-        emitter.instruction("mov rbp, rsp");                                    // establish a frame base
-        abi::emit_symbol_address(emitter, "r11", "_print_r_mode");              // materialize the address of the capture-mode flag
-        emitter.instruction("cmp QWORD PTR [r11], 2");                          // is a deferred echo-mode print_r active?
-        emitter.instruction("jne __rt_pr_flush_deferred_done_x86");             // no: nothing to write
-        emitter.instruction("mov QWORD PTR [r11], 0");                          // leave capture mode before writing
-        abi::emit_symbol_address(emitter, "r11", "_print_r_off");               // materialize the address of the append-offset global
-        emitter.instruction("mov rdx, QWORD PTR [r11]");                        // buffered byte count
-        emitter.instruction("mov QWORD PTR [r11], 0");                          // the buffer is empty after this flush
-        emitter.instruction("test rdx, rdx");                                   // anything buffered?
-        emitter.instruction("jz __rt_pr_flush_deferred_release_x86");           // no: nothing to write
-        emitter.instruction("push rdx");                                        // keep the byte count across the base lookup
-        emitter.instruction("push rdx");                                        // keep the stack 16-byte aligned
-        emitter.instruction("call __rt_pr_base");                               // rax = buffered bytes
-        emitter.instruction("pop rdx");                                         // restore the alignment pad
-        emitter.instruction("pop rdx");                                         // restore the byte count
-        emitter.instruction("mov rsi, rax");                                    // buffered bytes
-        emitter.instruction("call __rt_pr_write");                              // plain write path (output buffers or stdout)
-        emitter.label("__rt_pr_flush_deferred_release_x86");
-        emitter.instruction("call __rt_pr_release");                            // free a grown buffer
-        emitter.label("__rt_pr_flush_deferred_done_x86");
-        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
-        emitter.instruction("ret");                                             // return to the caller
-        return;
+    emitter.label_global("__rt_cleanup_print_r_capture");
+    abi::emit_jump(emitter, "__rt_pr_abort");
+    emitter.label_global("__rt_pr_abort");
+    abi::emit_frame_prologue(emitter, 16);
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_symbol_to_reg(emitter, result, "_print_r_ptr", 0);
+    for symbol in ["_print_r_ptr", "_print_r_cap", "_print_r_off", "_print_r_mode"] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the call
-    abi::emit_symbol_address(emitter, "x9", "_print_r_mode");                   // materialize the address of the capture-mode flag
-    emitter.instruction("ldr x10, [x9]");                                       // load the capture mode
-    emitter.instruction("cmp x10, #2");                                         // is a deferred echo-mode print_r active?
-    emitter.instruction("b.ne __rt_pr_flush_deferred_done");                    // no: nothing to write
-    emitter.instruction("str xzr, [x9]");                                       // leave capture mode before writing
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x2, [x9]");                                        // buffered byte count
-    emitter.instruction("str xzr, [x9]");                                       // the buffer is empty after this flush
-    emitter.instruction("cbz x2, __rt_pr_flush_deferred_release");              // nothing buffered: nothing to write
-    emitter.instruction("str x2, [sp, #-16]!");                                 // keep the byte count across the base lookup
-    emitter.instruction("bl __rt_pr_base");                                     // x0 = buffered bytes
-    emitter.instruction("ldr x2, [sp], #16");                                   // restore the byte count
-    emitter.instruction("mov x1, x0");                                          // buffered bytes
-    emitter.instruction("bl __rt_pr_write");                                    // plain write path (output buffers or stdout)
-    emitter.label("__rt_pr_flush_deferred_release");
-    emitter.instruction("bl __rt_pr_release");                                  // free a grown buffer
-    emitter.label("__rt_pr_flush_deferred_done");
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return to the caller
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
 }
 
-/// Emits `__rt_pr_finish`: materialize the captured bytes as an owned heap
-/// string, release a grown buffer, reset the capture state, and return the string in the platform
-/// string result registers (AArch64 x1=ptr, x2=len / x86_64 rax=ptr, rdx=len).
-///
-/// No inputs. Calls `__rt_str_persist` with the active buffer and `_print_r_off`,
-/// then stores 0 back to `_print_r_off` and `_print_r_mode`.
+/// Copies raw capture bytes into an owned string with the standard string metadata hooks.
+/// The raw buffer is freed and every capture global is cleared before returning the string pair.
 pub fn emit_pr_finish(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_pr_finish_linux_x86_64(emitter);
-        return;
+    emit_pr_abort(emitter);
+    emitter.blank();
+    emitter.label_global("__rt_pr_finish");
+    abi::emit_frame_prologue(emitter, 48);
+    let result = abi::int_result_reg(emitter);
+    let (pointer, length) = abi::string_result_regs(emitter);
+    abi::emit_load_symbol_to_reg(emitter, pointer, "_print_r_ptr", 0);
+    abi::store_at_offset(emitter, pointer, 8);
+    abi::emit_load_symbol_to_reg(emitter, length, "_print_r_off", 0);
+    abi::emit_call_label(emitter, "__rt_str_persist");
+    abi::store_at_offset(emitter, pointer, 16);
+    abi::store_at_offset(emitter, length, 24);
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    for symbol in ["_print_r_ptr", "_print_r_cap", "_print_r_off", "_print_r_mode"] {
+        abi::emit_store_zero_to_symbol(emitter, symbol, 0);
     }
-
-    emitter.blank();
-    emitter.comment("--- runtime: pr_finish ---");
-    emitter.label_global("__rt_pr_finish");
-
-    // -- set up a frame across the helper calls --
-    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish a frame pointer for the call
-
-    // -- load the captured length and buffer pointer into the str_persist ABI --
-    emitter.instruction("bl __rt_pr_base");                                     // x0 = active capture buffer
-    emitter.instruction("mov x1, x0");                                          // buffer address into the string-pointer register
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("ldr x2, [x9]");                                        // load the captured byte length into the string-length result reg
-    emitter.instruction("bl __rt_str_persist");                                 // persist the buffer as an owned heap string → x1=ptr, x2=len
-
-    // -- free a grown buffer (the result string owns its own copy) --
-    emitter.instruction("stp x1, x2, [sp, #-16]!");                             // keep the result across the release call
-    emitter.instruction("bl __rt_pr_release");                                  // free a grown capture block
-    emitter.instruction("ldp x1, x2, [sp], #16");                               // restore the result string
-
-    // -- reset the capture state (x1/x2 result survives scratch stores) --
-    abi::emit_symbol_address(emitter, "x9", "_print_r_off");                    // materialize the address of the append-offset global
-    emitter.instruction("str xzr, [x9]");                                       // reset the append offset to 0
-    abi::emit_symbol_address(emitter, "x9", "_print_r_mode");                   // materialize the address of the capture-mode flag
-    emitter.instruction("str xzr, [x9]");                                       // reset the capture-mode flag to 0 (restore stdout mode)
-
-    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
-    emitter.instruction("ret");                                                 // return with x1=owned string ptr, x2=length
-}
-
-/// Emits the Linux x86_64 variant of `__rt_pr_finish`.
-fn emit_pr_finish_linux_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: pr_finish ---");
-    emitter.label_global("__rt_pr_finish");
-
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the helper calls
-    emitter.instruction("mov rbp, rsp");                                        // establish a frame base
-
-    emitter.instruction("call __rt_pr_base");                                   // rax = active capture buffer
-    abi::emit_symbol_address(emitter, "r11", "_print_r_off");                   // materialize the address of the append-offset global
-    emitter.instruction("mov rdx, QWORD PTR [r11]");                            // load the captured byte length into the string-length result reg
-    emitter.instruction("call __rt_str_persist");                               // persist the buffer as an owned heap string → rax=ptr, rdx=len
-
-    emitter.instruction("push rax");                                            // keep the result pointer across the release call
-    emitter.instruction("push rdx");                                            // keep the result length across the release call
-    emitter.instruction("call __rt_pr_release");                                // free a grown capture block
-    emitter.instruction("pop rdx");                                             // restore the result length
-    emitter.instruction("pop rax");                                             // restore the result pointer
-
-    abi::emit_symbol_address(emitter, "r11", "_print_r_off");                   // materialize the address of the append-offset global
-    emitter.instruction("mov QWORD PTR [r11], 0");                              // reset the append offset to 0
-    abi::emit_symbol_address(emitter, "r11", "_print_r_mode");                  // materialize the address of the capture-mode flag
-    emitter.instruction("mov QWORD PTR [r11], 0");                              // reset the capture-mode flag to 0 (restore stdout mode)
-
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("ret");                                                 // return with rax=owned string ptr, rdx=length
+    abi::load_at_offset(emitter, pointer, 16);
+    abi::load_at_offset(emitter, length, 24);
+    abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
 }
 
 #[cfg(test)]
@@ -599,46 +287,46 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
-    /// Renders all three print_r return-mode helpers for one target.
-    fn render(platform: Platform, arch: Arch) -> String {
-        let mut emitter = Emitter::new(Target::new(platform, arch));
+    /// Renders all print_r capture helpers for one supported target.
+    fn render_target(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
         emit_pr_append(&mut emitter);
         emit_pr_write(&mut emitter);
         emit_pr_finish(&mut emitter);
-        emit_pr_base(&mut emitter);
-        emit_pr_reserve(&mut emitter);
-        emit_pr_release(&mut emitter);
-        emit_pr_flush_deferred(&mut emitter);
         emitter.output()
     }
 
-    /// Verifies every target exports the three helper labels.
+    /// Renders a platform/architecture fixture used by the existing branch tests.
+    fn render(platform: Platform, arch: Arch) -> String {
+        render_target(Target::new(platform, arch))
+    }
+
+    /// Verifies every supported target exports the capture and cleanup helpers.
     #[test]
     fn emits_global_labels_for_all_targets() {
-        for (platform, arch) in [
-            (Platform::MacOS, Arch::AArch64),
-            (Platform::Linux, Arch::AArch64),
-            (Platform::Linux, Arch::X86_64),
-        ] {
-            let asm = render(platform, arch);
-            assert!(
-                asm.contains(".globl __rt_pr_append\n"),
-                "missing __rt_pr_append label for {:?}/{:?}",
-                platform,
-                arch
-            );
-            assert!(
-                asm.contains(".globl __rt_pr_write\n"),
-                "missing __rt_pr_write label for {:?}/{:?}",
-                platform,
-                arch
-            );
-            assert!(
-                asm.contains(".globl __rt_pr_finish\n"),
-                "missing __rt_pr_finish label for {:?}/{:?}",
-                platform,
-                arch
-            );
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let asm = render_target(Target::parse(target).unwrap());
+            for label in ["__rt_pr_append", "__rt_pr_write", "__rt_pr_finish", "__rt_pr_abort", "__rt_cleanup_print_r_capture"] {
+                assert!(asm.contains(&format!(".globl {label}\n")), "{target}: missing {label}");
+            }
+        }
+    }
+
+    /// Overflow conditionals stay inside their atom and only a shared fatal entry escapes.
+    #[test]
+    fn pr_append_overflow_branches_stay_in_own_atom() {
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit_pr_append(&mut emitter);
+            let asm = emitter.output();
+            for line in asm.lines().map(str::trim) {
+                if let Some(destination) = line.strip_prefix("b.cs ").or_else(|| line.strip_prefix("jc ")) {
+                    let destination = destination.split_whitespace().next().unwrap();
+                    assert!(asm.contains(&format!("\n{destination}:\n")), "{target}: overflow leaves the append atom: {line}");
+                }
+            }
+            assert!(!asm.contains("__rt_heap_exhausted"), "{target}: private allocator label escaped");
+            assert!(asm.contains("__rt_heap_allocation_failed"), "{target}: missing shared fatal entry");
         }
     }
 
@@ -663,28 +351,11 @@ mod tests {
         let mac = render(Platform::MacOS, Arch::AArch64);
         assert!(mac.contains("bl __rt_str_persist"));
         assert!(mac.contains("_print_r_off"));
-        assert!(mac.contains("_print_r_buf"));
-        assert!(mac.contains("bl __rt_pr_release"));
+        assert!(mac.contains("_print_r_ptr"));
 
         let linux_x86 = render(Platform::Linux, Arch::X86_64);
         assert!(linux_x86.contains("call __rt_str_persist"));
         assert!(linux_x86.contains("_print_r_off"));
-        assert!(linux_x86.contains("_print_r_buf"));
-        assert!(linux_x86.contains("call __rt_pr_release"));
-    }
-
-    /// Verifies the capture buffer grows instead of truncating: the appender calls the reserve helper, which
-    /// mallocs/reallocs the block, and the release helper frees it.
-    #[test]
-    fn pr_append_grows_the_capture_through_the_heap() {
-        for (platform, arch, call) in [
-            (Platform::MacOS, Arch::AArch64, "bl __rt_pr_reserve"),
-            (Platform::Linux, Arch::X86_64, "call __rt_pr_reserve"),
-        ] {
-            let asm = render(platform, arch);
-            assert!(asm.contains(call), "{platform:?}/{arch:?}");
-            assert!(asm.contains("_print_r_base") && asm.contains("_print_r_cap"), "{platform:?}/{arch:?}");
-            assert!(asm.contains("malloc") && asm.contains("realloc") && asm.contains("free"), "{platform:?}/{arch:?}");
-        }
+        assert!(linux_x86.contains("_print_r_ptr"));
     }
 }

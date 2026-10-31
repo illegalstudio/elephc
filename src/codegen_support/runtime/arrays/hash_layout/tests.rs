@@ -52,7 +52,8 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
     for symbol in [
         "__rt_reference_cell_clone", "__rt_hash_to_mixed_box_owned", "__rt_hash_to_mixed_x86_box_owned",
         "__rt_mixed_from_value", "__rt_decref_mixed", "__rt_reference_cell_new",
-        "__rt_reference_cell_value_release",
+        "__rt_reference_cell_value_release", "__rt_tagged_reference_assignment_error_new",
+        "__rt_cleanup_preserve_exception", "__rt_mixed_unbox",
     ] {
         emitter.label_global(symbol);
         emitter.instruction(if target.arch == Arch::X86_64 { "ud2" } else { "brk #0" }); // reject reference paths outside this growth fixture
@@ -81,6 +82,7 @@ fn native_hash_owned_growth_preserves_identity_and_entries() {
         emitter.instruction("ldp x29, x30, [sp], #16");                         // restore caller linkage
     }
     emitter.instruction("ret");                                                 // return the borrowed matching entry
+    emitter.raw(&crate::codegen_support::data_section::comm_directive("_exc_value", 8, target));
     if target.platform == Platform::Linux { emitter.raw(".section .note.GNU-stack,\"\",@progbits"); }
     std::fs::write(directory.join("hash.s"), emitter.output()).unwrap();
     std::fs::write(directory.join("fixture.c"), include_str!("native_growth.c")).unwrap();

@@ -15,6 +15,34 @@
 
 use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_regex};
 
+/// Native callable descriptors keep their public signature and owner across opaque eval calls.
+#[test]
+fn test_eval_native_descriptor_callable_preserves_named_refs_defaults_and_variadics() {
+    let out = compile_and_run(
+        r#"<?php
+function eval_native_descriptor_probe(int &$value, int $delta = 2, string ...$rest): string {
+    $value += $delta;
+    return func_num_args() . ":" . $value . ":" . implode(",", array_keys($rest));
+}
+
+$callback = eval_native_descriptor_probe(...);
+$source = $argc > 0 ? '$first = "3";
+$a = call_user_func_array($callback, ["value" => &$first]);
+$firstClass = $callback(...);
+$third = "5";
+$c = $firstClass($third, 4);
+$closure = Closure::fromCallable($callback);
+unset($callback);
+$second = 4;
+$b = call_user_func_array($closure, ["delta" => 3, "value" => &$second, "extra" => "z"]);
+return $a . ":" . gettype($first) . ":" . $first . "|" . $b . ":" . gettype($second) . ":" . $second . "|" . $c . ":" . gettype($third) . ":" . $third;' : '';
+echo eval($source);
+"#,
+    );
+
+    assert_eq!(out, "1:5::integer:5|2:7:extra:integer:7|2:9::integer:9");
+}
+
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.
 #[test]
 fn test_eval_aot_function_callables_preserve_by_ref_writeback() {
@@ -1998,6 +2026,78 @@ return $box->value . "|" . $box->apply($callback, 4) . "|" .
         out,
         "string:ctor:string:ctor|string:method:string:method|string:static:string:static"
     );
+}
+
+/// Eval-backed objects satisfy context-free AOT reference guards and relation predicates.
+#[test]
+fn test_eval_object_satisfies_aot_reference_guards_and_relations() {
+    let out = compile_and_run(
+        r#"<?php
+interface EvalClosureObjectReferenceContract {
+    public function label(): string;
+}
+
+function acceptEvalClosureObjectReference(EvalClosureObjectReferenceContract &$value): string {
+    return $value->label();
+}
+
+function inspectEvalClosureObjectRelations(mixed $value, string $target): string {
+    return ($value instanceof EvalClosureObjectReferenceContract ? 'i' : 'n')
+        . (is_a($value, EvalClosureObjectReferenceContract::class) ? 'a' : 'n')
+        . (is_subclass_of($value, EvalClosureObjectReferenceContract::class) ? 's' : 'n')
+        . ($value instanceof $target ? 'd' : 'n')
+        . (is_a($value, 'stdClass') ? 'w' : 'n');
+}
+
+$callback = function(EvalClosureObjectReferenceContract &$value): string {
+    return $value->label();
+};
+
+echo eval('class EvalClosureObjectReferenceImplementation implements EvalClosureObjectReferenceContract {
+    public function label(): string { return "eval"; }
+}
+$value = new EvalClosureObjectReferenceImplementation();
+$first = $callback($value);
+$second = acceptEvalClosureObjectReference($value);
+$relations = inspectEvalClosureObjectRelations($value, "EvalClosureObjectReferenceContract");
+return $first . ":" . $second . ":" . $value->label() . ":" . $relations;');
+"#,
+    );
+
+    assert_eq!(out, "eval:eval:eval:iasdn");
+}
+
+/// Context-free relation probes preserve eval aliases and reject invalid dynamic targets.
+#[test]
+fn test_context_free_object_relations_cover_aliases_and_dynamic_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class EvalRelationNative {}
+
+function evalRelationProbe(mixed $value, mixed $target): string {
+    try {
+        return $value instanceof $target ? "y" : "n";
+    } catch (Error $error) {
+        return "e";
+    }
+}
+
+function evalNamedAliasProbe(mixed $value): string {
+    return is_a($value, "EvalRelationAlias") ? "y" : "n";
+}
+
+echo evalRelationProbe(new EvalRelationNative(), "MissingEvalRelation");
+echo evalRelationProbe(new EvalRelationNative(), "\xFF");
+echo eval('class_alias("EvalRelationNative", "EvalRelationAlias");
+class EvalRelationDynamicTarget extends EvalRelationNative {}
+return evalRelationProbe(new EvalRelationNative(), "EvalRelationAlias")
+    . evalNamedAliasProbe(new EvalRelationNative())
+    . evalRelationProbe(new EvalRelationNative(), new EvalRelationDynamicTarget())
+    . evalRelationProbe(new EvalRelationNative(), 42);');
+"#,
+    );
+
+    assert_eq!(out, "nnyyne");
 }
 
 /// Verifies `Closure::call()` rebinds method closures but passes later args by value.

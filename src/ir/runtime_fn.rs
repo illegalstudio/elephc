@@ -2389,6 +2389,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::IntvalBase
+                // File writes return a bare byte count, never either input string.
+                | RuntimeFnId::FilePutContents
                 // The first byte is a scalar integer, independent of its source string.
                 | RuntimeFnId::Ord
                 // Raw-memory writes return only the byte count, never the borrowed input string.
@@ -2592,8 +2594,6 @@ impl RuntimeFnId {
                 // Compression allocates independent output storage, including failure cells.
                 | RuntimeFnId::Gzdeflate
                 | RuntimeFnId::Gzinflate
-                // A newly boxed file descriptor never aliases its filename, mode or context.
-                | RuntimeFnId::Fopen
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.
@@ -2656,6 +2656,15 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // Stream results own new cells and cannot retain the filename, mode,
+                // or input resource temporary through a returned argument alias.
+                | RuntimeFnId::Fopen
+                | RuntimeFnId::StreamGetContents
+                // Writes box a fresh count or false and only borrow the input bytes.
+                | RuntimeFnId::Fwrite
+                // Filter attachment boxes a fresh resource or false; names are only compared.
+                | RuntimeFnId::StreamFilterAppend
+                | RuntimeFnId::StreamFilterPrepend
                 // These mixed-return helpers always allocate a new result cell. Date
                 // decomposition boxes a newly allocated hash, `strtotime` boxes its scalar
                 // answer, `hrtime` boxes either a scalar or a new hash, and grapheme reversal
@@ -2716,7 +2725,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregSplit
-                // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
+                // print_r renders into the `_print_r_ptr` raw buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
                 // storage that is freshly allocated and cannot alias an argument: return mode
                 // yields an owned heap string, echo mode a non-heap `true`, and the runtime-flag
@@ -2724,14 +2733,8 @@ impl RuntimeFnId {
                 // `value_is_scratch_string` classify the return-mode string as concat scratch and
                 // skip its release, leaking one block per `print_r($v, true)` call.
                 | RuntimeFnId::PrintR
-                // Stream writes box a fresh byte count or false and never return input storage.
-                | RuntimeFnId::Fwrite
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::ElephcPtrReadString
-                // Filter attachment boxes a new resource or false. The helper retains
-                // its own params owner, so none of the result storage aliases an input.
-                | RuntimeFnId::StreamFilterAppend
-                | RuntimeFnId::StreamFilterPrepend
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
                 | RuntimeFnId::Strtotime
@@ -2795,6 +2798,9 @@ impl RuntimeFnId {
         } else if matches!(
             self,
             RuntimeFnId::BaseConvert
+                // Reads produce independent scratch or heap bytes. User-filter callbacks
+                // transfer owned returns and persist borrowed strings before returning.
+                | RuntimeFnId::Fread
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
@@ -2804,7 +2810,6 @@ impl RuntimeFnId {
                 | RuntimeFnId::GetParentClass
                 // Reads return stream-owned bytes, never an argument view. Scratch is
                 // ignored by validated release; detached filter output must be retired.
-                | RuntimeFnId::Fread
                 | RuntimeFnId::Fgetc
                 // `__rt_chunk_split` always writes into a reservation taken from
                 // `__rt_concat_reserve`, so the split result can never alias the subject or
@@ -3548,6 +3553,7 @@ mod tests {
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
     #[test]
     fn runtime_result_ownership_distinguishes_fresh_boxes_from_concat_storage() {
+        assert_eq!(RuntimeFnId::FilePutContents.result_ownership(), BuiltinResultOwnership::NonHeap);
         for target in [
             RuntimeFnId::Getdate,
             RuntimeFnId::Localtime,
@@ -3555,10 +3561,13 @@ mod tests {
             RuntimeFnId::Hrtime,
             RuntimeFnId::GraphemeStrrev,
             RuntimeFnId::StripTags,
+            RuntimeFnId::Fwrite,
+            RuntimeFnId::StreamFilterAppend,
+            RuntimeFnId::StreamFilterPrepend,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }
-        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace] {
+        for target in [RuntimeFnId::StrRepeat, RuntimeFnId::StrReplace, RuntimeFnId::Fread] {
             assert_eq!(
                 target.result_ownership(),
                 BuiltinResultOwnership::Independent

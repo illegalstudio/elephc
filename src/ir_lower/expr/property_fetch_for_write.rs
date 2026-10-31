@@ -52,13 +52,20 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
         let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-        let child = lower_array_access_from_lowered_receiver(ctx, borrowed, index, expr);
+        let child = lower_native_dimension_write_select(ctx, borrowed, index, expr);
         return capture_static_write_child(ctx, parent, child, span);
     }
     if let ExprKind::DynamicPropertyAccess { object, property } = &expr.kind {
+        let early_name = if matches!(object.kind, ExprKind::Variable(_)) {
+            super::super::scoped_writes::property_name(ctx, property, span)
+        } else { None };
         let mut parent = lower_static_property_write_chain_with_operands(ctx, object, operands, span);
-        let name = lower_expr(ctx, property);
-        let name = property_access::coerce_runtime_property_name(ctx, name, span);
+        let name = if let Some(name) = early_name { name } else {
+            super::super::scoped_writes::property_name(ctx, property, span).unwrap_or_else(|| {
+                let name = lower_expr(ctx, property);
+                property_access::coerce_runtime_property_name(ctx, name, span)
+            })
+        };
         parent.narrow_for_dynamic_array(ctx, name, operands, span);
         let result_type = property_access::dynamic_property_get_result_type(
             ctx, parent.value.value, property, expr,
@@ -73,8 +80,11 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
             Op::Borrow.default_effects(), Some(span));
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         let pins = pin_in_flight_owners(ctx, &[name.value], span);
-        let child = property_access::lower_dynamic_property_fetch_from_operands(
-            ctx, borrowed, name, result_type, PropertyFetchMode::Read, expr,
+        let argument = ctx.emit_value(Op::Borrow, vec![name.value], None, PhpType::Str,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(argument.value, Ownership::Borrowed);
+        let child = property_access::lower_dynamic_property_fetch_or_select(
+            ctx, borrowed, argument, result_type, PropertyFetchMode::Read, false, true, expr,
         );
         unpin_in_flight_owners(ctx, pins, span);
         crate::ir_lower::ownership::release_if_owned(ctx, name, Some(span));
@@ -92,7 +102,7 @@ pub(crate) fn lower_static_property_write_chain_with_operands(
     let borrowed = ctx.emit_value(Op::Borrow, vec![parent.value.value], None, ty,
         Op::Borrow.default_effects(), Some(span));
     ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
-    let child = lower_property_get_from_value(ctx, borrowed, property, Op::PropGet, expr);
+    let child = property_access::write_select::select_named(ctx, borrowed, property, expr);
     capture_static_write_child(ctx, parent, child, span)
 }
 
@@ -121,7 +131,7 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     property: &str,
     expr: &Expr,
 ) -> ByRefForeachPropertySource {
-    lower_property_write_source(ctx, object, property, expr, false)
+    lower_property_write_source(ctx, object, property, expr, None)
 }
 
 /// Returns whether a by-reference foreach may bind a synthetic origin to this property slot.
@@ -175,8 +185,23 @@ pub(crate) fn lower_nested_assignment_property_source(
     object: &Expr,
     property: &str,
     expr: &Expr,
+    mode: crate::ir_lower::stmt::PropertyDimensionFetchMode,
 ) -> LoweredValue {
-    lower_property_write_source(ctx, object, property, expr, true).value
+    lower_property_write_source(ctx, object, property, expr, Some(mode)).value
+}
+
+/// Admits only property roots whose nested update protocol operates on an attached boxed cell.
+pub(crate) fn nested_property_has_boxed_root(
+    ctx: &LoweringContext<'_, '_>, object: &Expr, property: &str,
+) -> bool {
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, object);
+    let Some((class, _)) = singular_object_class(&ty) else {
+        return matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_));
+    };
+    class.is_empty() || ctx.interfaces.contains_key(class)
+        || crate::types::builtin_classes::native_property_method(class, property,
+            elephc_builtin_contract::ObjectProperty::WriteSelect, ctx.classes).is_some()
+        || property_is_splittable_container_slot(ctx, class, property, true)
 }
 
 /// Selects borrowed slot access only for the stable storage shape required by its consumer.
@@ -185,10 +210,53 @@ fn lower_property_write_source(
     object: &Expr,
     property: &str,
     expr: &Expr,
-    mixed_root: bool,
+    mode: Option<crate::ir_lower::stmt::PropertyDimensionFetchMode>,
 ) -> ByRefForeachPropertySource {
     let object_value = lower_expr(ctx, object);
-    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root) {
+    if mode.is_some()
+        && ctx.builder.value_php_type(object_value.value).codegen_repr() == PhpType::Mixed
+    {
+        let mut receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(
+            ctx, object_value, expr.span,
+        );
+        receiver.narrow_for_array(ctx, property, &[], expr.span);
+        let ty = ctx.builder.value_php_type(receiver.value.value);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![receiver.value.value], None, ty,
+            Op::Borrow.default_effects(), Some(expr.span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        let selected = lower_property_write_source_from_value(
+            ctx, object, borrowed, property, expr, mode, true,
+        );
+        receiver.finish(ctx, expr.span);
+        return selected;
+    }
+    lower_property_write_source_from_value(ctx, object, object_value, property, expr, mode, false)
+}
+
+/// Selects the property while an optional enclosing lease owns the already guarded receiver.
+fn lower_property_write_source_from_value(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, object_value: LoweredValue,
+    property: &str, expr: &Expr,
+    mode: Option<crate::ir_lower::stmt::PropertyDimensionFetchMode>, scoped_receiver: bool,
+) -> ByRefForeachPropertySource {
+    let mixed_root = mode.is_some();
+    if let Some(mode) = mode {
+        crate::ir_lower::stmt::guard_property_dimension_fetch(ctx, object_value, property, expr.span, mode);
+    }
+    let object_type = ctx.builder.value_php_type(object_value.value);
+    let native = native_property_method_for_value(ctx, object_value.value, property,
+        elephc_builtin_contract::ObjectProperty::WriteFetch).is_some();
+    let opaque = matches!(object_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || property_access::is_opaque_property_object(ctx, &object_type);
+    if mixed_root && !property.starts_with("__elephc_") && ctx.classes.contains_key("SimpleXMLElement")
+        && (native || opaque)
+    {
+        return ByRefForeachPropertySource {
+            value: property_access::write_select::select_named(ctx, object_value, property, expr),
+            receiver: None,
+        };
+    }
+    if !property_fetch_for_write_applies(ctx, &object_value, property, expr, mixed_root, scoped_receiver) {
         return ByRefForeachPropertySource {
             value: lower_property_get_from_value(ctx, object_value, property, Op::PropGet, expr),
             receiver: None,
@@ -255,6 +323,7 @@ fn property_fetch_for_write_applies(
     property: &str,
     expr: &Expr,
     mixed_root: bool,
+    scoped_receiver: bool,
 ) -> bool {
     let PhpType::Object(class_name) = ctx.builder.value_php_type(object_value.value).codegen_repr()
     else {
@@ -287,7 +356,8 @@ fn property_fetch_for_write_applies(
         let ExprKind::PropertyAccess { object, .. } = &expr.kind else {
             return false;
         };
-        return receiver_is_stable_backing_storage(ctx, object);
+        return receiver_is_stable_backing_storage(ctx, object)
+            || (scoped_receiver && matches!(object.kind, ExprKind::StaticPropertyAccess { .. }));
     }
     // A by-reference `foreach` receiver no longer has to name stable storage: an unstable one
     // is held by the loop instead (see `lower_by_ref_foreach_property_source`). What still has

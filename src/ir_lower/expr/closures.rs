@@ -210,9 +210,14 @@ pub(super) fn lower_closure_with_context(
                 PhpType::Mixed,
             )
         } else {
+            let preserves_native_reference_layout = by_ref
+                && ctx.is_ref_bound_local(capture)
+                && ctx.local_load_php_type(capture).is_some_and(|ty|
+                    crate::ir_lower::eval_reference_layouts::contains_unboxed_array(&ty));
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (body_contains_eval || body_writes_local(body, capture))
+                && !preserves_native_reference_layout;
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if widens_by_ref_capture {

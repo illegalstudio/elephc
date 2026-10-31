@@ -8,6 +8,30 @@
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
+/// Bare object parameters accept boxed instances without asking for an empty class name.
+#[test]
+fn nullable_to_bare_object_arguments_check_the_object_tag_on_every_target() {
+    let source = r#"<?php
+class BareObjectArgumentNode {}
+function acceptBareObjectArgument(object $node): string { return get_class($node); }
+function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
+echo passBareObjectArgument(new BareObjectArgumentNode());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "passBareObjectArgument").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::TypePredicate
+            && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))),
+            "{target}: a bare object boundary must inspect the runtime object tag");
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize].is_empty())),
+            "{target}: a bare object hint must not look up an empty class");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Follows ownership-only forwarding while preserving the underlying producer identity.
 fn ownership_forwarding_source(
     function: &crate::ir::Function,
@@ -787,13 +811,7 @@ echo coercionCaller($argc);
         // the call, and two backend roots protect the implicit Mixed boxes.
         assert_eq!(before.matches("publish temporary call operand owner").count(), 5, "{target}: {body}");
         assert_eq!(after.matches("detach temporary call operand owner").count(), 4, "{target}: {body}");
-        let implicit = after.split_once("op=pop_call_operand_owner").unwrap().0;
-        assert_eq!(implicit.matches("detach temporary call operand owner").count(), 2, "{target}: {body}");
-        let (inner, outer) = if target == "linux-x86_64" {
-            ("mov r10, QWORD PTR [rsp + 80]", "mov r10, QWORD PTR [rsp + 16]")
-        } else {
-            ("ldr x10, [sp, #80]", "ldr x10, [sp, #16]")
-        };
-        assert!(after.find(inner).unwrap() < after.find(outer).unwrap(), "{target}: {after}");
+        assert!(!after.contains("publish temporary call operand owner"),
+            "{target}: every temporary owner must already be published before the call");
     }
 }

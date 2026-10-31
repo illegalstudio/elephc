@@ -237,6 +237,7 @@ impl ElephcEvalContext {
 
     /// Records that one runtime object handle was created for an eval-declared class.
     pub fn register_dynamic_object(&mut self, identity: u64, class_name: &str) {
+        self.clear_eval_reflection_identity(identity);
         let class_name = self
             .resolve_class_name(class_name)
             .unwrap_or_else(|| class_name.to_string());
@@ -251,6 +252,7 @@ impl ElephcEvalContext {
 
     /// Removes one dynamic object identity and all per-object eval metadata.
     pub fn forget_dynamic_object(&mut self, identity: u64) {
+        self.clear_eval_reflection_identity(identity);
         self.dynamic_objects.remove(&identity);
         self.closure_objects.remove(&identity);
         self.dynamic_destructing_objects.remove(&identity);

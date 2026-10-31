@@ -1320,9 +1320,11 @@ fn emit_aarch64_constructor_ref_arg_cells(
     for slot in &ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
+        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -1360,9 +1362,11 @@ fn emit_x86_64_constructor_ref_arg_cells(
     for slot in &ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
+        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -1510,6 +1514,10 @@ fn emit_aarch64_cast_eval_array_arg(
     owner: ConstructorArgOwner,
 ) {
     emitter.instruction("ldr x0, [x29, #-16]");                                 // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) {
+        emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
+        return;
+    }
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the eval array payload for the constructor ABI
     abi::emit_load_int_immediate(emitter, "x9", expected_tag);
     emitter.instruction("cmp x0, x9");                                          // compare the eval payload tag with the expected array ABI
@@ -1674,6 +1682,10 @@ fn emit_x86_64_cast_eval_array_arg(
     owner: ConstructorArgOwner,
 ) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval argument for array unboxing
+    if super::eval_argument_helpers::emit_unbox_mixed_element_array(emitter, param_ty, fail_label) {
+        emit_acquire_staged_constructor_arg(emitter, param_ty, owner);
+        return;
+    }
     emitter.instruction("call __rt_mixed_unbox");                               // expose the eval array payload for the constructor ABI
     abi::emit_load_int_immediate(emitter, "r10", expected_tag);
     emitter.instruction("cmp rax, r10");                                        // compare the eval payload tag with the expected array ABI
@@ -2023,6 +2035,24 @@ mod argument_ownership_tests {
         emitter.output()
     }
 
+    /// Layout-neutral Mixed arrays admit packed and hash payloads while typed arrays stay strict.
+    #[test]
+    fn mixed_array_constructor_arguments_accept_both_layouts_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            for (param, accepts_hash) in [
+                (PhpType::Array(Box::new(PhpType::Mixed)), true),
+                (PhpType::Array(Box::new(PhpType::Int)), false),
+                (PhpType::AssocArray { key: Box::new(PhpType::Str), value: Box::new(PhpType::Int) }, false),
+            ] {
+                let asm = constructor_argument_asm(target, param, false);
+                let range = if target.arch == Arch::AArch64 { "sub x0, x0, #4" } else { "sub rax, 4" };
+                assert_eq!(asm.contains(range), accepts_hash, "{name}: {asm}");
+                assert!(!asm.contains("__rt_incref"), "{name}: borrowed argument acquired an extra owner");
+            }
+        }
+    }
+
     /// By-value refcounted constructor arguments stay borrowed on every target.
     ///
     /// Magician's normalized array roots the value for the whole native activation. An extra
@@ -2064,6 +2094,13 @@ mod argument_ownership_tests {
                 true,
             );
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+            let sequence = match target.arch {
+                Arch::AArch64 => "ldr x0, [x29, #-16]\n    bl __rt_mixed_deref",
+                Arch::X86_64 => {
+                    "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref"
+                }
+            };
+            assert!(asm.contains(sequence), "{name}: {asm}");
         }
     }
 

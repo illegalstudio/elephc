@@ -16,7 +16,9 @@ use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
 use elephc_builtin_contract::output_abi::OutputAction;
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
-use crate::interpreter::RuntimeValueOps;
+use crate::interpreter::{
+    NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
+};
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 mod collection_calls;
@@ -36,6 +38,27 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Uses the native Mixed cast after internal-class adapters have been checked.
+    fn cast_array(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_cast_array(value.as_ptr()) })
+    }
+
+    /// Checks native recursion before invoking an eval or AOT debug hook.
+    fn debug_guard_find(&mut self, object: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(unsafe { __elephc_eval_debug_guard(object.as_ptr(), 0, 0) } != 0)
+    }
+
+    /// Saves and extends the same native guard used by AOT formatters.
+    fn debug_guard_push(&mut self, object: RuntimeCellHandle) -> Result<Option<u64>, EvalStatus> {
+        Ok(Some(unsafe { __elephc_eval_debug_guard(object.as_ptr(), 1, 0) }))
+    }
+
+    /// Restores the native guard even when a projection or nested renderer failed.
+    fn debug_guard_restore(&mut self, depth: u64) -> Result<(), EvalStatus> {
+        unsafe { __elephc_eval_debug_guard(std::ptr::null_mut(), 2, depth); }
+        Ok(())
+    }
+
     /// Binds source operands through the shared native method argument planner.
     fn operator_static_call(&mut self, class: &str, method: &str, args: Vec<RuntimeCellHandle>) -> Result<RuntimeCellHandle, EvalStatus> {
         self.call_static_operator(class, method, args)

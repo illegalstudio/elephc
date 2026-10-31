@@ -142,6 +142,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_concat_offset_reset(emitter);
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
+    abi::emit_call_label(emitter, "__rt_stream_registry_cleanup");
     abi::emit_call_label(emitter, "__rt_diag_reset");
     emit_gc_state_reset(emitter);
 
@@ -200,20 +201,18 @@ fn emit_output_buffer_reset(emitter: &mut Emitter) {
     }
 }
 
-/// Restores the `print_r($value, true)` capture state to its process-start defaults.
+/// Restores print_r capture state to its process-start defaults.
 ///
-/// Return-mode rendering sets `_print_r_mode` and accumulates bytes into the static
-/// `_print_r_buf` through `_print_r_off`. A render interrupted before `__rt_pr_finish` would
+/// Rendering sets `_print_r_mode` and accumulates bytes in the raw heap buffer
+/// `_print_r_ptr`. A render interrupted before `__rt_pr_finish` would
 /// otherwise leave the mode set, so the next request's ordinary output would be captured into
 /// that stale buffer instead of reaching its response.
 fn emit_print_r_capture_reset(emitter: &mut Emitter) {
-    emitter.comment("reset any print_r return-mode capture abandoned by the previous request");
+    emitter.comment("reset any print_r capture abandoned by the previous request");
     abi::emit_store_zero_to_symbol(emitter, "_print_r_mode", 0);
     abi::emit_store_zero_to_symbol(emitter, "_print_r_off", 0);
-    let scratch = abi::symbol_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, scratch, "_print_r_buf");
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_print_r_base", 0);
-    abi::emit_store_imm_to_symbol(emitter, "_print_r_cap", 0, 65536);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_ptr", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_cap", 0);
 }
 
 /// Clears transient request-owned pointers and counters that are not owned by static locals,
@@ -484,15 +483,16 @@ mod handler_reset_tests {
             let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
             let output_level = asm.find("_ob_level").unwrap();
             let print_r_mode = asm.find("_print_r_mode").unwrap();
-            let print_r_base = asm.find("_print_r_base").unwrap();
+            let print_r_ptr = asm.find("_print_r_ptr").unwrap();
             let print_r_cap = asm.find("_print_r_cap").unwrap();
             let stream_context = asm.find("_stream_context_options").unwrap();
             let final_output_level = asm.rfind("_ob_level").unwrap();
             let final_print_r_mode = asm.rfind("_print_r_mode").unwrap();
-            let final_print_r_base = asm.rfind("_print_r_base").unwrap();
+            let final_print_r_ptr = asm.rfind("_print_r_ptr").unwrap();
             let final_print_r_cap = asm.rfind("_print_r_cap").unwrap();
             let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
+            let registrations = asm.find("__rt_stream_registry_cleanup").unwrap();
             let wrapper_table = asm.find("_user_wrappers").unwrap();
             let heap = asm.find("_heap_off").unwrap();
             for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
@@ -510,7 +510,7 @@ mod handler_reset_tests {
             for (label, position) in [
                 ("_ob_level", output_level),
                 ("_print_r_mode", print_r_mode),
-                ("_print_r_base", print_r_base),
+                ("_print_r_ptr", print_r_ptr),
                 ("_print_r_cap", print_r_cap),
                 ("_stream_context_options", stream_context),
             ] {
@@ -520,13 +520,13 @@ mod handler_reset_tests {
                 );
             }
             assert!(
-                inventory < wrapper_table && wrapper_table < heap,
+                inventory < registrations && registrations < wrapper_table && wrapper_table < heap,
                 "{target:?}: fd-keyed tables must clear after inventory cleanup and before the heap reset"
             );
             for (label, position) in [
                 ("_ob_level", final_output_level),
                 ("_print_r_mode", final_print_r_mode),
-                ("_print_r_base", final_print_r_base),
+                ("_print_r_ptr", final_print_r_ptr),
                 ("_print_r_cap", final_print_r_cap),
                 ("_stream_context_options", final_stream_context),
             ] {

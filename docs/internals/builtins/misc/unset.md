@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:146](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L146) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:148](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L148) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 

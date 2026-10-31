@@ -44,6 +44,9 @@ pub use types::{GenericDecl, TypeExpr, TypeParam, Variance};
 /// here is unaffected by that suffix.
 pub const NESTED_APPEND_TEMP_PREFIX: &str = "__elephc_napp_";
 
+/// Captures introduced by statement write planners, owned only until that statement ends.
+pub const SCOPED_WRITE_TEMP_PREFIX: &str = "__elephc_scoped_write_";
+
 /// Attribute the include rewrite puts on the `break` an included file's `return` becomes.
 ///
 /// `resolver::engine_includes::confine_nested_returns` turns each `return` of an included file

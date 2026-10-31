@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Resolves one native dimension adapter shared by every non-null arm of a receiver type.
+pub(super) fn native_dimension_method_for_type(
+    ctx: &LoweringContext<'_, '_>, ty: &PhpType,
+    operation: elephc_builtin_contract::ObjectDimension,
+) -> Option<&'static str> {
+    match ty {
+        PhpType::Object(class) => crate::types::builtin_classes::native_dimension_method(
+            class, operation, ctx.classes),
+        PhpType::Union(members) => {
+            let mut shared = None;
+            for member in members {
+                if matches!(member, PhpType::Void | PhpType::Never) { continue; }
+                let method = native_dimension_method_for_type(ctx, member, operation)?;
+                if shared.is_some_and(|previous| previous != method) { return None; }
+                shared = Some(method);
+            }
+            shared
+        }
+        _ => None,
+    }
+}
+
 /// Returns true when every possible object arm satisfies PHP's `ArrayAccess` interface.
 pub(crate) fn type_satisfies_array_access_for_ir(
     ctx: &LoweringContext<'_, '_>,
@@ -16,7 +38,7 @@ pub(crate) fn type_satisfies_array_access_for_ir(
 ) -> bool {
     match ty {
         PhpType::Object(class_name) => {
-            object_name_satisfies_interface_for_ir(ctx, class_name, "ArrayAccess")
+            object_name_supports_dimensions_for_ir(ctx, class_name)
         }
         PhpType::Union(members) => {
             let mut saw_object = false;
@@ -33,6 +55,12 @@ pub(crate) fn type_satisfies_array_access_for_ir(
         }
         _ => false,
     }
+}
+
+/// Resolves array syntax independently of PHP-visible interface membership.
+pub(super) fn object_name_supports_dimensions_for_ir(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    crate::types::builtin_classes::has_native_dimensions(name, ctx.classes)
+        || object_name_satisfies_interface_for_ir(ctx, name, "ArrayAccess")
 }
 
 /// Returns true when a class or interface name satisfies the requested interface.

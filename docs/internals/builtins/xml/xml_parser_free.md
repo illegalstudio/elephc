@@ -2,7 +2,7 @@
 title: "xml_parser_free() - internals"
 description: "Compiler internals for xml_parser_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1092
+  order: 1095
 ---
 
 ## `xml_parser_free()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1557](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1557) (`xml_parser_free`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1563](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1563) (`xml_parser_free`)
 - **Function symbol**: `xml_parser_free()`
 
 

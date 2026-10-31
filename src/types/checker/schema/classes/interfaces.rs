@@ -127,6 +127,18 @@ fn interface_self_return_conforms(
     actual_return: &PhpType,
 ) -> bool {
     match (required_return, actual_return) {
+        (PhpType::Union(expected), PhpType::Union(actual)) => actual.iter().all(|actual| {
+            expected.iter().any(|expected| interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual))
+        }),
+        (PhpType::Union(expected), actual) => expected.iter().any(|expected| {
+            interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual)
+        }),
+        (expected, PhpType::Union(actual)) => actual.iter().all(|actual| {
+            interface_self_return_conforms(checker, class, interface_name, expected, actual)
+                || declared_return_type_compatible(checker, expected, actual)
+        }),
         (PhpType::Object(expected_name), PhpType::Object(actual_name)) => {
             actual_name == &class.name
                 && (expected_name == interface_name

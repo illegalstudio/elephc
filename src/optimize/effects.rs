@@ -270,14 +270,13 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
-        ExprKind::Negate(inner) => {
+        ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             let effect = expr_effect(inner);
             if internal_object_operators_available() && !literal_scalar_operand(inner) {
                 effect.with_may_throw()
             } else { effect }
         }
         ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
@@ -519,7 +518,7 @@ fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     match target {
         InstanceOfTarget::Name(_) => Effect::PURE,
         InstanceOfTarget::Generic(_) => Effect::PURE,
-        InstanceOfTarget::Expr(expr) => expr_effect(expr),
+        InstanceOfTarget::Expr(expr) => expr_effect(expr).with_may_throw(),
     }
 }
 

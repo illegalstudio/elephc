@@ -182,6 +182,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload a non-self result for ordinary recursive encoding
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed return value as JSON
     emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across depth cleanup
+    emitter.instruction("ldr x0, [sp, #48]");                                   // recover the owned serializer result after encoding
+    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary projection and its nested values
     emitter.instruction("bl __rt_json_depth_exit");                             // balance object entry after recursive result encoding
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after cleanup
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
@@ -568,7 +570,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // Save the (rax, rdx) result across __rt_json_depth_exit.
     emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // checkpoint the encoded result pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // checkpoint the encoded result length
-    emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // recover the owned serializer result after encoding
+    emitter.instruction("call __rt_decref_mixed");                              // release the temporary projection and its nested values
+    emitter.instruction("call __rt_json_depth_exit");                           // balance object entry after recursive result encoding
     emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // restore the encoded result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // restore the encoded result length
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame

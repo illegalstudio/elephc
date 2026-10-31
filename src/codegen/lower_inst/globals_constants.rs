@@ -282,7 +282,9 @@ pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instru
     abi::emit_load_int_immediate(
         ctx.emitter,
         source_tag_reg,
-        crate::codegen::runtime_value_tag(&source_ty) as i64,
+        if matches!(source_ty, PhpType::TaggedScalar) {
+            callable_invoker_args::INVOKER_ARG_TAGGED_SCALAR_SOURCE
+        } else { crate::codegen::runtime_value_tag(&source_ty) as i64 },
     );
     ctx.emitter.comment("cufa_invoker_ref_cell");
     emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, ref_cell_reg, source_tag_reg);

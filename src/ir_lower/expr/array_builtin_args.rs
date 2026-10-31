@@ -534,10 +534,19 @@ fn prepare_write_only_output_local(
     parameter_index: usize,
     value: &Expr,
 ) -> Option<(String, PhpType)> {
-    let ty = match (canonical, parameter_index) {
-        ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
-        ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
-        _ => pcntl_output_type(canonical, parameter_index)?,
+    let boxed_output = crate::builtins::registry::lookup(canonical).is_some_and(|def| {
+        matches!(def.spec.semantics.argument_lowering,
+            crate::builtins::semantics::BuiltinArgumentLowering::WriteOnlyMixedOutputs(indices)
+                if indices.contains(&parameter_index))
+    });
+    let ty = if boxed_output {
+        PhpType::Mixed
+    } else {
+        match (canonical, parameter_index) {
+            ("preg_match", 2) => PhpType::Array(Box::new(PhpType::Str)),
+            ("preg_match_all", 2) => PhpType::Array(Box::new(PhpType::Mixed)),
+            _ => pcntl_output_type(canonical, parameter_index)?,
+        }
     };
     let ExprKind::Variable(name) = &value.kind else {
         return None;

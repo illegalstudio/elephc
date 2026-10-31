@@ -150,6 +150,14 @@ fn lower_reference_return(
     value_expr: Option<&Expr>,
     span: Span,
 ) {
+    // Sibling regions cannot execute this return's promotion. A handler can observe it after
+    // a throwing finally, so keep that separate recovery case out of this raw-only restoration.
+    let sibling_type = match value_expr.map(|expr| &expr.kind) {
+        Some(ExprKind::Variable(name)) if ctx.finally_stack.is_empty()
+            && !ctx.is_ref_bound_local(name) && needs_concrete_reference_staging(ctx) =>
+                Some((name.clone(), ctx.local_type(name))),
+        _ => None,
+    };
     match value_expr.map(|expr| &expr.kind) {
         Some(ExprKind::Variable(name)) => {
             if ctx.is_borrowed_element_ref_local(name) {
@@ -164,6 +172,12 @@ fn lower_reference_return(
                 return;
             }
             if !ctx.is_ref_bound_local(name) {
+                if protected_reference_coercion_is_unsupported(ctx, name) {
+                    refuse_reference_return(ctx, span,
+                        "Unsupported by-reference return: coercing this local to a different \
+                         payload representation inside try/finally requires handler recovery");
+                    return;
+                }
                 if !ctx.local_is_promotable_to_ref_cell(name) {
                     refuse_reference_return(
                         ctx,
@@ -197,6 +211,7 @@ fn lower_reference_return(
                 );
                 return;
             }
+            crate::ir_lower::object_boundaries::guard_return(ctx, value, Some(span));
             acquire_and_return_reference_cell(ctx, value, span);
         }
         Some(ExprKind::PropertyAccess { object, property }) => {
@@ -257,6 +272,10 @@ fn lower_reference_return(
              must return a reference",
         ),
     }
+    if let Some((name, ty)) = sibling_type {
+        ctx.set_local_logical_type(&name, ty);
+        ctx.unmark_ref_bound_local(&name);
+    }
 }
 
 /// Records an unsupported by-reference return and terminates the block without a value.
@@ -281,6 +300,31 @@ fn promote_local_to_reference_return_payload(
     name: &str,
     span: Span,
 ) {
+    if needs_concrete_reference_staging(ctx) {
+        // The frame slot can widen even after this return has been lowered. A synthetic
+        // slot written only here keeps the declared payload shape independent of that
+        // final frame layout. Attach the source name so finally writes reach the same cell.
+        let value = ctx.load_local(name, Some(span));
+        let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. })
+            && matches!(ctx.return_php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+        {
+            // Container conversions consume their input. The source slot still owns its
+            // payload until alias publication, so lend the conversion a separate owner.
+            let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            retained
+        } else { value };
+        let value = coerce_to_return_type(ctx, value, Some(span));
+        let result_type = ctx.return_php_type.clone();
+        let staged = ctx.declare_synthetic_php_local(result_type.clone());
+        ctx.store_local(&staged, value, result_type, Some(span));
+        ctx.mark_local_initialized(&staged);
+        ctx.promote_local_ref_cell(&staged, Some(span));
+        ctx.alias_local_ref_cell(name, &staged, Some(span));
+        ctx.release_ref_cell_owner(&staged, Some(span));
+        return;
+    }
     if ctx.return_php_type.codegen_repr() == PhpType::Mixed
         && ctx.local_type(name).codegen_repr() != PhpType::Mixed
     {
@@ -288,6 +332,34 @@ fn promote_local_to_reference_return_payload(
         return;
     }
     ctx.promote_local_ref_cell(name, Some(span));
+}
+
+/// Keeps concrete returned payloads separate from a source slot's eventual frame-wide widening.
+fn needs_concrete_reference_staging(ctx: &LoweringContext<'_, '_>) -> bool {
+    !matches!(ctx.return_php_type.codegen_repr(), PhpType::Mixed | PhpType::Void | PhpType::Never)
+}
+
+/// Keeps new scalar/container coercions out of protected paths until their handlers can recover.
+fn protected_reference_coercion_is_unsupported(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    let load_type = ctx.local_load_php_type(name).unwrap_or_else(|| ctx.local_type(name));
+    if ctx.finally_stack.is_empty() || !needs_concrete_reference_staging(ctx)
+        || load_type.reference_payload_compatible(&ctx.return_php_type)
+    { return false; }
+    let object_staging = matches!(ctx.return_php_type.codegen_repr(), PhpType::Object(_))
+        && match load_type {
+            PhpType::Mixed | PhpType::Object(_) => true,
+            PhpType::Union(members) => members.iter().any(|ty| matches!(ty, PhpType::Object(_)))
+                && members.iter().all(|ty| {
+                    matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::Never)
+                }),
+            _ => false,
+        };
+    // Object staging performs its throwing null/class guard before promotion. Loads and stores
+    // lowered for a same-frame catch or copied finalizer use the slot's runtime representation
+    // flag, so the guard-failure path reads the still-raw nullable slot while the successful path
+    // follows the promoted cell. Scalar and string coercions remain refused above because their
+    // conversions can run user code and need a stronger recovery contract.
+    !object_staging
 }
 
 /// Returns whether a local's cell payload agrees with the declared by-reference result shape.
@@ -366,7 +438,7 @@ fn receiver_class_is_statically_decided(ctx: &LoweringContext<'_, '_>, object: &
 /// (PHP snapshots the same way, with `MAKE_REF` before the finally).
 ///
 /// The `ReturnRefCell` slot it also writes is only the optional managed LEASE: it holds the
-/// retained owner so cleanup can retire it, and a superseded lease left by an earlier return is
+/// retained owner so cleanup can retire it, and a lease left by an earlier execution of this site is
 /// retired after the replacement is published, because that retirement can run a throwing
 /// destructor. An accepted address that owns no managed cell, which is the active
 /// `array_walk()` element borrow the descriptor invoker copies out immediately, publishes a
@@ -376,22 +448,36 @@ fn acquire_reference_return_owner(
     cell_ptr: LoweredValue,
     span: Span,
 ) -> LoweredValue {
+    let owner_name = ctx.next_synthetic_place_local_name();
     let owner = ctx.declare_local_with_kind(
-        "__eir_reference_return_owner",
+        &owner_name,
         PhpType::Pointer(None),
         crate::ir::LocalKind::ReturnRefCell,
     );
-    ctx.emit_value(
+    let captured = ctx.emit_value(
         Op::AcquireRefCell,
         vec![cell_ptr.value],
         Some(Immediate::LocalSlot(owner)),
         PhpType::Pointer(None),
         Op::AcquireRefCell.default_effects(),
         Some(span),
-    )
+    );
+    if !ctx.finally_stack.is_empty() || !ctx.try_loop_depths.is_empty() {
+        // Same-frame catches leave the function activation alive. Publish the lease separately
+        // so an exception that cancels this return clears it before entering that catch. A stable
+        // record in the frame coexists with temporary receiver and foreach owner records.
+        ctx.emit_void(
+            Op::PushCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(owner)),
+            Op::PushCallOperandOwner.default_effects(),
+            Some(span),
+        );
+    }
+    captured
 }
 
-/// Acquires the reference-return lease and terminates with the address it captured.
+/// Acquires this return site's independent lease and terminates with the address it captured.
 fn acquire_and_return_reference_cell(
     ctx: &mut LoweringContext<'_, '_>,
     cell_ptr: LoweredValue,
@@ -597,6 +683,8 @@ fn terminate_return_with_owner(
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
     let saved_cleaned = ctx.exit_cleaned_loops.clone();
+    let saved_types = ctx.local_types_snapshot();
+    let saved_initialized = ctx.initialized_slots_snapshot();
     release_taken_exceptions(ctx, None);
     if run_innermost_finally(ctx, false, None) {
         if !ctx.builder.insertion_block_is_terminated() {
@@ -608,6 +696,8 @@ fn terminate_return_with_owner(
         ctx.try_loop_depths = saved_try_loop_depths;
         ctx.taken_finally_exceptions = saved_taken;
         ctx.exit_cleaned_loops = saved_cleaned;
+        ctx.restore_local_types(saved_types);
+        ctx.restore_initialized_slots(saved_initialized);
         return;
     }
     emit_innermost_loop_cleanups(ctx, ctx.loop_stack.len());
@@ -628,6 +718,8 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
     let saved_taken = ctx.taken_finally_exceptions.clone();
     let saved_cleaned = ctx.exit_cleaned_loops.clone();
+    let saved_types = ctx.local_types_snapshot();
+    let saved_initialized = ctx.initialized_slots_snapshot();
     // `break N` / `continue N` target the loop at this depth: `loop_cleanup_count` is N - 1.
     let target_loop_depth = ctx.loop_stack.len().saturating_sub(loop_cleanup_count + 1);
     release_taken_exceptions(ctx, Some(target_loop_depth));
@@ -639,6 +731,8 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
         ctx.try_loop_depths = saved_try_loop_depths;
         ctx.taken_finally_exceptions = saved_taken;
         ctx.exit_cleaned_loops = saved_cleaned;
+        ctx.restore_local_types(saved_types);
+        ctx.restore_initialized_slots(saved_initialized);
         return;
     }
     emit_innermost_loop_cleanups(ctx, loop_cleanup_count);
@@ -654,12 +748,16 @@ pub(super) fn terminate_branch(ctx: &mut LoweringContext<'_, '_>, target: BlockI
 pub(super) fn terminate_throw(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
     let saved_finally_stack = ctx.finally_stack.clone();
     let saved_try_loop_depths = ctx.try_loop_depths.clone();
+    let saved_types = ctx.local_types_snapshot();
+    let saved_initialized = ctx.initialized_slots_snapshot();
     if run_innermost_finally(ctx, true, None) {
         if !ctx.builder.insertion_block_is_terminated() {
             terminate_throw(ctx, value);
         }
         ctx.finally_stack = saved_finally_stack;
         ctx.try_loop_depths = saved_try_loop_depths;
+        ctx.restore_local_types(saved_types);
+        ctx.restore_initialized_slots(saved_initialized);
         return;
     }
     // NOT every active loop: a `try` inside one catches without leaving it. See
@@ -680,6 +778,18 @@ pub(crate) fn lower_throw_access_error(
     span: Span,
 ) {
     lower_throw_access_exception(ctx, "Error", message, span);
+}
+
+/// Throws a catchable access Error whose message uses already captured runtime strings.
+pub(crate) fn lower_throw_access_error_message(
+    ctx: &mut LoweringContext<'_, '_>, message: &Expr, span: Span,
+) {
+    if ctx.builder.insertion_block_is_terminated() { return; }
+    let error = Expr::new(ExprKind::NewObject {
+        class_name: crate::names::Name::unqualified("Error"), args: vec![message.clone()],
+    }, span);
+    let value = crate::ir_lower::expr::lower_expr(ctx, &error);
+    terminate_throw(ctx, value.value);
 }
 
 /// Lowers a statically-decided access violation as a named catchable exception.

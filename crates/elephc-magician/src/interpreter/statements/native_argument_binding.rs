@@ -62,7 +62,9 @@ pub(super) fn bind_native_callable_bound_args_with_mode(
     if !signature.bridge_supported() {
         return Err(EvalStatus::RuntimeFatal);
     }
-    if signature.param_names().len() == signature.param_count() {
+    if signature.has_explicit_shape()
+        || signature.param_names().len() == signature.param_count()
+    {
         bind_native_signature_args(&signature, args, by_ref_mode, context, values)
     } else {
         positional_evaluated_bound_args(Some(&signature), args, by_ref_mode, context, values)
@@ -132,8 +134,8 @@ pub(in crate::interpreter) fn release_native_bound_args(
     result
 }
 
-/// Preserves a native result while releasing the activation's internal argument owners.
-pub(super) fn finish_native_bound_call(
+/// Preserves a call result while releasing the activation's internal argument owners.
+pub(in crate::interpreter) fn finish_native_bound_call(
     result: Result<RuntimeCellHandle, EvalStatus>,
     args: &[BoundMethodArg],
     context: &mut ElephcEvalContext,
@@ -184,6 +186,7 @@ fn write_back_native_ref_target(
         return Err(EvalStatus::RuntimeFatal);
     };
     if visible_scope_cell(context, scope, name) == Some(value) {
+        mark_scope_binding_changed(context, scope, name)?;
         return Ok(());
     }
     let retained = values.retain(value)?;

@@ -60,6 +60,7 @@ macro_rules! impl_fake_collection_call_ops {
         array: RuntimeCellHandle,
         position: usize,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.array_iter_key_calls += 1;
         self.runtime_array_iter_key(array, position)
     }
     /// Writes one fake indexed or associative array element.
@@ -70,6 +71,12 @@ macro_rules! impl_fake_collection_call_ops {
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_set(array, index, value)
+    }
+    /// Copies fake entries and index history without calling runtime element traversal hooks.
+    fn copy_array_value(&mut self, array: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !self.is_array_like(array)? { return Err(EvalStatus::RuntimeFatal); }
+        self.array_value_copy_calls += 1;
+        self.copy_value(array)
     }
     /// Reads one fake object property by name.
     fn property_get(

@@ -9,6 +9,14 @@
 
 use super::*;
 
+mod native_xml;
+
+/// Routes a runtime-name XML write while preserving the caller's common operand owners.
+pub(crate) fn lower_native_dynamic_property_set(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: LoweredValue,
+    value: LoweredValue, span: Span,
+) -> bool { native_xml::lower_dynamic(ctx, object, property, value, span) }
+
 /// Lowers an object property write.
 pub(super) fn lower_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
@@ -17,6 +25,9 @@ pub(super) fn lower_property_assign(
     value: &Expr,
     span: Span,
 ) {
+    if crate::ir_lower::expr::lower_native_xml_property_update(ctx, object, property, value, span) {
+        return;
+    }
     // Readonly errors depend on runtime initialization, after receiver and RHS effects.
     let readonly_write = ctx.throw_access_sites.get(&span).and_then(|info| {
         if let ThrowAccessKind::ReadonlyProperty { class_name, property, initialization_error } = &info.kind {
@@ -48,12 +59,14 @@ pub(super) fn lower_property_assign(
         }
     }
     let value_expr = value;
-    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object) {
+    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object)
+        || (!property.starts_with("__elephc_") && crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object)) {
         let rhs = lower_expr(ctx, value_expr);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
         (receiver, rhs)
     } else {
-        let object = crate::ir_lower::expr::lower_member_receiver_at_span(ctx, object, span);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+        let object = crate::ir_lower::expr::refine_member_receiver_at_span(ctx, object, span);
         let receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let rhs = match object_property_type(ctx, object.value, property) {
             Some(property_ty) => {
@@ -408,6 +421,18 @@ fn lower_property_assign_value(
     lowered_value: LoweredValue,
     preserve_property_operand: bool,
     span: Span,
+) {
+    if native_xml::lower(ctx, object, property, value_expr, lowered_value, preserve_property_operand, span) {
+        return;
+    }
+    lower_property_assign_without_native(ctx, object, property, value_expr, lowered_value,
+        preserve_property_operand, span);
+}
+
+/// Writes an ordinary slot, hook, or magic property after native XML dispatch is excluded.
+pub(super) fn lower_property_assign_without_native(
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, property: &str,
+    value_expr: &Expr, lowered_value: LoweredValue, preserve_property_operand: bool, span: Span,
 ) {
     let value = contextualize_property_array_assignment(
         ctx,
@@ -894,7 +919,8 @@ pub(super) fn set_hook_receiver_has_accessor(
     object: crate::ir::ValueId,
     property: &str,
 ) -> bool {
-    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+    let object_ty = ctx.builder.value_php_type(object);
+    let Some((class_name, _)) = crate::ir_lower::expr::singular_object_class(&object_ty) else {
         return false;
     };
     let normalized = class_name.trim_start_matches('\\');

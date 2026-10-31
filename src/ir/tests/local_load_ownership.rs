@@ -107,3 +107,28 @@ fn compiler_temp_load_releases_are_not_pruned() {
         }
     }
 }
+
+/// Alias-dependent releases borrow ordinary string loads but retain detached Mixed unboxes.
+#[test]
+fn conditional_string_release_pruning_respects_final_local_storage() {
+    for op in [Op::LoadLocal, Op::LoadStaticLocal, Op::LoadRefCell] {
+        for storage in [PhpType::Str, PhpType::Mixed] {
+            let survives = storage == PhpType::Mixed;
+            let mut function = Function::new("conditional_release".into(), IrType::Void, PhpType::Void);
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let kind = if op == Op::LoadStaticLocal { LocalKind::StaticLocal } else { LocalKind::PhpLocal };
+            let slot = builder.add_local(Some("text".into()), IrType::from_php(&storage), storage, kind);
+            let text = builder.emit(op, vec![], Some(Immediate::LocalSlot(slot)),
+                IrType::Str, PhpType::Str, Ownership::MaybeOwned).unwrap();
+            builder.emit(Op::ReleaseUnlessAliases, vec![text, text], None,
+                IrType::Void, PhpType::Void, Ownership::NonHeap);
+            builder.prune_borrowed_local_load_release_ops();
+            builder.terminate(Terminator::Return { value: None });
+            assert_eq!(function.instructions[1].op,
+                if survives { Op::ReleaseUnlessAliases } else { Op::Nop }, "{op:?}");
+        }
+    }
+}

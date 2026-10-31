@@ -16,6 +16,7 @@ use crate::ir::{BlockId, Immediate, Op, PropertyFetchMode, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
+use super::nullable_method_calls::terminate_method_call_on_null;
 
 use super::{
     branch_to, lower_array_access_from_value, lower_boxed_null,
@@ -55,6 +56,58 @@ pub(super) fn lower_with_missing_warning(
         expr,
         warn_on_missing,
     ))
+}
+
+/// Keeps a terminal empty probe inside the complete nullsafe chain's continuation.
+pub(super) fn lower_empty(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<LoweredValue> {
+    let mut chain = flatten_nullsafe_postfix_chain(expr)?;
+    let tail = chain.segments.pop()?;
+    let (key, dimension, nullsafe, named_property) = match tail {
+        PostfixSegment::Property { property, nullsafe, .. } => {
+            if property.starts_with("__elephc_") { return None; }
+            (Expr::new(ExprKind::StringLiteral(property.into()), expr.span),
+                false, nullsafe, Some(property))
+        }
+        PostfixSegment::DynamicProperty { property, nullsafe, .. } => {
+            (property.clone(), false, nullsafe, None)
+        }
+        PostfixSegment::Array { index, .. } => (index.clone(), true, false, None),
+        _ => return None,
+    };
+    let temp = ctx.declare_hidden_temp(PhpType::Bool);
+    let absent = ctx.builder.create_named_block("empty.chain.short_circuit", vec![]);
+    let done = ctx.builder.create_named_block("empty.chain.done", vec![]);
+    let initial = ctx.initialized_slots_snapshot();
+    let mut current = Some(lower_expr(ctx, chain.base));
+    for segment in chain.segments {
+        let Some(value) = current.take() else { break; };
+        if ctx.builder.insertion_block_is_terminated() { break; }
+        current = lower_nullsafe_postfix_segment(ctx, value, segment, absent, false);
+    }
+    let mut present_reachable = false;
+    if let Some(value) = current {
+        if !ctx.builder.insertion_block_is_terminated()
+            && (!nullsafe || guard_nullsafe_chain_receiver(ctx, value, absent, expr))
+        {
+            let result = super::native_xml_empty::lower_from_receiver(
+                ctx, value, &key, dimension, named_property, expr,
+            );
+            store_value_into_temp(ctx, &temp, PhpType::Bool, result, expr.span);
+            branch_to(ctx, done);
+            present_reachable = true;
+        }
+    }
+    let present_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(absent);
+    ctx.restore_initialized_slots(initial.clone());
+    let result = super::emit_bool_literal(ctx, true, Some(expr.span));
+    store_value_into_temp(ctx, &temp, PhpType::Bool, result, expr.span);
+    branch_to(ctx, done);
+    let absent_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(super::merge_initialized_slots_for_expr(&initial,
+        present_slots, present_reachable, absent_slots, true));
+    Some(take_owned_temp(ctx, &temp, expr.span))
 }
 
 /// Flattened left-to-right postfix chain rooted at a base expression.
@@ -442,7 +495,8 @@ fn guard_nullsafe_chain_receiver(
         branch_to(ctx, null_block);
         return false;
     }
-    if !value_is_nullable(ctx, current.value) {
+    if !value_is_nullable(ctx, current.value)
+        && !matches!(ctx.builder.value_php_type(current.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return true;
     }
     let is_null = ctx.emit_value(
@@ -484,7 +538,8 @@ fn guard_regular_method_receiver(
         terminate_method_call_on_null(ctx, method);
         return false;
     }
-    if !value_is_nullable(ctx, current.value) {
+    if !value_is_nullable(ctx, current.value)
+        && !matches!(ctx.builder.value_php_type(current.value).codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
         return true;
     }
     let is_null = ctx.emit_value(
@@ -510,11 +565,4 @@ fn guard_regular_method_receiver(
 
     ctx.builder.position_at_end(call_block);
     true
-}
-
-/// Emits the PHP fatal diagnostic for calling a method on null.
-fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Fatal error: Call to a member function {}() on null\n", method);
-    let message = ctx.intern_string(&message);
-    ctx.builder.terminate(Terminator::Fatal { message });
 }

@@ -246,7 +246,7 @@ pub(in crate::interpreter) fn eval_dynamic_call(
 }
 
 /// Invokes a rooted callback while source-order argument leases protect all consumed values.
-fn eval_dynamic_call_with_callback(
+pub(in crate::interpreter) fn eval_dynamic_call_with_callback(
     callback: RuntimeCellHandle,
     args: &[EvalCallArg],
     context: &mut ElephcEvalContext,

@@ -159,3 +159,228 @@ checkTransientReuse();
     assert_eq!(out.stdout, ("70000:a|ZZZ;".repeat(6) + "40\n").repeat(2), "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Masked trim views must be persisted before their source-evaluation pins retire.
+#[test]
+fn test_masked_trim_argument_view_owners_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function maskedTrimOwner(string $text): void {
+    for ($i = 0; $i < 4; $i++) {
+        $left = ltrim($text, 'x');
+        $right = rtrim($text, 'x');
+        $both = trim($text, 'x');
+        $chopped = chop($text, 'x');
+        echo strlen($left), ':', strlen($right), ':', strlen($both), ':', strlen($chopped), '|';
+    }
+}
+maskedTrimOwner(str_repeat('x', 32) . 'v' . str_repeat('x', 32));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "33:33:1:33|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Persisted slices remain independently owned when user functions return boxed string unions.
+#[test]
+fn test_persisted_string_arguments_nullable_returns_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function maybePersistedString(bool $keep, string $text): string|false {
+    if ($keep) { return $text; }
+    return false;
+}
+function nullablePersistedString(string $text): ?string { return $text; }
+function inspectPersistedArguments(int $argc): void {
+    $subject = str_repeat('ab', 32);
+    for ($i = 0; $i < 4; $i++) {
+        echo strlen((string)nullablePersistedString(substr($subject, 1, 8))), ':';
+        echo strlen((string)maybePersistedString($argc > 0, substr($subject, 2, 8))), ':';
+        echo strlen((string)maybePersistedString($argc < 0, substr($subject, 3, 8))), '|';
+    }
+}
+inspectPersistedArguments($argc);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "8:8:0|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+/// Boxed user returns do not retain owned string calls or provisional unboxes of widened locals.
+#[test]
+fn test_owned_string_call_and_widened_local_arguments_boxed_returns_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function freshForwardedString(): string { return str_repeat('s', 40); }
+function boxForwardedString(string $text): mixed { return $text; }
+function boxForwardedLocal(&$text): void { $text = $text; }
+function widenedForwardedStrings(): void {
+    for ($i = 0; $i < 4; $i++) {
+        $text = freshForwardedString();
+        echo strlen((string)boxForwardedString($text)), ':';
+        echo strlen((string)boxForwardedString(freshForwardedString())), '|';
+        boxForwardedLocal($text);
+    }
+}
+
+widenedForwardedStrings();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "40:40|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxed string passthroughs own their result cells even when the argument is borrowed.
+#[test]
+fn test_boxed_string_passthrough_results_own_return_cells() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function mixedBorrowedString(string $text): mixed { return $text; }
+function nullableBorrowedString(string $text): ?string { return $text; }
+function unionBorrowedString(string $text): string|false { return $text; }
+function inspectBorrowedStringBoxes(string $text): void {
+    for ($i = 0; $i < 4; $i++) {
+        echo strlen((string)mixedBorrowedString($text)), ':';
+        echo strlen((string)nullableBorrowedString($text)), ':';
+        echo strlen((string)unionBorrowedString($text)), '|';
+    }
+}
+inspectBorrowedStringBoxes(str_repeat('s', 32));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "32:32:32|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A possibly aliasing raw string return cannot retire a borrowed by-value parameter.
+#[test]
+fn test_conditional_string_returns_preserve_borrowed_caller_argument() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function pickBorrowedString(string $text, int $flag): string {
+    if ($flag) { return $text; }
+    return str_repeat('z', 40);
+}
+function useBorrowedString(string $text, int $argc): void {
+    echo strlen(pickBorrowedString($text, $argc - 1)), ':', $text, '|';
+    echo strlen(pickBorrowedString($text, $argc)), ':', $text, '|';
+}
+useBorrowedString(str_repeat('a', 40), $argc);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("40:{}|", "a".repeat(40)).repeat(2));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Case transforms transfer their owned bytes into mixed arrays while scratch transforms copy.
+#[test]
+fn test_owned_case_transform_results_in_mixed_arrays_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function transformedPair(string $text): mixed { return [strtolower($text), 0]; }
+function checkCaseArrayOwners(string $text): void {
+    for ($i = 0; $i < 4; $i++) {
+        $values = [strtolower($text), 0];
+        $values[] = strtoupper($text);
+        $values[] = strrev($text);
+        $values[] = $text;
+        $pair = transformedPair($text);
+        $noise = strrev(str_repeat('x', 100));
+        echo substr((string)$values[0], 0, 2), ':';
+        echo substr((string)$values[2], 0, 2), ':';
+        echo substr((string)$values[3], 0, 2), ':';
+        echo substr((string)$values[4], 0, 2), ':';
+        echo substr((string)$pair[0], 0, 2), '|';
+    }
+}
+checkCaseArrayOwners(str_repeat('Ab', 40));
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ab:AB:bA:Ab:ab|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Constructorless reflection retires detached class names and preserves named reflector owners.
+#[test]
+fn test_constructorless_reflection_class_name_owners_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReflectedNameBase {
+    public function accept(ReflectedNameBase $other): ReflectedNameBase { return $other; }
+}
+class ReflectedNameOwner extends ReflectedNameBase {
+    public string $value = 'ready';
+    public function __construct() { echo 'unexpected-constructor|'; }
+    public function accept(ReflectedNameBase $other): ReflectedNameBase { return $other; }
+}
+function makeReflectedNameOwner(): mixed {
+    return (new ReflectionClass(ReflectedNameOwner::class))->newInstanceWithoutConstructor();
+}
+$reflector = new ReflectionClass(ReflectedNameOwner::class);
+for ($i = 0; $i < 4; $i++) {
+    $inline = makeReflectedNameOwner();
+    $named = $reflector->newInstanceWithoutConstructor();
+    if ($inline instanceof ReflectedNameOwner && $named instanceof ReflectedNameOwner) {
+        echo $inline->value, ':', $named->value, '|';
+    }
+}
+echo $reflector->getName();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "ready:ready|".repeat(4) + "ReflectedNameOwner");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Reflector class-name leases survive argument and constructor throws without consuming borrows.
+#[test]
+fn test_reflection_constructor_class_name_owners_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ReflectedConstructedNameOwner {
+    public int $count;
+    public function __construct(int $count = 7) {
+        if ($count < 0) { throw new RuntimeException('ctor'); }
+        $this->count = $count;
+    }
+}
+function throwingReflectedNameArgument(): int { throw new RuntimeException('arg'); }
+$reflector = new ReflectionClass(ReflectedConstructedNameOwner::class);
+for ($i = 0; $i < 4; $i++) {
+    $inline = (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstance();
+    $named = $reflector->newInstance(9);
+    $array = (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstanceArgs([11]);
+    if ($inline instanceof ReflectedConstructedNameOwner
+        && $named instanceof ReflectedConstructedNameOwner
+        && $array instanceof ReflectedConstructedNameOwner) {
+        echo $inline->count, ':', $named->count, ':', $array->count, '|';
+    }
+    try { (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstance(-1); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+    try { (new ReflectionClass(ReflectedConstructedNameOwner::class))->newInstance(throwingReflectedNameArgument()); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+echo $reflector->getName();
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "7:9:11|ctor|arg|".repeat(4) + "ReflectedConstructedNameOwner");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// String reads from narrowed Mixed parameters retire detached copies after container insertion.
+#[test]
+fn test_borrowed_string_reads_narrowed_parameter_array_insertions() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function insertNarrowedString(mixed $text): void {
+    if (!is_string($text)) { return; }
+    $indexed = [$text];
+    $indexed[] = $text;
+    $hash = ['first' => $text];
+    $hash['second'] = $text;
+    $spread = [...$indexed, $text];
+    $text = null;
+    echo strlen($indexed[0]), ':', count($indexed), ':', strlen($hash['second']), ':', count($spread), ':', gettype($text), '|';
+}
+for ($index = 0; $index < 3; $index++) { insertNarrowedString(str_repeat('ab', $argc + 4)); }
+"#);
+    assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "10:2:10:3:NULL|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Array insertion cleanup keeps the same ownership contract without EIR optimization.
+#[test]
+fn test_borrowed_string_reads_narrowed_parameter_array_insertions_no_ir_opt() {
+    crate::support::without_ir_opt(test_borrowed_string_reads_narrowed_parameter_array_insertions);
+}

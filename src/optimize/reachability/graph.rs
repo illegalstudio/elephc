@@ -503,8 +503,19 @@ impl GraphState {
                     || operators.is_some_and(|operators| {
                         if *is_static {
                             operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.bitwise.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.shift.iter().any(|(_, adapter)| *adapter == method)
                                 || operators.compare == Some(method.as_str())
-                        } else { operators.boolean == Some(method.as_str()) }
+                        } else { operators.boolean == Some(method.as_str()) || operators.json == Some(method.as_str())
+                            || operators.bit_not == Some(method.as_str())
+                            || operators.native_clone == Some(method.as_str())
+                            || operators.properties.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.dimensions.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.native_casts.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.casts.is_some_and(|casts| {
+                                [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
+                                    .into_iter().flatten().any(|adapter| adapter == method)
+                            }) }
                     })
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)

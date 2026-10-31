@@ -1,0 +1,510 @@
+//! Purpose:
+//! Verifies computed property updates preserve scalar and heap result storage.
+//!
+//! Called from:
+//! - The AST-to-EIR regression suite.
+//!
+//! Key details:
+//! - Ordinary getters and Stringable names coexist with the native XML protocol.
+
+/// Runtime names keep the declared property's attached COW fetch for typed and erased receivers.
+#[test]
+fn computed_runtime_name_array_updates_publish_the_declared_slot_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class RuntimeNameArraySlot {
+    public array $items = [0];
+    public function typed(): self { return $this; }
+    public function erased(): mixed { return $this; }
+}
+function runtimeArraySlotName(): string { return 'items'; }
+function writeRuntimeArrayTyped(RuntimeNameArraySlot $box): void {
+    $box->typed()->{runtimeArraySlotName()}[0] += 2;
+}
+function writeRuntimeArrayErased(RuntimeNameArraySlot $box): void {
+    $box->erased()->{runtimeArraySlotName()}[0] += 2;
+}
+$box = new RuntimeNameArraySlot();
+writeRuntimeArrayTyped($box); writeRuntimeArrayErased($box);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        for name in ["writeRuntimeArrayTyped", "writeRuntimeArrayErased"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite
+                && matches!(inst.immediate, Some(Immediate::Data(id))
+                    if module.data.strings[id.as_raw() as usize] == "items")),
+                "{target}: {name} must mutate the actual declared slot\n{}",
+                crate::ir::print_function(function));
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// A statement's indexed read and write borrow the same computed receiver until scope cleanup.
+#[test]
+fn computed_indexed_update_preserves_scoped_receiver_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class ReusableWriteCapture {
+    public array $items = [1];
+    public function receiver(): mixed { return $this; }
+}
+function reusableCaptureIncrement(ReusableWriteCapture $box): void { $box->receiver()->items[0]++; }
+function reusableCaptureDecrement(ReusableWriteCapture $box): void { --$box->receiver()->items[0]; }
+function reusableCaptureCompound(ReusableWriteCapture $box): void { $box->receiver()->items[0] += 2; }
+$box = new ReusableWriteCapture();
+reusableCaptureIncrement($box); reusableCaptureDecrement($box); reusableCaptureCompound($box);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["reusableCaptureIncrement", "reusableCaptureDecrement", "reusableCaptureCompound"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            let receiver = function.locals.iter().find(|slot| {
+                slot.name.as_deref().is_some_and(|name| name.starts_with(crate::parser::ast::SCOPED_WRITE_TEMP_PREFIX))
+                    && slot.php_type.codegen_repr() == crate::types::PhpType::Mixed
+            }).expect("computed mixed receiver needs a scoped capture");
+            let cleanup = function.instructions.iter().position(|inst|
+                inst.op == Op::ReleaseLocalSlot && inst.immediate == Some(Immediate::LocalSlot(receiver.id)))
+                .expect("the receiver must retire after the update");
+            assert!(scoped_receiver_borrows_stay_live(function, receiver.id),
+                "{target}: {name} consumed the receiver before both update halves\n{}",
+                crate::ir::print_function(function));
+            // Prove the check also rejects an early retirement when SSA reuses one load.
+            let mut early_cleanup = function.clone();
+            let (block, first_load) = function.blocks.iter().find_map(|block|
+                block.instructions.iter().position(|id| function.instruction(*id).is_some_and(|inst|
+                    inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(receiver.id))))
+                    .map(|position| (block.id, position))).unwrap();
+            early_cleanup.blocks[block.as_raw() as usize].instructions
+                .insert(first_load, crate::ir::InstId::from_raw(cleanup as u32));
+            assert!(!scoped_receiver_borrows_stay_live(&early_cleanup, receiver.id),
+                "{target}: {name} must detect a receiver retired before its borrowed uses");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Checks every reachable receiver borrow against the owning slot's CFG lifetime.
+fn scoped_receiver_borrows_stay_live(function: &crate::ir::Function, slot: crate::ir::LocalSlotId) -> bool {
+    use crate::ir::{Immediate, Op, Ownership, Terminator};
+    use std::collections::HashSet;
+    let local = Some(Immediate::LocalSlot(slot));
+    let mut borrowed = function.instructions.iter().filter(|inst| inst.op == Op::LoadLocal
+        && inst.immediate == local).filter_map(|inst| inst.result).collect::<HashSet<_>>();
+    if borrowed.is_empty() { return false; }
+    loop {
+        let before = borrowed.len();
+        for inst in &function.instructions {
+            if matches!(inst.op, Op::Borrow | Op::MixedUnbox)
+                && inst.operands.iter().any(|value| borrowed.contains(value)) {
+                if let Some(result) = inst.result.filter(|value| function.value(*value)
+                    .is_some_and(|value| value.ownership == Ownership::Borrowed)) {
+                    borrowed.insert(result);
+                }
+            }
+        }
+        if borrowed.len() == before { break; }
+    }
+    let mut pending = vec![(function.entry, false)];
+    let mut visited = HashSet::new();
+    let mut uses = HashSet::new();
+    while let Some((block, mut live)) = pending.pop() {
+        if !visited.insert((block, live)) { continue; }
+        let block = &function.blocks[block.as_raw() as usize];
+        for id in &block.instructions {
+            let inst = function.instruction(*id).unwrap();
+            if (inst.op == Op::LoadLocal && inst.immediate == local)
+                || inst.operands.iter().any(|value| borrowed.contains(value)) {
+                if !live { return false; }
+                if !matches!(inst.op, Op::LoadLocal | Op::Borrow | Op::MixedUnbox) { uses.insert(*id); }
+            }
+            if inst.immediate == local {
+                match inst.op {
+                    Op::StoreLocal => live = true,
+                    Op::ReleaseLocalSlot | Op::UnsetLocal | Op::ZeroLocalSlot => live = false,
+                    _ => {}
+                }
+            }
+        }
+        let terminator = block.terminator.as_ref().unwrap();
+        if !live && terminator.used_values().iter().any(|value| borrowed.contains(value)) { return false; }
+        match terminator {
+            Terminator::Br { target, .. } => pending.push((*target, live)),
+            Terminator::CondBr { then_target, else_target, .. } => {
+                pending.extend([(*then_target, live), (*else_target, live)]);
+            }
+            Terminator::Switch { cases, default, .. } => {
+                pending.extend(cases.iter().map(|case| (case.target, live)));
+                pending.push((*default, live));
+            }
+            Terminator::GeneratorSuspend { resume, .. } => pending.push((*resume, live)),
+            Terminator::Return { .. } | Terminator::Throw { .. }
+            | Terminator::Fatal { .. } | Terminator::Unreachable => {}
+        }
+    }
+    uses.len() >= 2
+}
+
+/// Null typed slots are tested before mutation and their temporary read lease is retired.
+#[test]
+fn erased_nullable_property_dimension_guards_on_every_target() {
+    use crate::ir::{Op, ValueDef};
+    let source = r#"<?php
+class NullableDimensionSlot { public ?ArrayObject $items = null; }
+class NullableIntegerDimensionSlot { public ?int $items = null; }
+class ReadonlyNullableDimensionSlot {
+    public readonly ?ArrayObject $items;
+    public function __construct() { $this->items = null; }
+}
+function writeNullableDimensionSlot(mixed $box): void { $box->items[0] = 'x'; }
+writeNullableDimensionSlot(new NullableDimensionSlot());
+writeNullableDimensionSlot(new NullableIntegerDimensionSlot());
+writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "writeNullableDimensionSlot").unwrap();
+        let guards = function.instructions.iter().filter(|inst| inst.op == Op::IsNull
+            && inst.operands.first().and_then(|value| function.value(*value))
+                .and_then(|value| match value.def {
+                    ValueDef::Instruction { inst, .. } => function.instruction(inst),
+                    _ => None,
+                }).is_some_and(|producer| producer.op == Op::PropGet)).collect::<Vec<_>>();
+        assert_eq!(guards.len(), 3, "{target}: nullable declared slots require payload guards");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::PropInitialized).count(), 3,
+            "{target}: write fetches must test initialization before reading a typed slot");
+        for guard in guards {
+            assert!(function.instructions.iter().any(|inst| inst.op == Op::Release
+                && inst.operands == guard.operands), "{target}: the guard must retire its property read");
+        }
+        assert!(module.data.strings.iter().any(|message|
+            message == "Cannot auto-initialize an array inside property NullableDimensionSlot::$items of type ?ArrayObject"));
+        assert!(module.data.strings.iter().any(|message|
+            message == "Cannot indirectly modify readonly property ReadonlyNullableDimensionSlot::$items"));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Compound and increment paths guard null storage before any warning-producing element read.
+#[test]
+fn erased_nullable_readwrite_guards_precede_element_reads_on_every_target() {
+    use crate::ir::Op;
+    let source = r#"<?php
+class ReadwriteGuardSlot { public ?ArrayObject $items = null; }
+function guardedCompound(mixed $box): void { $box->items[0] += 1; }
+function guardedIncrement(mixed $box): void { $box->items[0]++; }
+function guardedExpression(mixed $box): mixed { return ++$box->items[0]; }
+$box = new ReadwriteGuardSlot();
+guardedCompound($box); guardedIncrement($box); guardedExpression($box);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        for name in ["guardedCompound", "guardedIncrement", "guardedExpression"] {
+            let function = module.functions.iter().find(|f| f.name == name).unwrap();
+            let check = function.instructions.iter().position(|inst| inst.op == Op::IsNull)
+                .unwrap_or_else(|| panic!("{target}: {name} requires a nullable slot guard"));
+            let read = function.instructions.iter().position(|inst| matches!(inst.op,
+                Op::RuntimeCall | Op::MethodCall | Op::ArrayGet | Op::ArrayGetMixedKey | Op::HashGet)
+                && inst.result.is_some() && inst.operands.len() >= 2
+                && inst.result_php_type.codegen_repr() == crate::types::PhpType::Mixed)
+                .unwrap_or_else(|| panic!("{target}: {name} must retain its element read"));
+            assert!(check < read, "{target}: {name} must refuse null before the element read");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Computed updates validate and emit for scalar operands and concrete string getters.
+#[test]
+fn computed_property_update_storage_on_every_target() {
+    let source = r#"<?php
+class UpdateOwnerCounter {
+    public int $number = 3;
+    public string $text = 'a';
+    public function receiver(): self { return $this; }
+}
+
+class UpdateOwnerName {
+    public function __toString(): string { return 'number'; }
+}
+function updateOwnerExercise(UpdateOwnerCounter $counter): void {
+    $counter->receiver()->number += 2;
+    echo ++$counter->receiver()->number, $counter->receiver()->number++;
+    echo ($counter->receiver()->text .= 'b');
+    $counter->{new UpdateOwnerName()} += 1;
+    echo $counter->{new UpdateOwnerName()};
+}
+updateOwnerExercise(new UpdateOwnerCounter());
+function updateOwnerNumericMask(int|float $value): int { return $value & 7; }
+echo updateOwnerNumericMask($argc);
+class UpdateOwnerRegistry {
+    public array $handlers = [];
+    public mixed $weights = [1.5, 2.5];
+    public function step(): void { $this->weights[0]++; --$this->weights[1]; }
+    public function registry(): self { return $this; }
+}
+$registry = new UpdateOwnerRegistry();
+$registry->registry()->handlers['save'][] = 'first';
+$registry->registry()->handlers['save'][] = 'second';
+echo count($registry->handlers['save']);
+$registry->step();
+$registry->weights[0]++;
+echo json_encode($registry->weights);
+$xml = new SimpleXMLElement('<r><a>1</a></r>');
+$xml->a += 1;
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let numeric = module.functions.iter().find(|function| function.name == "updateOwnerNumericMask").unwrap();
+        let exercise = module.functions.iter().find(|function| function.name == "updateOwnerExercise").unwrap();
+        assert!(!exercise.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
+            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+                if module.data.strings[id.as_raw() as usize] == "__elephc_property_update")),
+            "{target}: a concrete ordinary receiver must not dispatch an XML update adapter\n{}",
+            crate::ir::print_function(exercise));
+        assert!(!numeric.instructions.iter().any(|inst| matches!(inst.op,
+            crate::ir::Op::InstanceOf | crate::ir::Op::PushCallOperandOwner)),
+            "{target}: scalar coercion must not gain native dispatch or operand owners\n{}",
+            crate::ir::print_function(numeric));
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Erased receivers reach the existing declared-slot COW writer on every supported target.
+#[test]
+fn erased_property_dimension_uses_declared_storage_on_every_target() {
+    let source = "<?php class ErasedWriteStorage { public array $items = [1]; } \
+        function mutateErasedStorage(mixed $box): void { $box->items[0] = 7; } \
+        mutateErasedStorage(new ErasedWriteStorage());";
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "mutateErasedStorage").unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGetForWrite),
+            "{target}: the runtime class must write its declared slot\n{}", crate::ir::print_function(function));
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::DynamicPropSet),
+            "{target}: element writes must not introduce magic setters");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Native XML candidates are excluded while ArrayAccess and buffer slots keep their typed writes.
+#[test]
+fn erased_property_dimension_eligibility_matches_typed_writers_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class XmlDeclaredArrayWriteStorage extends SimpleXMLElement { public array $items = []; }
+class PlainDeclaredArrayWriteStorage { public array $items = []; }
+class ObjectDeclaredWriteStorage {
+    public ArrayObject $items;
+    public function __construct() { $this->items = new ArrayObject([]); }
+}
+class BufferDeclaredWriteStorage { public function __construct(public buffer<int> $values) {} }
+function writeErasedDeclaredItems(mixed $box): void { $box->items[0] = 'x'; }
+function writeErasedDeclaredBuffer(mixed $box): void { $box->values[0] = 7; }
+writeErasedDeclaredItems(new XmlDeclaredArrayWriteStorage('<r/>'));
+writeErasedDeclaredItems(new PlainDeclaredArrayWriteStorage());
+writeErasedDeclaredItems(new ObjectDeclaredWriteStorage());
+buffer<int> $values = buffer_new<int>(1);
+writeErasedDeclaredBuffer(new BufferDeclaredWriteStorage($values)); buffer_free($values);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let items = module.functions.iter().find(|function| function.name == "writeErasedDeclaredItems").unwrap();
+        assert!(!items.instructions.iter().any(|inst| inst.op == Op::MixedUnbox
+            && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
+                matches!(&value.php_type, crate::types::PhpType::Object(class)
+                    if class == "XmlDeclaredArrayWriteStorage"))),
+            "{target}: native XML properties must not enter the ordinary writer");
+        let object_arm = items.blocks.iter().find(|block| block.instructions.iter().any(|id|
+            items.instruction(*id).is_some_and(|inst| inst.op == Op::PropGet
+                && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
+                    matches!(&value.php_type, crate::types::PhpType::Object(class) if class == "ArrayObject")))))
+            .expect("declared ArrayObject write arm");
+        assert!(!object_arm.instructions.iter().any(|id| items.instruction(*id).is_some_and(|inst|
+            inst.op == Op::RuntimeCall && matches!(inst.immediate, Some(Immediate::Data(_))))),
+            "{target}: ArrayAccess writes must not use the stdClass-only property fallback");
+        let buffer = module.functions.iter().find(|function| function.name == "writeErasedDeclaredBuffer").unwrap();
+        assert!(buffer.instructions.iter().any(|inst| inst.op == Op::BufferSet), "{target}: typed buffer write");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Object arithmetic borrows an incdec working slot until overwrite and final cleanup.
+#[test]
+fn native_dimension_incdec_working_slot_has_one_owner_on_every_target() {
+    use crate::ir::{Immediate, LocalKind, Op, ValueDef};
+    let source = r#"<?php
+function dimensionOwnerStep(SimpleXMLElement $xml): void { $xml[0]++; }
+dimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "dimensionOwnerStep").unwrap();
+        let call = function.instructions.iter().find(|inst| inst.op == Op::StaticMethodCall
+            && matches!(inst.immediate, Some(Immediate::Data(name))
+                if module.data.strings[name.as_raw() as usize] == "SimpleXMLElement::__elephc_add"))
+            .expect("native XML incdec must retain its object arithmetic branch");
+        let old = call.operands[0];
+        let ValueDef::Instruction { inst, .. } = function.value(old).unwrap().def else {
+            panic!("{target}: working operand must load its retained variable");
+        };
+        let load = function.instruction(inst).unwrap();
+        assert_eq!(load.op, Op::LoadLocal, "{target}: incdec working operand");
+        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: working slot"); };
+        assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::PhpLocal,
+            "{target}: updating storage must not transfer on each load");
+        assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
+            && inst.operands.contains(&old)), "{target}: arithmetic must not consume the slot's old owner");
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ReleaseLocalSlot
+            && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
+            "{target}: overwrite retires the old owner and final cleanup retires the replacement");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Static Mixed indexed writes publish an independent box before runtime mutation.
+#[test]
+fn static_mixed_dimension_write_separates_storage_on_every_target() {
+    use crate::ir::{Immediate, Op};
+    let source = r#"<?php
+class StaticDimensionOwner { public static mixed $items = null; }
+function staticDimensionOwnerWrite(): void { StaticDimensionOwner::$items[0] = 5; }
+staticDimensionOwnerWrite();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "staticDimensionOwnerWrite").unwrap();
+        let clone = function.instructions.iter().find(|inst| inst.op == Op::MixedClone)
+            .expect("boxed static writes must separate the shared cell");
+        let cloned = clone.result.unwrap();
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::StoreStaticProperty
+            && inst.operands.contains(&cloned)
+            && matches!(inst.immediate, Some(Immediate::Data(name))
+                if module.data.strings[name.as_raw() as usize] == "StaticDimensionOwner::items")),
+            "{target}: publish the independent cell into original static storage");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Eval-reserved dynamic storage still reaches a native getter after a missing hash entry.
+#[test]
+fn mixed_magic_hash_miss_emits_getter_on_every_target() {
+    let source = r#"<?php
+class MixedHashOwner { public function __get(string $name): int { return 30; } }
+function mixedHashOwnerRead(mixed $object): mixed { return $object->missing; }
+echo mixedHashOwnerRead(new MixedHashOwner());
+$source = $argc > 0 ? ';' : ''; eval($source);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        assert!(module.class_infos["MixedHashOwner"].dynamic_property_hash_is_name_addressable(),
+            "{target}: the fixture must include the overlapping hash candidate");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let call = if module.target.arch == crate::codegen::platform::Arch::AArch64 { "bl" } else { "call" };
+        let getter = crate::names::method_symbol("MixedHashOwner", "__get");
+        assert!(assembly.contains("mixed_prop_hash_found"), "{target}: distinguish an actual entry from a missing key");
+        assert!(assembly.contains(&format!("{call} {getter}")), "{target}: missing keys reach the normal magic getter");
+    }
+}
+
+/// Missing hash entries honor borrowed and reference getter return contracts on every target.
+#[test]
+fn mixed_magic_hash_getter_returns_are_owned_on_every_target() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+class MixedGetterReferenceOwner {
+    private mixed $items = [1, 2];
+    public function &__get(string $name): mixed { return $this->items; }
+}
+#[AllowDynamicProperties]
+class MixedGetterBorrowedOwner {
+    public static mixed $items = null;
+    public function __get(string $name): mixed { return self::$items; }
+}
+function mixedGetterOwnerRead(mixed $object): mixed { return $object->missing; }
+echo json_encode(mixedGetterOwnerRead(new MixedGetterReferenceOwner()));
+echo json_encode(mixedGetterOwnerRead(new MixedGetterBorrowedOwner()));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = crate::names::function_symbol("mixedGetterOwnerRead");
+        let function = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+        let function = function.split("\n.globl ").next().unwrap();
+        assert!(function.contains("magic_return_owned"), "{target}: borrowed returns need marker handling");
+        let clone = function.find("__rt_mixed_clone").expect("reference returns need value snapshots");
+        let release = function.find("__rt_reference_cell_release").expect("reference leases need retirement");
+        assert!(clone < release, "{target}: copy the payload before retiring its cell");
+    }
+}
+
+/// Reference isset probes release their lease before testing the raw bool on every target.
+#[test]
+fn mixed_magic_hash_reference_isset_uses_bool_payload_on_every_target() {
+    let source = r#"<?php
+#[AllowDynamicProperties]
+final class ReferenceIssetOwner {
+    public bool $answer = false;
+    public function &__isset(string $name): bool { return $this->answer; }
+}
+function referenceIssetOwnerProbe(mixed $object): bool { return isset($object->missing); }
+var_dump(referenceIssetOwnerProbe(new ReferenceIssetOwner()));
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let symbol = crate::names::function_symbol("referenceIssetOwnerProbe");
+        let body = assembly.split_once(&format!("{symbol}:\n")).unwrap().1;
+        let body = body.split("\n.globl ").next().unwrap();
+        let arm = module.target.arch == crate::codegen::platform::Arch::AArch64;
+        let call = if arm { "bl" } else { "call" };
+        let callee = crate::names::method_symbol("ReferenceIssetOwner", "__isset");
+        let after = body.split_once(&format!("{call} {callee}")).unwrap().1;
+        let release = after.find("__rt_reference_cell_release").expect("probe must retire the cell");
+        let compare = after.find(if arm { "cmp x0, #0" } else { "test rax, rax" })
+            .expect("probe must test the returned bool");
+        assert!(release < compare, "{target}: restore the bool before the existing probe branch");
+    }
+}

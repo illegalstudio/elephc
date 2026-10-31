@@ -9,6 +9,7 @@
 //! - String parents preserve reference markers and publish their stored child before leaf writes.
 
 use super::*;
+use super::nested_property_updates::{attached_property_root, capture_compound_rhs};
 
 /// Writes an expression's captured nested update without repeating its key diagnoses.
 pub(crate) fn lower_nested_array_assign_after_read(
@@ -46,36 +47,50 @@ pub(super) fn lower_nested_array_assign(
     }
     let static_update = matches!(&update,
         Some(ElementUpdate::Compound | ElementUpdate::IncDec { .. }));
+    let runtime_property = super::nested_write_sources::scoped_runtime_property_root(target);
     if static_update
         && (nested_target_has_static_array_root(ctx, target)
-            || nested_target_has_local_array_root(ctx, target))
+            || nested_target_has_local_array_root(ctx, target)
+            || attached_property_root(ctx, target) || runtime_property)
     {
         let mut sources = Vec::new();
-        let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
         let mut value = value.clone();
-        if let ExprKind::BinaryOp { right, .. } = &mut value.kind {
-            // PHP settles computed dimensions and the RHS before obtaining the writable parent.
-            // Bare variable dimensions are still captured by the subsequent read, after the RHS.
-            *right = Box::new(super::nested_write_sources::capture(ctx, right, &mut sources));
+        // The parser already captured the receiver and raw name. PHP converts that name
+        // only after the compound RHS, then both update halves share the converted string.
+        if runtime_property { capture_compound_rhs(ctx, &mut value, &mut sources); }
+        let target = super::nested_write_sources::capture_update_target(ctx, target, &mut sources);
+        if !runtime_property { capture_compound_rhs(ctx, &mut value, &mut sources); }
+        let value = super::nested_runtime_property_updates::with_read(&value, &target);
+        if !runtime_property || !super::nested_runtime_property_updates::lower(ctx, &target, &value, span) {
+            lower_captured_update(ctx, &target, &value, span);
         }
+        super::nested_write_sources::retire(ctx, sources, span);
+        return;
+    }
+    if ctx.classes.contains_key("SimpleXMLElement") && matches!(update, Some(ElementUpdate::IncDec { .. })) {
+        let mut sources = Vec::new();
+        let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
         let mut snapshots = Vec::new();
         let (read, write) = snapshot_nested_update_keys(ctx, &target, &mut snapshots, true);
-        if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
-            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
-        } else if nested_static_root_is_boxed(ctx, &target)
-            || nested_target_has_local_array_root(ctx, &target) {
-            lower_boxed_static_nested_update(ctx, &read, &write, update.unwrap(), &value, value.span);
-        } else {
-            let mut value = value.clone();
-            match &mut value.kind {
-                ExprKind::BinaryOp { left, .. } => *left = Box::new(read),
-                ExprKind::Assignment { prelude, .. } => {
-                    if let StmtKind::Assign { value, .. } = &mut prelude[0].kind { *value = read; }
-                }
-                _ => unreachable!("classified element updates have a captured read"),
-            }
-            lower_nested_array_assign_inner(ctx, &write, &value, span, true);
+        let ExprKind::ArrayAccess { array, index } = &read.kind else { unreachable!() };
+        let parent = lower_nested_assign_parent_with_diagnosed_key(ctx, array, span, true);
+        let parent = if ctx.builder.value_php_type(parent.value).codegen_repr() == PhpType::Mixed {
+            let resolved = ctx.emit_owned_value(Op::RuntimeCall, vec![parent.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellResolveForWrite)),
+                PhpType::Mixed, effects_lookup::runtime_effects(), Some(span));
+            crate::ir_lower::ownership::release_if_owned(ctx, parent, Some(span));
+            resolved
+        } else { parent };
+        let (parent, owner) = root_static_update_receiver(ctx, parent, span);
+        let Some(ElementUpdate::IncDec { increment }) = update else { unreachable!() };
+        let handled = super::native_dimension_incdec::lower(ctx, parent, index, increment, span,
+            |ctx, parent| lower_boxed_nested_update_from_parent(ctx, parent, &read, &write,
+                ElementUpdate::IncDec { increment }, value, span));
+        if !handled {
+            lower_boxed_nested_update_from_parent(ctx, parent, &read, &write,
+                ElementUpdate::IncDec { increment }, value, span);
         }
+        if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
         retire_update_keys(ctx, snapshots, span);
         super::nested_write_sources::retire(ctx, sources, span);
         return;
@@ -83,6 +98,36 @@ pub(super) fn lower_nested_array_assign(
     if let Some((_, write)) = bind_concrete_static_update_root(ctx, target, target) {
         lower_nested_array_assign_inner(ctx, &write, value, span, static_update);
     } else { lower_nested_array_assign_inner(ctx, target, value, span, static_update); }
+}
+
+/// Uses the established attached parent and native incdec kernels after inputs are captured.
+pub(super) fn lower_captured_update(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
+) {
+    let update = desugared_element_update(value, span, |read| read == target)
+        .expect("captured update retains its canonical self-read");
+    let mut snapshots = Vec::new();
+    let (read, write) = snapshot_nested_update_keys(ctx, target, &mut snapshots, true);
+    if let Some((read, write)) = bind_concrete_static_update_root(ctx, &read, &write) {
+        lower_boxed_static_nested_update(ctx, &read, &write, update, value, value.span);
+    } else if nested_static_root_is_boxed(ctx, target)
+        || nested_target_has_local_array_root(ctx, target)
+        || attached_property_root(ctx, target)
+        || runtime_property_root(target).is_some() {
+        lower_boxed_static_nested_update(ctx, &read, &write, update, value, value.span);
+    } else {
+        let value = super::nested_runtime_property_updates::with_read(value, &read);
+        lower_nested_array_assign_inner(ctx, &write, &value, span, true);
+    }
+    retire_update_keys(ctx, snapshots, span);
+}
+
+/// Returns the runtime-name root without inspecting unrelated dimensions or captured operands.
+pub(super) fn runtime_property_root(target: &Expr) -> Option<(&Expr, &Expr)> {
+    let mut root = target;
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind { root = array; }
+    let ExprKind::DynamicPropertyAccess { object, property } = &root.kind else { return None; };
+    Some((object, property))
 }
 
 /// Releases key snapshots without widening their already allocated PHP storage.
@@ -204,10 +249,29 @@ fn lower_boxed_static_nested_update(
     span: Span,
 ) {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else { unreachable!() };
-    let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
-    let incdec = matches!(update, ElementUpdate::IncDec { .. });
+    let ExprKind::ArrayAccess { array: write_array, .. } = &write.kind else { unreachable!() };
     let parent = lower_static_update_parent(ctx, read_array, write_array, span);
     let (pinned, owner) = root_static_update_receiver(ctx, parent, span);
+    if let ElementUpdate::IncDec { increment } = &update {
+        if super::native_dimension_incdec::lower(ctx, pinned, read_key, *increment, span,
+            |ctx, parent| lower_boxed_nested_update_from_parent(ctx, parent, read, write, update, source_value, span))
+        {
+            if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+            return;
+        }
+    }
+    lower_boxed_nested_update_from_parent(ctx, pinned, read, write, update, source_value, span);
+    if let Some(owner) = owner { crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span); }
+}
+
+/// Computes and stores an ordinary nested update through its already retained parent.
+fn lower_boxed_nested_update_from_parent(
+    ctx: &mut LoweringContext<'_, '_>, pinned: LoweredValue, read: &Expr, write: &Expr,
+    update: ElementUpdate<'_>, source_value: &Expr, span: Span,
+) {
+    let ExprKind::ArrayAccess { index: read_key, .. } = &read.kind else { unreachable!() };
+    let ExprKind::ArrayAccess { index: write_key, .. } = &write.kind else { unreachable!() };
+    let incdec = matches!(update, ElementUpdate::IncDec { .. });
     let string_error = if incdec { "Cannot increment/decrement string offsets" }
         else { "Cannot use assign-op operators with string offsets" };
     let attached = lower_static_update_key_and_guard(ctx, pinned, read_key, string_error, span);
@@ -237,7 +301,11 @@ fn lower_boxed_static_nested_update(
             ExprKind::PreIncrement(temp.clone())
         } else { ExprKind::PreDecrement(temp.clone()) }, span),
         ElementUpdate::Compound => {
-            let ExprKind::BinaryOp { op, right, .. } = &source_value.kind else { unreachable!() };
+            let operation = match &source_value.kind {
+                ExprKind::Assignment { value, prelude, .. } if prelude.is_empty() => value.as_ref(),
+                _ => source_value,
+            };
+            let ExprKind::BinaryOp { op, right, .. } = &operation.kind else { unreachable!() };
             Expr::new(ExprKind::BinaryOp {
                 left: Box::new(Expr::new(ExprKind::Variable(temp.clone()), span)),
                 op: op.clone(), right: right.clone(),
@@ -270,9 +338,6 @@ fn lower_boxed_static_nested_update(
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
-    if let Some(owner) = owner {
-        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
-    }
     let null = LoweredValue { value: ctx.builder.emit_const_null(), ir_type: IrType::I64 };
     ctx.unset_local(&temp, null, Some(span));
 }
@@ -285,6 +350,11 @@ fn lower_static_update_parent(
     span: Span,
 ) -> LoweredValue {
     let ExprKind::ArrayAccess { array: read_array, index: read_key } = &read.kind else {
+        if let ExprKind::PropertyAccess { object, property } = &read.kind {
+            return crate::ir_lower::expr::lower_nested_assignment_property_source(
+                ctx, object, property, read, PropertyDimensionFetchMode::ReadWrite,
+            );
+        }
         return lower_expr(ctx, read);
     };
     let ExprKind::ArrayAccess { array: write_array, index: write_key } = &write.kind else { unreachable!() };
@@ -293,36 +363,57 @@ fn lower_static_update_parent(
     lower_static_update_key_and_guard(ctx, pinned, read_key,
         "Cannot use string offset as an array", span);
     let probe = lower_array_access_from_lowered_receiver(ctx, pinned, write_key, read);
-    let object = ctx.emit_value(Op::TypePredicate, vec![pinned.value],
-        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
-        Op::TypePredicate.default_effects(), Some(span));
+    let receiver_type = ctx.builder.value_php_type(pinned.value).codegen_repr();
+    let known_object = matches!(receiver_type, PhpType::Object(_));
+    let known_array = matches!(receiver_type, PhpType::Array(_) | PhpType::AssocArray { .. });
     let selected = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let slot = ctx.local_slots[&selected];
     ctx.clear_owned_hidden_temp(&selected, Some(span));
     let initialized = ctx.initialized_slots_snapshot();
-    let object_block = ctx.builder.create_named_block("static.update.object.parent", Vec::new());
-    let array_block = ctx.builder.create_named_block("static.update.array.parent", Vec::new());
+    let object_block = (!known_array).then(|| ctx.builder.create_named_block("static.update.object.parent", Vec::new()));
+    let array_block = (!known_object).then(|| ctx.builder.create_named_block("static.update.array.parent", Vec::new()));
     let merge = ctx.builder.create_named_block("static.update.parent.merge", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: object.value, then_target: object_block, then_args: Vec::new(),
-        else_target: array_block, else_args: Vec::new(),
-    });
-    ctx.builder.position_at_end(object_block);
-    let parent = retain_static_update_parent(ctx, probe, span);
-    let ty = ctx.builder.value_php_type(parent.value);
-    ctx.store_call_argument_local(&selected, parent, ty, Some(span));
-    branch_to(ctx, merge);
-    ctx.builder.position_at_end(array_block);
-    ctx.restore_initialized_slots(initialized);
-    if ctx.value_is_owning_temporary(probe) {
-        crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+    match (object_block, array_block) {
+        (Some(object), None) | (None, Some(object)) => branch_to(ctx, object),
+        (Some(object_block), Some(array_block)) => {
+            let object = ctx.emit_value(Op::TypePredicate, vec![pinned.value],
+                Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)), PhpType::Bool,
+                Op::TypePredicate.default_effects(), Some(span));
+            ctx.builder.terminate(Terminator::CondBr {
+                cond: object.value, then_target: object_block, then_args: Vec::new(),
+                else_target: array_block, else_args: Vec::new(),
+            });
+        }
+        (None, None) => unreachable!("a property update has at least one storage arm"),
     }
-    let parent = lower_static_update_array_parent(ctx, pinned, read_array, write_key, read, span);
-    let parent = retain_static_update_parent(ctx, parent, span);
-    let ty = ctx.builder.value_php_type(parent.value);
-    ctx.store_call_argument_local(&selected, parent, ty, Some(span));
-    branch_to(ctx, merge);
+    let mut branch_slots: Option<HashSet<LocalSlotId>> = None;
+    if let Some(object_block) = object_block {
+        ctx.builder.position_at_end(object_block);
+        let parent = retain_static_update_parent(ctx, probe, span);
+        let ty = ctx.builder.value_php_type(parent.value);
+        ctx.store_call_argument_local(&selected, parent, ty, Some(span));
+        branch_to(ctx, merge);
+        branch_slots = Some(ctx.initialized_slots_snapshot());
+    }
+    if let Some(array_block) = array_block {
+        ctx.builder.position_at_end(array_block);
+        ctx.restore_initialized_slots(initialized.clone());
+        if ctx.value_is_owning_temporary(probe) {
+            crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+        }
+        let parent = lower_static_update_array_parent(ctx, pinned, read_array, write_key, read, span);
+        let parent = retain_static_update_parent(ctx, parent, span);
+        let ty = ctx.builder.value_php_type(parent.value);
+        ctx.store_call_argument_local(&selected, parent, ty, Some(span));
+        branch_to(ctx, merge);
+        let array_slots = ctx.initialized_slots_snapshot();
+        branch_slots = Some(match branch_slots {
+            Some(object_slots) => object_slots.intersection(&array_slots).copied().collect(),
+            None => array_slots,
+        });
+    }
     ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(branch_slots.unwrap_or(initialized));
     // Replace the original parent's topmost record before publishing the child:
     // operand scopes are LIFO, even though the EIR pop names its protected slot.
     if let Some(owner) = owner {
@@ -608,7 +699,7 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
         }
         if let ExprKind::PropertyAccess { object, property } = &expr.kind {
             return crate::ir_lower::expr::lower_nested_assignment_property_source(
-                ctx, object, property, expr,
+                ctx, object, property, expr, PropertyDimensionFetchMode::Write,
             );
         }
         return lower_expr(ctx, expr);
@@ -628,14 +719,34 @@ fn lower_nested_assign_parent_with_diagnosed_key_inner(
     let receiver = lower_nested_assign_parent_with_diagnosed_key_inner(
         ctx, array, span, key_already_diagnosed, convert_false,
     );
+    if let Some(parent) = super::native_dimension_incdec::select_parent(ctx, receiver, index, expr,
+        |ctx, receiver| lower_nested_parent_from_receiver(ctx, receiver, array, index, expr,
+            span, key_already_diagnosed, convert_false))
+    { return parent; }
+    lower_nested_parent_from_receiver(ctx, receiver, array, index, expr, span, key_already_diagnosed, convert_false)
+}
+
+/// Retains the existing ordinary autovivification and key behavior after native parent dispatch.
+fn lower_nested_parent_from_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, array: &Expr, index: &Expr,
+    expr: &Expr, span: Span, key_already_diagnosed: bool, convert_false: bool,
+) -> LoweredValue {
     if convert_false && ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Str {
         crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
         lower_throw_access_error(ctx, "Cannot use string offset as an array", span);
         return receiver;
     }
+    if matches!(ctx.builder.value_php_type(receiver.value).codegen_repr(), PhpType::Object(class)
+        if crate::types::builtin_classes::spl_storage_write_fetch_owner(&class, ctx.classes).is_some()) {
+        let receiver = ctx.box_value_as_mixed(receiver, PhpType::Mixed, Some(span));
+        return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span, key_already_diagnosed);
+    }
+    if let Some(parent) = super::nested_spl_writes::fetch_interface_parent(
+        ctx, receiver, index, expr, key_already_diagnosed,
+    ) { return parent; }
     if ctx.builder.value_php_type(receiver.value).codegen_repr() == PhpType::Mixed {
         if convert_false {
-            return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span);
+            return super::nested_plain_writes::fetch_parent(ctx, receiver, index, expr.span, key_already_diagnosed);
         }
         let key = lower_expr(ctx, index);
         let key = crate::ir_lower::ownership::persist_string_byte_view(

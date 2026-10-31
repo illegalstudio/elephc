@@ -70,6 +70,7 @@ pub(crate) fn emit_runtime_data_fixed(
 ) -> String {
     let mut out = String::new();
     out.push_str(".data\n");
+    out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
@@ -206,6 +207,12 @@ pub(crate) fn emit_runtime_data_fixed(
     // (unlike the argument-type diagnostics, which spell the type as `bool`).
     out.push_str(".globl _unser_type_true\n_unser_type_true:\n    .ascii \"true\"\n");
     out.push_str(".globl _unser_type_false\n_unser_type_false:\n    .ascii \"false\"\n");
+    out.push_str(&format!(".globl _bit_not_prefix\n_bit_not_prefix:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::arrays::BIT_NOT_PREFIX));
+    out.push_str(".p2align 3\n.globl _bit_not_type_rows\n_bit_not_type_rows:\n");
+    for (symbol, len) in crate::codegen_support::runtime::arrays::BIT_NOT_TYPE_ROWS {
+        out.push_str(&format!("    .quad {symbol}, {len}\n"));
+    }
     out.push_str(&format!(
         ".globl _unser_property_assign_prefix\n_unser_property_assign_prefix:\n    .ascii {UNSER_PROPERTY_ASSIGN_PREFIX:?}\n"
     ));
@@ -242,17 +249,15 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _diag_sprintf_object_to_float_suffix\n_diag_sprintf_object_to_float_suffix:\n    .ascii {SPRINTF_OBJECT_TO_FLOAT_WARNING_SUFFIX:?}\n"
     ));
     out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
-    // print_r($value, true) return-mode capture state. _print_r_mode is a flag
-    // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
+    // print_r rendering capture state. _print_r_mode is a flag
+    // (0 = write to stdout, 1 = append to _print_r_ptr) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
-    // byte count; _print_r_buf is the 64 KiB accumulation buffer finalized by
+    // byte count; _print_r_ptr owns raw growable storage finalized by
     // __rt_pr_finish into an owned heap string. Only non-zero during an active
-    // print_r return-mode rendering, so non-print_r output is unaffected.
+    // print_r rendering, so ordinary output is unaffected.
     out.push_str(&comm_directive("_print_r_mode", 8, target));
     out.push_str(&comm_directive("_print_r_off", 8, target));
-    out.push_str(&comm_directive("_print_r_buf", 65536, target));
-    // _print_r_base / _print_r_cap: the grown capture block (0 = the static buffer above, capacity 65536).
-    out.push_str(&comm_directive("_print_r_base", 8, target));
+    out.push_str(&comm_directive("_print_r_ptr", 8, target));
     out.push_str(&comm_directive("_print_r_cap", 8, target));
     // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
     // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
@@ -757,6 +762,12 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
     out.push_str(".globl _borrowed_reference_return_msg\n_borrowed_reference_return_msg:\n    .ascii \"Cannot return a reference to storage that has no independent reference cell\"\n");
+    for (label, message) in [
+        ("_tagged_reference_argument_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ARGUMENT_MSG),
+        ("_tagged_reference_assignment_msg", crate::codegen_support::runtime::reference_cells::TAGGED_REFERENCE_ASSIGNMENT_MSG),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
@@ -924,7 +935,7 @@ pub(crate) fn emit_runtime_data_fixed(
         symbol = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE_SYMBOL,
         message = crate::codegen_support::runtime::exceptions::ABSENT_MESSAGE,
     ));
-    out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
+    out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Class name must be a valid object or a string\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
     out.push_str(".globl _swr_bad_proto_msg\n_swr_bad_proto_msg:\n    .ascii \"Warning: stream_wrapper_register(): Invalid protocol scheme specified.\\n\"\n");
@@ -1527,6 +1538,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
     // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
     out.push_str(&comm_directive("_user_wrappers", 2048, target));
+    out.push_str(&comm_directive("_simplexml_unwind_stream", 8, target));
     // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
     // slots, each storing the wrapper object pointer keyed by synthetic fd
     // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
@@ -1710,6 +1722,11 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
     out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");
     out.push_str(".globl _heap_dbg_block_refs\n_heap_dbg_block_refs:\n    .ascii \" refs=\"\n");
+    out.push_str(".globl _heap_dbg_block_class\n_heap_dbg_block_class:\n    .ascii \" class_id=\"\n");
+    out.push_str(".globl _heap_dbg_block_class_name\n_heap_dbg_block_class_name:\n    .ascii \" class=\"\n");
+    out.push_str(".globl _heap_dbg_block_tag\n_heap_dbg_block_tag:\n    .ascii \" tag=\"\n");
+    out.push_str(".globl _heap_dbg_block_length\n_heap_dbg_block_length:\n    .ascii \" length=\"\n");
+    out.push_str(".globl _heap_dbg_block_fingerprint\n_heap_dbg_block_fingerprint:\n    .ascii \" fingerprint=\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     for (label, value) in [
         ("_bt_arg_unknown", "Unknown"),

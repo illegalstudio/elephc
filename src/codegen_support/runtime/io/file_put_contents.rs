@@ -10,6 +10,7 @@
 //! - The ARM64 body checks the raw `open` and `write` syscalls with `branch_on_syscall_success`:
 //!   macOS reports failure through the carry flag with a POSITIVE errno in x0, so an unchecked
 //!   failed open (ENOENT = 2) used to write the data to stderr and report success.
+//! - Raw ARM64 open/write failures publish their error code to libc errno, matching x86_64.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -100,6 +101,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     }
     let open_ok = emitter.platform.branch_on_syscall_success("__rt_fpc_opened");
     emitter.instruction(&open_ok);                                              // continue only when open succeeded
+    emit_raw_file_error_errno(emitter);
     emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
     emitter.instruction("b __rt_fpc_return");                                   // nothing was opened, so nothing to close
     emitter.label("__rt_fpc_opened");
@@ -135,6 +137,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     }
     let write_ok = emitter.platform.branch_on_syscall_success("__rt_fpc_wrote");
     emitter.instruction(&write_ok);                                             // keep the byte count of a successful write
+    emit_raw_file_error_errno(emitter);
     emitter.instruction("mov x0, #-1");                                         // file_put_contents()'s failure result
     emitter.label("__rt_fpc_wrote");
     emitter.instruction("str x0, [sp, #32]");                                   // save bytes written
@@ -158,6 +161,24 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+/// Publishes a raw ARM64 syscall error through the target's thread-local libc errno.
+fn emit_raw_file_error_errno(emitter: &mut Emitter) {
+    use crate::codegen_support::platform::Platform;
+    // -- preserve the syscall error while resolving thread-local errno --
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x0, x0");                                      // Linux returns -errno, while Darwin already returns positive errno
+    }
+    emitter.instruction("str w0, [sp, #32]");                                   // preserve the error code in the unused byte-count slot across the libc call
+    let accessor = match emitter.platform {
+        Platform::MacOS => "__error",
+        Platform::Linux => "__errno_location",
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    emitter.bl_c(accessor);                                                     // obtain this thread's errno pointer without relying on a syscall side effect
+    emitter.instruction("ldr w9, [sp, #32]");                                   // restore the captured positive error after the accessor clobbered caller registers
+    emitter.instruction("str w9, [x0]");                                        // make the original open/write failure visible to native error-message adapters
 }
 
 /// Emits the x86_64 Linux implementation of `__rt_file_put_contents`.
@@ -296,6 +317,33 @@ mod tests {
                 "{platform:?}: a failed write is reported as -1, not as a byte count"
             );
         }
+    }
+
+    /// Every supported ARM64 target stores the original syscall error before reporting failure.
+    #[test]
+    fn test_file_put_contents_syscall_errors_publish_target_errno() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64"] {
+            let target = Target::parse(name).unwrap();
+            let errno = target.extern_symbol(if target.platform == Platform::MacOS { "__error" } else { "__errno_location" });
+            let mut emitter = Emitter::new(target);
+            emit_file_put_contents(&mut emitter);
+            let asm = emitter.output();
+            for label in ["__rt_fpc_opened", "__rt_fpc_wrote"] {
+                let branch = target.platform.branch_on_syscall_success(label);
+                let failure = asm.split_once(&branch).unwrap().1.split_once(label).unwrap().0;
+                let save = failure.find("str w0, [sp, #32]").unwrap();
+                let call = failure.find(&format!("bl {errno}")).unwrap();
+                let restore = failure.find("ldr w9, [sp, #32]").unwrap();
+                let publish = failure.find("str w9, [x0]").unwrap();
+                let result = failure.find("mov x0, #-1").unwrap();
+                assert!(save < call && call < restore && restore < publish && publish < result, "{name}: {failure}");
+                assert_eq!(failure.contains("neg x0, x0"), target.platform == Platform::Linux, "{name}: {failure}");
+            }
+        }
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emit_file_put_contents(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("call open") && asm.contains("call write"));
     }
 
     /// `__rt_flock` and `__rt_ftruncate` do NOT take the platform's first argument registers on

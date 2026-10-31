@@ -353,9 +353,11 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
         // what its own lowering loads; other receivers keep the previous syntactic answer.
         _ => buffer_receiver_type_for_ir(ctx, array),
-    }?
-    .codegen_repr();
-    match array_ty {
+    }?;
+    if let Some((class_name, _)) = singular_object_class(&array_ty) {
+        return array_access_offset_get_return_type(ctx, class_name);
+    }
+    match array_ty.codegen_repr() {
         // A buffer element reads as its handle word, and a miss as the invalid handle 0 rather
         // than null, so the read keeps the plain buffer type: a nullable union would box the
         // handle in a merge or literal, where an element read of it answered null.
@@ -460,6 +462,13 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         return Some(normalize_value_php_type(property_ty));
     }
     let class_info = ctx.classes.get(normalized)?;
+    if !property.starts_with("__elephc_")
+        && crate::types::builtin_classes::has_native_dimensions(normalized, ctx.classes)
+    {
+        // The native property adapter returns a boxed view or null. Literal storage
+        // must match that result rather than stamp a raw object payload over the cell.
+        return Some(PhpType::Mixed);
+    }
     class_info
         .properties
         .iter()

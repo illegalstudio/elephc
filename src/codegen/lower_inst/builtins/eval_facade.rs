@@ -87,6 +87,13 @@ pub(in crate::codegen::lower_inst) fn lower_eval_object_new_dynamic_fallback(
     eval::lower_eval_object_new_dynamic_fallback(ctx, inst, miss_label)
 }
 
+/// Probes constructorless allocation through the active eval activation.
+pub(in crate::codegen::lower_inst) fn lower_eval_constructorless_fallback(
+    ctx: &mut FunctionContext<'_>, miss_label: &str,
+) -> Result<()> {
+    eval::lower_eval_constructorless_fallback(ctx, miss_label)
+}
+
 /// Lowers a post-eval method call that may target an eval-created object.
 pub(in crate::codegen::lower_inst) fn lower_eval_method_call(
     ctx: &mut FunctionContext<'_>,

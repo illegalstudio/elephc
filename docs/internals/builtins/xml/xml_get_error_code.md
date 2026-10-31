@@ -2,7 +2,7 @@
 title: "xml_get_error_code() - internals"
 description: "Compiler internals for xml_get_error_code(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 1087
+  order: 1090
 ---
 
 ## `xml_get_error_code()` - internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_xml.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_xml.rs)
-- **Lowering**: [`src/xml_prelude/build/parser.rs`:1502](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1502) (`xml_get_error_code`)
+- **Lowering**: [`src/xml_prelude/build/parser.rs`:1508](https://github.com/illegalstudio/elephc/blob/main/src/xml_prelude/build/parser.rs#L1508) (`xml_get_error_code`)
 - **Function symbol**: `xml_get_error_code()`
 
 

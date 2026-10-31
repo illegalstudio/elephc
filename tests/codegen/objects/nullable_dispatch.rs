@@ -9,6 +9,43 @@
 
 use super::*;
 
+/// A boxed nullable instance crosses a bare object boundary, while null gets the PHP type label.
+#[test]
+fn test_nullable_to_bare_object_argument_checks_the_runtime_tag() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BareObjectArgumentNode {}
+function acceptBareObjectArgument(object $node): string { return get_class($node); }
+function passBareObjectArgument(mixed $node): string { return acceptBareObjectArgument($node); }
+echo passBareObjectArgument(new BareObjectArgumentNode()), '|';
+try { passBareObjectArgument(null); }
+catch (TypeError $error) { echo explode(', called in ', $error->getMessage())[0]; }
+unset($error);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "BareObjectArgumentNode|acceptBareObjectArgument(): Argument #1 ($node) must be of type object, null given");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A procedural wrapper preserves a typed boolean property store fed by a mixed cast.
+#[test]
+fn test_wrapped_mixed_bool_property_assignment_persists() {
+    let out = compile_and_run(r#"<?php
+class WrappedBoolProperty {
+    public bool $flag = false;
+    public function set(mixed $value): bool { $this->flag = (bool) $value; return true; }
+    public function read(): bool { return $this->flag; }
+}
+function setWrappedBoolProperty(WrappedBoolProperty $target, mixed $value): bool {
+    return $target->set($value);
+}
+$target = new WrappedBoolProperty();
+echo (int)$target->read(), ':';
+setWrappedBoolProperty($target, 1); echo (int)$target->read(), ':';
+setWrappedBoolProperty($target, 0); echo (int)$target->read();
+"#);
+    assert_eq!(out, "0:1:0");
+}
+
 /// Tests that a method call on a `?Holder` parameter dispatches correctly
 /// when the receiver is non-null. Verifies the codegen unboxes the boxed
 /// mixed cell to recover the concrete object pointer before reading the
@@ -392,4 +429,19 @@ echo 'after';
     assert_eq!(out.stdout,
         format!("{}after", "Attempt to assign property \"msg\" on null|".repeat(8)));
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A real null after a nullsafe segment throws catchable Error before method arguments.
+#[test]
+fn test_nullsafe_mixed_child_method_error_is_catchable() {
+    let out = compile_and_run(r#"<?php
+class MixedChildHolder { public mixed $child = null; }
+function noisyMixedChildArgument(): int { echo 'argument|'; return 1; }
+$holder = new MixedChildHolder();
+try { $holder?->child->run(noisyMixedChildArgument()); }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+finally { echo 'finally|'; }
+echo 'after';
+"#);
+    assert_eq!(out, "Call to a member function run() on null|finally|after");
 }

@@ -198,7 +198,7 @@ pub(super) fn eval_reflection_class_new_instance_without_constructor_result(
 }
 
 /// Builds PHP's reflection instantiation error for eval non-instantiable class-likes.
-pub(super) fn eval_reflection_eval_instantiation_error_message(
+pub(in crate::interpreter) fn eval_reflection_eval_instantiation_error_message(
     reflected_name: &str,
     context: &ElephcEvalContext,
 ) -> Option<String> {

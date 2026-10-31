@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Calls a wrapper hook while consuming only the fresh operands synthesized by its caller.
+pub(in crate::interpreter) fn eval_dynamic_method_with_owned_values(
+    class_name: &str, called_class_name: &str, method: &EvalClassMethod,
+    object: RuntimeCellHandle, mut arguments: Vec<EvaluatedCallArg>,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let owners = arguments.iter().map(|argument| argument.value).collect();
+    for argument in &mut arguments { argument.value = argument.value.borrowed(); }
+    let result = eval_dynamic_method_with_values(
+        class_name, called_class_name, method, object, arguments, context, values,
+    );
+    finish_synthesized_method_arguments(result, owners, context, values)
+}
+
 /// Executes one eval-declared class method with `$this` bound in method scope.
 pub(in crate::interpreter) fn eval_dynamic_method_with_values(
     class_name: &str,
@@ -141,6 +155,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
@@ -160,6 +175,7 @@ pub(in crate::interpreter) fn eval_dynamic_method_with_values_and_ref_mode(
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }
@@ -290,6 +306,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     let return_result = match (persist_result, writeback_result, result) {
         (Err(status), _, _) | (_, Err(status), _) | (_, _, Err(status)) => Err(status),
         (Ok(()), Ok(()), Ok(control)) => eval_declared_return_control_value(
+            &qualified_method_name,
             method.return_type(),
             Some(class_name),
             Some(called_class_name),
@@ -309,6 +326,7 @@ pub(in crate::interpreter) fn eval_dynamic_static_method_with_values_and_ref_mod
     context.pop_called_class_scope();
     context.pop_class_scope();
     let return_result = finish_activation_scope(&mut method_scope, return_result, context, values);
+    let return_result = finish_native_bound_call(return_result, &evaluated_args, context, values);
     context.pop_function();
     return_result
 }

@@ -1883,6 +1883,59 @@ if ($o !== null) {
     assert_eq!(out, "VVNV");
 }
 
+/// Mixed static appends preserve arrays, copies and ArrayAccess callbacks without XML enabled.
+#[test]
+fn test_mixed_static_property_append_array_and_object() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class MixedStaticAppend { public static mixed $items = []; }
+class MixedStaticAppendAccess implements ArrayAccess {
+    public array $items = [];
+    public function offsetSet(mixed $key, mixed $value): void { $this->items[] = $value; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetUnset(mixed $key): void {}
+}
+$copy = MixedStaticAppend::$items;
+MixedStaticAppend::$items[] = str_repeat('a', 4);
+echo count($copy), ':', implode(',', MixedStaticAppend::$items), '|';
+$object = new MixedStaticAppendAccess();
+MixedStaticAppend::$items = $object;
+MixedStaticAppend::$items[] = str_repeat('b', 4);
+echo implode(',', $object->items);
+MixedStaticAppend::$items = null;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "0:aaaa|bbbb");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxed static appends pass null to ArrayAccess and retire arguments after a callback throws.
+#[test]
+fn test_mixed_static_append_null_offset_and_throw_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ThrowingStaticAppend implements ArrayAccess {
+    public function offsetSet(mixed $offset, mixed $value): void {
+        echo $offset === null ? 'append|' : 'wrong|';
+        throw new RuntimeException('caught');
+    }
+    public function offsetExists(mixed $offset): bool { return false; }
+    public function offsetGet(mixed $offset): mixed { return null; }
+    public function offsetUnset(mixed $offset): void {}
+}
+class StaticAppendTarget { public static mixed $value = null; }
+StaticAppendTarget::$value = new ThrowingStaticAppend();
+try { StaticAppendTarget::$value[] = str_repeat('x', 40); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+StaticAppendTarget::$value = new SplDoublyLinkedList();
+StaticAppendTarget::$value[] = 'list';
+echo StaticAppendTarget::$value[0];
+StaticAppendTarget::$value = null;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "append|caught|list");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A static-property element write whose value reassigns the property lands in the array the
 /// property holds afterwards, like the instance form (#1950).
 #[test]

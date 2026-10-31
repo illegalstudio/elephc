@@ -4,6 +4,7 @@
 //! the `elephc_xml` bridge's `extern` block. PHP 8 models both a parser and a writer as an
 //! OBJECT, and this prelude is what makes `xml_parser_create()` / `xmlwriter_open_memory()`
 //! return real objects that `is_object`, `get_class`, `instanceof` and `var_dump` agree about.
+//! Injection also joins the parsed SimpleXML declarations on the same bridge capability.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` and the codegen test harness via `inject_if_used`, after
@@ -25,14 +26,16 @@
 //!   `__elephc_xml_parse_into_struct` / `__elephc_xml_struct_values` /
 //!   `__elephc_xml_struct_index` helpers, and the reachability scan keeps those helpers
 //!   alive whenever the builtin is called.
-//! - HANDLE OWNERSHIP. Each object holds the bridge handle as a plain `int` and frees it
+//! - HANDLE OWNERSHIP. XMLParser and XMLWriter hold their bridge handle as an `int` and free it
 //!   from `__destruct` (the `GdImage` model); the bridge's free is idempotent, so there is
 //!   no resource-kind cleanup ladder to extend.
+//!   SimpleXML wrappers own independent final lease objects so user destructors cannot bypass cleanup.
 //! - EVERY wrapper BINDS `$object->__elephc_handle` TO A LOCAL (`$raw`) BEFORE CALLING, the
 //!   same rule the hash and curl preludes document for `mixed` properties.
 
 mod build;
 mod detect;
+mod dom_receiver;
 #[cfg(test)]
 mod fragments;
 
@@ -52,12 +55,12 @@ pub(crate) fn program_uses_surface(program: &[crate::parser::ast::Stmt]) -> bool
     detect::program_uses_xml(program)
 }
 
-/// Injects the xml prelude when the program references the `ext/xml` / `ext/xmlwriter`
+/// Injects the XML prelude when the program references XML, XMLWriter, or SimpleXML's
 /// surface, leaving every other program untouched.
 ///
 /// `force` comes from `--with-xml` (or the codegen harness); otherwise the decision is
 /// `detect::program_uses_xml`. The prelude carries only declarations, so prepending it is
-/// order-independent — PHP hoists them.
+/// order-independent because PHP hoists them.
 ///
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
@@ -82,6 +85,7 @@ fn inject_if_used_on_compiler_stack(
         return program;
     }
     let mut combined = xml_declarations();
+    combined.extend(crate::simplexml_prelude::declarations());
     inventory.record_program("xml", &combined);
     combined.extend(program);
     combined
@@ -168,8 +172,14 @@ mod oracle_tests {
             .filter(|contract| contract.kind == elephc_builtin_contract::BuiltinKind::PreludeProvided)
             .map(|contract| contract.name)
             .collect();
+        let simplexml_functions = crate::simplexml_prelude::declarations().into_iter()
+            .filter_map(|stmt| match stmt.kind {
+                StmtKind::FunctionDecl { name, .. } => Some(name),
+                _ => None,
+            }).collect::<Vec<_>>();
         let declared: std::collections::BTreeSet<&str> = functions
             .iter()
+            .chain(simplexml_functions.iter())
             .map(String::as_str)
             .filter(|name| !name.starts_with("__elephc_"))
             .collect();

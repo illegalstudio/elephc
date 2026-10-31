@@ -261,7 +261,7 @@ pub(in crate::interpreter) fn eval_object_clone_result(
     eval_object_clone_with_properties_result(object, None, None, context, values)
 }
 
-/// Creates a shallow clone, invokes `__clone()`, then applies PHP 8.5 property overrides.
+/// Copies an object, runs its native clone handler or `__clone()`, then applies property overrides.
 pub(crate) fn eval_object_clone_with_properties_result(
     object: RuntimeCellHandle,
     with_properties: Option<RuntimeCellHandle>,
@@ -324,21 +324,38 @@ pub(crate) fn eval_object_clone_with_properties_result(
     };
     context.begin_clone_initialization(clone_identity);
     let initialization = (|| {
-        if let Some(class_name) = dynamic_class_name {
-            context.register_dynamic_object(clone_identity, &class_name);
+        if let Some(class_name) = dynamic_class_name.as_deref() {
+            context.register_dynamic_object(clone_identity, class_name);
             context.clone_dynamic_property_aliases(identity, clone_identity);
-            if let Some((declaring_class, method)) = clone_method {
-                let result = eval_dynamic_method_with_values(
-                    &declaring_class,
-                    &class_name,
-                    &method,
-                    clone,
-                    Vec::new(),
-                    context,
-                    values,
-                )?;
-                eval_release_value(context, values, result)?;
-            } else if let Some(hook) = dynamic_native_clone_hook {
+        }
+        let native_cloned = super::super::runtime_ops::object_operators::clone_native_storage(values, clone)?;
+        if !native_cloned {
+            if let Some(class_name) = dynamic_class_name {
+                if let Some((declaring_class, method)) = clone_method {
+                    let result = eval_dynamic_method_with_values(
+                        &declaring_class,
+                        &class_name,
+                        &method,
+                        clone,
+                        Vec::new(),
+                        context,
+                        values,
+                    )?;
+                    eval_release_value(context, values, result)?;
+                } else if let Some(hook) = dynamic_native_clone_hook {
+                    let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
+                        clone,
+                        &hook.called_class,
+                        "__clone",
+                        Vec::new(),
+                        Some(&hook.declaring_class),
+                        Some(&hook.called_class),
+                        context,
+                        values,
+                    )?;
+                    values.release(result)?;
+                }
+            } else if let Some(hook) = aot_clone_hook {
                 let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
                     clone,
                     &hook.called_class,
@@ -351,18 +368,6 @@ pub(crate) fn eval_object_clone_with_properties_result(
                 )?;
                 values.release(result)?;
             }
-        } else if let Some(hook) = aot_clone_hook {
-            let result = eval_native_method_with_positional_values_unchecked_bridge_scope(
-                clone,
-                &hook.called_class,
-                "__clone",
-                Vec::new(),
-                Some(&hook.declaring_class),
-                Some(&hook.called_class),
-                context,
-                values,
-            )?;
-            values.release(result)?;
         }
 
         context.restart_clone_initialization(clone_identity);
@@ -507,8 +512,10 @@ pub(super) fn eval_native_method_call_with_scope(
     if let Some(called_class) = called_class_scope {
         context.push_called_class_scope(called_class.to_string());
     }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let _native_context = match called_class_scope {
+        Some(called_class) => push_native_frame_called_class_override(context, scope, called_class),
+        None => push_native_frame_context(context),
+    };
     let result = values.method_call(object, method_name, evaluated_args);
     if called_class_scope.is_some() {
         context.pop_called_class_scope();
@@ -531,8 +538,10 @@ pub(super) fn eval_native_static_method_call_with_scope(
     if let Some(called_class) = called_class_scope {
         context.push_called_class_scope(called_class.to_string());
     }
-    let _called_class_override = called_class_scope
-        .map(|called_class| push_native_frame_called_class_override(context, scope, called_class));
+    let _native_context = match called_class_scope {
+        Some(called_class) => push_native_frame_called_class_override(context, scope, called_class),
+        None => push_native_frame_context(context),
+    };
     let result = values.static_method_call(class_name, method_name, evaluated_args);
     if called_class_scope.is_some() {
         context.pop_called_class_scope();
@@ -682,7 +691,7 @@ pub(super) fn eval_runtime_object_class_name(
 }
 
 /// Creates a backing object for an eval-declared class without running its constructor.
-pub(super) fn eval_dynamic_class_allocate_object(
+pub(in crate::interpreter) fn eval_dynamic_class_allocate_object(
     class: &EvalClass,
     context: &mut ElephcEvalContext,
     caller_scope: &mut ElephcEvalScope,

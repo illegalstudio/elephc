@@ -43,6 +43,7 @@ use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
 mod gc_owners;
+pub(super) mod reference_returns;
 pub(super) use destructor_cleanup::is_destructor;
 
 const FRAME_FOOTER_BYTES: usize = 16;
@@ -74,6 +75,7 @@ pub(super) struct FrameLayout {
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
+    pub(super) return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
@@ -160,6 +162,17 @@ pub(super) fn layout_for_function(
             exception_guard_offsets.insert(token, offset);
         }
     }
+    let guarded_slots = function.instructions.iter().filter_map(|inst| {
+        if inst.op != Op::PushCallOperandOwner { return None; }
+        match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None }
+    }).collect::<HashSet<_>>();
+    let mut return_owner_guard_offsets = HashMap::new();
+    for local in &function.locals {
+        if local.kind == LocalKind::ReturnRefCell && guarded_slots.contains(&local.id) {
+            offset += abi::CALL_OPERAND_OWNER_RECORD_BYTES;
+            return_owner_guard_offsets.insert(local.id, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -194,6 +207,7 @@ pub(super) fn layout_for_function(
         ref_cell_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
+        return_owner_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
         exception_cleanup_activation: exception_activations,
@@ -301,6 +315,7 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
                 _ => return false,
             };
             id.produces_resource_inventory_entry()
+                || matches!(id, crate::ir::RuntimeFnId::StreamFilterRegister | crate::ir::RuntimeFnId::StreamWrapperRegister)
         })
 }
 
@@ -773,6 +788,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     let (static_properties, hosting_tables) =
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
     emit_main_static_property_cleanup(ctx, static_properties);
+    // Collect PHP cycles while eval declarations and hosted extension state are alive.
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+    emit_eval_context_epilogue_cleanup(ctx);
     // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
     // hosting tables release the engine objects (`free_obj` may still use module state), and the
     // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
@@ -1131,6 +1149,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
     emit_main_local_epilogue_cleanup(ctx);
+    emit_eval_context_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
     // the request's `{main}` frame just like process-exit teardown does.
     emit_instr_exit(ctx);
@@ -1277,7 +1296,6 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         emit_owned_local_cleanup(ctx, slot, offset, &ty);
     }
     emit_eval_scope_epilogue_cleanup(ctx);
-    emit_eval_context_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.
@@ -1366,7 +1384,7 @@ fn initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
 /// Releases hidden ref-cell owner slots that still hold fallback cells at exit.
 fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     let owners = ref_cell_owner_locals(ctx);
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners, None);
 }
 
 /// Releases live foreach-by-reference aliases recorded in local representation words.
@@ -1389,9 +1407,10 @@ fn emit_hash_entry_ref_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
 fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
+    transferred_owner: Option<LocalSlotId>,
 ) {
     for (name, slot, ty, offset) in owners {
-        if !ctx.unwinding_cleanup
+        if !ctx.unwinding_cleanup && Some(slot) == transferred_owner
             && ctx.function.locals[slot.as_raw() as usize].kind == LocalKind::ReturnRefCell
         {
             continue;
@@ -1676,7 +1695,7 @@ fn emit_function_local_epilogue_cleanup(
         push_return_value(ctx, &return_ty);
     }
     emit_hash_entry_ref_epilogue_cleanup(ctx);
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners, skip_return_slot);
     for (name, slot, ty, offset) in cleanup_locals {
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         emit_owned_local_cleanup(ctx, slot, offset, &ty);

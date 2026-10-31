@@ -16,6 +16,7 @@
 //!   the order the invoker's container validation requires.
 
 use super::*;
+use crate::context::push_native_frame_context;
 
 /// Evaluates a registered AOT function through its descriptor-compatible invoker.
 pub(in crate::interpreter) fn eval_native_function(
@@ -38,6 +39,7 @@ pub(in crate::interpreter) fn eval_native_function_with_values(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    let _native_context = push_native_frame_context(context);
     let result = invoke_native_function_with_staged_args(&function, &bound_args, context, values);
     finish_eval_argument_values(result, bound_args.values, context, values)
 }
@@ -89,7 +91,7 @@ fn invoke_native_function_with_staged_args(
 /// source-declared variadic absorbs. The key cell is a temporary this function owns; `array_set`
 /// only borrows it, and the container retains the value, so the key is released either way and
 /// the staged value keeps the single owner staging gave it.
-fn build_native_function_arg_array(
+pub(in crate::interpreter) fn build_native_function_arg_array(
     bound_args: &BoundNativeFunctionArgs,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -134,13 +136,13 @@ pub(in crate::interpreter) fn cleanup_native_function_ref_args(
                 values.release_raw_string_words(words[0], words[1])
             }
             BoundNativeFunctionRefSlot::OwnedRawWord { slot, .. } => {
-                let word = **slot;
+                let word = slot[0];
                 values.release_raw_heap_word(word)
             }
             BoundNativeFunctionRefSlot::Mixed { slot, .. } => {
                 values.release(RuntimeCellHandle::from_raw(**slot))
             }
-            BoundNativeFunctionRefSlot::RawWord { .. } => Ok(()),
+            BoundNativeFunctionRefSlot::RawWord { .. } | BoundNativeFunctionRefSlot::TaggedScalar { .. } => Ok(()),
         };
         if result.is_ok() { result = released; }
     }
@@ -187,9 +189,10 @@ fn write_back_native_function_ref_slot(
             original,
             slot,
             target,
+            force_writeback,
         } => {
-            let word = **slot;
-            if word == *original {
+            let word = slot[0];
+            if word == *original && !force_writeback {
                 return Ok(());
             }
             let Some(target) = target else {
@@ -198,16 +201,28 @@ fn write_back_native_function_ref_slot(
             let value = values.raw_word_value(*tag, word)?;
             publish_native_function_ref_value(target, value, context, values)
         }
+        BoundNativeFunctionRefSlot::TaggedScalar { original, slot, target } => {
+            let words = **slot;
+            if words == *original { return Ok(()); }
+            let Some(target) = target else { return Ok(()); };
+            let value = match words[1] {
+                EVAL_TAG_INT => values.raw_word_value(EVAL_TAG_INT, words[0])?,
+                EVAL_TAG_NULL => values.null()?,
+                _ => return Err(EvalStatus::RuntimeFatal),
+            };
+            publish_native_function_ref_value(target, value, context, values)
+        }
         BoundNativeFunctionRefSlot::RawString {
             original,
             slot,
             target,
+            force_writeback,
         } => {
             let words = **slot;
             let Some(target) = target else {
                 return values.release_raw_string_words(words[0], words[1]);
             };
-            if words == *original {
+            if words == *original && !force_writeback {
                 return values.release_raw_string_words(words[0], words[1]);
             }
             let value = values.raw_string_value(words[0], words[1]);
@@ -219,7 +234,7 @@ fn write_back_native_function_ref_slot(
             slot,
             target,
         } => {
-            let word = **slot;
+            let word = slot[0];
             let Some(target) = target else {
                 return values.release_raw_heap_word(word);
             };

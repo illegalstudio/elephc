@@ -8255,3 +8255,97 @@ fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
         "repeated stream_context_set_option() calls grew the live heap"
     );
 }
+
+/// Wrapper discovery snapshots live registrations and keeps names after unregister frees them.
+#[test]
+fn test_stream_get_wrappers_includes_registered_protocols() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class WrapperDiscovery {}
+stream_wrapper_register('discoveryone', 'WrapperDiscovery');
+stream_wrapper_register('discoverytwo', 'WrapperDiscovery');
+$list = stream_get_wrappers();
+var_dump(in_array('discoveryone', $list, true), in_array('discoverytwo', $list, true));
+stream_wrapper_unregister('discoveryone');
+stream_wrapper_unregister('discoverytwo');
+var_dump(in_array('discoveryone', stream_get_wrappers(), true), in_array('discoveryone', $list, true));
+unset($list);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Filter discovery includes userspace names and wildcard patterns as independent string copies.
+#[test]
+fn test_stream_get_filters_includes_registered_patterns() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class FilterDiscovery extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }
+}
+
+stream_filter_register('discoveryfilter', 'FilterDiscovery');
+stream_filter_register('discoveryfilter.*', 'FilterDiscovery');
+$filters = stream_get_filters();
+var_dump(in_array('discoveryfilter', $filters, true), in_array('discoveryfilter.*', $filters, true));
+unset($filters);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime filter names use the same builtin transforms as literal append and prepend calls.
+#[test]
+fn test_stream_filter_dynamic_builtin_names() {
+    let out = compile_and_run(r#"<?php
+function readDynamicBuiltinFilter(string $name, bool $prepend): void {
+    $stream = fopen('php://temp', 'w+');
+    fwrite($stream, 'AbC'); rewind($stream);
+    if ($prepend) { stream_filter_prepend($stream, $name, STREAM_FILTER_READ); }
+    else { stream_filter_append($stream, $name, STREAM_FILTER_READ); }
+    echo stream_get_contents($stream), '|';
+    fclose($stream);
+}
+readDynamicBuiltinFilter('string.tolower', false);
+readDynamicBuiltinFilter('string.toupper', true);
+readDynamicBuiltinFilter('string.rot13', false);
+"#);
+    assert_eq!(out, "abc|ABC|NoP|");
+}
+
+/// PHP standard-stream wrappers own duplicates, so closing them preserves the process streams.
+#[test]
+fn test_php_standard_stream_handles_close_independently() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$input = fopen('php://stdin', 'rb');
+echo (int)(get_resource_id($input) !== get_resource_id(STDIN)), '|';
+fclose($input);
+$output = fopen('php://stdout', 'wb');
+fclose($output);
+$error = fopen('php://stderr', 'wb');
+fclose($error);
+echo get_resource_type(STDIN), ':', get_resource_type(STDOUT), ':', get_resource_type(STDERR);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1|stream:stream:stream");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+/// Stream creation and reads retire fresh filename and handle argument copies independently.
+#[test]
+fn test_stream_fresh_arguments_do_not_alias_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$path = tempnam(sys_get_temp_dir(), 'stream-owner-');
+try {
+    for ($i = 0; $i < 4; $i++) {
+        $stream = fopen(substr('x' . $path, 1), 'w+');
+        fwrite($stream, 'value');
+        rewind($stream);
+        echo stream_get_contents($stream), '|';
+        fclose($stream);
+    }
+} finally { unlink($path); }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "value|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

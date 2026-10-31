@@ -73,6 +73,8 @@ pub enum RuntimeCallTarget {
     WeakObjectId,
     /// Returns a freshly boxed nullable referent without retaining it in the wrapper.
     WeakReferenceGet,
+    /// Tests whether a concrete object has a trusted attached internal SPL getter.
+    SplStorageHasAttachedWriteFetch,
     /// Initializes a builtin Throwable constructor without assuming a compact receiver layout.
     ThrowableInitialize,
     /// Appends an exception to the END of another's `previous` chain, as php-src's
@@ -93,6 +95,12 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Fetches an owned attached cell from a known ordinary dynamic-property hash.
+    PropertyHashFetchForWrite,
+    /// Tests an ordinary dynamic-property hash entry without invoking PHP accessors.
+    PropertyHashContains,
+    /// Copies a stored dynamic-property value without accessors, returning null for a missing entry.
+    PropertyHashRead,
     /// Fetches a parent whose key conversion was diagnosed by the update's preceding read.
     ArrayFetchForWriteAlreadyDiagnosed,
     /// Fetches through a pending append parent, preserving a payload-only survivor selected
@@ -124,6 +132,8 @@ pub enum RuntimeCallTarget {
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
+    /// Complements a borrowed PHP value, preserving string bytes and implicit float diagnostics.
+    MixedBitNot,
     /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
     ExceptionGuardOwned,
     /// Removes an owned-value guard without releasing the value on the normal path.
@@ -166,6 +176,9 @@ impl RuntimeCallTarget {
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
+            RuntimeCallTarget::SplStorageHasAttachedWriteFetch => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::I64,
+            }),
             RuntimeCallTarget::WeakObjectId => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::I64,
@@ -198,6 +211,14 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Object)],
                 result: IrType::Void,
             }),
+            RuntimeCallTarget::PropertyHashContains => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
+                result: IrType::I64,
+            }),
+            RuntimeCallTarget::PropertyHashFetchForWrite | RuntimeCallTarget::PropertyHashRead => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object), IrType::Str],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
             RuntimeCallTarget::ArrayFetchForWrite
             | RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed
             | RuntimeCallTarget::PendingAppendFetchForWrite
@@ -223,7 +244,8 @@ impl RuntimeCallTarget {
                     result: IrType::Heap(IrHeapKind::Hash),
                 })
             }
-            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite => Some(RuntimeCallSignature::Fixed {
+            RuntimeCallTarget::MixedCellClone | RuntimeCallTarget::MixedCellResolveForWrite
+            | RuntimeCallTarget::MixedBitNot => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
@@ -280,6 +302,7 @@ impl RuntimeCallTarget {
     /// Returns the stable backend-neutral spelling used by textual EIR.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeCallTarget::SplStorageHasAttachedWriteFetch => "object.spl_has_attached_write_fetch",
             RuntimeCallTarget::WeakObjectId => "object.weak_identity",
             RuntimeCallTarget::WeakReferenceCreate => "object.weak_reference_create",
             RuntimeCallTarget::WeakReferenceGet => "object.weak_reference_get",
@@ -292,6 +315,9 @@ impl RuntimeCallTarget {
                 "object.exception_catch_host_replacement"
             }
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::PropertyHashFetchForWrite => "object.property_hash_fetch_for_write",
+            RuntimeCallTarget::PropertyHashContains => "object.property_hash_contains",
+            RuntimeCallTarget::PropertyHashRead => "object.property_hash_read",
             RuntimeCallTarget::ArrayFetchForWriteAlreadyDiagnosed => "array.fetch_for_write_already_diagnosed",
             RuntimeCallTarget::PendingAppendFetchForWrite => "array.pending_append_fetch_for_write",
             RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed => {
@@ -316,6 +342,7 @@ impl RuntimeCallTarget {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
+            RuntimeCallTarget::MixedBitNot => "mixed.bit_not",
             RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",

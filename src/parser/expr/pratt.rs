@@ -59,8 +59,13 @@ pub(super) fn parse_expr_bp(
     // linux-aarch64 was thin enough that adding a handful of locals to parser
     // frames tipped it over.
     stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, min_bp, None)
+        parse_expr_bp_inner(tokens, pos, min_bp, None, false)
     })
+}
+
+/// Applies scoped capture naming only to the outer statement assignment, never nested expressions.
+pub(super) fn parse_scoped_write_expr(tokens: &[SpannedToken], pos: &mut usize) -> Result<Expr, CompileError> {
+    stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || parse_expr_bp_inner(tokens, pos, 0, None, true))
 }
 
 /// Identifies whether the prefix operand increments an append or a property of its null value.
@@ -72,7 +77,7 @@ pub(super) fn parse_prefix_increment_operand(
 ) -> Result<(Expr, PrefixIncrementTarget), CompileError> {
     let mut appended = PrefixIncrementTarget::Regular;
     let expression = stacker::maybe_grow(64 * 1024, 4 * 1024 * 1024, || {
-        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended))
+        parse_expr_bp_inner(tokens, pos, 35, Some(&mut appended), false)
     })?;
     Ok((expression, appended))
 }
@@ -83,6 +88,7 @@ fn parse_expr_bp_inner(
     pos: &mut usize,
     min_bp: u8,
     mut prefix_increment: Option<&mut PrefixIncrementTarget>,
+    scoped_write: bool,
 ) -> Result<Expr, CompileError> {
     let mut lhs = parse_prefix(tokens, pos)?;
 
@@ -482,12 +488,14 @@ fn parse_expr_bp_inner(
             }
             if is_non_local_assignment_target(&lhs) {
                 if let AssignmentOperator::Compound(op) = op {
-                    lhs = super::compound_assignment_expression(lhs, op, rhs, span);
+                    lhs = if scoped_write {
+                        super::assignment_targets::scoped_compound_assignment_expression(lhs, op, rhs, span)
+                    } else { super::compound_assignment_expression(lhs, op, rhs, span) };
                     continue;
                 }
                 let null_coalesce_assign = matches!(op, AssignmentOperator::NullCoalesce);
 
-                let mut lowerer = AssignmentExpressionLowerer::new(span);
+                let mut lowerer = if scoped_write { AssignmentExpressionLowerer::new_scoped(span) } else { AssignmentExpressionLowerer::new(span) };
                 let target = lowerer.stabilize_non_local_target(lhs, &rhs);
                 let conditional_value_temp =
                     null_coalesce_assign.then(|| lowerer.reserve_value_temp());

@@ -201,14 +201,19 @@ impl<'f> Builder<'f> {
         self.func.locals[slot.as_raw() as usize].php_type.clone()
     }
 
+    /// Associates a PHP name with its hidden reference-cell lease, independently of flow facts.
+    pub(crate) fn set_local_ref_cell_owner(&mut self, slot: LocalSlotId, owner: LocalSlotId) {
+        self.func.locals[slot.as_raw() as usize].ref_cell_owner = Some(owner);
+    }
+
     /// Neutralizes deferred `release_local_slot` ops whose slot never widened to
     /// lifetime-tracked storage.
     ///
-    /// Lowering emits `release_local_slot` before a loop store when the slot's
-    /// storage type LOOKS untracked at that point but a later store on a
-    /// back-edge path may still widen it (e.g. a `for` counter widened
-    /// Int→Mixed by its checked-add update). Once the whole body is lowered the
-    /// final storage types are known, so ops guarding slots that stayed
+    /// Lowering emits `release_local_slot` before overwriting initialized storage,
+    /// even when it currently looks scalar. A later store or eval synchronization
+    /// can widen storage for the entire frame, including earlier assignments.
+    /// Once the whole body is lowered the final storage types are known, so ops
+    /// guarding slots that stayed
     /// untracked are rewritten to `nop`s. This keeps scalar slots eligible for
     /// dead-store elimination and load forwarding, which conservatively exclude
     /// any slot named by an unknown op.
@@ -270,7 +275,7 @@ impl<'f> Builder<'f> {
     pub fn prune_borrowed_local_load_release_ops(&mut self) {
         let mut prune = Vec::new();
         for (index, inst) in self.func.instructions.iter().enumerate() {
-            if inst.op != Op::Release {
+            if !matches!(inst.op, Op::Release | Op::ReleaseUnlessAliases) {
                 continue;
             }
             let Some(source) = inst.operands.first().copied() else {

@@ -125,9 +125,17 @@ pub(super) fn lower_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, left.span);
+    let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
     let rhs = lower_expr(ctx, right);
     unpin_in_flight_owners(ctx, left_pins, left.span);
+    lower_numeric_binary_from_values(ctx, lhs, op, rhs, left, right, expr)
+}
+
+/// Applies the ordinary object, dynamic and numeric paths to already evaluated operands.
+pub(super) fn lower_numeric_binary_from_values(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, op: &BinOp, rhs: LoweredValue,
+    left: &Expr, right: &Expr, expr: &Expr,
+) -> LoweredValue {
     if let Some(result) = object_operators::lower_object_binary_values(ctx, lhs, op, rhs, expr) {
         return result;
     }
@@ -227,8 +235,7 @@ fn lower_numeric_binary_values(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight
     ) {
-        let lhs = coerce_to_int(ctx, lhs, left);
-        let rhs = coerce_to_int(ctx, rhs, right);
+        let (lhs, rhs) = coerce_bitwise_operands(ctx, lhs, rhs, left, right, expr);
         let iop = match op {
             BinOp::BitAnd => Op::IBitAnd,
             BinOp::BitOr => Op::IBitOr,
@@ -341,6 +348,35 @@ fn lower_numeric_binary_values(
         effects_lookup::runtime_effects(),
         Some(expr.span),
     )
+}
+
+/// Keeps both operands rooted until native integer adapters have finished borrowing them.
+fn coerce_bitwise_operands(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, rhs: LoweredValue,
+    left: &Expr, right: &Expr, expr: &Expr,
+) -> (LoweredValue, LoweredValue) {
+    // Publishing scalar checked boxes changes their producer chain and blocks numeric
+    // fusion. A program without native integer casts keeps its ordinary coercion path.
+    let native_casts = ctx.classes.keys().any(|name| {
+        elephc_builtin_contract::lookup_class(name).and_then(|class| class.operators)
+            .and_then(|operators| operators.cast_method(elephc_builtin_contract::ObjectCast::Int)).is_some()
+    });
+    let possible_object = object_operators::can_contain_object(&ctx.builder.value_php_type(lhs.value))
+        || object_operators::can_contain_object(&ctx.builder.value_php_type(rhs.value));
+    if !native_casts || !possible_object {
+        return (coerce_to_int(ctx, lhs, left), coerce_to_int(ctx, rhs, right));
+    }
+    let pins = pin_in_flight_owners(ctx, &[lhs.value, rhs.value], expr.span);
+    let left_cast = object_operators::lower_object_numeric_cast(ctx, lhs, &CastType::Int, Some(left.span));
+    let right_cast = object_operators::lower_object_numeric_cast(ctx, rhs, &CastType::Int, Some(right.span));
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    let left_result = left_cast.unwrap_or_else(|| coerce_to_int(ctx, lhs, left));
+    let right_result = right_cast.unwrap_or_else(|| coerce_to_int(ctx, rhs, right));
+    if left_cast.is_some() { release_binary_operand_temporary(ctx, lhs, expr.span); }
+    if right_cast.is_some() && (left_cast.is_none() || rhs.value != lhs.value) {
+        release_binary_operand_temporary(ctx, rhs, expr.span);
+    }
+    (left_result, right_result)
 }
 
 /// Returns the EIR opcode and result type for PHP array union operands.

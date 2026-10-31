@@ -97,6 +97,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);
     io::emit_wrapper_unbox_int(emitter);
+    io::emit_stream_close_mode(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);
@@ -170,10 +171,6 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_pr_append(emitter);
     io::emit_pr_write(emitter);
     io::emit_pr_finish(emitter);
-    io::emit_pr_flush_deferred(emitter);
-    io::emit_pr_base(emitter);
-    io::emit_pr_reserve(emitter);
-    io::emit_pr_release(emitter);
     // Output-buffering (ob_*) stack helpers. Always emitted: __rt_stdout_write,
     // __rt_pr_write, and the process-exit paths reference them unconditionally.
     io::emit_var_dump_write(emitter);

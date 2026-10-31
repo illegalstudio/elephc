@@ -506,6 +506,12 @@ impl AppendLowerer {
             ExprKind::PropertyAccess { object, property } => {
                 Stmt::new(StmtKind::PropertyArrayPush { object, property, value }, self.span)
             }
+            ExprKind::DynamicPropertyAccess { object, property } => {
+                let ExprKind::StringLiteral(property) = property.kind else {
+                    return Err(CompileError::new(base.span, "Append to a runtime property name is not supported"));
+                };
+                Stmt::new(StmtKind::PropertyArrayPush { object, property, value }, self.span)
+            }
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 Stmt::new(StmtKind::StaticPropertyArrayPush { receiver, property, value }, self.span)
             }

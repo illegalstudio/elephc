@@ -38,14 +38,24 @@ pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst:
         && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
     let address = abi::tertiary_scratch_reg(ctx.emitter);
     abi::emit_frame_slot_address(ctx.emitter, address, offset);
-    abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    if ctx.local_kind(slot)? == crate::ir::LocalKind::ReturnRefCell {
+        let record = ctx.return_owner_guard_offset(slot)?;
+        abi::emit_link_call_operand_owner_in_frame(ctx.emitter, address, record);
+    } else {
+        abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    }
     Ok(())
 }
 
 /// Removes the innermost operand scope before the owning slot is retired normally.
 pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::expect_local_slot(inst)?;
-    abi::emit_pop_call_operand_owner(ctx.emitter);
+    let slot = super::expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? == crate::ir::LocalKind::ReturnRefCell {
+        let record = ctx.return_owner_guard_offset(slot)?;
+        abi::emit_unlink_call_operand_owner_in_frame(ctx.emitter, record);
+    } else {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+    }
     Ok(())
 }
 
@@ -175,6 +185,19 @@ pub(super) fn lower_release_unless_aliases(
     let skip_label = ctx.next_label("release_unless_aliases_skip");
     let result_reg = abi::symbol_scratch_reg(ctx.emitter);
     let ty = ctx.load_value_to_result(value)?;
+    // An equal string payload transfers the argument owner into the call result. Its
+    // saved return marker must reflect that transfer before another return forwards it.
+    // Unclaimed transient strings still need persistence, so retain their borrowed status.
+    let mut alias_owner = None;
+    if ty == PhpType::Str && !transient && ctx.value_php_type(result)? == PhpType::Str {
+        if let Some(offset) = ctx.runtime_return_ownership_offset(result) {
+            let status = crate::codegen::return_ownership::classify_return_value(ctx, value, None)?;
+            if !matches!(status, crate::codegen::return_ownership::ReturnOwnershipStatus::Static(false)) {
+                alias_owner = Some((offset, status));
+            }
+        }
+    }
+    let done_label = alias_owner.map(|_| ctx.next_label("release_unless_aliases_done"));
     // A string loads into the string result pair, whose pointer register is not the integer
     // result register on AArch64 (`x1` against `x0`); boxed payloads stay single-word values.
     let value_reg = if ty == PhpType::Str {
@@ -209,7 +232,25 @@ pub(super) fn lower_release_unless_aliases(
         }
         _ => {}
     }
+    if let Some(done) = &done_label {
+        abi::emit_jump(ctx.emitter, done);
+    }
     ctx.emitter.label(&skip_label);
+    if let Some((offset, status)) = alias_owner {
+        if let crate::codegen::return_ownership::ReturnOwnershipStatus::Dynamic(argument_offset) = status {
+            let owned = ctx.next_label("release_alias_argument_owned");
+            crate::codegen::return_ownership::emit_load_status(ctx.emitter, argument_offset);
+            crate::codegen::return_ownership::emit_branch_if_owned(ctx.emitter, &owned);
+            // A borrowed argument adds no owner; preserve any owner the callee supplied.
+            abi::emit_jump(ctx.emitter, done_label.as_ref().expect("alias transfer has a join"));
+            ctx.emitter.label(&owned);
+        }
+        crate::codegen::return_ownership::emit_status(ctx.emitter, true);
+        crate::codegen::return_ownership::emit_store_status(ctx.emitter, offset);
+    }
+    if let Some(done) = done_label {
+        ctx.emitter.label(&done);
+    }
     Ok(())
 }
 
@@ -452,7 +493,7 @@ fn runtime_call_discards_string_argument(inst: &Instruction) -> bool {
 /// only frees plausible live heap blocks, so it safely handles the zero-length owned
 /// strings that `__rt_str_persist` now allocates as independent blocks. The previous
 /// `cbz len` guard skipped them and leaked every owned empty string on reassignment.
-fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
+pub(super) fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, _) = abi::string_result_regs(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {

@@ -103,6 +103,10 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_array_set_var_stmt(name, index, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DimensionWrite { array, index, op, value } => {
+            super::dimension_writes::eval_dimension_write(array, index.as_ref(), *op, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::Break => Ok(EvalControl::Break),
         EvalStmt::Continue => Ok(EvalControl::Continue),
         EvalStmt::DoWhile { body, condition } => {

@@ -19,8 +19,11 @@
 //!   `zend_hash_update`, so building a new array never mutates the array it was copied from.
 //! - `__rt_hash_set_shared` is restricted to a pending append selected before a diagnostic
 //!   callback. It preserves the exact payload retained by a surviving child copy.
+//! - `__rt_hash_set_owned_refusal` keeps ordinary COW and retires only the separate helper
+//!   owner when a mixed-key storeback refuses a nullable-reference assignment.
 
-use crate::codegen_support::callable_invoker_args::INVOKER_ARG_REF_CELL_TAG;
+use crate::codegen_support::abi;
+use crate::codegen_support::callable_invoker_args::{INVOKER_ARG_REF_CELL_TAG, INVOKER_ARG_TAGGED_SCALAR_SOURCE};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use super::hash_layout;
@@ -43,6 +46,9 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_entry");                               // share insertion and update machinery
     emitter.label_global("__rt_hash_set_shared");
     emitter.instruction("mov x9, #1");                                          // pending append mutates its pre-callback selected payload
+    emitter.instruction("b __rt_hash_set_entry");                               // keep selected-payload mode distinct from exceptional owner retirement
+    emitter.label_global("__rt_hash_set_owned_refusal");
+    emitter.instruction("mov x9, #2");                                          // a mixed-key caller supplied a separate owner to retire on refusal
     emitter.label_shared("__rt_hash_set_entry");
 
     // -- set up stack frame, save all inputs --
@@ -67,6 +73,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x5, [sp, #40]");                                   // save value_tag
     emitter.instruction("str x9, [sp, #56]");                                   // preserve the pending-append selection mode
     emitter.instruction("str x0, [sp, #0]");                                    // save the candidate hash table before null normalization
+    super::hash_set_reference_layout::emit_shared_tagged_reference_selection(emitter);
     emitter.instruction("cbnz x0, __rt_hash_set_have_table");                   // a live table skips the null-hash allocation
     emitter.instruction("mov x0, #4");                                          // allocate a four-entry hash for a null dynamic-property slot
     emitter.instruction("ldr x1, [sp, #40]");                                   // preserve the caller's value tag as the hash value type
@@ -74,7 +81,7 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // publish the freshly allocated table
     emitter.label("__rt_hash_set_have_table");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the candidate table
-    emitter.instruction("cbnz x9, __rt_hash_set_ready");                        // selected payloads must remain visible through surviving copies
+    emitter.instruction("tbnz x9, #0, __rt_hash_set_ready");                    // only selected-payload mode bypasses the ordinary COW boundary
     emitter.instruction("bl __rt_hash_ensure_unique");                          // split ordinary shared hash tables before mutation
     emitter.label("__rt_hash_set_ready");
     emitter.instruction("str x0, [sp, #0]");                                    // save the unique hash_table_ptr
@@ -275,6 +282,8 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("b __rt_hash_set_done");                                // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw");
+    emitter.instruction(&format!("cmp x15, #{INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
+    emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged");         // decode boxed replacements before publishing both words
     emitter.instruction("ldr x14, [x14, #8]");                                  // load the concrete caller-storage address
     emitter.instruction("ldr x0, [x14]");                                       // retain the previous low payload for optional release
     emitter.instruction("ldr x13, [sp, #24]");                                  // load replacement value_lo
@@ -296,6 +305,44 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_release_callable");
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the overwritten callable after publication
     emitter.instruction("b __rt_hash_set_done");                                // return the unchanged argument hash
+
+    emitter.label("__rt_hash_set_invoker_reference_tagged");
+    emitter.instruction("ldr x14, [x14, #8]");                                  // address the caller's inline tagged-scalar slot
+    emitter.instruction("ldr x0, [sp, #40]");                                   // inspect the replacement PHP representation
+    emitter.instruction("cmp x0, #7");                                          // a Mixed replacement owns a box that must be decoded
+    emitter.instruction("b.eq __rt_hash_set_invoker_reference_tagged_box");     // preserve the boxed value until both words are published
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        emitter, "x0", "__rt_hash_set_invoker_reference_tagged_valid",
+        "__rt_hash_set_invoker_reference_tagged_invalid",
+    );
+    emitter.label("__rt_hash_set_invoker_reference_tagged_invalid");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // consume the rejected direct payload with its original PHP tag
+    emitter.instruction("ldr x2, [sp, #32]");                                   // preserve string lengths and other high words during cleanup
+    abi::emit_call_label(emitter, "__rt_hash_to_mixed_box_owned");
+    super::container_refusal_owner::emit_throw(emitter);
+    emitter.label("__rt_hash_set_invoker_reference_tagged_valid");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // load the direct nullable-integer payload
+    emitter.instruction("str x1, [x14]");                                       // publish the scalar payload
+    emitter.instruction("str x0, [x14, #8]");                                   // publish its actual PHP tag
+    emitter.instruction("b __rt_hash_set_done");                                // the marker remains owned by the argument hash
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // load the replacement box owned by this write
+    abi::emit_push_reg_pair(emitter, "x0", "x14");
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        emitter, "x0", "__rt_hash_set_invoker_reference_tagged_box_valid",
+        "__rt_hash_set_invoker_reference_tagged_box_invalid",
+    );
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid");
+    abi::emit_pop_reg_pair(emitter, "x0", "x14");
+    super::container_refusal_owner::emit_throw(emitter);
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid");
+    abi::emit_load_temporary_stack_slot(emitter, "x14", 8);
+    emitter.instruction("str x1, [x14]");                                       // publish the unboxed scalar payload
+    emitter.instruction("str x0, [x14, #8]");                                   // publish the unboxed null or integer tag
+    abi::emit_pop_reg_pair(emitter, "x0", "x14");
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("b __rt_hash_set_done");                                // retire the consumed box without changing marker identity
 
     // -- write through an existing PHP reference set instead of replacing the entry --
     emitter.label("__rt_hash_set_reference_write");
@@ -401,6 +448,9 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_x86_entry");                         // share insertion and update machinery
     emitter.label_global("__rt_hash_set_shared");
     emitter.instruction("mov r10d, 1");                                         // pending append mutates its pre-callback selected payload
+    emitter.instruction("jmp __rt_hash_set_x86_entry");                         // keep selected-payload mode independent from refusal ownership
+    emitter.label_global("__rt_hash_set_owned_refusal");
+    emitter.instruction("mov r10d, 2");                                         // identify the caller's extra destination owner on nullable refusal
     emitter.label("__rt_hash_set_x86_entry");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving hash-insert spill slots
@@ -416,6 +466,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], r8");                        // save the high payload word across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // save the runtime value tag across the probe and optional update paths
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // preserve the pending-append selection mode
+    super::hash_set_reference_layout::emit_shared_tagged_reference_selection(emitter);
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the candidate hash-table pointer before null normalization
     emitter.instruction("test rdi, rdi");                                       // is the dynamic-property hash slot still null?
     emitter.instruction("jnz __rt_hash_set_x86_have_table");                    // a live table skips the null-hash allocation
@@ -426,7 +477,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, rax");                                        // keep the new table as the mutation target
     emitter.label("__rt_hash_set_x86_have_table");
     emitter.instruction("mov rax, rdi");                                        // selected mode returns the original table without a COW helper call
-    emitter.instruction("test r10, r10");                                       // was this table selected before a callback retained its payload?
+    emitter.instruction("test r10, 1");                                         // only pending-append selection bypasses COW
     emitter.instruction("jnz __rt_hash_set_x86_ready");                         // yes, preserve that exact payload identity
     emitter.instruction("call __rt_hash_ensure_unique");                        // split ordinary shared associative arrays before mutation
     emitter.label("__rt_hash_set_x86_ready");
@@ -601,6 +652,8 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the argument hash still owns the unchanged marker wrapper
 
     emitter.label("__rt_hash_set_invoker_reference_raw_x");
+    emitter.instruction(&format!("cmp r13, {INVOKER_ARG_TAGGED_SCALAR_SOURCE}")); // source shape12 stores a nullable integer payload and tag
+    emitter.instruction("je __rt_hash_set_invoker_reference_tagged_x");         // decode boxed replacements before publishing both words
     emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // load the concrete caller-storage address
     emitter.instruction("mov rax, QWORD PTR [r14]");                            // retain the previous low payload for optional release
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // load replacement value_lo
@@ -622,6 +675,44 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_set_invoker_reference_release_callable_x");
     emitter.instruction("call __rt_callable_descriptor_release");               // release the overwritten callable after publication
     emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // return the unchanged argument hash
+
+    emitter.label("__rt_hash_set_invoker_reference_tagged_x");
+    emitter.instruction("mov r14, QWORD PTR [r14 + 8]");                        // address the caller's inline tagged-scalar slot
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // inspect the replacement PHP representation
+    emitter.instruction("cmp rax, 7");                                          // a Mixed replacement owns a box that must be decoded
+    emitter.instruction("je __rt_hash_set_invoker_reference_tagged_box_x");     // preserve the boxed value until both words are published
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        emitter, "rax", "__rt_hash_set_invoker_reference_tagged_valid_x",
+        "__rt_hash_set_invoker_reference_tagged_invalid_x",
+    );
+    emitter.label("__rt_hash_set_invoker_reference_tagged_invalid_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // consume the rejected direct payload with its original PHP tag
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // preserve string lengths and other high words during cleanup
+    abi::emit_call_label(emitter, "__rt_hash_to_mixed_x86_box_owned");
+    super::container_refusal_owner::emit_throw(emitter);
+    emitter.label("__rt_hash_set_invoker_reference_tagged_valid_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // load the direct nullable-integer payload
+    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the scalar payload
+    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish its actual PHP tag
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // the marker remains owned by the argument hash
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the replacement box owned by this write
+    abi::emit_push_reg_pair(emitter, "rax", "r14");
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_guard(
+        emitter, "rax", "__rt_hash_set_invoker_reference_tagged_box_valid_x",
+        "__rt_hash_set_invoker_reference_tagged_box_invalid_x",
+    );
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box_invalid_x");
+    abi::emit_pop_reg_pair(emitter, "rax", "r14");
+    super::container_refusal_owner::emit_throw(emitter);
+    emitter.label("__rt_hash_set_invoker_reference_tagged_box_valid_x");
+    abi::emit_load_temporary_stack_slot(emitter, "r14", 8);
+    emitter.instruction("mov QWORD PTR [r14], rdi");                            // publish the unboxed scalar payload
+    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish the unboxed null or integer tag
+    abi::emit_pop_reg_pair(emitter, "rax", "r14");
+    abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("jmp __rt_hash_set_reference_done_x");                  // retire the consumed box without changing marker identity
 
     emitter.label("__rt_hash_set_reference_write_x");
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag
@@ -728,6 +819,9 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_hash_set(&mut emitter);
             let assembly = emitter.output();
+            let prelookup = assembly.find("__rt_hash_get").unwrap();
+            let cow = assembly.find("__rt_hash_ensure_unique").unwrap();
+            assert!(prelookup < cow, "{name}: shared nullable references must refuse writes before COW consumes the caller owner");
             let update = assembly.split("__rt_hash_set_update:\n").nth(1).unwrap();
             let (marker_branch, write_label, publish, release) = if name == "linux-x86_64" {
                 (
@@ -751,6 +845,36 @@ mod tests {
                 write_through.find(publish).unwrap() < write_through.find(release).unwrap(),
                 "{name}: publish replacement before releasing the previous Mixed owner"
             );
+            let (tagged_label, tagged_store) = if name == "linux-x86_64" {
+                ("__rt_hash_set_invoker_reference_tagged_x:", "mov QWORD PTR [r14 + 8], rax")
+            } else {
+                ("__rt_hash_set_invoker_reference_tagged:", "str x0, [x14, #8]")
+            };
+            let tagged = write_through.split(tagged_label).nth(1).unwrap();
+            assert!(tagged.contains(tagged_store), "{name}: nullable sources publish their actual PHP tag");
+            assert!(tagged.contains("__rt_mixed_unbox"), "{name}: boxed replacements must be decoded");
+            assert!(tagged.contains("__rt_decref_mixed"), "{name}: the consumed replacement box must retire");
+            let suffix = if name == "linux-x86_64" { "_x" } else { "" };
+            for shape in ["tagged", "tagged_box"] {
+                let valid = format!("__rt_hash_set_invoker_reference_{shape}_valid{suffix}:");
+                let invalid = format!("__rt_hash_set_invoker_reference_{shape}_invalid{suffix}:");
+                let guard_end = tagged.find(&invalid).unwrap();
+                let publication = tagged.find(&valid).unwrap();
+                let rejected = &tagged[guard_end..publication];
+                assert!(rejected.find("__rt_tagged_reference_assignment_error_new").unwrap()
+                    < rejected.find("__rt_decref_mixed").unwrap(),
+                    "{name}: {shape} must root the refusal before destructor cleanup");
+                assert!(rejected.find("__rt_decref_mixed").unwrap()
+                    < rejected.find("__rt_throw_current").unwrap(),
+                    "{name}: {shape} must release a rejected replacement before throwing");
+                assert!(!rejected.contains(tagged_store), "{name}: {shape} modified the caller on refusal");
+                let guard = &tagged[..guard_end];
+                for tag in [0, 8] {
+                    let compare = if name == "linux-x86_64" { format!("cmp rax, {tag}") }
+                        else { format!("cmp x0, #{tag}") };
+                    assert!(guard.contains(&compare), "{name}: {shape} accepts only integer and null tags");
+                }
+            }
         }
     }
 }

@@ -36,12 +36,14 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
-        if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
+        if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
             return Ok(plan.result_type(op));
         }
         if matches!(op, BinOp::Div | BinOp::Mod)
             && (matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 || matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            && supports_dynamic_arithmetic_operand(self, &lt, op)
+            && supports_dynamic_arithmetic_operand(self, &rt, op)
             && self.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some()))
         {
             return Ok(PhpType::Mixed);
@@ -1658,6 +1660,18 @@ fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)
 }
 
+/// Keeps boxed division/modulo dispatch for numeric scalars and internal operator objects.
+fn supports_dynamic_arithmetic_operand(checker: &Checker, ty: &PhpType, op: &BinOp) -> bool {
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| supports_dynamic_arithmetic_operand(checker, member, op)),
+        PhpType::Void => true,
+        PhpType::Object(_) => crate::types::object_operators::binary_plan_with_classes(
+            op, ty, &PhpType::Mixed, &checker.classes,
+        ).is_some(),
+        _ => is_arithmetic_operand_type(checker, ty),
+    }
+}
+
 /// PHP's `is_numeric_string` classification of a string literal used in arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum NumericStringClass {
@@ -1714,6 +1728,9 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         // here rather than admitted there, where it would widen ordering too.
         || ty.is_int_float_union()
         || checker.is_union_with_mixed_int_dispatch(ty)
+        || crate::types::object_operators::supports_cast_with_classes(ty,
+            elephc_builtin_contract::ObjectCast::Int, &checker.classes)
+        || matches!(ty, PhpType::Union(members) if members.iter().all(|member| is_integer_operand_type(checker, member)))
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

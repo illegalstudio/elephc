@@ -14,6 +14,33 @@
 
 use crate::support::*;
 
+/// Runtime eval retires fresh value and target operands on predicates and throwing target evaluation.
+#[test]
+fn test_instanceof_opaque_eval_temporary_operands_release_bundle() {
+    let source = r#"<?php
+class OpaqueInstanceOwner { public function __destruct() { echo "D|"; } }
+function throwingOpaqueInstanceTarget(): string { echo "T|"; throw new RuntimeException("target"); }
+$source = 'for ($i = 0; $i < 3; $i++) {
+    echo (int)((new OpaqueInstanceOwner()) instanceof OpaqueInstanceOwner), ":";
+    echo (int)((new OpaqueInstanceOwner()) instanceof (str_repeat("OpaqueInstanceOwner", 1))), ":";
+    try { (new OpaqueInstanceOwner()) instanceof (throwingOpaqueInstanceTarget()); }
+    catch (RuntimeException $error) { echo "caught|"; unset($error); }
+}' . ' // ' . $argc;
+eval($source);
+unset($source);
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "D|1:D|1:T|D|caught|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime predicate operand ownership is independent of EIR optimization.
+#[test]
+fn test_instanceof_opaque_eval_temporary_operands_release_no_ir_opt_bundle() {
+    without_ir_opt(test_instanceof_opaque_eval_temporary_operands_release_bundle);
+}
+
 /// Returns one bounded user-function region for ownership diagnostics on CI failures.
 fn bounded_user_symbol_assembly(assembly: &str, symbol: &str) -> String {
     let label = format!("{symbol}:\n");

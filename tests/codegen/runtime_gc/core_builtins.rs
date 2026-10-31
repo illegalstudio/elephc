@@ -403,10 +403,21 @@ $box = new stdClass(); $box->n = 2;
 receiver($box)->{member()} += delta();
 echo ":", $box->n, "|";
 receiver($box)->{member()}++;
-echo ":", $box->n; return 42;' . ' // ' . $argc;
+echo ":", $box->n, "|";
+class FailedCompoundProperty {
+    public function __get($name) { echo "G"; return 5; }
+    public function __set($name, $value) { echo "S"; }
+}
+function failingDelta() { echo "F"; throw new Exception("stop"); }
+$failure = new FailedCompoundProperty();
+try { $failure->n += failingDelta(); } catch (Exception $error) { echo "!"; }
+try { $failure->{"n"} += failingDelta(); } catch (Exception $error) { echo "!"; }
+try { receiver($failure)->n += failingDelta(); } catch (Exception $error) { echo "!"; }
+try { receiver($failure)->{"n"} += failingDelta(); } catch (Exception $error) { echo "!"; }
+return 42;' . ' // ' . $argc;
 echo ":", eval($source);
 "#;
-    assert_eq!(compile_and_run(source), ":RNV:5|RN:642");
+    assert_eq!(compile_and_run(source), ":RNV:5|RN:6|F!F!RF!RF!42");
 }
 
 /// Indexed, appended, compound, and unset property writes release keys, clones, and read cells.
@@ -1089,4 +1100,32 @@ echo memory_get_peak_usage() - $peak >= 400000 ? "regrow" : "bad";
 "#,
     );
     assert_eq!(out, "void:high:reset:realreset:regrow");
+}
+
+/// Static SPL factory wrappers retain the hidden class word through AOT and opaque eval calls.
+#[test]
+fn test_core_fixed_array_factory_callable_abi_bundle() {
+    let source = r###"<?php
+$factory = SplFixedArray::fromArray(...);
+$first = $factory([4, 5]);
+echo $first->getSize(), ':', $first[0], ':', $first[1], '|';
+$second = call_user_func([SplFixedArray::class, 'fromArray'], [2 => 'x', 5 => 'y'], false);
+echo $second->getSize(), ':', $second[0], ':', $second[1], '|';
+$third = SplFixedArray::fromArray([2 => 'a', 5 => 'b']);
+echo $third->getSize(), ':', $third[2], ':', $third[5], '|';
+unset($factory, $first, $second, $third);
+"###;
+    let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
+    let expected = "2:4:5|2:x:y|6:a:b|";
+    assert_bundle_with(&[
+        BundleCase { name: "fixed_factory_aot", source, expected },
+        BundleCase { name: "fixed_factory_eval", source: &eval, expected },
+    ], |source| {
+        let out = compile_and_run_with_heap_debug(source);
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:") && !out.stderr.contains("Notice:"), "{}", out.stderr);
+        out.stdout
+    });
 }
