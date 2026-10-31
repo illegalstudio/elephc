@@ -72,6 +72,7 @@ pub(crate) struct FunctionContext<'a> {
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     exception_guard_offsets: HashMap<ValueId, usize>,
+    return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
@@ -201,6 +202,7 @@ impl<'a> FunctionContext<'a> {
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             exception_guard_offsets: layout.exception_guard_offsets,
+            return_owner_guard_offsets: layout.return_owner_guard_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
             exception_activation_offset: layout.exception_activation_offset,
@@ -226,6 +228,12 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn exception_guard_offset(&self, token: ValueId) -> Result<usize> {
         self.exception_guard_offsets.get(&token).copied().ok_or_else(||
             CodegenIrError::invalid_module(format!("missing exception guard token {}", token.as_raw())))
+    }
+
+    /// Returns stable cleanup storage for a pending reference-return lease.
+    pub(super) fn return_owner_guard_offset(&self, slot: LocalSlotId) -> Result<usize> {
+        self.return_owner_guard_offsets.get(&slot).copied().ok_or_else(||
+            CodegenIrError::invalid_module(format!("missing return owner guard {}", slot.as_raw())))
     }
 
     /// Returns a module-unique local label carrying a readable but lossy prefix.

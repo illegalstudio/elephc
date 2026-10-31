@@ -38,14 +38,24 @@ pub(super) fn lower_push_call_operand_owner(ctx: &mut FunctionContext<'_>, inst:
         && ctx.local_php_type(slot)?.codegen_repr() == PhpType::Callable;
     let address = abi::tertiary_scratch_reg(ctx.emitter);
     abi::emit_frame_slot_address(ctx.emitter, address, offset);
-    abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    if ctx.local_kind(slot)? == crate::ir::LocalKind::ReturnRefCell {
+        let record = ctx.return_owner_guard_offset(slot)?;
+        abi::emit_link_call_operand_owner_in_frame(ctx.emitter, address, record);
+    } else {
+        abi::emit_push_call_operand_owner(ctx.emitter, address, callable);
+    }
     Ok(())
 }
 
 /// Removes the innermost operand scope before the owning slot is retired normally.
 pub(super) fn lower_pop_call_operand_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::expect_local_slot(inst)?;
-    abi::emit_pop_call_operand_owner(ctx.emitter);
+    let slot = super::expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? == crate::ir::LocalKind::ReturnRefCell {
+        let record = ctx.return_owner_guard_offset(slot)?;
+        abi::emit_unlink_call_operand_owner_in_frame(ctx.emitter, record);
+    } else {
+        abi::emit_pop_call_operand_owner(ctx.emitter);
+    }
     Ok(())
 }
 

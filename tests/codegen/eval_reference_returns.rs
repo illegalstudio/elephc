@@ -9,6 +9,62 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Exceptional cancellation retires the inner lease before the catch unsets its source binding.
+#[test]
+fn test_cancelled_reference_return_lease_retires_before_catch_side_unset() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class CancelledReturnLeaseNode {
+    public string $id;
+    public function __construct(string $id) { $this->id = $id; }
+    public function __destruct() { echo 'drop:', $this->id, '|'; }
+}
+function &cancelledReturnLease(): CancelledReturnLeaseNode {
+    $outer = new CancelledReturnLeaseNode('a'); $inner = new CancelledReturnLeaseNode('b');
+    try { return $outer; }
+    finally {
+        try { try { return $inner; } finally { throw new Exception('cancel'); } }
+        catch (Exception $error) { unset($inner); echo 'after|'; }
+    }
+}
+$alias =& cancelledReturnLease(); echo $alias->id, '|'; unset($alias);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "drop:b|after|a|drop:a|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Retiring an owned property receiver must preserve the newer fixed return-lease guard.
+#[test]
+fn test_pending_property_return_guard_survives_receiver_owner_retirement() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class GuardedPropertyReturnNode {
+    public string $id;
+    public function __construct(string $id) { $this->id = $id; }
+    public function __destruct() { echo 'drop:', $this->id, '|'; }
+}
+class GuardedPropertyReturnHolder {
+    public GuardedPropertyReturnNode $node;
+    public function __construct() { $this->node = new GuardedPropertyReturnNode('temporary'); }
+    public function __destruct() { echo 'holder|'; }
+}
+function guardedPropertyReturnHolder(): GuardedPropertyReturnHolder {
+    return new GuardedPropertyReturnHolder();
+}
+function &guardedPropertyReturn(): GuardedPropertyReturnNode {
+    $fallback = new GuardedPropertyReturnNode('fallback');
+    try {
+        try { return guardedPropertyReturnHolder()->node; }
+        finally { echo 'finally|'; throw new Exception('cancel'); }
+    } catch (Exception $error) { echo 'caught|'; }
+    return $fallback;
+}
+$alias =& guardedPropertyReturn(); echo 'return:', $alias->id, '|'; unset($alias);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "holder|finally|drop:temporary|caught|return:fallback|drop:fallback|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A cancelled inner reference return preserves the outer lease and releases superseded values.
 #[test]
 fn test_nested_pending_reference_returns_keep_independent_cell_leases() {

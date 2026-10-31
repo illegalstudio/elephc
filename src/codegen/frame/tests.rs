@@ -14,6 +14,38 @@ use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership, Terminator};
 use crate::types::FunctionSig;
 
+/// Pending reference-return guards occupy distinct full activation records outside owner slots.
+#[test]
+fn return_lease_guards_have_distinct_fixed_storage_on_every_target() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut function = Function::new("return_guard_frame".into(), IrType::Void, PhpType::Void);
+        let first = function.add_local(Some("first".into()), IrType::I64,
+            PhpType::Pointer(None), LocalKind::ReturnRefCell);
+        let second = function.add_local(Some("second".into()), IrType::I64,
+            PhpType::Pointer(None), LocalKind::ReturnRefCell);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            for slot in [first, second] {
+                builder.emit(Op::PushCallOperandOwner, Vec::new(), Some(Immediate::LocalSlot(slot)),
+                    IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        for regalloc in [false, true] {
+            let layout = layout_for_function(&function, target, regalloc, true, true);
+            let left = layout.return_owner_guard_offsets[&first];
+            let right = layout.return_owner_guard_offsets[&second];
+            assert_eq!(right - left, abi::CALL_OPERAND_OWNER_RECORD_BYTES, "{name}");
+            assert!(left >= layout.local_offsets[&second] + abi::CALL_OPERAND_OWNER_RECORD_BYTES, "{name}");
+            assert!(layout.frame_size >= right, "{name}");
+        }
+    }
+}
+
 /// Plain programs skip the clock read, while timing metrics and eval keep it enabled.
 #[test]
 fn gc_request_timing_initialization_is_pay_for_use() {

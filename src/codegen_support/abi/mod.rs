@@ -41,6 +41,7 @@ pub(crate) use call_operand_scope::{
     CALL_OPERAND_OWNER_RECORD_BYTES,
     emit_link_call_operand_owner_at_stack, emit_pop_call_operand_owner,
     emit_push_call_operand_owner, emit_unlink_call_operand_owner_at_stack,
+    emit_link_call_operand_owner_in_frame, emit_unlink_call_operand_owner_in_frame,
 };
 pub use frame::{
     emit_frame_prologue, emit_frame_restore, emit_frame_slot_address, emit_load_from_address,

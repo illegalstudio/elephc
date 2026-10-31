@@ -865,7 +865,10 @@ pub enum Op {
     ReleaseLocalSlot,
     /// Retires a raw local owner only when its runtime storage is not a reference-cell pointer.
     ReleaseRawLocalSlot,
+    /// Publishes a cleanup record for the immediate owner slot. ReturnRefCell slots use stable
+    /// frame records so pending returns do not change receiver/foreach temporary stack offsets.
     PushCallOperandOwner,
+    /// Detaches the named owner's record, preserving newer fixed return-lease records.
     PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,

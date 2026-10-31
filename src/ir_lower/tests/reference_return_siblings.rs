@@ -133,6 +133,11 @@ function &nestedPendingReference(): NestedPendingReferenceNode {
         }).collect::<std::collections::HashSet<_>>();
         assert!(owners.len() >= 2, "{target}: exercise independent inner and outer returns");
         assert_eq!(owners.len(), acquisitions.len(), "{target}: each emitted return site needs its own owner");
+        for owner in &owners {
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PushCallOperandOwner
+                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(*owner))),
+                "{target}: each pending lease must retire before a same-frame catch");
+        }
         for block in &function.blocks {
             if let Some(crate::ir::Terminator::Return { value: Some(value) }) = block.terminator {
                 let crate::ir::ValueDef::Instruction { inst, .. } = function.value(value).unwrap().def else {

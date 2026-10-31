@@ -444,14 +444,27 @@ fn acquire_reference_return_owner(
         PhpType::Pointer(None),
         crate::ir::LocalKind::ReturnRefCell,
     );
-    ctx.emit_value(
+    let captured = ctx.emit_value(
         Op::AcquireRefCell,
         vec![cell_ptr.value],
         Some(Immediate::LocalSlot(owner)),
         PhpType::Pointer(None),
         Op::AcquireRefCell.default_effects(),
         Some(span),
-    )
+    );
+    if !ctx.finally_stack.is_empty() || !ctx.try_loop_depths.is_empty() {
+        // Same-frame catches leave the function activation alive. Publish the lease separately
+        // so an exception that cancels this return clears it before entering that catch. A stable
+        // record in the frame coexists with temporary receiver and foreach owner records.
+        ctx.emit_void(
+            Op::PushCallOperandOwner,
+            Vec::new(),
+            Some(Immediate::LocalSlot(owner)),
+            Op::PushCallOperandOwner.default_effects(),
+            Some(span),
+        );
+    }
+    captured
 }
 
 /// Acquires this return site's independent lease and terminates with the address it captured.

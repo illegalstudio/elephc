@@ -563,6 +563,17 @@ return's `finally` can resume the outer return without losing its owner. Normal
 epilogue cleanup transfers only the lease named by the selected snapshot and retires
 the cancelled pending returns; exceptional cleanup retires every lease.
 
+A reference return acquired under a native handler or `finally` also publishes its
+lease slot through a fixed 48-byte cleanup record in the PHP frame. An exception
+that cancels this return clears and releases the lease before entering a surviving
+same-frame catch. An outer pending return lies below the inner handler's saved
+activation boundary, so an inner cancellation leaves that outer lease attached.
+The record uses the ordinary owner-slot cleanup and GC visitor. It does not move
+the temporary stack: receiver and foreach records retain their original addresses.
+Removing one of those older temporary records splices its exact address out of the
+activation chain while preserving newer fixed return records. Normal frame teardown
+removes the remaining records after transferring the selected lease.
+
 Because the returned reference is the snapshot rather than a re-read of the
 variable, a `finally` that rebinds the returned variable and falls through cannot
 change what was returned. This mirrors PHP, which materializes the reference with

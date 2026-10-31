@@ -75,6 +75,7 @@ pub(super) struct FrameLayout {
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
+    pub(super) return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
@@ -161,6 +162,17 @@ pub(super) fn layout_for_function(
             exception_guard_offsets.insert(token, offset);
         }
     }
+    let guarded_slots = function.instructions.iter().filter_map(|inst| {
+        if inst.op != Op::PushCallOperandOwner { return None; }
+        match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None }
+    }).collect::<HashSet<_>>();
+    let mut return_owner_guard_offsets = HashMap::new();
+    for local in &function.locals {
+        if local.kind == LocalKind::ReturnRefCell && guarded_slots.contains(&local.id) {
+            offset += abi::CALL_OPERAND_OWNER_RECORD_BYTES;
+            return_owner_guard_offsets.insert(local.id, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -195,6 +207,7 @@ pub(super) fn layout_for_function(
         ref_cell_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
+        return_owner_guard_offsets,
         concat_base_offset,
         exception_activation_offset,
         exception_cleanup_activation: exception_activations,
