@@ -13,6 +13,10 @@ use crate::codegen::{abi, context::FunctionContext, platform::Arch, stack_numeri
 use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
 use crate::types::PhpType;
 
+#[cfg(test)]
+#[path = "numeric_cast_tests.rs"]
+mod tests;
+
 /// Uses a guarded payload load only when existing frame proofs cover the entire numeric value.
 pub(super) fn try_lower_int(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, value: ValueId,
@@ -34,13 +38,7 @@ pub(super) fn try_lower_int(
 
     // -- preserve a promoted float while extracting an integer without a runtime call --
     abi::emit_load_from_address(ctx.emitter, tag, result, 0);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz {tag}, {slow}")), // preserve the original boxed float conversion on the cold path
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {tag}, {tag}"));             // distinguish the proven integer and float tags
-            ctx.emitter.instruction(&format!("jnz {slow}"));                    // preserve the original boxed float conversion on the cold path
-        }
-    }
+    emit_float_branch(ctx.emitter, tag, &slow);
     abi::emit_load_from_address(ctx.emitter, result, result, 8);
     ctx.emitter.label(&done);
     super::store_if_result(ctx, inst)?;
@@ -52,4 +50,19 @@ pub(super) fn try_lower_int(
         Ok(())
     })?;
     Ok(true)
+}
+
+/// Uses the wide ARM branch form so the deferred float tail can exceed conditional reach.
+fn emit_float_branch(emitter: &mut crate::codegen::emit::Emitter, tag: &str, slow: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cbz {tag}, 1f"));                     // keep the integer payload on the local fallthrough path
+            emitter.instruction(&format!("b {slow}"));                          // reach the deferred float conversion beyond conditional branch range
+            emitter.label("1");
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {tag}, {tag}"));                 // distinguish the proven integer and float tags
+            emitter.instruction(&format!("jnz {slow}"));                        // preserve the original boxed float conversion on the cold path
+        }
+    }
 }

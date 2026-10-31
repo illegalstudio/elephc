@@ -149,3 +149,17 @@ pointer assumption. The typed prime example also matches PHP with a clean heap
 under the second compiler. All eight selected tests and final hygiene checks
 pass; no task-owned `checks-*` temporary directories remain. Publication and
 review evidence are tracked in Code Journal plan `d6045879`.
+
+## Deferred ARM branch range
+
+The integer-cast tag dispatch uses an inverted local conditional skip over an
+unconditional AArch64 branch to its deferred float tail. The tail may be more
+than one MiB away in large generated functions. The machine peephole can shorten
+this wide form only after proving the complete region fits conditional reach.
+
+The regression fails with the original direct `cbnz` and passes with the wide
+form on all four ARM target emitters. Clang cross-assembly of a 1,048,600-byte
+padded tail rejects the original branch and accepts the wide form for macOS,
+iOS device, iOS Simulator and Linux ARM64. The warning-free build and three cast
+integration tests pass. The x86_64 benchmark method's assembly is exactly
+unchanged, so its accepted timing evidence remains applicable.

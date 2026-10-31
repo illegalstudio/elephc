@@ -178,6 +178,8 @@ semantics; this does not require or imply an integer range proof for either coun
 Integer casts of selected frame cells or reads of proven numeric locals inspect
 the runtime tag and load an integer payload directly. A float keeps the existing
 boxed conversion on a cold path, including PHP's out-of-range integer value.
+AArch64 reaches that deferred path with a wide branch; machine peepholes shorten
+it only when the complete function region proves the conditional jump in range.
 Unknown values, references and warning-sensitive string-offset or implicit casts
 keep their existing lowering. This reuses frame proofs without adding graph scans
 or changing the representation of a loop counter.
