@@ -39,6 +39,8 @@ mod testing_generics;
 mod strict_php_source_guards;
 mod lfc;
 mod benchmarks;
+#[path = "perf_regressions.rs"]
+mod perf_regressions;
 mod echo_vars;
 mod eval;
 mod eval_generics;

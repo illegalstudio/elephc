@@ -266,6 +266,21 @@ pub(crate) fn lower_sscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
 pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_str_split_impl(ctx, inst, "__rt_str_split")
+}
+
+/// Lowers the allocation-free `count(str_split(...))` helper with the same argument
+/// materialization and `$length >= 1` guard as the allocating split.
+pub(crate) fn lower_str_split_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_str_split_impl(ctx, inst, "__rt_str_split_count")
+}
+
+/// Shared `str_split` argument materialization, validation, and runtime call.
+fn lower_str_split_impl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    runtime_label: &str,
+) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "str_split expected 1 or 2 args, got {}",
@@ -288,7 +303,7 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
         STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE,
     );
-    abi::emit_call_label(ctx.emitter, "__rt_str_split");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }
 

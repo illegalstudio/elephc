@@ -70,6 +70,9 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     sentinels::emit_branch_if_null_container(emitter, low, abi::secondary_scratch_reg(emitter), &format!("{prefix}_invalid"));
     abi::store_at_offset(emitter, low, PAYLOAD);
     for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT, ESCAPED] { clear_slot(emitter, slot); }
+    if !product {
+        emit_packed_int_sum_fast_path(emitter, prefix);
+    }
     install_boundary(emitter, prefix);
     abi::load_at_offset(emitter, result, BORROWED);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -194,6 +197,56 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     emit_unsupported_warning(emitter, prefix, product);
     abi::emit_jump(emitter, &format!("{prefix}_loop"));
     emit_cleanup(emitter, prefix);
+}
+
+/// Emits the packed int-array fast path for `array_sum` before the generic fold.
+///
+/// `array<int>` is the common aggregate receiver. Its header is an indexed array with
+/// 8-byte int slots, so the typed reduction helper can sum it without an iterator,
+/// per-element Mixed boxes, warning bookkeeping or an exception boundary. Every other
+/// storage shape falls through to the generic fold.
+fn emit_packed_int_sum_fast_path(emitter: &mut Emitter, prefix: &str) {
+    let generic = format!("{prefix}_generic");
+    abi::load_at_offset(emitter, abi::int_result_reg(emitter), PAYLOAD);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [x0, #-8]");                           // load the packed array metadata
+            emitter.instruction("and w9, w9, #0xff");                           // isolate the storage kind
+            emitter.instruction("cmp w9, #2");                                 // kind 2 = indexed packed array
+            emitter.instruction(&format!("b.ne {generic}"));                    // other storage keeps the generic fold
+            emitter.instruction("ldr x9, [x0, #-8]");                           // reload the metadata for the value type
+            emitter.instruction("ubfx x9, x9, #8, #7");                         // isolate the element value type
+            emitter.instruction(&format!("cbnz x9, {generic}"));                // only int-shaped slots take the fast path
+            emitter.instruction("ldr x9, [x0, #16]");                           // load the element size
+            emitter.instruction("cmp x9, #8");                                 // int slots are one 8-byte word
+            emitter.instruction(&format!("b.ne {generic}"));                    // widened slots keep the generic fold
+            emitter.instruction("ldr x2, [x0]");                                // exclusive end = array length
+            emitter.instruction("mov x1, #0");                                 // start at the first element
+            emitter.instruction("mov x3, #0");                                 // the empty seed is int zero
+            abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // load the packed array metadata
+            emitter.instruction("and r10d, 0xff");                              // isolate the storage kind
+            emitter.instruction("cmp r10d, 2");                                 // kind 2 = indexed packed array
+            emitter.instruction(&format!("jne {generic}"));                     // other storage keeps the generic fold
+            emitter.instruction("mov r10, QWORD PTR [rax - 8]");                // reload the metadata for the value type
+            emitter.instruction("shr r10, 8");                                  // move the value type into the low bits
+            emitter.instruction("and r10d, 0x7f");                              // ignore the persistent COW flag
+            emitter.instruction(&format!("jnz {generic}"));                     // only int-shaped slots take the fast path
+            emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the element size
+            emitter.instruction("cmp r10, 8");                                  // int slots are one 8-byte word
+            emitter.instruction(&format!("jne {generic}"));                     // widened slots keep the generic fold
+            emitter.instruction("mov rdi, rax");                                // pass the packed array
+            emitter.instruction("xor esi, esi");                                // start at the first element
+            emitter.instruction("mov rdx, QWORD PTR [rax]");                    // exclusive end = array length
+            emitter.instruction("xor ecx, ecx");                                // the empty seed is int zero
+            abi::emit_call_label(emitter, "__rt_array_sum_int_i64");
+        }
+    }
+    abi::emit_frame_restore(emitter, FRAME);
+    abi::emit_return(emitter);
+    emitter.label(&generic);
 }
 
 /// Selects PHP's unsupported type spelling after publishing the complete operation prefix.
@@ -399,6 +452,11 @@ mod tests {
                 assert!(!asm.contains("__rt_mixed_clone"), "{name}: stack cells stay borrowed");
                 if target.arch == Arch::X86_64 {
                     assert!(asm.contains("mov rsi, rdx"), "preserve high snapshot words");
+                }
+                if product {
+                    assert!(!asm.contains("__rt_array_sum_int_i64"), "{name}: products have no int fast path");
+                } else {
+                    assert!(asm.contains("__rt_array_sum_int_i64"), "{name}: missing packed int aggregate fast path");
                 }
             }
         }

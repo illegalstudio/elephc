@@ -64,7 +64,40 @@ pub(super) fn emit_mark_reserved_result_temporary(emitter: &mut Emitter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::Target;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits the strip-tags scanner for one target and returns the assembly text.
+    fn strip_tags_asm(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_strip_tags(&mut emitter);
+        emitter.output()
+    }
+
+    /// The no-allow-list fast path copies text with a sixteen-byte block and skips
+    /// ordinary tags without entering the full state machine.
+    #[test]
+    fn strip_tags_no_allow_list_uses_the_fast_path() {
+        let arm = strip_tags_asm(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("__rt_strip_tags_fast_entry:"), "{arm}");
+        assert!(arm.contains("str q0, [x23], #16"), "{arm}");
+
+        let x64 = strip_tags_asm(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("__rt_strip_tags_fast_entry_x86:"), "{x64}");
+        assert!(x64.contains("movdqu XMMWORD PTR [rbx], xmm0"), "{x64}");
+    }
+
+    /// The hot output cursor stays in a callee-saved register instead of being
+    /// reloaded and stored around every retained byte.
+    #[test]
+    fn strip_tags_output_cursor_stays_in_a_register() {
+        let arm = strip_tags_asm(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(arm.contains("strb w22, [x23], #1"), "{arm}");
+        assert!(arm.contains("add x23, x23, x2"), "{arm}");
+
+        let x64 = strip_tags_asm(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(x64.contains("mov BYTE PTR [rbx], r15b"), "{x64}");
+        assert!(x64.contains("add rbx, rcx"), "{x64}");
+    }
 
     /// Every target adopts the reservation into independently owned storage before returning.
     #[test]

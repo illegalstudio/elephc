@@ -116,6 +116,9 @@ class BorrowedRead {
     public function __get(string $name): string { return "fallback"; }
     public function byteAt(int $i): int { return ord(substr($this->bytes, $i, 1)); }
     public function findAt(int $i): int { return (int)strpos($this->bytes, "b", $i); }
+    public function findLast(int $i): int { return (int)strrpos($this->bytes, "b", $i); }
+    public function findCase(int $i): int { return (int)stripos($this->bytes, "B", $i); }
+    public function findLastCase(int $i): int { return (int)strripos($this->bytes, "B", $i); }
 }
 function localByte(string $s, int $i): int { return ord(substr($s, $i, 1)); }
 function namedByte(string $s, int $i): int { return ord(\SUBSTR(length: 1, string: $s, offset: $i)); }
@@ -126,7 +129,7 @@ function localLoop(int $n): int {
     return $sum;
 }
 $r = new BorrowedRead(str_repeat("ab", 2000));
-echo $r->byteAt($argc), $r->findAt($argc), localByte("ab", $argc), namedByte("ab", $argc), localLoop($argc);
+echo $r->byteAt($argc), $r->findAt($argc), $r->findLast($argc), $r->findCase($argc), $r->findLastCase($argc), localByte("ab", $argc), namedByte("ab", $argc), localLoop($argc);
 "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let module = super::lower_source_at_for_target(
@@ -137,9 +140,20 @@ echo $r->byteAt($argc), $r->findAt($argc), localByte("ab", $argc), namedByte("ab
         for function in module.functions.iter().chain(module.class_methods.iter()) {
             for call in &function.instructions {
                 if !matches!(call.immediate, Some(Immediate::RuntimeCall(
-                    RuntimeCallTarget::Function(RuntimeFnId::Substr | RuntimeFnId::Strpos)
+                    RuntimeCallTarget::Function(
+                        RuntimeFnId::Substr
+                            | RuntimeFnId::Strpos
+                            | RuntimeFnId::Stripos
+                            | RuntimeFnId::Strrpos
+                            | RuntimeFnId::Strripos
+                    )
                         | RuntimeCallTarget::ProfiledFunction {
-                            target: RuntimeFnId::Substr | RuntimeFnId::Strpos, ..
+                            target: RuntimeFnId::Substr
+                                | RuntimeFnId::Strpos
+                                | RuntimeFnId::Stripos
+                                | RuntimeFnId::Strrpos
+                                | RuntimeFnId::Strripos,
+                            ..
                         }
                 ))) { continue; }
                 reads += 1;
@@ -150,7 +164,63 @@ echo $r->byteAt($argc), $r->findAt($argc), localByte("ab", $argc), namedByte("ab
                     function.name, function.instruction(inst).unwrap().op);
             }
         }
-        assert_eq!(reads, 5, "{target}: exercise every read");
+        assert_eq!(reads, 8, "{target}: exercise every read");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Read-only mbstring calls borrow string operands instead of copying each subject.
+#[test]
+fn borrowed_mbstring_reads_avoid_subject_copies() {
+    use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId, ValueDef};
+    let source = r#"<?php
+function mbReads(string $s, int $n): string {
+    $a = mb_strtoupper($s, "UTF-8");
+    $b = mb_convert_case($s, MB_CASE_TITLE, "UTF-8");
+    $c = mb_trim($s, " ", "UTF-8");
+    $d = mb_substr($s, 0, $n, "UTF-8");
+    return $a . $b . $c . $d;
+}
+echo mbReads("hello", $argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|f| f.name == "mbReads").unwrap();
+        let mut calls = 0;
+        for call in &function.instructions {
+            let Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(target)
+                    | RuntimeCallTarget::ProfiledFunction { target, .. },
+            )) = &call.immediate
+            else {
+                continue;
+            };
+            if !matches!(
+                target,
+                RuntimeFnId::MbStrtoupper
+                    | RuntimeFnId::MbConvertCase
+                    | RuntimeFnId::MbTrim
+                    | RuntimeFnId::MbSubstr
+            ) {
+                continue;
+            }
+            calls += 1;
+            let ValueDef::Instruction { inst, .. } = function.value(call.operands[0]).unwrap().def
+            else {
+                panic!("{target:?}: mbstring subject producer");
+            };
+            assert_ne!(
+                function.instruction(inst).unwrap().op,
+                Op::Acquire,
+                "{target:?}: mbstring subjects must be borrowed",
+            );
+        }
+        assert_eq!(calls, 4, "{target:?}: every read-only mbstring call");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

@@ -238,3 +238,25 @@ echo ($result === false ? "false" : $result), "|", bin2hex($root[0]), "\n";
     assert_eq!(compile_and_run(source),
         "mb_convert_variables(): Cannot handle recursive references\nfalse|c3a9\n");
 }
+
+/// Verifies the identical-UTF-8 unobserved-array length fold and the observed-array fallback.
+#[test]
+fn test_mbstring_variables_identical_encoding_length_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$arr = ["héllo"];
+echo strlen((string)mb_convert_variables("UTF-8", "UTF-8", $arr)), "|";
+$arr2 = ["a" => "b"];
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    $n ^= strlen((string)mb_convert_variables("UTF-8", "UTF-8", $arr2)) + $i;
+}
+echo $n, "|";
+$invalid = ["\x80"];
+$result = mb_convert_variables("UTF-8", "UTF-8", $invalid);
+echo $result, "|", bin2hex($invalid[0]), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|4|UTF-8|3f|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

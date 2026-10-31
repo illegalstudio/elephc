@@ -19,7 +19,7 @@ use crate::types::PhpType;
 use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{
-    expect_operand, io,
+    ensure_arg_count, expect_operand, io,
     load_value_to_first_int_arg, store_if_result,
 };
 
@@ -71,9 +71,9 @@ pub(crate) use hash::{
     lower_hash_final, lower_hash_hmac, lower_hash_init, lower_hash_update,
     lower_md5, lower_sha1,
 };
-pub(crate) use mbstring::lower_mbstring;
-pub(crate) use network::{lower_inet, lower_ip2long, lower_long2ip};
-pub(crate) use parse_url::lower_parse_url;
+pub(crate) use mbstring::{lower_mb_chr_len, lower_mb_convert_encoding_len, lower_mb_decode_numericentity_len, lower_mb_encode_numericentity_len, lower_mb_encoding_aliases_count, lower_mb_ereg_replace_len, lower_mb_get_info_len, lower_mb_http_input_len, lower_mb_list_encodings_count, lower_mb_regex_set_options_len, lower_mb_preferred_mime_name_len, lower_mb_split_count, lower_mb_detect_encoding_len, lower_mb_detect_order_single, lower_mb_ord_int, lower_mb_position_int, lower_mb_setting_int, lower_mb_str_split_count, lower_mb_strimwidth_len, lower_mb_strstr_len, lower_mb_strlen, lower_mbstring};
+pub(crate) use network::{lower_inet, lower_inet_pton_len, lower_ip2long, lower_ip2long_int, lower_long2ip};
+pub(crate) use parse_url::{lower_parse_url, lower_parse_url_count};
 pub(crate) use printf::{lower_printf, lower_sprintf, lower_vprintf, lower_vsprintf};
 pub(crate) use replace_wrap::{lower_str_pad, lower_string_replace, lower_wordwrap};
 pub(crate) use scalar::{
@@ -82,15 +82,16 @@ pub(crate) use scalar::{
     lower_ord,
 };
 pub(crate) use search::{
-    lower_str_contains, lower_str_repeat, lower_string_position, lower_strstr, lower_substr,
+    lower_str_contains, lower_str_repeat, lower_string_position, lower_string_position_int,
+    lower_strstr, lower_strstr_len, lower_substr,
     lower_substr_replace,
 };
 pub(crate) use simple::{
-    lower_binary_string_runtime, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
+    lower_binary_string_runtime, lower_bin2hex_len, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
     lower_trim_like, lower_ucfirst,
 };
-pub(crate) use strip_tags::lower_strip_tags;
-pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split};
+pub(crate) use strip_tags::{lower_strip_tags, lower_strip_tags_len};
+pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_split, lower_str_split_count};
 
 #[allow(unused_imports)]
 pub(super) use common::{
@@ -271,6 +272,37 @@ fn emit_str_pad_argument_guards(ctx: &mut FunctionContext<'_>, has_pad_type: boo
 
 
 
+/// Lowers the length-only `base64_encode()` result selected by the string length sink.
+///
+/// The input is already a PHP string, so the encoded byte count is exactly
+/// `4 * ceil(len / 3)`; no alphabet lookup or output allocation is needed.
+pub(crate) fn lower_base64_encoded_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "base64_encoded_len", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            common::load_value_as_string_to_regs(ctx, value, "base64_encoded_len", "x1", "x2")?;
+            ctx.emitter.instruction("add x0, x2, #2");                          // round the byte count up to a whole 3-byte quantum
+            ctx.emitter.instruction("mov x1, #3");                              // three source bytes produce one quantum
+            ctx.emitter.instruction("udiv x0, x0, x1");                         // number of encoded quanta
+            ctx.emitter.instruction("lsl x0, x0, #2");                          // four base64 characters per quantum
+        }
+        Arch::X86_64 => {
+            common::load_value_as_string_to_regs(ctx, value, "base64_encoded_len", "rax", "rdx")?;
+            ctx.emitter.instruction("mov rax, rdx");                            // start from the source byte count
+            ctx.emitter.instruction("add rax, 2");                              // round up to a whole 3-byte quantum
+            ctx.emitter.instruction("xor edx, edx");                            // clear the high dividend word
+            ctx.emitter.instruction("mov ecx, 3");                              // three source bytes produce one quantum
+            ctx.emitter.instruction("div rcx");                                 // number of encoded quanta
+            ctx.emitter.instruction("shl rax, 2");                              // four base64 characters per quantum
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `base64_decode(string, strict?)` and boxes its `string|false` answer as Mixed.
 ///
 /// `__rt_base64_decode` reports a strict-mode rejection out of band — the decoded string
@@ -324,6 +356,34 @@ pub(crate) fn lower_base64_decode(ctx: &mut FunctionContext<'_>, inst: &Instruct
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     ctx.emitter.label(&end_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the allocation-free `strlen(base64_decode(...))` helper.
+pub(crate) fn lower_base64_decoded_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "base64_decode expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    materialize_truthy_flag(ctx, inst, 1, "base64_decode")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "base64_decode", "x1", "x2")?;
+            abi::emit_pop_reg(ctx.emitter, "x3");                               // reload the parked $strict flag
+            abi::emit_call_label(ctx.emitter, "__rt_base64_decoded_len");
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "base64_decode", "rax", "rdx")?;
+            abi::emit_pop_reg(ctx.emitter, "rdi");                              // reload the parked $strict flag
+            abi::emit_call_label(ctx.emitter, "__rt_base64_decoded_len");
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -384,8 +444,8 @@ const UCWORDS_DEFAULT_SEPARATOR_COUNT: i64 = 6;
 pub(crate) use scalar::load_as_int;
 pub(crate) use replace_wrap::lower_base_convert;
 pub(crate) use split::lower_base_to_number;
-pub(crate) use replace_wrap::lower_chunk_split;
-pub(crate) use replace_wrap::lower_count_chars;
+pub(crate) use replace_wrap::{lower_chunk_split, lower_chunk_split_len};
+pub(crate) use replace_wrap::{lower_count_chars, lower_count_chars_distinct};
 pub(crate) use split::lower_dec_to_base;
 pub(crate) use split::lower_length_limited_compare;
 pub(crate) use replace_wrap::lower_str_word_count;

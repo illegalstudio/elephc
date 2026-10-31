@@ -1,6 +1,6 @@
 ---
 title: "openssl_decrypt()"
-description: "Decrypts data with a supported AES cipher."
+description: "Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog."
 sidebar:
   order: 972
 ---
@@ -11,7 +11,7 @@ sidebar:
 function openssl_decrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed
 ```
 
-Decrypts data with a supported AES cipher.
+Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.
 
 **Parameters**:
 - `$data` (`string`)

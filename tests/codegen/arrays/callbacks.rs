@@ -2268,3 +2268,259 @@ echo $list[0], "|", $a[0], "|", count($a), "|", $map["k"], "|", $b["k"], "|", im
     assert_eq!(out.stdout, "direct|changed|2|1|9|k,j|two", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A pure `(int) -> bool` predicate filters a packed int array through the direct helper:
+/// keys are preserved, values stay raw ints, and a capturing predicate falls back to the
+/// generic descriptor path with the same answers.
+#[test]
+fn test_array_filter_direct_int_predicate_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+$b = array_filter($a, fn($x) => $x % 2 === 0);
+echo count($b), "|", implode(",", $b), "|";
+foreach ($b as $k => $v) { echo $k, ":", $v, ","; }
+$k = 3;
+$c = array_filter($a, fn($x) => $x % $k === 0);
+echo count($c), "|", implode(",", $c), "\n";
+"#,
+    );
+    assert_eq!(out, "5|2,4,6,8,10|1:2,3:4,5:6,7:8,9:10,3|3,6,9\n");
+}
+
+/// A typed `(int, int): int` reducer runs through the direct raw-accumulator helper, while an
+/// untyped reducer and an empty source keep the generic path and the initial value.
+#[test]
+fn test_array_reduce_direct_typed_int_and_generic_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 10);
+echo array_reduce($a, fn(int $c, int $x): int => $c + $x, 0), "|",
+     array_reduce($a, fn(int $c, int $x): int => $c + $x, 100), "|",
+     array_reduce([], fn(int $c, int $x): int => $c + $x, 7), "|",
+     array_reduce($a, fn($c, $x) => $c + $x, 0), "|",
+     array_reduce($a, fn(int $c, int $x): int => $c * $x, 1), "\n";
+"#,
+    );
+    assert_eq!(out, "55|155|7|55|3628800\n");
+}
+
+/// The specialized reducer's overflow path still throws PHP's catchable TypeError, and the
+/// thrown exception unwinds through the direct helper without leaking or swallowing it.
+#[test]
+fn test_array_reduce_typed_int_overflow_is_a_catchable_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fn(int $c, int $x): int => $c + $x;
+try {
+    $f(PHP_INT_MAX, 1);
+} catch (TypeError $e) {
+    echo str_contains($e->getMessage(), "float returned") ? "caught" : "wrong";
+}
+try {
+    array_reduce([PHP_INT_MAX, 1], fn(int $c, int $x): int => $c + $x, 0);
+} catch (TypeError $e) {
+    echo "|caught";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "caught|caught\n");
+}
+
+/// A typed int callback makes `array_map` call the closure and its plain int map helper
+/// directly, with no per-element descriptor invocation.
+#[test]
+fn test_array_map_typed_int_callback_uses_plain_runtime() {
+    let source = r#"<?php
+$a = [1, 2, 3];
+echo implode(",", array_map(fn(int $x): int => $x + 1, $a));
+"#;
+    let out = compile_and_run(source);
+    assert_eq!(out, "2,3,4");
+    let dir = make_cli_test_dir("elephc_array_map_typed_direct");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("__rt_array_map")
+            && !user_asm.contains("__rt_callable_invoke_owned_args"),
+        "typed int array_map callbacks should not use the descriptor invoker:\n{}",
+        user_asm
+    );
+}
+
+/// A zero-initialized untyped `$carry + $item` reducer over a packed int array lowers to the
+/// typed int sum. Swapped operands fuse too; a nonzero initial value or an extra body term keeps
+/// the generic reducer and must still match PHP.
+#[test]
+fn test_array_reduce_sum_fusion_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = range(1, 100);
+echo array_reduce($a, fn($c, $x) => $c + $x, 0), "|",
+     array_reduce($a, fn($c, $x) => $x + $c, 0), "|",
+     array_reduce($a, fn($c, $x) => $c + $x, 100), "|",
+     array_reduce($a, fn($c, $x) => $c + $x + 1, 0), "|",
+     array_reduce([1, 2, 3], fn($c, $x) => $c + $x, 0), "\n";
+"#,
+    );
+    assert_eq!(out, "5050|5050|5150|5150|6\n");
+}
+
+/// `count(explode($literal, $subject))` counts separator occurrences without building segment
+/// strings. Empty subjects, repeated/trailing separators, multi-byte separators, and dynamic
+/// subjects all match the array-building path; a limit keeps the generic explode.
+#[test]
+fn test_count_explode_fusion_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "1,2,3,4,5";
+echo count(explode(",", "a,b,c")), "|",
+     count(explode(",", "")), "|",
+     count(explode(",", "a,,b,")), "|",
+     count(explode("XX", "aXXb")), "|",
+     count(explode(",", "a")), "|",
+     count(explode(",", $s)), "|",
+     count(explode(",", "a,b,c", 2)), "\n";
+"#,
+    );
+    assert_eq!(out, "3|1|4|2|1|5|2\n");
+}
+
+/// Fused packed-int kernels reproduce PHP map-then-sum promotion and filter remainder truth.
+#[test]
+fn test_keyed_array_kernels_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = range(1, 100);
+echo array_sum(array_map(fn($x) => $x + 1, $a)), '|';
+echo array_sum(array_map(fn($x) => -50 + $x, $a)), '|';
+$negative = [];
+for ($i = 0; $i < 100; $i++) { $negative[] = -$i; }
+echo array_sum(array_map(fn($x) => $x + 3, $negative)), '|';
+$overflow = [PHP_INT_MAX];
+for ($i = 0; $i < 99; $i++) { $overflow[] = PHP_INT_MAX; }
+echo gettype(array_sum(array_map(fn($x) => $x + 1, $overflow))), ':', array_sum(array_map(fn($x) => $x + 1, $overflow)), '|';
+echo count(array_filter($a, fn($x) => $x % 2 === 0)), '|';
+echo count(array_filter($a, fn($x) => $x % 3 === 0)), '|';
+echo count(array_filter($a, fn($x) => $x % -3 === 0)), '|';
+echo count(array_filter($negative, fn($x) => $x % -2 === 0)), '|';
+echo count(array_filter($a, fn($x) => $x % 1 === 0)), '|';
+$mixed = [PHP_INT_MIN, PHP_INT_MAX, 0, 1, -1, 2, -2, 7];
+echo count(array_filter($mixed, fn($x) => $x % -1 === 0)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "5150|50|-4650|double:9.2233720368548E+20|50|33|33|50|100|8\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Fused `is_*($a[$i])` predicates read the packed Mixed tag directly and keep PHP's warning
+/// and null behavior on missing, negative and out-of-range keys.
+#[test]
+fn test_array_element_type_predicates_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, "x", [1], null, 1.5, true, ["k" => 1]];
+for ($i = 0; $i < 7; $i++) {
+    echo (int)is_int($a[$i]), (int)is_string($a[$i]), (int)is_array($a[$i]),
+         (int)is_null($a[$i]), (int)is_float($a[$i]), (int)is_bool($a[$i]),
+         (int)is_scalar($a[$i]), '|';
+}
+echo "\n";
+set_error_handler(function (int $no, string $msg): bool { echo 'W[', $msg, ']'; return true; });
+echo (int)is_int($a[7]), (int)is_array($a[7]), (int)is_null($a[7]), '|';
+echo (int)is_null($a[-1]), '|';
+echo (int)is_int($a[1 + 1]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1000001|0100001|0010000|0001000|0000101|0000011|0010000|\n\
+W[Undefined array key 7]0W[Undefined array key 7]0W[Undefined array key 7]1|W[Undefined array key -1]1|0\n"
+    );
+}
+
+/// SIMD gates in the fused kernels keep the scalar fallback for wide, negative and
+/// overflowing elements, and handle odd tails and power-of-two/non-power divisors.
+#[test]
+fn test_keyed_array_kernels_simd_boundaries_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+$odd = range(1, 101);
+echo array_sum(array_map(fn($x) => $x + 1, $odd)), '|';
+$eight = [1, 2, 3, 4, 5, 6, 7, 8];
+echo array_sum(array_map(fn($x) => $x + 0, $eight)), '|';
+$wide = [4294967296];
+for ($i = 0; $i < 99; $i++) { $wide[] = 1; }
+echo array_sum(array_map(fn($x) => $x + 1, $wide)), '|';
+$neg = [];
+for ($i = 0; $i < 100; $i++) { $neg[] = $i - 50; }
+echo array_sum(array_map(fn($x) => $x + 3, $neg)), '|';
+$ov = [PHP_INT_MAX, 1, 2, 3, 4, 5, 6, 7, 8];
+echo gettype(array_sum(array_map(fn($x) => $x + 1, $ov))), ':', array_sum(array_map(fn($x) => $x + 1, $ov)), '|';
+echo count(array_filter($odd, fn($x) => $x % 2 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 4 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 8 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 3 === 0)), '|';
+echo count(array_filter($neg, fn($x) => $x % -2 === 0)), '|';
+echo count(array_filter($odd, fn($x) => $x % 1 === 0)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "5252|36|4294967495|250|double:9.2233720368548E+18|50|25|12|33|50|101\n"
+    );
+}
+
+/// Declared-int map callbacks take the preflighted fused kernel when no value overflows and
+/// fall back to the generic typed map when one does, preserving the catchable TypeError.
+#[test]
+fn test_typed_map_sum_preflight_matches_generic_path() {
+    let out = compile_and_run(
+        r#"<?php
+$ok = range(1, $argc + 100);
+$n = 0;
+for ($i = 0; $i < 2001; $i++) { $n ^= array_sum(array_map(fn(int $x): int => $x + 1, $ok)); }
+echo $n, '|';
+$ov = [PHP_INT_MAX, 1, 2, 3, 4, 5, 6, 7, 8];
+try {
+    array_sum(array_map(fn(int $x): int => $x + 1, $ov));
+    echo 'no-throw|';
+} catch (TypeError $e) {
+    echo str_contains($e->getMessage(), 'Return value must be of type int, float returned') ? 'typeerror|' : $e->getMessage();
+}
+$negative = [-3, 7, -11, 5];
+echo array_sum(array_map(fn(int $x): int => $x + 1, $negative)), "\n";
+"#,
+    );
+    assert_eq!(out, "5252|typeerror|2\n");
+}
+
+/// The safe and scalar-fallback preflight arms own their results without a heap leak.
+#[test]
+fn test_typed_map_sum_preflight_heap_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$ok = range(1, $argc + 100);
+$n = 0;
+for ($i = 0; $i < 2001; $i++) { $n ^= array_sum(array_map(fn(int $x): int => $x + 1, $ok)); }
+$negative = [-3, 7, -11, 5];
+echo $n, '|', array_sum(array_map(fn(int $x): int => $x + 1, $negative)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "5252|2\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

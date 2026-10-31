@@ -147,6 +147,31 @@ fn stack_numeric_rejects_delayed_borrowed_read() {
     assert!(candidates(&function).is_empty());
 }
 
+/// A final string observation reads the numeric payload without keeping the cell address.
+#[test]
+fn stack_numeric_allows_string_observation_of_numeric_slot() {
+    let (mut function, value) = fixture(false, false);
+    let slot = function.locals[0].id;
+    let _ = function.blocks[0].terminator.take();
+    let mut builder = Builder::new(&mut function);
+    builder.position_at_end(crate::ir::BlockId::from_raw(0));
+    let loaded = builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+    let text = builder
+        .emit(
+            Op::Cast,
+            vec![loaded],
+            Some(Immediate::CastTarget(IrType::Str)),
+            IrType::Str,
+            PhpType::Str,
+            Ownership::Owned,
+        )
+        .unwrap();
+    builder.terminate(Terminator::Return { value: Some(text) });
+    function.return_type = IrType::Str;
+    function.return_php_type = PhpType::Str;
+    assert_eq!(candidates(&function), vec![value]);
+}
+
 /// A reference or an eval context can expose a local through a side channel.
 #[test]
 fn stack_numeric_rejects_reference_eval_and_suspension() {

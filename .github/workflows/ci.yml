@@ -36,6 +36,7 @@ env:
     -p elephc-tls
     -p elephc-pdo
     -p elephc-crypto
+    -p elephc-openssl
     -p elephc-bcmath
     -p elephc-gmp
     -p elephc-random
@@ -1118,7 +1119,10 @@ jobs:
     needs: [plan, build-archive-macos-aarch64]
     if: needs.plan.outputs.extended == 'true'
     runs-on: macos-15
-    timeout-minutes: 20
+    # The computed-eval web regression compiles three full eval hosts and can
+    # exceed 20 minutes on the loaded extended-tier runners; the test itself is
+    # still bounded by its nextest slow-timeout.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

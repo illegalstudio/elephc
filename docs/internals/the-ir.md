@@ -1627,9 +1627,12 @@ the integer range; the store beside it is still typed. Loops of such updates now
 ### Bounded Mixed Counters
 
 `src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
-by increment/decrement and seeded with concrete PHP integers, or with checked or
-mixed `+`, `-`, `*` of raw integers and of the counters proven with them
-(`$j = $i + 1`). A seed producer becomes the matching `ichecked_*_to_int` on the
+by increment/decrement or by a constant compound step (`$i += c`, `$i -= c`), and
+seeded with concrete PHP integers, or with checked or mixed `+`, `-`, `*` of raw
+integers and of the counters proven with them (`$j = $i + 1`). Private slots in the
+executable main frame take part in the same proof; a runtime `include` (which hands
+the frame to evaluated code) or dynamic `eval` keeps main's counters boxed. A seed
+producer becomes the matching `ichecked_*_to_int` on the
 trial and, like an update, must be rewritten to unchecked arithmetic. A comparison
 of a counter with a checked `+`/`-` of raw integers (`$i < $n - 1`) stays a
 `php_rel_cmp`, since the bound may be an overflowed float; IntegerRange bounds the

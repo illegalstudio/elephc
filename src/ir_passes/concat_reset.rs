@@ -33,7 +33,7 @@
 
 use crate::ir::{
     BlockId, DataPool, Effects, Function, Immediate, InstId, Instruction, IrType, LocalSlotId, Op,
-    Terminator, ValueId,
+    RuntimeCallTarget, RuntimeFnId, Terminator, ValueId,
 };
 use crate::types::PhpType;
 
@@ -96,6 +96,25 @@ impl IrPass for ConcatResetElim {
         changed |= coalesce_postdominated_concat_resets(function, &inert, &reachable);
         changed
     }
+}
+
+/// Returns whether `inst` is a single-argument `count()` of a non-null typed array/hash.
+fn typed_array_count_call(function: &Function, inst: &Instruction) -> bool {
+    inst.operands.len() == 1
+        && matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::Count
+            )))
+        )
+        && inst.operands.first().is_some_and(|&operand| {
+            function.value(operand).is_some_and(|value| {
+                matches!(
+                    value.php_type.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+            })
+        })
 }
 
 /// Three-state memoization entry for destructor-freeness queries over values and local slots.
@@ -699,6 +718,16 @@ impl<'a> ConcatInertAnalysis<'a> {
         // concrete operand/slot specialization before the generic effect filter.
         match inst.op {
             Op::ConcatReset => return true,
+            // The reserved append writes one raw int into preallocated payload and length
+            // storage; it neither allocates nor observes the concat scratch cursor.
+            Op::ArrayPushReserved => return true,
+            // The reduction helper allocates only its Mixed result cell and never formats
+            // or observes concat scratch.
+            Op::ArraySumInt => return true,
+            // A typed-array count lowers inline to a header length read: it allocates nothing,
+            // cannot warn, and its only throwable is a location-less TypeError for a null
+            // container, which a non-null `Array`/`AssocArray` value cannot produce.
+            Op::RuntimeCall if typed_array_count_call(self.function, inst) => return true,
             Op::ReleaseLocalSlot | Op::ReleaseLocalRefCell => {
                 return self.release_slot_is_concat_inert(inst);
             }

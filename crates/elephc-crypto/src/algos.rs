@@ -200,6 +200,101 @@ fn crc32c(data: &[u8]) -> Vec<u8> {
     C.checksum(data).to_be_bytes().to_vec()
 }
 
+/// Buffered state backed by an `allthehashes` implementation (HAVAL, Tiger,
+/// Snefru, GOST94). The library exposes one-shot digests, so the bridge keeps
+/// the streaming buffer and calls it at finalize time.
+struct LibraryState {
+    buf: Vec<u8>,
+    out_len: usize,
+    block: usize,
+    algorithm: &'static dyn allthehashes::HashAlgorithm,
+}
+
+impl HashState for LibraryState {
+    /// Accumulates input bytes for the one-shot library digest.
+    fn update(&mut self, data: &[u8]) {
+        self.buf.extend_from_slice(data);
+    }
+    /// Computes the library digest over all buffered input.
+    fn finalize_box(self: Box<Self>) -> Vec<u8> {
+        self.algorithm.hash(&self.buf).expect("supported library hash")
+    }
+    /// Returns the raw digest width.
+    fn output_size(&self) -> usize {
+        self.out_len
+    }
+    /// Returns the HMAC block size for the legacy cryptographic algorithms.
+    fn block_size(&self) -> usize {
+        self.block
+    }
+    /// Clones the buffered input and the immutable algorithm descriptor.
+    fn box_clone(&self) -> Box<dyn HashState> {
+        Box::new(LibraryState {
+            buf: self.buf.clone(),
+            out_len: self.out_len,
+            block: self.block,
+            algorithm: self.algorithm,
+        })
+    }
+}
+
+/// Builds a buffered state for one `allthehashes` algorithm and HMAC block size.
+fn library(name: &str, out_len: usize, block: usize) -> Box<dyn HashState> {
+    let algorithm = allthehashes::get_algorithm(name).expect("known library hash algorithm");
+    Box::new(LibraryState { buf: Vec::new(), out_len, block, algorithm })
+}
+
+/// MurmurHash3 x86 32-bit with PHP's zero seed, big-endian bytes.
+fn murmur3a(data: &[u8]) -> Vec<u8> {
+    murmur3::murmur3_32(&mut &data[..], 0)
+        .expect("murmur3_32 reads a slice")
+        .to_be_bytes()
+        .to_vec()
+}
+
+/// MurmurHash3 x86 128-bit with PHP's zero seed, PHP's h1..h4 word order and
+/// big-endian words.
+fn murmur3c(data: &[u8]) -> Vec<u8> {
+    let value = murmur3::murmur3_x86_128(&mut &data[..], 0)
+        .expect("murmur3_x86_128 reads a slice");
+    let mut out = Vec::with_capacity(16);
+    for word in 0..4 {
+        out.extend(((value >> (32 * word)) as u32).to_be_bytes());
+    }
+    out
+}
+
+/// MurmurHash3 x64 128-bit with PHP's zero seed, PHP's low-then-high big-endian
+/// 64-bit word order.
+fn murmur3f(data: &[u8]) -> Vec<u8> {
+    let value = murmur3::murmur3_x64_128(&mut &data[..], 0)
+        .expect("murmur3_x64_128 reads a slice");
+    let mut out = Vec::with_capacity(16);
+    out.extend((value as u64).to_be_bytes());
+    out.extend(((value >> 64) as u64).to_be_bytes());
+    out
+}
+
+/// xxHash32 with PHP's zero seed, big-endian bytes.
+fn xxh32(data: &[u8]) -> Vec<u8> {
+    xxhash_rust::xxh32::xxh32(data, 0).to_be_bytes().to_vec()
+}
+
+/// xxHash64 with PHP's zero seed, big-endian bytes.
+fn xxh64(data: &[u8]) -> Vec<u8> {
+    xxhash_rust::xxh64::xxh64(data, 0).to_be_bytes().to_vec()
+}
+
+/// xxHash3 64-bit, big-endian bytes.
+fn xxh3(data: &[u8]) -> Vec<u8> {
+    xxhash_rust::xxh3::xxh3_64(data).to_be_bytes().to_vec()
+}
+
+/// xxHash3 128-bit, big-endian bytes.
+fn xxh128(data: &[u8]) -> Vec<u8> {
+    xxhash_rust::xxh3::xxh3_128(data).to_be_bytes().to_vec()
+}
+
 /// Resolves a PHP hash() algorithm name to a freshly initialized `HashState`,
 /// or `None` if the algorithm is unsupported (caller maps to PHP ValueError).
 pub fn make(name: &str) -> Option<Box<dyn HashState>> {
@@ -226,6 +321,38 @@ pub fn make(name: &str) -> Option<Box<dyn HashState>> {
         "ripemd256" => digest_state::<Ripemd256>(64),
         "ripemd320" => digest_state::<Ripemd320>(64),
         "whirlpool" => digest_state::<whirlpool::Whirlpool>(64),
+        "tiger128,3" => library("tiger128,3", 16, 64),
+        "tiger160,3" => library("tiger160,3", 20, 64),
+        "tiger192,3" => library("tiger192,3", 24, 64),
+        "tiger128,4" => library("tiger128,4", 16, 64),
+        "tiger160,4" => library("tiger160,4", 20, 64),
+        "tiger192,4" => library("tiger192,4", 24, 64),
+        "snefru" => library("snefru", 32, 32),
+        "snefru256" => library("snefru256", 32, 32),
+        "gost" => library("gost", 32, 32),
+        "gost-crypto" => library("gost-crypto", 32, 32),
+        "haval128,3" => library("haval128,3", 16, 128),
+        "haval160,3" => library("haval160,3", 20, 128),
+        "haval192,3" => library("haval192,3", 24, 128),
+        "haval224,3" => library("haval224,3", 28, 128),
+        "haval256,3" => library("haval256,3", 32, 128),
+        "haval128,4" => library("haval128,4", 16, 128),
+        "haval160,4" => library("haval160,4", 20, 128),
+        "haval192,4" => library("haval192,4", 24, 128),
+        "haval224,4" => library("haval224,4", 28, 128),
+        "haval256,4" => library("haval256,4", 32, 128),
+        "haval128,5" => library("haval128,5", 16, 128),
+        "haval160,5" => library("haval160,5", 20, 128),
+        "haval192,5" => library("haval192,5", 24, 128),
+        "haval224,5" => library("haval224,5", 28, 128),
+        "haval256,5" => library("haval256,5", 32, 128),
+        "murmur3a" => buf(4, murmur3a),
+        "murmur3c" => buf(16, murmur3c),
+        "murmur3f" => buf(16, murmur3f),
+        "xxh32" => buf(4, xxh32),
+        "xxh64" => buf(8, xxh64),
+        "xxh3" => buf(8, xxh3),
+        "xxh128" => buf(16, xxh128),
         "crc32" => buf(4, crc32_bzip2),
         "crc32b" => buf(4, crc32b),
         "crc32c" => buf(4, crc32c),

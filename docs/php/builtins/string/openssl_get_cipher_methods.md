@@ -1,6 +1,6 @@
 ---
 title: "openssl_get_cipher_methods()"
-description: "Returns the supported OpenSSL cipher method names."
+description: "Returns PHP's OpenSSL 3.6.4 default-provider cipher method names."
 sidebar:
   order: 974
 ---
@@ -11,7 +11,7 @@ sidebar:
 function openssl_get_cipher_methods(bool $aliases = false): array
 ```
 
-Returns the supported OpenSSL cipher method names.
+Returns PHP's OpenSSL 3.6.4 default-provider cipher method names.
 
 **Parameters**:
 - `$aliases` (`bool`), default `false`, optional

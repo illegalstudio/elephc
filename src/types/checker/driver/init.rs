@@ -56,6 +56,7 @@ impl Checker {
             functions_called_directly: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
+            closure_param_hints: HashMap::new(),
             callable_sigs: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),

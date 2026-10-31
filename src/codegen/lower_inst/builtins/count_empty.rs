@@ -131,7 +131,7 @@ fn emit_non_countable_object_type_error(
 }
 
 /// Raises the `count()` TypeError naming `type_name`, exactly as php-src words it.
-fn emit_count_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
+pub(in crate::codegen) fn emit_count_type_error(ctx: &mut FunctionContext<'_>, type_name: &str) {
     super::exceptions::emit_type_error(ctx, &format!("{COUNT_TYPE_ERROR_PREFIX}{type_name} given"));
 }
 

@@ -157,6 +157,21 @@ fn lower_base_convert_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 
 /// Lowers `chunk_split(string, length?, separator?)` through the shared runtime helper.
 pub(crate) fn lower_chunk_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_chunk_split_impl(ctx, inst, "__rt_chunk_split")
+}
+
+/// Lowers the length-only `strlen(chunk_split(...))` helper with the same argument
+/// materialization and `$length >= 1` guard as the allocating form.
+pub(crate) fn lower_chunk_split_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_chunk_split_impl(ctx, inst, "__rt_chunk_split_len")
+}
+
+/// Shared `chunk_split` argument materialization, validation, and runtime call.
+fn lower_chunk_split_impl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    runtime_label: &str,
+) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
             "chunk_split expected 1 to 3 args, got {}",
@@ -179,7 +194,7 @@ pub(crate) fn lower_chunk_split(ctx: &mut FunctionContext<'_>, inst: &Instructio
         super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
         CHUNK_SPLIT_NON_POSITIVE_LENGTH_MESSAGE,
     );
-    abi::emit_call_label(ctx.emitter, "__rt_chunk_split");
+    abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }
 
@@ -361,6 +376,25 @@ pub(crate) fn lower_count_chars(ctx: &mut FunctionContext<'_>, inst: &Instructio
         COUNT_CHARS_MODE_MESSAGE,
     );
     abi::emit_call_label(ctx.emitter, "__rt_count_chars");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the allocation-free `count(count_chars($s, 1))` helper.
+pub(crate) fn lower_count_chars_distinct(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, "count_chars", 1, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "count_chars", "x1", "x2")?;
+            abi::emit_call_label(ctx.emitter, "__rt_count_chars_distinct");
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "count_chars", "rax", "rdx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_count_chars_distinct");
+        }
+    }
     store_if_result(ctx, inst)
 }
 

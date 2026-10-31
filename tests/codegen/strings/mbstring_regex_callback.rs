@@ -89,3 +89,23 @@ var_dump($calls);
         assert_eq!(compile_and_run(&program(source, eval)), "called\ncalled\nint(2)\n", "eval={eval}");
     }
 }
+
+/// Verifies the constant-returning callback rewrite to the string replacement form.
+///
+/// A capture-free callback returning a literal with no replacement backreferences is
+/// equivalent to `mb_ereg_replace()`. Backslashes and captured values must stay on the
+/// callback path so their result is not reinterpreted by the replacement engine.
+#[test]
+fn test_mbstring_regex_callback_constant_replacement_fold() {
+    let out = compile_and_run_with_heap_debug(r##"<?php
+echo mb_ereg_replace_callback("[0-9]+", fn($m) => "#", "abc123def456"), "|";
+echo mb_ereg_replace_callback("[0-9]+", function($m) { return "#"; }, "abc123def456"), "|";
+echo mb_ereg_replace_callback("[0-9]+", fn($m) => "\\1", "abc123"), "|";
+$prefix = "#";
+echo mb_ereg_replace_callback("[0-9]+", fn($m) => $prefix, "abc123"), "|";
+echo "\n";
+"##);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "abc#def#|abc#def#|abc\\1|abc#|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -154,6 +154,188 @@ fn test_stack_numeric_reduction_is_heap_clean_and_allocation_bounded() {
     );
 }
 
+/// A numeric accumulator observed only through its final string form keeps its frame cell.
+///
+/// `echo $sum` casts the boxed slot to string at the loop exit. That read must not disqualify
+/// the producer's frame cell, or the loop falls back to the allocating runtime numeric helper.
+#[test]
+fn test_stack_numeric_string_observation_keeps_allocation_bounded() {
+    let source = r#"<?php
+function local_sum_text(int $n): void {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $i;
+    }
+    echo $sum . "|";
+}
+local_sum_text($argc * 1000);
+"#;
+    let large = run(source, true);
+    assert_eq!(large.0, "499500|");
+    let (large_allocs, large_frees) = parse_gc_stats(&large.1);
+    assert_eq!(large_allocs, large_frees, "every numeric owner is retired");
+    let small = run(&source.replace("* 1000", "* 10"), true);
+    assert_eq!(small.0, "45|");
+    let (small_allocs, _) = parse_gc_stats(&small.1);
+    assert!(
+        large_allocs.abs_diff(small_allocs) <= 8,
+        "the loop must not allocate per iteration: small={small_allocs}, large={large_allocs}"
+    );
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized).0, "499500|");
+    }
+}
+
+/// A scalarized counter feeds a boxed accumulator without allocating a rhs Mixed box.
+#[test]
+fn test_stack_numeric_scalar_rhs_avoids_boxing_in_boxed_accumulator() {
+    let source = r#"<?php
+function sum_echo(int $n): void {
+    $sum = 0;
+    $i = 0;
+    while ($i < $n) {
+        $sum += $i;
+        $i += 1;
+    }
+    echo $sum, "|";
+}
+sum_echo($argc + 1000);
+"#;
+    let dir = make_cli_test_dir("elephc_stack_numeric_scalar_rhs");
+    let path = dir.join("main.php");
+    fs::write(&path, source).unwrap();
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit-asm"]);
+    let output = command.arg(&path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+    let function = asm
+        .split("@fn name=sum_echo")
+        .nth(1)
+        .expect("sum_echo assembly")
+        .split("@fn ")
+        .next()
+        .unwrap();
+    let body = function
+        .split("@block name=while.body")
+        .nth(1)
+        .expect("loop body")
+        .split("@block name=while.exit")
+        .next()
+        .unwrap();
+    assert!(body.contains("__rt_mixed_numeric_add"), "{body}");
+    assert!(
+        !body.contains("__rt_mixed_from_value"),
+        "the scalar rhs must not be boxed:\n{body}"
+    );
+    assert_eq!(run(source, true).0, "500500|");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A TaggedScalar array element narrows to null-as-zero int and keeps the accumulator cell.
+#[test]
+fn test_stack_numeric_tagged_scalar_rhs_uses_frame_cell() {
+    let source = r#"<?php
+function sum_tagged_rhs(int $n): void {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i % 97;
+        $i += 1;
+    }
+    $sum = 0;
+    $i = 0;
+    while ($i < count($data)) {
+        $sum += $data[$i];
+        $i += 1;
+    }
+    echo $sum . "|" . $i;
+}
+sum_tagged_rhs($argc + 9);
+"#;
+    let dir = make_cli_test_dir("elephc_stack_numeric_tagged_rhs");
+    let path = dir.join("main.php");
+    fs::write(&path, source).unwrap();
+    let mut command = elephc_cli_command(&dir);
+    command.args(["--emit-asm"]);
+    let output = command.arg(&path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+    let function = asm
+        .split("@fn name=sum_tagged_rhs")
+        .nth(1)
+        .expect("sum_tagged_rhs assembly")
+        .split("@fn ")
+        .next()
+        .unwrap();
+    let body = function
+        .split("@block name=while.body")
+        .find(|body| body.contains("op=array_get"))
+        .expect("array sum loop body");
+    assert!(body.contains("op=cast"), "the element must narrow to int:\n{body}");
+    assert!(
+        body.contains("stack_numeric_integer"),
+        "the accumulator must keep its frame cell:\n{body}"
+    );
+    assert!(
+        !body.contains("__rt_mixed_from_value") && !body.contains("__rt_mixed_numeric_add"),
+        "the narrowed element must stay out of the boxed numeric helper:\n{body}"
+    );
+    assert!(
+        body.contains("numeric_local_cleanup_done"),
+        "the numeric slot retirement must recognize its frame cell:\n{body}"
+    );
+    let condition = function
+        .split("@block name=while.cond")
+        .find(|block| block.contains("op=runtime_call"))
+        .expect("count condition");
+    let count_at = condition.find("op=runtime_call").expect("count lowering");
+    let window_start = condition[..count_at].rfind("@src").unwrap_or(0);
+    assert!(
+        !condition[window_start..count_at].contains("_php_diagnostic_line"),
+        "a typed-array count must not publish a diagnostic site:\n{condition}"
+    );
+    assert_eq!(run(source, true).0, "45|10");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+/// A missing int element is null-as-zero, and a tagged scalar sum still promotes to float.
+#[test]
+fn test_stack_numeric_tagged_scalar_null_and_overflow_match_php() {
+    let source = r#"<?php
+function sum_sparse(int $n): void {
+    $data = [1, 2];
+    $data[4] = 3;
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += @$data[$i];
+    }
+    echo gettype($sum), ':', @(int)$sum, '|';
+}
+function sum_overflow(int $n): void {
+    $data = [PHP_INT_MAX, 1];
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $data[$i];
+    }
+    echo gettype($sum), ':', @(int)$sum, '|';
+}
+sum_sparse($argc + 4);
+sum_overflow($argc + 1);
+"#;
+    let expected = "integer:6|double:-9223372036854775808|";
+    assert_eq!(run(source, false).0, expected);
+    assert_eq!(run(source, true).0, expected);
+}
+
 /// Escaping boxes, aliases, captures and a delayed snapshot keep independently owned values.
 #[test]
 fn test_stack_numeric_escaping_values_preserve_php_snapshots() {

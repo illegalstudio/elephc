@@ -90,9 +90,12 @@ pub fn emit_heap_free(emitter: &mut Emitter, eval_bridge: bool, mbstring: bool) 
     }
     if mbstring {
         // -- string identity belongs to the child buffer, never its Mixed wrapper --
-        emitter.instruction("ldrb w9, [x0, #-8]");                              // inspect the validated allocation kind after eval observers retire
-        emitter.instruction("cmp w9, #5");                                      // a Mixed wrapper cannot be a native string identity owner
+        emitter.instruction("ldr w9, [x0, #-8]");                               // inspect the validated allocation kind and identity flag after eval observers retire
+        emitter.instruction("and w10, w9, #0xff");                              // isolate the top-level heap kind from header flags
+        emitter.instruction("cmp w10, #5");                                     // a Mixed wrapper cannot be a native string identity owner
         emitter.instruction("b.eq __rt_heap_free_mbstring_done");               // let the separately owned string child retire its own identity
+        emitter.instruction(&format!("tst w9, #{}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // does this allocation carry native string identity metadata?
+        emitter.instruction("b.eq __rt_heap_free_mbstring_done");               // untracked strings skip the full bridge callback
         emitter.instruction("stp x0, x30, [sp, #-16]!");                        // preserve the freed pointer and caller return address across the metadata callback
         emitter.instruction("bl __rt_mbstring_ini_forget");                     // retire the string identity before allocator reuse
         emitter.instruction("ldp x0, x30, [sp], #16");                          // restore the frameless allocator's input and original return address
@@ -420,8 +423,12 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter, eval_bridge: bool, mbstrin
     }
     if mbstring {
         // -- string identity belongs to the child buffer, never its Mixed wrapper --
-        emitter.instruction("cmp BYTE PTR [rax - 8], 5");                       // inspect the validated allocation kind after eval observers retire
+        emitter.instruction("mov r10d, DWORD PTR [rax - 8]");                   // inspect the validated allocation kind and identity flag after eval observers retire
+        emitter.instruction("and r10d, 0xff");                                   // isolate the top-level heap kind from header flags
+        emitter.instruction("cmp r10d, 5");                                      // a Mixed wrapper cannot be a native string identity owner
         emitter.instruction("je __rt_heap_free_mbstring_done");                 // let the separately owned string child retire its own identity
+        emitter.instruction(&format!("test DWORD PTR [rax - 8], 0x{:x}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // does this allocation carry native string identity metadata?
+        emitter.instruction("jz __rt_heap_free_mbstring_done");                 // untracked strings skip the full bridge callback
         emitter.instruction("sub rsp, 8");                                      // align the identity-retirement call from the frameless entry
         emitter.instruction("call __rt_mbstring_ini_forget");                   // retire the string identity before allocator reuse
         emitter.instruction("add rsp, 8");                                      // restore the allocator's entry stack

@@ -437,6 +437,24 @@ fn literal_range(function: &Function, value: ValueId) -> Option<IntRange> {
 }
 
 /// Computes one instruction's integer interval from the current operand facts.
+/// Returns whether `slot` is the runtime-seeded `$argc` of the main function and is never
+/// assigned by user code. The process argument count is a non-negative C `int`.
+fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) -> bool {
+    if !function.flags.is_main {
+        return false;
+    }
+    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
+        return false;
+    };
+    if local.name.as_deref() != Some("argc") {
+        return false;
+    }
+    !function.instructions.iter().any(|inst| {
+        inst.op == Op::StoreLocal
+            && matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+    })
+}
+
 fn instruction_range(
     function: &Function,
     inst: &crate::ir::Instruction,
@@ -451,6 +469,12 @@ fn instruction_range(
         (Op::ConstI64, Some(Immediate::I64(value))) => Some(IntRange::point(*value)),
         (Op::ConstBool, Some(Immediate::Bool(value))) => {
             Some(IntRange::point(i64::from(*value)))
+        }
+        // The process argument count is a non-negative C `int`; seeding it lets range
+        // analysis prove the bounds of `$argc + constant` loop limits and their induction
+        // variables. A user assignment to `$argc` disqualifies the slot below.
+        (Op::LoadLocal, Some(Immediate::LocalSlot(slot))) if main_argc_slot(function, *slot) => {
+            Some(IntRange { lo: 0, hi: i64::from(i32::MAX) })
         }
         (Op::IAdd | Op::ICheckedAdd | Op::ICheckedAddToInt, _) => {
             checked_add(operand(0)?, operand(1)?).or_else(|| scalar_result_top(function, inst))

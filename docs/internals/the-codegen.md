@@ -173,8 +173,10 @@ closed numeric add/subtract/multiply or increment; every input must be proven
 integer or float, including all local writers. A float tag remains floating point
 on subsequent operations.
 Private slots in the executable main frame use the same lifetime proof; globals
-retain heap storage. Delayed reads, escaping consumers, aliases, references,
-`eval` and suspension fail the proof.
+retain heap storage. A string cast of the final value is an observation, not an
+escape: the formatter reads the tag and payload and numeric tags render into concat
+scratch without adopting the cell. Delayed reads, escaping consumers, aliases,
+references, `eval` and suspension fail the proof.
 
 Independent frame cells do not invalidate each other's borrowed reads. A same-block
 read must be consumed before its owning slot is stored or released, or before any
@@ -190,6 +192,11 @@ cleanup; neither the catch boundary nor the cleanup records are removed.
 Selected values use 24-byte `mixed` cells in the frame, without heap headers.
 `stack_numeric::placement` shares storage only between same-block temporaries
 whose payload observations do not overlap, following transparent retains/borrows.
+Retiring a proven numeric local compares the stored pointer with the selected
+frame cells: a frame-cell hit skips the heap refcount helper because the cell
+owns no child allocation, while a heap seed or any other pointer keeps the
+ordinary `__rt_decref_mixed` path. The comparison is bounded to four cells; a
+function with more numeric cells keeps the helper call.
 The last numeric consumer reads both inputs before writing, so its output may
 reuse an input cell at that boundary. Any value stored in a local, including a
 scoped operand owner, keeps dedicated storage. Groups never share across blocks.
@@ -323,6 +330,65 @@ Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
 `ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
 including when a key becomes boxed `Mixed` or the array is promoted to hash
 storage at runtime. Integral float keys convert without a deprecation.
+
+### Append dispatch and raw-int fast path
+
+Every indexed append reads the receiver's low metadata byte inline to select
+promoted hash storage instead of calling `__rt_heap_kind`. For a raw-int value,
+the append lowering then emits the helper's unique/int-shaped/capacity fast path
+inline: one refcount check, the length/capacity pair, the value-type nibble and a
+direct slot store. Null receivers, shared arrays, the first append into an empty
+array, full arrays and non-int value types jump to `__rt_array_push_int`, which
+keeps the existing COW split, shape specialization and growth behavior. The
+result remains the container pointer, so the ordinary local/global writeback is
+unchanged.
+
+### Typed-array reduction helper
+
+`ArraySumInt` lowers to `__rt_array_sum_int(array, start, end, seed)`. The helper
+walks the packed int payload once, starts from the borrowed seed cell's int or
+float payload, and mirrors PHP's left-to-right addition. The first `adds`
+overflow converts the running integer and the overflowing element to doubles;
+later elements are added as doubles. The final int or float is boxed into a fresh
+Mixed cell, while an empty range retains the seed cell. The helper runs no user
+code and does not warn.
+
+The `array_sum()` builtin keeps its generic boxed fold for associative, Mixed and
+float storage. Before installing its warning boundary it checks the source header:
+an indexed, 8-byte, int-valued packed array jumps to the raw-seed
+`__rt_array_sum_int_i64` entry and returns the boxed sum directly. Every other
+shape falls through to the iterator-based fold unchanged.
+
+### Leaf runtime calls
+
+A runtime call whose effect summary excludes throw, warn, fatal, output, refcount
+retirement and blocking/network I/O, and whose operands are neither callables nor
+objects, cannot re-enter PHP code. The block emitter therefore skips the
+diagnostic file/line publication and the backtrace frame setup for those calls.
+String search/transform helpers and typed array probes take this path; warning-
+or callback-capable helpers keep the existing publication.
+
+### Reserved typed-array append
+
+`ArrayPushReserved` is emitted only after the fill-loop pass sizes the receiver's
+initial `array_new` to the exact final element count. The receiver is unique,
+non-null, int-shaped and has spare capacity by construction, so lowering stores
+one payload word, advances the header length and returns without COW, growth,
+metadata checks or a source-local writeback. The generic `ArrayPush` path stays
+in place for runtime bounds, shared arrays, non-int values and every unproven
+fill loop.
+
+### Unchecked typed-array reads
+
+`ArrayGetUnchecked` carries the array-bounds proof from
+[the optimizer](the-optimizer.md#eir-typed-array-bounds-proof). It reads one raw
+int word from the packed payload at a fixed 24-byte header offset and stores the
+result as a plain PHP `int`. The op has no null sentinel, storage-kind dispatch,
+bounds branch, missing-key warning, or TaggedScalar materialization; the producer
+proved the receiver is a private, non-null, int-shaped indexed array and that the
+index is in `[0, length)` on every path that reaches the read. Inclusive bounds,
+mutable receivers, parameters and any non-cast consumer keep the guarded
+`ArrayGet` lowering.
 
 String indexing returns a null sentinel for a missing offset when lowered for
 `isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback

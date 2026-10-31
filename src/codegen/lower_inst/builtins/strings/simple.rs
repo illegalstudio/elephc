@@ -54,6 +54,13 @@ pub(crate) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instru
     store_if_result(ctx, inst)
 }
 
+/// Lowers the allocation-free `strlen(bin2hex(...))` helper.
+pub(crate) fn lower_bin2hex_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_single_string_arg(ctx, inst, "bin2hex")?;
+    abi::emit_call_label(ctx.emitter, "__rt_bin2hex_len");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `ucfirst()` by copying the string and uppercasing the first ASCII byte.
 pub(crate) fn lower_ucfirst(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "ucfirst")?;
@@ -104,9 +111,182 @@ pub(crate) fn lower_binary_string_runtime(
     name: &str,
     runtime_label: &str,
 ) -> Result<()> {
+    if try_lower_constant_prefix_suffix(ctx, inst, name)? {
+        return Ok(());
+    }
     load_binary_string_args(ctx, inst, name)?;
     abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
+}
+
+/// Inlines a short constant prefix/suffix comparison for `str_starts_with`/`str_ends_with`.
+///
+/// A literal needle of at most eight bytes fits in one register. A haystack of at least eight
+/// bytes is compared with one masked word load; shorter haystacks use a byte loop. Longer or
+/// dynamic needles keep the libc-backed runtime helper.
+fn try_lower_constant_prefix_suffix(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<bool> {
+    if name != "str_starts_with" && name != "str_ends_with" {
+        return Ok(false);
+    }
+    let haystack = expect_operand(inst, 0)?;
+    let needle = expect_operand(inst, 1)?;
+    if ctx.value_php_type(haystack)?.codegen_repr() != PhpType::Str {
+        return Ok(false);
+    }
+    let Some((data_id, bytes)) = constant_string_value(ctx, needle) else {
+        return Ok(false);
+    };
+    let length = bytes.len();
+    if length > 8 {
+        return Ok(false);
+    }
+    if length == 0 {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        return store_if_result(ctx, inst).map(|()| true);
+    }
+    let starts = name == "str_starts_with";
+    let mut padded = [0u8; 8];
+    padded[..length].copy_from_slice(&bytes);
+    let word = u64::from_le_bytes(padded);
+    let mask = if length == 8 { u64::MAX } else { (1u64 << (length * 8)) - 1 };
+    let shift = (8 - length) * 8;
+    let no = ctx.next_label("const_prefix_no");
+    let short = ctx.next_label("const_prefix_short");
+    let short_loop = ctx.next_label("const_prefix_short_loop");
+    let done = ctx.next_label("const_prefix_done");
+    let result = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(haystack, "x1", "x2")?;
+            ctx.emitter.instruction(&format!("cmp x2, #{}", length));           // does the haystack hold the full needle?
+            ctx.emitter.instruction(&format!("b.lt {}", no));                   // a shorter haystack cannot match
+            ctx.emitter.instruction("cmp x2, #8");                              // is one word load safe?
+            ctx.emitter.instruction(&format!("b.lt {}", short));                // short haystacks use the byte loop
+            if starts {
+                ctx.emitter.instruction("ldr x9, [x1]");                        // load the first haystack word
+                if length < 8 {
+                    abi::emit_load_int_immediate(ctx.emitter, "x10", mask as i64);
+                    ctx.emitter.instruction("and x9, x9, x10");                 // keep only the prefix bytes
+                }
+            } else {
+                ctx.emitter.instruction("sub x9, x2, #8");                      // address the final haystack word
+                ctx.emitter.instruction("add x9, x1, x9");                      // compute the suffix word address
+                ctx.emitter.instruction("ldr x9, [x9]");                        // load the final haystack word
+                if shift > 0 {
+                    ctx.emitter.instruction(&format!("lsr x9, x9, #{}", shift));// move the suffix to the low bytes
+                }
+            }
+            abi::emit_load_int_immediate(ctx.emitter, "x10", word as i64);
+            ctx.emitter.instruction("cmp x9, x10");                             // compare the masked haystack word
+            ctx.emitter.instruction(&format!("cset x0, eq"));                   // materialize the boolean result
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the byte-loop result
+            ctx.emitter.label(&short);
+            let (label, _) = ctx.intern_string_data(data_id)?;
+            abi::emit_symbol_address(ctx.emitter, "x3", &label);
+            if starts {
+                ctx.emitter.instruction("mov x5, #0");                          // start the short prefix at offset zero
+            } else {
+                ctx.emitter.instruction(&format!("sub x10, x2, #{}", length));  // start the short suffix at the tail
+                ctx.emitter.instruction("mov x5, #0");                          // start the short suffix index at zero
+            }
+            ctx.emitter.label(&short_loop);
+            if starts {
+                ctx.emitter.instruction("ldrb w6, [x1, x5]");                   // load the next haystack byte
+            } else {
+                ctx.emitter.instruction("add x11, x10, x5");                    // compute the suffix byte position
+                ctx.emitter.instruction("ldrb w6, [x1, x11]");                  // load the next suffix byte
+            }
+            ctx.emitter.instruction("ldrb w7, [x3, x5]");                       // load the matching needle byte
+            ctx.emitter.instruction("cmp w6, w7");                              // compare the bytes
+            ctx.emitter.instruction(&format!("b.ne {}", no));                   // a mismatch answers false
+            ctx.emitter.instruction("add x5, x5, #1");                          // advance the short comparison
+            ctx.emitter.instruction(&format!("cmp x5, #{}", length));           // has the whole needle been compared?
+            ctx.emitter.instruction(&format!("b.lt {}", short_loop));           // continue the short comparison
+            ctx.emitter.instruction("mov x0, #1");                              // a full short match answers true
+            ctx.emitter.instruction(&format!("b {}", done));                    // join the word-path result
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(haystack, "rdi", "rsi")?;
+            ctx.emitter.instruction(&format!("cmp rsi, {}", length));           // does the haystack hold the full needle?
+            ctx.emitter.instruction(&format!("jl {}", no));                     // a shorter haystack cannot match
+            ctx.emitter.instruction("cmp rsi, 8");                              // is one word load safe?
+            ctx.emitter.instruction(&format!("jl {}", short));                  // short haystacks use the byte loop
+            if starts {
+                ctx.emitter.instruction("mov r10, QWORD PTR [rdi]");            // load the first haystack word
+                if length < 8 {
+                    abi::emit_load_int_immediate(ctx.emitter, "r11", mask as i64);
+                    ctx.emitter.instruction("and r10, r11");                    // keep only the prefix bytes
+                }
+            } else {
+                ctx.emitter.instruction("mov r10, rsi");                        // copy the haystack length
+                ctx.emitter.instruction("sub r10, 8");                          // address the final haystack word
+                ctx.emitter.instruction("mov r10, QWORD PTR [rdi + r10]");      // load the final haystack word
+                if shift > 0 {
+                    ctx.emitter.instruction(&format!("shr r10, {}", shift));    // move the suffix to the low bytes
+                }
+            }
+            abi::emit_load_int_immediate(ctx.emitter, "r11", word as i64);
+            ctx.emitter.instruction("cmp r10, r11");                            // compare the masked haystack word
+            ctx.emitter.instruction("sete al");                                 // materialize equality in the low byte
+            ctx.emitter.instruction("movzx eax, al");                           // widen the boolean result
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the byte-loop result
+            ctx.emitter.label(&short);
+            let (label, _) = ctx.intern_string_data(data_id)?;
+            abi::emit_symbol_address(ctx.emitter, "rdx", &label);
+            if starts {
+                ctx.emitter.instruction("xor r10d, r10d");                      // start the short prefix at offset zero
+            } else {
+                ctx.emitter.instruction("mov r8, rsi");                         // copy the haystack length
+                ctx.emitter.instruction(&format!("sub r8, {}", length));        // start the short suffix at the tail
+                ctx.emitter.instruction("xor r10d, r10d");                      // start the short suffix index at zero
+            }
+            ctx.emitter.label(&short_loop);
+            if starts {
+                ctx.emitter.instruction("movzx eax, BYTE PTR [rdi + r10]");     // load the next haystack byte
+            } else {
+                ctx.emitter.instruction("lea r11, [r8 + r10]");                 // compute the suffix byte position
+                ctx.emitter.instruction("movzx eax, BYTE PTR [rdi + r11]");     // load the next suffix byte
+            }
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [rdx + r10]");        // load the matching needle byte
+            ctx.emitter.instruction("cmp eax, r11d");                           // compare the bytes
+            ctx.emitter.instruction(&format!("jne {}", no));                    // a mismatch answers false
+            ctx.emitter.instruction("add r10, 1");                              // advance the short comparison
+            ctx.emitter.instruction(&format!("cmp r10, {}", length));           // has the whole needle been compared?
+            ctx.emitter.instruction(&format!("jl {}", short_loop));             // continue the short comparison
+            ctx.emitter.instruction("mov eax, 1");                              // a full short match answers true
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // join the word-path result
+        }
+    }
+    ctx.emitter.label(&no);
+    abi::emit_load_int_immediate(ctx.emitter, result, 0);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst).map(|()| true)
+}
+
+/// Returns the data id and decoded bytes of a direct `ConstStr` value.
+fn constant_string_value(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Option<(crate::ir::DataId, Vec<u8>)> {
+    let ValueDef::Instruction { inst, .. } = ctx.function.value(value)?.def else {
+        return None;
+    };
+    let inst = ctx.function.instruction(inst)?;
+    if inst.op != Op::ConstStr {
+        return None;
+    }
+    let Some(Immediate::Data(data_id)) = inst.immediate else {
+        return None;
+    };
+    let string = ctx.module.data.strings.get(data_id.as_raw() as usize)?;
+    Some((
+        data_id,
+        elephc_builtin_contract::string_literal::literal_bytes(string),
+    ))
 }
 /// Describes how the first-byte ASCII case helper mutates matched characters.
 pub(super) enum FirstCharAdjust {

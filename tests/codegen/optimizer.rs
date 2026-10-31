@@ -11,8 +11,42 @@
 
 use crate::support::*;
 
+#[path = "optimizer/abs_int_sink.rs"]
+mod abs_int_sink;
+#[path = "optimizer/sqrt_add_int_sink.rs"]
+mod sqrt_add_int_sink;
+#[path = "optimizer/strpos_int_sink.rs"]
+mod strpos_int_sink;
+#[path = "optimizer/strstr_len_sink.rs"]
+mod strstr_len_sink;
+#[path = "optimizer/base64_decode_len_sink.rs"]
+mod base64_decode_len_sink;
+#[path = "optimizer/parse_url_count_sink.rs"]
+mod parse_url_count_sink;
+#[path = "optimizer/count_chars_count_sink.rs"]
+mod count_chars_count_sink;
+#[path = "optimizer/strip_tags_len_sink.rs"]
+mod strip_tags_len_sink;
+#[path = "optimizer/inet_pton_len_sink.rs"]
+mod inet_pton_len_sink;
+#[path = "optimizer/ip2long_int_sink.rs"]
+mod ip2long_int_sink;
+#[path = "optimizer/string_len_sink.rs"]
+mod string_len_sink;
+#[path = "optimizer/str_split_count_sink.rs"]
+mod str_split_count_sink;
+#[path = "optimizer/json_decode_count_sink.rs"]
+mod json_decode_count_sink;
+#[path = "optimizer/array_sum_int_sink.rs"]
+mod array_sum_int_sink;
+#[path = "optimizer/array_map_sum_add_int_sink.rs"]
+mod array_map_sum_add_int_sink;
+#[path = "optimizer/array_filter_count_hoist.rs"]
+mod array_filter_count_hoist;
 #[path = "optimizer/array_read_match.rs"]
 mod array_read_match;
+#[path = "optimizer/leaf_runtime_calls.rs"]
+mod leaf_runtime_calls;
 #[path = "optimizer/switch_fallthrough.rs"]
 mod switch_fallthrough;
 #[path = "optimizer/bcmath_number.rs"]

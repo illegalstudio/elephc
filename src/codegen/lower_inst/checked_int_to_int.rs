@@ -99,11 +99,23 @@ pub(super) fn lower_checked_int_to_int(
     let constant_index = immediate.as_ref().map(|usage| usage.constant_index);
     ctx.emit_cold_path(|ctx| {
         ctx.emitter.label(&overflow_label);
-        // `Immediate::Bool(true)` means an explicit `(int)` cast observed this value, and php's
-        // own answer there is the promoted double converted back to an int. Anything else means
-        // the narrowing came from a raw int SLOT, where php would have kept the float — so the
-        // program stops rather than print a number php never produces.
-        if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        // `Immediate::Data` is a declared-`int` return boundary: the promoted float must throw
+        // PHP's catchable TypeError with the boundary's message prefix. `Bool(true)` means an
+        // explicit `(int)` cast observed this value, and php's own answer there is the promoted
+        // double converted back to an int. Anything else means the narrowing came from a raw int
+        // SLOT, where php would have kept the float — so the program stops rather than print a
+        // number php never produces.
+        if let Some(Immediate::Data(data_id)) = &inst.immediate {
+            let prefix = ctx
+                .module
+                .data
+                .strings
+                .get(data_id.as_raw() as usize)
+                .cloned()
+                .unwrap_or_default();
+            let message = format!("{prefix}float returned");
+            super::exceptions::emit_type_error(ctx, &message);
+        } else if matches!(inst.immediate, Some(Immediate::Bool(true))) {
             if let Some(index) = constant_index {
                 load_integer_operand(ctx, inst.operands[index], rhs_reg, inst)?;
             }

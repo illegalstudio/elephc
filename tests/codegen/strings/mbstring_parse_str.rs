@@ -71,3 +71,27 @@ fn clean(source: &str, expected: &str) {
     assert_eq!(output.stdout, expected);
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Verifies the conservative literal-query fold, numeric/string consumers, and the fallback
+/// for percent-encoded queries and array-count observers.
+#[test]
+fn test_mbstring_parse_str_literal_fold() {
+    clean(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 3; $i++) {
+    mb_parse_str("a=1&b=2", $out);
+    $n ^= ($out["a"] + $i);
+}
+echo $n, "|";
+mb_parse_str("a=1&b=2", $out);
+var_dump($out["a"], $out["b"]);
+echo mb_parse_str("a=1&b=2", $out2) ? "true" : "false", "|";
+mb_parse_str("a=%31", $out);
+echo $out["a"], "|";
+mb_parse_str("a=1&b=2", $counted);
+echo count($counted), "|";
+"#,
+        "0|string(1) \"1\"\nstring(1) \"2\"\ntrue|1|2|",
+    );
+}

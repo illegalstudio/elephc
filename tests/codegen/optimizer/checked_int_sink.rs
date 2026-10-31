@@ -80,9 +80,13 @@ buffer_free($values);
         "three indices plus the loaded-value increment start boxed"
     );
     assert_eq!(optimized.matches("= ichecked_add ").count(), 0);
+    // The `$argc` C-int range seed lets the shared index arithmetic use a plain
+    // `iadd`; the loaded-value increment stays checked. CSE still shares one
+    // index expression, so exactly two scalar adds remain.
+    let scalar_adds = optimized.matches("= iadd ").count()
+        + optimized.matches("= ichecked_add_to_int ").count();
     assert_eq!(
-        optimized.matches("= ichecked_add_to_int ").count(),
-        2,
+        scalar_adds, 2,
         "CSE shares one index expression while the value increment remains distinct"
     );
     assert_eq!(compile_and_run(source), "1");
@@ -114,7 +118,12 @@ buffer_free($values);
 
     assert!(unoptimized.contains("while.body:"));
     assert!(unoptimized.contains("= ichecked_add "));
-    assert!(preheader.contains("= ichecked_add_to_int "));
+    // The `$argc` C-int range seed lets integer range analysis replace the
+    // checked add with a plain `iadd`; the LICM provenance is the invariant.
+    assert!(
+        preheader.contains("= iadd ") || preheader.contains("= ichecked_add_to_int "),
+        "{preheader}"
+    );
     assert!(preheader.contains("origin: licm"));
     // The loop counter's own `$i++` is scalar as well, so an `ichecked_add_to_int` in the
     // body is expected and says nothing about hoisting. What must not be there is the

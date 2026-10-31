@@ -97,6 +97,9 @@ relative-to = "target"
 path = "debug/libelephc_crypto.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_openssl.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_bcmath.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -181,6 +184,28 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::nested_property_defaults::test_core_.*owners_release$/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 
+# The EIR example corpus lowers every example in-process. It now runs about 240s on a
+# fast host and crossed the 180s retry budget on a Linux x86_64 shard; a bounded 300s
+# period keeps a real hang detectable without dropping the corpus from the suite.
+[[profile.default.overrides]]
+filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+# `method_receiver_roots_respect_later_eval_on_all_targets` lowers and eval-checks the
+# same program for every supported target. It reached 161s and timed out twice on a loaded
+# Linux x86_64 non-codegen shard, so give it the all-targets budget.
+[[profile.default.overrides]]
+filter = 'test(method_receiver_roots_respect_later_eval_on_all_targets)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(method_receiver_roots_respect_later_eval_on_all_targets)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
 # The `ir_backend_parity` first-class-callable case bundles 15 legacy-vs-EIR
 # parity programs (several link the PCRE staticlib), each compiled and run twice.
 # It legitimately runs ~65-70s, just over the global 60s cap, so it needs a
@@ -194,14 +219,14 @@ filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # This debug-range check lowers and emits the same program for all five supported targets.
-# It takes about 37s on local x86_64 and exceeded the 60s cap on a loaded ARM64 runner.
+# It reached 165s and timed out at the 180s budget on a loaded Linux x86_64 shard.
 [[profile.default.overrides]]
 filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
-slow-timeout = { period = "180s", terminate-after = 1 }
+slow-timeout = { period = "300s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(native_debug_ranges_stay_in_their_function_sections_on_all_targets)'
-slow-timeout = { period = "180s", terminate-after = 1 }
+slow-timeout = { period = "300s", terminate-after = 1 }
 
 # Every `extension_loaded_tests` fixture compiles and links a whole program in an isolated
 # cold cache, most of them force-loading the PDO and/or mysqli surface and its static
@@ -235,16 +260,18 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 
 # Core eval GC fixtures use opaque eval and link Magician just like codegen::eval.
 # Collection comparisons and heap-debug/tagged controls often compile twice.
-# Multiple macOS runs have exceeded 60s in different members of this same family.
-# Give the whole named family the existing eval budget, not unrelated AOT/GC tests.
-# The compiled-program watchdog remains 60s independently of this outer budget.
+# Multiple macOS runs have exceeded 60s in different members of this same family,
+# and two members reached the old three-period cap (180s) on both attempts once a
+# loaded shared runner packed the shard with 31 slow tests. Give the whole named
+# family six periods, not unrelated AOT/GC tests. The compiled-program watchdog
+# remains 60s independently of this outer budget.
 [[profile.default.overrides]]
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 6 }
 
 [[profile.ci.overrides]]
 filter = 'binary(codegen_tests) and test(/^codegen::runtime_gc::[^:]+::test_core_eval_/)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 6 }
 
 # The standalone `eval_*` integration binaries (object handles, resource ids,
 # string interpolation) link Magician for every program they compile, exactly
@@ -356,14 +383,17 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 # These environment probes compile eval-capable web hosts. The computed-name
 # regression needs three separate programs, since one literal eval target would
-# otherwise retain the environment for every case. It took 90s locally.
+# otherwise retain the environment for every case. It measured 282s locally with
+# the loop-invariant mbstring pass, and the shared PR-tier macOS runners can be
+# several times slower; twenty periods keep a real hang bounded while letting the
+# first attempt finish instead of spending the job budget on retries.
 [[profile.default.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
-slow-timeout = { period = "60s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.ci.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_computed_eval_retains_population)'
-slow-timeout = { period = "60s", terminate-after = 6 }
+slow-timeout = { period = "60s", terminate-after = 20 }
 
 [[profile.default.overrides]]
 filter = 'binary(web_tests) and test(=environment::web_environment_opaque_eval_retains_population)'
@@ -445,6 +475,16 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(lowers_examples_corpus)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# The opaque-eval demand probe compiles the whole builtin catalog; ~19s alone locally and
+# over the global 60s cap on a loaded non-codegen shard. A hang still terminates at 180s.
+[[profile.default.overrides]]
+filter = 'test(opaque_evals_demand_everything)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(opaque_evals_demand_everything)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 # These eval/codegen regression tests intentionally exercise several complete

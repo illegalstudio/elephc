@@ -663,6 +663,190 @@ float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the
 complete expression at each cast and removes the now-unobserved boxed storage.
 
+## Loop-invariant array caches
+
+`src/ir_passes/array_sum_int_bounds.rs` proves a raw `array_sum()` receiver is a
+non-escaping PHP local that is neither written, unset nor observed by another in-loop
+load, then inserts `ArraySumProbeSmall` in the loop preheader. The probe returns the
+exact non-negative 32-bit sum or `PHP_INT_MIN`; the loop call becomes
+`ArraySumIntCached`, which returns the cached sum on success and keeps the exact guarded
+reducer (including warned float-to-int casts) on the sentinel path. Dynamic eval,
+generators and fibers keep the per-iteration call.
+
+`src/ir_passes/array_filter_count_hoist.rs` applies the same immutability proof to the pure
+fused `count(array_filter($ints, fn($x) => $x % C === 0))` kernel and moves the call to the
+preheader. `src/ir_passes/array_map_sum_cache.rs` inserts `ArrayMapSumProbeInt`, which
+performs the map and running sum with PHP's checked additions and returns `PHP_INT_MIN`
+when either step would promote. The loop call becomes `ArrayMapSumAddIntCached`, returning
+the cached integer or falling back to the raw kernel for warned float-to-int promotion.
+
+## EIR cast-observed integer sinks
+
+`src/ir_passes/array_sum_int_sink.rs` handles a builtin `array_sum()` over a
+statically packed `array<int>` when its boxed result is observed only through
+one `(int)` cast (plus ordinary release scaffolding). The pass retargets the
+call to `ArraySumInt`, changes the result to a raw `I64`/`int`/`NonHeap` value,
+replaces the cast result with the call result, and neutralizes the cast and
+releases. The raw reducer keeps the same NEON/SSE2 positive-int gate and scalar
+promotion sequence; a promoted sum terminates in PHP's warned float-to-int
+conversion. Any other observer — echo, a store, a second cast, a call, or a
+terminator — keeps the boxed `array_sum()` call.
+
+`src/ir_passes/array_sum_int_direct.rs` then removes the temporary-owner scaffold
+around an `ArraySumInt` call when its receiver is a stable, non-address-escaping PHP
+local. The source load becomes the reducer operand and the acquire, hidden-temporary
+store, call-operand owner push/pop and both temporary-slot releases are neutralized;
+the hidden slot is reclassified as a borrowed temp. A reference alias, an intervening
+source write or any foreign temporary-slot use keeps the original scaffold.
+
+`src/ir_passes/array_map_sum_add_int_sink.rs` applies the cast-observed rule to the
+frozen `array_sum(array_map(fn($x) => $x + C, $packedInts))` lowering. The boxed
+`ArrayMapSumAdd` call becomes `ArrayMapSumAddInt`, the cast result replaces the call
+result, and the cast/release scaffolding is retired. The raw kernel shares the
+existing vector/scalar body but skips the Mixed box; a promoted map or running sum
+terminates in PHP's warned float-to-int conversion.
+
+`src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
+When the operand is a concrete int, bool, or null-capable tagged scalar and the
+boxed result is observed only through one `(int)` cast, the call becomes
+`AbsInt`: in-range values return the raw magnitude, while `INT_MIN` still
+promotes to the float `2^63` and terminates in PHP's warned float-to-int
+conversion. Floats and general Mixed operands keep the boxed `abs()` call.
+
+`src/ir_passes/sqrt_add_int_sink.rs` fuses `(int)sqrt($a + $b)` when both addends are
+concrete PHP ints, the boxed `ichecked_add` result is observed only by the `sqrt()`
+call, and the square root keeps the cast-only observation rule. The call becomes
+`SqrtAddInt` over the two raw addends, which reproduces PHP's checked-add overflow
+promotion, the NAN warning for a negative sum, and truncation toward zero. A float
+addend, another observer of the sum, or a non-cast observer of the root keeps the
+boxed graph.
+
+`src/ir_passes/json_decode_count_sink.rs` folds `count(json_decode($s, true))` into
+`JsonDecodeCount` when the decoded Mixed graph has no other observer. The decode
+must have exactly two operands with an associative flag constant `true`; the decode
+result may be observed only by the count call, one temporary-slot store, one release
+and that slot's owner/unset scaffolding. The decode call itself is retargeted to
+`JsonDecodeCount` with the same source and assoc operands; every use of the count
+result is replaced by the decoder result, and the separate count call, decoded store,
+owner pushes/pops, unset and pre-store retirement are retired. Because the count runs
+at the decode call site, both stable locals and temporary sources are safe. When the
+source is a `Mixed` local cast to string, the sink also follows the cast/acquire chain
+back to the original load, so the helper's boxed-source loader borrows the string
+payload instead of materializing a per-call cast copy. The runtime
+validates the whole document, counts a top-level array by skipping values or a
+top-level object by deduplicating plain non-numeric keys, raises PHP's exact
+`count()` TypeError for scalar/invalid roots, and falls back to the full decoder for
+numeric roots and escaped/numeric keys.
+
+`src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`, `stripos()`,
+`strrpos()` and `strripos()`. The search keeps its original arguments, offsets,
+coercion and `ValueError` behavior; only the result representation changes from
+the boxed `int|false` cell to a raw `I64` `int`, where the not-found sentinel
+becomes `0` exactly like PHP's `(int)false`. A strict-false comparison, echo,
+store or any other observer keeps the boxed call.
+
+`src/ir_passes/strstr_len_sink.rs` folds `strlen(strstr(...))` into the
+allocation-free `StrstrLen` helper. The boxed result may be observed only by one
+`Cast` to `Str`, that cast by one `str_len`, plus release scaffolding. The
+helper runs the same search, returns the prefix or suffix byte count, and maps a
+missing needle to `strlen(false) == 0`. The pass also retires the haystack
+lifetime pin and hidden temporary slot that the boxed call needed, so the loop
+does not copy or refcount the subject per iteration. A `=== false` check or any
+string use keeps the boxed call.
+
+`src/ir_passes/json_encode_len_sink.rs` removes the Mixed boxing and string-cast
+copies from `strlen((string) json_encode($value))`. The encoder still runs with its
+original flags, depth, `json_last_error` state and throws; only the result becomes
+the encoder's raw string, which one `str_len` consumes immediately and one release
+frees (a scratch-backed result is a no-op). A JSON error without
+`JSON_PARTIAL_OUTPUT_ON_ERROR` becomes the empty string, exactly like
+`(string) false`, so the observed length stays zero. Any other observer keeps the
+boxed call.
+
+`src/ir_passes/strpos_int_sink.rs` also folds an `(int)ip2long(...)` observation into
+the raw integer parser; an invalid address becomes zero, matching PHP's `(int)false`.
+A value observation keeps the boxed `int|false` result.
+
+`src/ir_passes/inet_pton_len_sink.rs` folds `strlen(inet_pton(...))` into the
+length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IPv6
+return 4/16, while an invalid address returns zero for `strlen(false)`. A value
+observation, including an `=== false` check, keeps the boxed helper.
+
+`src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
+count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
+allow-list exactly once, including array/Mixed coercion and strict `TypeError`s,
+but returns the retained byte count instead of publishing and persisting the
+output. Any non-length observer keeps the allocating helper.
+
+`src/ir_passes/count_chars_count_sink.rs` folds `count(count_chars($s, 1))` into
+`CountCharsDistinct`, which scans the subject into a 256-bit presence map and
+returns the distinct byte count without building the tally hash.
+
+`src/ir_passes/parse_url_count_sink.rs` folds `count(parse_url(...))` into
+`ParseUrlCount`. Only the full-array form is eligible: the runtime parser runs in a
+count-only mode that returns the component bit count, and an invalid URL returns
+status zero so the lowering raises PHP's count `TypeError`. Component-selector
+calls keep the ordinary parser because their result is a scalar or null.
+
+`src/ir_passes/base64_decode_len_sink.rs` folds `strlen(base64_decode(...))` into
+`Base64DecodedLen`. The helper counts accepted sextets, ignores whitespace and lax
+invalid bytes, and reproduces strict-mode padding rejection; a rejected decode answers
+zero like `strlen(false)`. The encoded-string lifetime pin and hidden slot are retired.
+
+`src/ir_passes/str_split_count_sink.rs` folds `count(str_split(...))` into the
+allocation-free `StrSplitCount` helper when the temporary array is observed only by
+`count()` and release scaffolding. The helper keeps the same source/chunk operands
+and `$length >= 1` guard, and returns `ceil(len / chunk_len)` (zero for an empty
+source). The source lifetime pin and hidden array slot are retired.
+
+`src/ir_passes/string_len_sink.rs` removes a hash/encoding/case conversion whose
+bytes are never observed. When a one-argument `md5()`, `base64_encode()`,
+`strtolower()` or `strtoupper()` call receives an already-materialized PHP string
+and its result feeds only one `str_len` (plus release scaffolding), the length
+observer becomes the constant `32` for md5, `4 * ceil(len / 3)` via
+`Base64EncodedLen` for base64, or the source `str_len` for ASCII case conversion
+(byte length is unchanged). The same fold covers `ucfirst()`, `lcfirst()`,
+`ucwords()` and the three-argument `strtr()`: their byte length is invariant, so
+the subject's `str_len` replaces the transform and the transform's argument pin
+and hidden slot are retired. `chunk_split()` uses `ChunkSplitLen`, which computes
+`subject_len + max(1, ceil(subject_len / chunk_len)) * separator_len` and reports
+the same allocation-overflow fatal as the allocating helper. `bin2hex()` folds to
+`Bin2HexLen`, which returns `2 * subject_len` with the same overflow guard.
+`count(str_split(...))` uses `StrSplitCount`, which returns
+`ceil(subject_len / chunk_len)` without allocating the chunk array. The source
+lifetime pin and hidden slot are retired for both sinks. The operand
+evaluation and its side effects remain; the binary `md5(..., true)` form,
+non-string operands, the replacement-pair `strtr()` form and any other observer
+keep the real call.
+
+## Borrowed string reads
+
+`src/ir_lower/expr/borrowed_string_args.rs` admits read-only string subjects for
+`substr()`, `substr_count()`, `strpos()`, `stripos()`, `strrpos()`, `strripos()`,
+`str_contains()`, `str_starts_with()` and `str_ends_with()` when every argument is
+an exact scalar and cannot run user code. Those calls borrow the subject directly
+instead of acquiring and releasing a per-call owner, which is why the reverse and
+case-insensitive searches now run at the same speed as `strpos()` and no longer
+carry a hidden string copy into the loop. Property receivers and named arguments
+use the same planner and remain eligible; a spread, default expression or
+user-code argument falls back to the ordinary owner ledger.
+
+## Performance regression guards
+
+The optimized string paths are pinned by deterministic IR assertions rather than
+wall-clock thresholds: `tests/codegen/optimizer/strpos_int_sink.rs` checks the raw
+integer variants for all four searches, `strstr_len_sink.rs` checks the length helper
+and the absence of the haystack owner pin, and `string_len_sink.rs` checks the
+length-only folds for `strtr`, `chunk_split`, the case transforms and `ucwords`.
+These tests run in the normal suite, so a lost sink or a reintroduced boxing
+temporary fails CI even when functional output stays correct.
+
+`tests/codegen/perf_regressions.rs` adds opt-in wall-clock ceilings for the same
+paths. It is ignored by default because runner speed varies; run it explicitly with
+`cargo test --test codegen_tests perf_regressions -- --ignored` (use a release
+build locally for the closest numbers). The ceilings are deliberately loose and
+catch order-of-magnitude regressions rather than small timing noise.
+
 ## EIR buffer resolution hoisting
 
 `src/ir_passes/buffer_access.rs` runs once after the module fixed point (and
@@ -1213,10 +1397,11 @@ acquire/release cancellation, string-literal concat folding, redundant
 `move`/`borrow` cleanup), then scalar local promotion into SSA values with block
 parameters at joins and loop back edges, then immutable concrete numeric-local
 classification and integer-sink specialization for checked add/subtract/multiply.
-Immutable-load classification also covers concrete float locals. It refines integer
-loads only in functions with checked integer arithmetic and float loads only in
-functions with float arithmetic, so identical generic bodies stay identical for
-shape merging. It accepts an
+Immutable-load classification also covers concrete float and string locals. It
+refines integer loads only in functions with checked integer arithmetic, float
+loads only in functions with float arithmetic, and string loads only in functions
+with a whitelisted explicit-UTF-8 mbstring call, so identical generic bodies stay
+identical for shape merging. It accepts an
 unwritten by-value parameter or one entry-block store that dominates every load,
 and rejects by-reference aliases, dynamic `eval`, other storage representations,
 and any unrecognized slot operation. Those passes make proven-stable integer and
@@ -1236,8 +1421,22 @@ is shared with canonical loop optimization, which exposes invariant header value
 coalesces counters with identical overflow semantics, and simplifies integer tests.
 LICM moves invariant bounds and step materializations from blocks that dominate
 every loop latch. Conditional constants stay near varying uses unless they
-accompany an invariant computation. Branch cleanup composes SSA forwarding
-arguments and merges single-predecessor loop update blocks. See
+accompany an invariant computation. LICM also moves a reviewed set of
+explicit-UTF-8 mbstring reads — `mb_strlen`, `mb_strwidth`,
+`mb_check_encoding`, `mb_substr_count`, `mb_ord`, the position searches, and the
+allocation-free length/count variants produced by the length sinks — when their
+arguments make them total and deterministic. It requires a literal `UTF-8`
+encoding, a literal zero offset where the function validates a range, a
+non-empty literal needle or `mb_ord` subject where an empty argument would
+throw, and a loop with no other global writer except the concatenation scratch
+reset. An owned `mb_substr`/`mb_strcut` result observed only by `strlen` moves
+as one group with its length observer and single release, so the loop body reads
+only the scalar length and no per-iteration allocation survives. An extra
+observer keeps the producer and release in the loop. A numeric-entity length call
+whose map operand is the literal full decimal packed array
+`[0x80, 0x10FFFF, 0, 0x1FFFFF]` moves with the subject and map loads; the proof
+follows the load, store, and four array-push chain and rejects any other map. Branch cleanup composes SSA
+forwarding arguments and merges single-predecessor loop update blocks. See
 [Canonical Loop Optimization](the-ir.md#canonical-loop-optimization).
 
 CFG states store only nonredundant path facts. Immutable scalar literals are read

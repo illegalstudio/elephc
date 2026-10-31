@@ -10,6 +10,10 @@
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
 
+#[path = "runtime_gc/mixed_inc_dec_in_place.rs"]
+mod mixed_inc_dec_in_place;
+#[path = "runtime_gc/case_transform_owners.rs"]
+mod case_transform_owners;
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
 #[path = "runtime_gc/borrowed_string_reads.rs"]

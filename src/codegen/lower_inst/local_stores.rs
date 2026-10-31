@@ -724,6 +724,33 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
     store_value_to_raw_ref_cell_as(ctx, slot, value, target_ty, previous)
 }
 
+/// Returns whether `value` is an owned in-place `++`/`--` result.
+///
+/// The increment helper may mutate a unique heap cell and return that same pointer with one
+/// fresh owner. Ownership wrappers (acquire/move/borrow/ensure-owned) are followed so the
+/// ref-cell store can distinguish that new owner from a republished container alias.
+fn value_is_in_place_increment(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<bool> {
+    if ctx.value_ownership(value)? != Ownership::Owned {
+        return Ok(false);
+    }
+    for _ in 0..8 {
+        let Some(inst) = instruction_for_value(ctx, value)? else {
+            return Ok(false);
+        };
+        match inst.op {
+            Op::StrIncDec => return Ok(true),
+            Op::Acquire | Op::Move | Op::Borrow | Op::EnsureOwned => {
+                let Some(&source) = inst.operands.first() else {
+                    return Ok(false);
+                };
+                value = source;
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(false)
+}
+
 /// Writes through a borrowed address or a managed cell whose payload uses the declared shape.
 fn store_value_to_raw_ref_cell_as(
     ctx: &mut FunctionContext<'_>,
@@ -746,6 +773,10 @@ fn store_value_to_raw_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
+    // `StrIncDec` may update a unique cell in place and return that same pointer with a
+    // fresh owner for this store. The pointer-equality short-circuit below assumes a
+    // same-pointer store republishes the cell's existing owner, so it must not apply here.
+    let in_place_increment = value_is_in_place_increment(ctx, value)?;
     let retires_previous = previous == RefCellStorePrevious::Retire
         && (matches!(target_ty, PhpType::Str | PhpType::Callable) || target_ty.is_refcounted());
     if retires_previous {
@@ -813,22 +844,24 @@ fn store_value_to_raw_ref_cell_as(
             pointer_reg,
             0,
         );
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!(                               // did this store replace the cell's occupant at all?
-                    "cmp {}, {}",
-                    abi::int_result_reg(ctx.emitter),
-                    old_reg
-                ));
-                ctx.emitter.instruction(&format!("b.eq {published}"));          // the same object stays owned by the cell
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!(                               // did this store replace the cell's occupant at all?
-                    "cmp {}, {}",
-                    abi::int_result_reg(ctx.emitter),
-                    old_reg
-                ));
-                ctx.emitter.instruction(&format!("je {published}"));            // the same object stays owned by the cell
+        if !in_place_increment {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!(                           // did this store replace the cell's occupant at all?
+                        "cmp {}, {}",
+                        abi::int_result_reg(ctx.emitter),
+                        old_reg
+                    ));
+                    ctx.emitter.instruction(&format!("b.eq {published}"));      // the same object stays owned by the cell
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!(                           // did this store replace the cell's occupant at all?
+                        "cmp {}, {}",
+                        abi::int_result_reg(ctx.emitter),
+                        old_reg
+                    ));
+                    ctx.emitter.instruction(&format!("je {published}"));        // the same object stays owned by the cell
+                }
             }
         }
         // Publish before retirement because object/callable cleanup can execute PHP code.

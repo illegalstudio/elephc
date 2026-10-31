@@ -40,6 +40,13 @@ fn aarch64(emitter: &mut Emitter, operation: &str) {
     for register in (0..32).step_by(2) {
         emitter.instruction(&format!("stp q{register}, q{}, [sp, #{}]", register + 1, 256 + register * 16));// preserve the full vector register pair across Rust
     }
+    if matches!(operation, "fresh" | "persist") {
+        let pointer = if operation == "fresh" { "x1" } else { "x0" };
+        emitter.instruction(&format!("ldr w9, [{pointer}, #-8]"));             // load the allocation kind word before registering identity metadata
+        emitter.instruction(&format!("mov w10, #{}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // materialize the tracked-identity header flag
+        emitter.instruction("orr w9, w9, w10");                                 // mark this allocation as carrying mbstring identity metadata
+        emitter.instruction(&format!("str w9, [{pointer}, #-8]"));             // publish the flag so the free path can skip untracked strings
+    }
     if matches!(operation, "fresh" | "literal") {
         emitter.instruction("mov x0, x1");                                      // pass the native string result pointer after preserving all live registers
         emitter.instruction("mov x1, x2");                                      // pass its exact logical byte length to the origin registry
@@ -86,6 +93,10 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
     emitter.instruction("and rsp, -16");                                        // repair either allocator leaf stack phase for a SysV C call
     for register in 0..16 {
         emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{register}", register * 16));// preserve each complete vector value before calling Rust
+    }
+    if matches!(operation, "fresh" | "persist") {
+        let pointer = if operation == "fresh" { "rax" } else { "rax" };
+        emitter.instruction(&format!("or QWORD PTR [{pointer} - 8], 0x{:x}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // mark this allocation as carrying mbstring identity metadata
     }
     if operation != "reset" {
         emitter.instruction("mov rdi, rax");                                    // pass the native owner or destination allocation to C

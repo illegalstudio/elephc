@@ -329,10 +329,10 @@ routing and web transport verification remain open.
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
-| `openssl_encrypt()` | `openssl_encrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", &$tag = null, $aad = "", $tag_length = 16): string\|false` | Encrypt data with a supported AES CBC, CTR, ECB, or GCM cipher. |
-| `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and, for GCM, authenticate data with the supplied tag and AAD. |
+| `openssl_encrypt()` | `openssl_encrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", &$tag = null, $aad = "", $tag_length = 16): string\|false` | Encrypt data with a cipher from the OpenSSL 3.6.4 default-provider catalog. |
+| `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and authenticate AEAD data with the supplied tag and AAD. |
 | `openssl_cipher_iv_length()` | `openssl_cipher_iv_length($cipher_algo): int\|false` | Return the default IV length for a supported cipher. |
-| `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return the exact cipher matrix implemented by elephc. |
+| `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return PHP's 135-name OpenSSL 3.6.4 default-provider cipher catalog. |
 | `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` always, `"` under `ENT_COMPAT`, `'` under `ENT_QUOTES`; `ENT_NOQUOTES` leaves both quotes literal. The single quote is `&#039;` under `ENT_HTML401` and `&apos;` under `ENT_HTML5`, `ENT_XHTML` or `ENT_XML1`. The `ENT_*` flag constants are defined with PHP's values; `$encoding` is accepted but not applied |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
@@ -470,19 +470,27 @@ Known divergences:
 
 elephc implements `openssl_encrypt()`, `openssl_decrypt()`,
 `openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()` on both compiled
-and `eval()` paths. They use the pure-Rust `elephc-crypto` bridge and do not link
-the system OpenSSL library. Programs that do not use crypto builtins do not link
-the bridge.
+and `eval()` paths. The compiled AOT path links the managed `openssl-crypto`
+package — a libcrypto-only OpenSSL 3.6.4 build — through the `elephc-openssl`
+bridge and reports PHP's exact 135-name default-provider catalog. It does not use
+a system OpenSSL, and programs that do not use cipher builtins do not link
+libcrypto. Declare the package in the project manifest:
 
-The supported cipher list is intentionally smaller than stock PHP/OpenSSL and is
-exactly what `openssl_get_cipher_methods()` returns:
+```toml
+[native.dependencies]
+openssl-crypto = "3.6.4"
+zlib = "1.3.2"
+```
 
-| Mode | Supported names | Key bytes | IV bytes |
-|---|---|---:|---:|
-| CBC | `aes-128-cbc`, `aes-192-cbc`, `aes-256-cbc` | 16 / 24 / 32 | 16 |
-| CTR | `aes-128-ctr`, `aes-192-ctr`, `aes-256-ctr` | 16 / 24 / 32 | 16 |
-| ECB | `aes-128-ecb`, `aes-192-ecb`, `aes-256-ecb` | 16 / 24 / 32 | 0 |
-| GCM | `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm` | 16 / 24 / 32 | 12 by default |
+The AOT catalog is exactly what `openssl_get_cipher_methods()` returns: AES,
+ARIA, Camellia, ChaCha20, DES-EDE/EDE3, NULL, and SM4 in CBC, CTS, CFB/CFB1/CFB8,
+CTR, ECB, GCM, CCM, OCB, OFB, SIV, GCM-SIV, wrap, and XTS modes, plus the
+AES-CBC-HMAC composite entries. The legacy provider is deliberately not loaded;
+PHP's default-provider list does not include BF/CAST/DES/IDEA/RC2/RC4/SEED.
+
+The `eval()` interpreter retains its smaller pure-Rust cipher implementation
+(the 12 AES CBC/CTR/ECB/GCM methods) so eval-only programs stay free of the
+libcrypto native package. AOT code has the full 135-method surface.
 
 Cipher names are case-insensitive. Without `OPENSSL_RAW_DATA`, encryption returns
 Base64 and decryption accepts Base64. With the flag, both functions exchange raw

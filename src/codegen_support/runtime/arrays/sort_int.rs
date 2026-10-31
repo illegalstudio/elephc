@@ -34,6 +34,14 @@ pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
 
     let label = if reverse { "__rt_rsort_int" } else { "__rt_sort_int" };
     let cmp_branch = if reverse { "b.ge" } else { "b.le" };
+    let outer = format!("{}_outer", label);
+    let inner = format!("{}_inner", label);
+    let insert = format!("{}_insert", label);
+    let done = format!("{}_done", label);
+    let start = format!("{}_start", label);
+    let precheck = format!("{}_precheck", label);
+    let reverse_entry = format!("{}_reverse_entry", label);
+    let reverse_loop = format!("{}_reverse_loop", label);
 
     emitter.blank();
     emitter.comment(&format!("--- runtime: {} ---", label));
@@ -42,12 +50,40 @@ pub fn emit_sort_int(emitter: &mut Emitter, reverse: bool) {
     // -- load array metadata and set up outer loop --
     emitter.instruction("ldr x1, [x0]");                                        // x1 = array length from header
     emitter.instruction("add x2, x0, #24");                                     // x2 = base of data region (skip header)
+    // -- reverse-sorted fast path: a non-increasing payload becomes sorted by reversal --
+    emitter.instruction("cmp x1, #2");                                          // arrays shorter than two elements are already sorted
+    emitter.instruction(&format!("b.lt {done}"));                               // nothing to do for zero or one element
+    emitter.instruction("mov x3, #1");                                          // start the reverse-order precheck at the second element
+    emitter.label(&precheck);
+    emitter.instruction("cmp x3, x1");                                          // has the whole payload been checked?
+    emitter.instruction(&format!("b.ge {reverse_entry}"));                      // every adjacent pair was in reverse order
+    emitter.instruction("ldr x4, [x2, x3, lsl #3]");                            // current element
+    emitter.instruction("sub x5, x3, #1");                                      // previous-element index
+    emitter.instruction("ldr x5, [x2, x5, lsl #3]");                            // previous element
+    emitter.instruction("cmp x5, x4");                                          // compare the adjacent pair
+    if reverse {
+        emitter.instruction(&format!("b.gt {start}"));                          // ascending prefix needs the general sort
+    } else {
+        emitter.instruction(&format!("b.lt {start}"));                          // non-descending prefix needs the general sort
+    }
+    emitter.instruction("add x3, x3, #1");                                      // inspect the next adjacent pair
+    emitter.instruction(&format!("b {precheck}"));                              // continue the reverse-order proof
+    emitter.label(&reverse_entry);
+    emitter.instruction("mov x3, #0");                                          // left reversal cursor
+    emitter.instruction("sub x4, x1, #1");                                      // right reversal cursor
+    emitter.label(&reverse_loop);
+    emitter.instruction("cmp x3, x4");                                          // have the reversal cursors met?
+    emitter.instruction(&format!("b.ge {done}"));                               // the payload is now sorted
+    emitter.instruction("ldr x5, [x2, x3, lsl #3]");                            // left value
+    emitter.instruction("ldr x6, [x2, x4, lsl #3]");                            // right value
+    emitter.instruction("str x6, [x2, x3, lsl #3]");                            // swap the left slot
+    emitter.instruction("str x5, [x2, x4, lsl #3]");                            // swap the right slot
+    emitter.instruction("add x3, x3, #1");                                      // advance the left cursor
+    emitter.instruction("sub x4, x4, #1");                                      // retreat the right cursor
+    emitter.instruction(&format!("b {reverse_loop}"));                          // continue reversing
+    emitter.label(&start);
     emitter.instruction("mov x3, #1");                                          // x3 = i = 1 (outer loop index, start at second element)
 
-    let outer = format!("{}_outer", label);
-    let inner = format!("{}_inner", label);
-    let insert = format!("{}_insert", label);
-    let done = format!("{}_done", label);
 
     // -- outer loop: iterate i from 1 to length-1 --
     emitter.label(&outer);
@@ -98,12 +134,51 @@ fn emit_sort_int_linux_x86_64(emitter: &mut Emitter, reverse: bool) {
 
     emitter.instruction("mov r8, QWORD PTR [rdi]");                             // load the indexed-array logical length before starting the insertion-sort outer loop
     emitter.instruction("lea r9, [rdi + 24]");                                  // compute the indexed-array payload base pointer once so the loop body can index slots directly
-    emitter.instruction("mov r10, 1");                                          // initialize the insertion-sort outer-loop cursor to the second element
 
     let outer = format!("{}_outer", label);
     let inner = format!("{}_inner", label);
     let insert = format!("{}_insert", label);
     let done = format!("{}_done", label);
+    let start = format!("{}_start", label);
+    let precheck = format!("{}_precheck", label);
+    let reverse_entry = format!("{}_reverse_entry", label);
+    let reverse_loop = format!("{}_reverse_loop", label);
+
+    // -- reverse-sorted fast path: a non-increasing payload becomes sorted by reversal --
+    emitter.instruction("cmp r8, 2");                                           // arrays shorter than two elements are already sorted
+    emitter.instruction(&format!("jb {done}"));                                 // nothing to do for zero or one element
+    emitter.instruction("mov r10, 1");                                          // start the reverse-order precheck at the second element
+    emitter.label(&precheck);
+    emitter.instruction("cmp r10, r8");                                         // has the whole payload been checked?
+    emitter.instruction(&format!("jae {reverse_entry}"));                       // every adjacent pair was in reverse order
+    emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");                   // current element
+    emitter.instruction("mov rcx, r10");                                        // previous-element index
+    emitter.instruction("sub rcx, 1");                                          // step to the previous element
+    emitter.instruction("mov rcx, QWORD PTR [r9 + rcx * 8]");                   // previous element
+    emitter.instruction("cmp rcx, r11");                                        // compare the adjacent pair
+    if reverse {
+        emitter.instruction(&format!("jg {start}"));                            // ascending prefix needs the general sort
+    } else {
+        emitter.instruction(&format!("jl {start}"));                            // non-descending prefix needs the general sort
+    }
+    emitter.instruction("add r10, 1");                                          // inspect the next adjacent pair
+    emitter.instruction(&format!("jmp {precheck}"));                            // continue the reverse-order proof
+    emitter.label(&reverse_entry);
+    emitter.instruction("xor r10d, r10d");                                      // left reversal cursor
+    emitter.instruction("mov rcx, r8");                                         // right reversal cursor
+    emitter.instruction("sub rcx, 1");                                          // start at the last element
+    emitter.label(&reverse_loop);
+    emitter.instruction("cmp r10, rcx");                                        // have the reversal cursors met?
+    emitter.instruction(&format!("jae {done}"));                                // the payload is now sorted
+    emitter.instruction("mov r11, QWORD PTR [r9 + r10 * 8]");                   // left value
+    emitter.instruction("mov rdx, QWORD PTR [r9 + rcx * 8]");                   // right value
+    emitter.instruction("mov QWORD PTR [r9 + r10 * 8], rdx");                   // swap the left slot
+    emitter.instruction("mov QWORD PTR [r9 + rcx * 8], r11");                   // swap the right slot
+    emitter.instruction("add r10, 1");                                          // advance the left cursor
+    emitter.instruction("sub rcx, 1");                                          // retreat the right cursor
+    emitter.instruction(&format!("jmp {reverse_loop}"));                        // continue reversing
+    emitter.label(&start);
+    emitter.instruction("mov r10, 1");                                          // initialize the insertion-sort outer-loop cursor to the second element
 
     emitter.label(&outer);
     emitter.instruction("cmp r10, r8");                                         // compare the insertion-sort outer-loop cursor against the indexed-array logical length

@@ -468,3 +468,52 @@ fn upper_boundary_overflow_is_not_rewritten() {
     assert!(!specialize(&mut function));
     assert_eq!(function.instructions[2].op, Op::ICheckedAddToInt);
 }
+
+/// The main `$argc` is a non-negative C `int`; `$argc + 9999` is therefore safe to uncheck.
+#[test]
+fn main_argc_bounds_prove_checked_add_safe() {
+    let mut function = Function::new("main".to_string(), IrType::I64, PhpType::Int);
+    function.flags.is_main = true;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let argc = emit_unknown_int(&mut builder, "argc");
+        let offset = builder.emit_const_i64(9999);
+        let sum = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, argc, offset);
+        builder.terminate(Terminator::Return { value: Some(sum) });
+    }
+    assert!(specialize(&mut function));
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::IAdd));
+    assert!(!function.instructions.iter().any(|inst| inst.op == Op::ICheckedAddToInt));
+    assert!(validate_function(&function).is_ok());
+}
+
+/// A user assignment to `$argc` removes the process-argument range proof.
+#[test]
+fn assigned_argc_keeps_checked_add() {
+    let mut function = Function::new("main".to_string(), IrType::I64, PhpType::Int);
+    function.flags.is_main = true;
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let slot = builder.add_local(
+            Some("argc".to_string()),
+            IrType::I64,
+            PhpType::Int,
+            LocalKind::PhpLocal,
+        );
+        let assigned = builder.emit_const_i64(5);
+        builder.emit_store_local(slot, assigned);
+        let argc = builder.emit_load_local(slot, IrType::I64, PhpType::Int);
+        let offset = builder.emit_const_i64(9999);
+        let sum = emit_scalar_binop(&mut builder, Op::ICheckedAddToInt, argc, offset);
+        builder.terminate(Terminator::Return { value: Some(sum) });
+    }
+    let _ = specialize(&mut function);
+    assert!(function.instructions.iter().any(|inst| inst.op == Op::ICheckedAddToInt));
+    assert!(validate_function(&function).is_ok());
+}

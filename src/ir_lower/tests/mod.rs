@@ -75,6 +75,7 @@ mod branch_conditions;
 mod boxed_array_write_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
+mod keyed_array_kernels;
 mod boxed_array_multisort;
 mod builtin_datetime_methods;
 mod eval_demand;

@@ -393,6 +393,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if planned_link_libraries.iter().any(|lib| lib == "elephc_fileinfo") {
         native_requirements.push(NativeRequirement::package("libmagic"));
     }
+    // The cipher bridge declares libcrypto's provider/EVP symbols without linking
+    // them. `openssl-crypto` is a libcrypto-only 3.6.4 build, deliberately separate
+    // from curl's 3.5.8 TLS pin; its zlib dependency supplies libz.a after it.
+    if planned_link_libraries.iter().any(|lib| lib == "elephc_openssl") {
+        native_requirements.push(NativeRequirement::package("openssl-crypto"));
+    }
     let mut resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,

@@ -109,6 +109,8 @@ pub(crate) struct Checker {
     pub constants: HashMap<String, PhpType>,
     /// Tracks the return type of closures assigned to variables, keyed by variable name.
     pub closure_return_types: HashMap<String, PhpType>,
+    /// Contextual parameter types inferred for inline array-callback closures, keyed by span.
+    pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
@@ -1459,6 +1461,7 @@ fn check_types_on_compiler_stack(
         warnings,
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
+        closure_param_hints: checker.closure_param_hints,
         array_push_property_plans: checker.array_push_property_plans,
         member_receiver_types: checker.member_receiver_types,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,

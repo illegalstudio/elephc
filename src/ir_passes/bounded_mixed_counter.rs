@@ -7,6 +7,9 @@
 //! Key details:
 //! - A private trial function is scalarized, promoted to SSA and checked by IntegerRange.
 //! - Unproven overflow, type changes, references, implicit scope access and pointer escapes fail closed.
+//! - Both `$i++`/`$i--` and constant compound steps (`$i += c`, `$i -= c`) are counter updates.
+//! - Private slots in the executable main frame are eligible; a runtime `include` that exposes
+//!   the frame, or dynamic `eval`, keeps them boxed.
 //! - Existing direct calls keep their target and ABI; this pass never authorizes a closure call.
 //! - A seed computed by checked or mixed `+ - *` (`$j = $i + 1`) must be proven unchecked like
 //!   an update, and a comparison against a checked `+`/`-` bound (`$i < $end - 1`) stays a PHP
@@ -94,17 +97,39 @@ impl IrPass for BoundedMixedCounter {
         "bounded_mixed_counter"
     }
 
-    /// Avoids graph construction for ordinary functions without boxed increment operations.
+    /// Avoids graph construction unless a boxed local has a recognized counter update.
     fn is_applicable(&self, function: &Function) -> bool {
-        function
-            .instructions
+        let boxed: HashSet<LocalSlotId> = function
+            .locals
             .iter()
-            .any(|inst| inst.op == Op::StrIncDec)
+            .filter(|local| {
+                local.kind == LocalKind::PhpLocal
+                    && local.ir_type == IrType::Heap(IrHeapKind::Mixed)
+                    && local.php_type == PhpType::Mixed
+            })
+            .map(|local| local.id)
+            .collect();
+        if boxed.is_empty() {
+            return false;
+        }
+        function.instructions.iter().any(|inst| {
+            if inst.op != Op::StoreLocal {
+                return false;
+            }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                return false;
+            };
+            boxed.contains(&slot)
+                && inst
+                    .operands
+                    .first()
+                    .is_some_and(|&stored| stored_counter_update(function, slot, stored))
+        })
     }
 
     /// Commits a trial representation only when every new checked update becomes unchecked.
     fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
-        if function.flags.is_main
+        if (function.flags.is_main && !main_frame_is_private(function, data))
             || function.flags.is_generator
             || function.flags.is_fiber_wrapper
             || function.instructions.len() > 4096
@@ -222,6 +247,7 @@ impl CounterProof {
         let mut uses: HashMap<ValueId, Vec<InstId>> = HashMap::new();
         let mut stores = Vec::new();
         let mut pending = Vec::new();
+        let compound_updates = compound_counter_updates(function, slots);
         for block in &function.blocks {
             for &id in &block.instructions {
                 let inst = function.instruction(id)?;
@@ -291,9 +317,38 @@ impl CounterProof {
                         proof.updates.insert(id);
                         pending.push(inst.result?);
                     }
+                    _ if compound_updates.contains(&id) => {
+                        proof.updates.insert(id);
+                        pending.push(inst.result?);
+                    }
                     Op::PhpRelCmp => {
                         proof.comparisons.insert(id);
                     }
+                    // The lowering replay may already have narrowed the bound test while the
+                    // slot was still integer; the range proof below keeps that test justified.
+                    Op::ICmp => {}
+                    // A conversion of the proven integer reads its bits without retaining the
+                    // slot. `$data[] = $i % 97` casts the counter to int before `ismod`.
+                    Op::Cast if observational_cast(inst) => {}
+                    // Integer arithmetic reads the proven scalar bits by value; a result stored
+                    // back into the slot still has to pass the seed check below.
+                    Op::ISMod
+                    | Op::IDiv
+                    | Op::ISDiv
+                    | Op::IAdd
+                    | Op::ISub
+                    | Op::IMul
+                    | Op::IBitAnd
+                    | Op::IBitOr
+                    | Op::IBitXor
+                    | Op::IShl
+                    | Op::IShrA
+                    | Op::INeg
+                    | Op::IBitNot => {}
+                    // A proven integer remains the same PHP array key after scalarization, and
+                    // the typed index path is strictly cheaper than a boxed-key lookup.
+                    Op::ArrayGet | Op::ArrayGetSilent
+                        if inst.operands.get(1) == Some(&value) => {}
                     // Numeric helpers borrow their inputs. The unchanged opcode accepts
                     // a raw integer after the recurrence's complete range proof succeeds.
                     Op::MixedNumericBinop if matches!(inst.immediate,
@@ -301,6 +356,10 @@ impl CounterProof {
                     // Lowering already fixed the physical call signature and any by-ref storage.
                     // Re-materialization boxes a proven integer for an unchanged Mixed parameter.
                     Op::Call if pass.safe_call_use(inst, value, data) => {}
+                    // These typed runtime operations accept a concrete integer operand and take
+                    // the same fast path the explicit-cast form already produces. Keeping the
+                    // counter scalar avoids boxing every loop iteration just to unbox it again.
+                    Op::RuntimeCall if runtime_call_accepts_integer_counter(inst, value) => {}
                     _ if readonly_calls.is_some_and(|calls| {
                         calls.get(&id).is_some_and(|positions| {
                             inst.operands.iter().enumerate()
@@ -358,9 +417,22 @@ impl CounterProof {
         proof.comparisons.retain(|id| !bound_comparisons.contains(id));
         // An increment must consume a load or another closed numeric increment, not an
         // unrelated string value that merely shares a destination at one source location.
+        // A compound update is a binary add/sub whose counter operand is closed and whose
+        // step is a raw integer constant.
         if !proof.updates.iter().all(|id| {
             function.instruction(*id).is_some_and(|inst| {
-                inst.operands.len() == 1 && proof.scalar_values.contains(&inst.operands[0])
+                if inst.op == Op::StrIncDec {
+                    inst.operands.len() == 1 && proof.scalar_values.contains(&inst.operands[0])
+                } else {
+                    inst.operands.len() == 2
+                        && inst
+                            .operands
+                            .iter()
+                            .any(|value| proof.scalar_values.contains(value))
+                        && inst.operands.iter().all(|value| {
+                            proof.scalar_values.contains(value) || integer(function, *value)
+                        })
+                }
             })
         }) {
             return None;
@@ -599,39 +671,51 @@ impl CounterProof {
                     }
                 }
                 if self.updates.contains(&id) {
-                    let delta = match function.instructions[id.as_raw() as usize].immediate {
-                        Some(Immediate::I64(delta)) => delta,
-                        _ => unreachable!(),
-                    };
-                    let constant_id = InstId::from_raw(function.instructions.len() as u32);
-                    let value = ValueId::from_raw(function.values.len() as u32);
-                    function.values.push(Value {
-                        ir_type: IrType::I64,
-                        php_type: PhpType::Int,
-                        ownership: Ownership::NonHeap,
-                        def: ValueDef::Instruction {
-                            block: function.blocks[block_index].id,
-                            index: rewritten.len() as u32,
-                            inst: constant_id,
-                        },
-                    });
-                    function.instructions.push(Instruction::new(
-                        Op::ConstI64,
-                        vec![],
-                        Some(Immediate::I64(delta)),
-                        Some(value),
-                        IrType::I64,
-                        PhpType::Int,
-                        Ownership::NonHeap,
-                        Op::ConstI64.default_effects(),
-                        None,
-                    ));
-                    rewritten.push(constant_id);
-                    let inst = &mut function.instructions[id.as_raw() as usize];
-                    inst.op = Op::ICheckedAddToInt;
-                    inst.immediate = None;
-                    inst.operands.push(value);
-                    inst.effects = Op::ICheckedAddToInt.default_effects();
+                    if function.instructions[id.as_raw() as usize].op == Op::StrIncDec {
+                        let delta = match function.instructions[id.as_raw() as usize].immediate {
+                            Some(Immediate::I64(delta)) => delta,
+                            _ => unreachable!(),
+                        };
+                        let constant_id = InstId::from_raw(function.instructions.len() as u32);
+                        let value = ValueId::from_raw(function.values.len() as u32);
+                        function.values.push(Value {
+                            ir_type: IrType::I64,
+                            php_type: PhpType::Int,
+                            ownership: Ownership::NonHeap,
+                            def: ValueDef::Instruction {
+                                block: function.blocks[block_index].id,
+                                index: rewritten.len() as u32,
+                                inst: constant_id,
+                            },
+                        });
+                        function.instructions.push(Instruction::new(
+                            Op::ConstI64,
+                            vec![],
+                            Some(Immediate::I64(delta)),
+                            Some(value),
+                            IrType::I64,
+                            PhpType::Int,
+                            Ownership::NonHeap,
+                            Op::ConstI64.default_effects(),
+                            None,
+                        ));
+                        rewritten.push(constant_id);
+                        let inst = &mut function.instructions[id.as_raw() as usize];
+                        inst.op = Op::ICheckedAddToInt;
+                        inst.immediate = None;
+                        inst.operands.push(value);
+                        inst.effects = Op::ICheckedAddToInt.default_effects();
+                    } else {
+                        // A compound `$i += c` / `$i -= c` update already carries its constant
+                        // operand; only the opcode has to become the checked integer form.
+                        let inst = &mut function.instructions[id.as_raw() as usize];
+                        let op = seed_op(inst);
+                        if let Some(op) = op {
+                            inst.op = op;
+                            inst.immediate = None;
+                            inst.effects = op.default_effects();
+                        }
+                    }
                 }
                 rewritten.push(id);
             }
@@ -655,6 +739,187 @@ fn defining_id(function: &Function, value: ValueId) -> Option<InstId> {
         return None;
     };
     Some(inst)
+}
+
+/// Returns whether a main frame's private counter slots cannot be read by name elsewhere.
+///
+/// Top-level locals that another body reaches through `global` are `GlobalAlias` slots, which the
+/// candidate filter excludes, and eval is rejected separately. A runtime `include` is the one
+/// remaining way to hand the whole frame to other code, so main keeps boxed storage there.
+pub(super) fn main_frame_is_private(function: &Function, data: &DataPool) -> bool {
+    !function.instructions.iter().any(|inst| {
+        inst.op == Op::RuntimeCall
+            && matches!(inst.immediate, Some(Immediate::Data(id))
+                if data.strings.get(id.as_raw() as usize)
+                    .is_some_and(|label| label.starts_with("include ")))
+    })
+}
+
+/// Collects compound `slot += constant` / `slot -= constant` update instructions.
+fn compound_counter_updates(function: &Function, slots: &HashSet<LocalSlotId>) -> HashSet<InstId> {
+    let mut updates = HashSet::new();
+    for inst in &function.instructions {
+        if inst.op != Op::StoreLocal {
+            continue;
+        }
+        let Some(Immediate::LocalSlot(target)) = inst.immediate else {
+            continue;
+        };
+        if !slots.contains(&target) {
+            continue;
+        }
+        let Some(&stored) = inst.operands.first() else {
+            continue;
+        };
+        if let Some(id) = counter_update_producer(function, target, stored) {
+            updates.insert(id);
+        }
+    }
+    updates
+}
+
+/// Follows ownership wrappers from a stored value to an increment or constant step.
+fn stored_counter_update(function: &Function, slot: LocalSlotId, mut value: ValueId) -> bool {
+    for _ in 0..8 {
+        let Some(inst) = defining_instruction(function, value) else {
+            return false;
+        };
+        match inst.op {
+            Op::StrIncDec => return true,
+            Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::EnsureOwned
+                if inst.immediate.is_none() =>
+            {
+                let Some(&source) = inst.operands.first() else {
+                    return false;
+                };
+                value = source;
+            }
+            _ => return counter_step(function, slot, inst),
+        }
+    }
+    false
+}
+
+/// Follows ownership wrappers from a stored value back to a bounded counter step.
+fn counter_update_producer(
+    function: &Function,
+    slot: LocalSlotId,
+    mut value: ValueId,
+) -> Option<InstId> {
+    for _ in 0..8 {
+        let id = defining_id(function, value)?;
+        let inst = function.instruction(id)?;
+        match inst.op {
+            Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::EnsureOwned
+                if inst.immediate.is_none() =>
+            {
+                value = *inst.operands.first()?;
+            }
+            _ => return counter_step(function, slot, inst).then_some(id),
+        }
+    }
+    None
+}
+
+/// Requires `slot + constant` or `slot - constant` in any of its lowering opcodes.
+///
+/// The counter must be the left operand, so `1 - $i` is never read as a counter update.
+pub(super) fn counter_step(function: &Function, slot: LocalSlotId, inst: &Instruction) -> bool {
+    let add = matches!(
+        (inst.op, &inst.immediate),
+        (Op::ICheckedAdd | Op::ICheckedAddToInt, _)
+            | (
+                Op::MixedNumericBinop,
+                Some(Immediate::MixedNumericOp(MixedNumericOp::Add))
+            )
+    );
+    let sub = matches!(
+        (inst.op, &inst.immediate),
+        (Op::ICheckedSub | Op::ICheckedSubToInt, _)
+            | (
+                Op::MixedNumericBinop,
+                Some(Immediate::MixedNumericOp(MixedNumericOp::Sub))
+            )
+    );
+    if !(add || sub) || inst.operands.len() != 2 {
+        return false;
+    }
+    let [counter, step] = inst.operands.as_slice() else {
+        return false;
+    };
+    int_constant(function, *step).is_some() && loads_slot(function, slot, *counter)
+}
+
+/// Follows ownership wrappers to a plain load of `slot`.
+fn loads_slot(function: &Function, slot: LocalSlotId, mut value: ValueId) -> bool {
+    for _ in 0..8 {
+        let Some(inst) = defining_instruction(function, value) else {
+            return false;
+        };
+        match inst.op {
+            Op::LoadLocal if inst.immediate == Some(Immediate::LocalSlot(slot)) => return true,
+            Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::EnsureOwned
+                if inst.immediate.is_none() =>
+            {
+                let Some(&source) = inst.operands.first() else {
+                    return false;
+                };
+                value = source;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Returns the integer constant a value carries, through transparent owners.
+fn int_constant(function: &Function, mut value: ValueId) -> Option<i64> {
+    for _ in 0..8 {
+        let inst = defining_instruction(function, value)?;
+        if let (Op::ConstI64, Some(Immediate::I64(integer))) = (inst.op, &inst.immediate) {
+            return Some(*integer);
+        }
+        if matches!(
+            inst.op,
+            Op::Acquire | Op::Move | Op::Borrow | Op::MixedClone | Op::EnsureOwned
+        ) && inst.immediate.is_none()
+        {
+            value = *inst.operands.first()?;
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+/// Returns whether a typed runtime call accepts `value` as a concrete integer operand.
+///
+/// Only arithmetic operations whose integer lowering already exists are listed. Everything else
+/// keeps the proven counter boxed, so an ABI that expects a `Mixed` cell is never handed raw
+/// integer bits.
+fn runtime_call_accepts_integer_counter(inst: &Instruction, value: ValueId) -> bool {
+    use crate::ir::RuntimeCallTarget;
+    let Some(Immediate::RuntimeCall(target)) = &inst.immediate else {
+        return false;
+    };
+    let target = match target {
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. } => *target,
+        _ => return false,
+    };
+    let allowed_position = match target {
+        crate::ir::RuntimeFnId::Intdiv => 2,
+        crate::ir::RuntimeFnId::Abs
+        | crate::ir::RuntimeFnId::Sqrt
+        | crate::ir::RuntimeFnId::Round => 1,
+        // `sprintf` keeps the literal format at position zero and packs every following value
+        // into a 16-byte record; the packing lowering handles a raw integer operand.
+        crate::ir::RuntimeFnId::Sprintf => usize::MAX,
+        _ => return false,
+    };
+    inst.operands.iter().enumerate().all(|(index, operand)| {
+        *operand != value || (index < allowed_position && (target != crate::ir::RuntimeFnId::Sprintf || index >= 1))
+    })
 }
 
 /// Maps a counter seed producer to the checked integer opcode its trial must prove unchecked.
@@ -686,6 +951,20 @@ fn checked_bound(function: &Function, value: ValueId) -> bool {
             && inst.operands.len() == 2
             && inst.operands.iter().all(|&operand| integer(function, operand))
     })
+}
+
+/// Returns whether a conversion only reads the proven integer bits.
+///
+/// Int, float and string targets all consume the payload without taking ownership of the source
+/// cell, and the range proof makes the conversion value-identical to the boxed original.
+fn observational_cast(inst: &Instruction) -> bool {
+    inst.op == Op::Cast
+        && matches!(
+            (&inst.immediate, &inst.result_php_type),
+            (Some(Immediate::CastTarget(IrType::I64)), PhpType::Int)
+                | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
+                | (Some(Immediate::CastTarget(IrType::Str)), PhpType::Str)
+        )
 }
 
 /// Accepts an already raw PHP integer without assuming anything about a Mixed label.

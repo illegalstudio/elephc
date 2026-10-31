@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer.
+//! - A string cast is a payload observation: numeric tags render into concat scratch without
+//!   adopting the cell, so an accumulator echoed at loop exit keeps its frame storage.
 //! - Pointer reads cannot survive another execution of the producing instruction.
 //! - Independent producers may intervene, but owning-slot replacements invalidate borrowed reads.
 //! - References, eval, suspension, unknown consumers and escaping values fail closed.
@@ -424,6 +426,11 @@ pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, valu
 }
 
 /// Copies a scalar payload without exposing its address; declared returns retain their checks.
+///
+/// A string cast is an observation, not an escape: `__rt_mixed_cast_string` reads the tag and
+/// payload and formats numeric tags into concat scratch, so it never retains or frees the cell.
+/// The numeric-domain proof guarantees every value reaching this cell is an int or float, the
+/// two tags that format without adopting the source storage.
 fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
     (inst.op == Op::ReturnBoundaryMixedToInt
         && inst.operands.len() == 1
@@ -433,6 +440,7 @@ fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
             (&inst.immediate, &inst.result_php_type),
             (Some(Immediate::CastTarget(IrType::I64)), PhpType::Int)
                 | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
+                | (Some(Immediate::CastTarget(IrType::Str)), PhpType::Str)
         ))
 }
 

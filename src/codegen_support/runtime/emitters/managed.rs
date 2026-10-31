@@ -32,6 +32,11 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_ensure_unique(emitter);
     arrays::emit_array_grow(emitter);
     arrays::emit_array_new(emitter);
+    arrays::emit_array_map_sum_probe_int(emitter);
+    arrays::emit_array_sum_probe_small(emitter);
+    arrays::emit_array_sum_int(emitter);
+    arrays::emit_keyed_kernels(emitter);
+    arrays::emit_array_type_check(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);
     arrays::emit_array_push_str(emitter);
@@ -168,7 +173,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_map_mixed(emitter);
     arrays::emit_array_map_str(emitter);
     arrays::emit_array_map_str_owned(emitter);
+    arrays::emit_array_filter_int_direct(emitter);
     arrays::emit_array_predicate_boxed(emitter);
+    arrays::emit_array_reduce_int_direct(emitter);
     arrays::emit_array_reduce(emitter);
     arrays::emit_array_reduce_str(emitter);
     arrays::emit_array_reduce_boxed(emitter);
@@ -202,6 +209,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_reference(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_from_owned_string(emitter);
     arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);

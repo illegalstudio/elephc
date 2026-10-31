@@ -320,6 +320,474 @@ fn check_mbstring_supported_target_lowering(target: &str) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+
+/// Verifies the ASCII case fast paths, including Unicode fallbacks and title word rules.
+#[test]
+fn test_mb_ascii_case_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$ascii = "hello_world-foo bar";
+$accented = "héllo wörld";
+echo mb_strtoupper($ascii, "UTF-8"), "|";
+echo mb_strtolower("HELLO", "UTF-8"), "|";
+echo mb_convert_case($ascii, MB_CASE_TITLE, "UTF-8"), "|";
+echo mb_convert_case("don't stop", MB_CASE_TITLE, "UTF-8"), "|";
+echo mb_convert_case("ABC", MB_CASE_FOLD, "UTF-8"), "|";
+echo mb_ucfirst("hello", "UTF-8"), "|";
+echo mb_lcfirst("Hello", "UTF-8"), "|";
+echo mb_strtoupper($accented, "UTF-8"), "|";
+echo mb_strtolower("HÉLLO", "UTF-8"), "|";
+echo mb_convert_case($accented, MB_CASE_TITLE, "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "HELLO_WORLD-FOO BAR|hello|Hello_World-Foo Bar|Don't Stop|abc|Hello|hello|\
+         HÉLLO WÖRLD|héllo|Héllo Wörld|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies ASCII width, encoding validation, slicing, and padding fast paths.
+#[test]
+fn test_mb_ascii_width_slice_and_pad_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_strwidth("hello", "UTF-8"), "|";
+echo mb_strwidth("héllo", "UTF-8"), "|";
+echo mb_check_encoding("héllo", "UTF-8") ? "1" : "0", "|";
+echo mb_check_encoding("\x80", "UTF-8") ? "1" : "0", "|";
+echo mb_substr("abcdefghij", 2, 3, "UTF-8"), "|";
+echo mb_substr("abcdefghij", -3, 2, "UTF-8"), "|";
+echo mb_strcut("abcdefghij", 2, 3, "UTF-8"), "|";
+echo mb_str_pad("x", 5, "-", STR_PAD_BOTH, "UTF-8"), "|";
+echo mb_ord("A", "UTF-8"), "|";
+try { mb_ord("", "UTF-8"); } catch (ValueError $e) { echo "empty|"; }
+echo mb_ord("é", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|5|1|0|cde|hi|cde|--x--|65|empty|233|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the x86_64 ASCII predicate reports through rcx so `mb_ord` keeps the
+/// subject pointer in rax for its first-byte load.
+#[test]
+fn test_mb_ord_x86_64_ascii_predicate_preserves_the_subject_pointer() {
+    let dir = make_cli_test_dir("elephc_mb_ord_x86_ascii");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo mb_ord(\"A\", \"UTF-8\");").unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected x86_64 assembly");
+    let call = asm
+        .lines()
+        .position(|line| line.trim() == "call __rt_mb_is_ascii")
+        .expect("mb_ord must check the UTF-8 subject for ASCII");
+    let after: Vec<&str> = asm.lines().map(str::trim).skip(call + 1).take(8).collect();
+    assert!(
+        after[0].starts_with("test rcx, rcx"),
+        "the x86_64 predicate must report through rcx, got: {}",
+        after[0]
+    );
+    assert!(
+        after.iter().any(|line| line.starts_with("movzx edi, BYTE PTR [rax]")),
+        "mb_ord must load the first subject byte through the preserved rax pointer"
+    );
+
+    let target = Target::parse("linux-x86_64").expect("linux-x86_64 is supported");
+    let runtime = elephc::codegen::generate_runtime(8_388_608, target);
+    let helper = runtime
+        .split("__rt_mb_is_ascii:")
+        .nth(1)
+        .expect("the runtime must emit the ASCII predicate")
+        .split("--- runtime:")
+        .next()
+        .unwrap();
+    assert!(helper.contains("mov ecx, 1"), "the predicate must report through rcx");
+    assert!(helper.contains("xor ecx, ecx"), "the predicate must reject through rcx");
+    assert!(!helper.contains("mov eax, 1"), "the predicate must not clobber rax");
+    assert!(!helper.contains("xor eax, eax"), "the predicate must not clobber rax");
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies the x86_64 digit-run census copies the subject pointer before reusing rax
+/// for the replaced-length accumulator.
+#[test]
+fn test_mb_ereg_replace_len_x86_64_keeps_the_subject_cursor() {
+    let dir = make_cli_test_dir("elephc_mb_ereg_replace_len_x86");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php echo strlen(mb_ereg_replace(\"[0-9]+\", \"#\", \"a1b22c333\"));",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .args(["--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected x86_64 assembly");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let call = lines
+        .iter()
+        .position(|line| *line == "call __rt_mb_is_ascii")
+        .expect("the digit-run census must check the subject for ASCII");
+    assert!(lines[call + 1].starts_with("test rcx, rcx"), "got: {}", lines[call + 1]);
+    let reset = lines[call..]
+        .iter()
+        .position(|line| line.starts_with("xor eax, eax"))
+        .expect("the census must start its replaced-length accumulator at zero")
+        + call;
+    assert_eq!(
+        lines[reset - 1], "mov r8, rax",
+        "the census must copy the subject pointer into r8 before rax becomes the count"
+    );
+    let fallback = lines
+        .iter()
+        .position(|line| line.contains("mb_ereg_replace_len_fallback"))
+        .expect("the non-fast pattern must emit the bridge fallback");
+    let unbox = lines[fallback..]
+        .iter()
+        .position(|line| *line == "call __rt_mixed_unbox")
+        .expect("the non-fast pattern must unbox the bridge result")
+        + fallback;
+    assert!(
+        lines[unbox + 2].starts_with("mov QWORD PTR [rsp + 16], rdx"),
+        "the unboxed string length must come from the high payload register, got: {}",
+        lines[unbox + 2]
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies ASCII trim, substring counting, and a non-ASCII trim fallback.
+#[test]
+fn test_mb_ascii_trim_and_substr_count_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_trim("  hi  ", " ", "UTF-8"), "|";
+echo mb_ltrim("  hi  ", " ", "UTF-8"), "|";
+echo mb_rtrim("  hi  ", " ", "UTF-8"), "|";
+echo mb_substr_count("banana", "ana", "UTF-8"), "|";
+echo mb_substr_count("héllo", "l", "UTF-8"), "|";
+echo mb_trim("héllo", " ", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "hi|hi  |  hi|1|2|héllo|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the allocation-free codepoint, detection, width, split, scrub, and search sinks.
+#[test]
+fn test_mb_ascii_search_and_length_sink_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo (int)mb_ord("A", "UTF-8"), "|";
+echo strlen(mb_chr(65, "UTF-8")), "|";
+echo strlen(mb_chr(0x20AC, "UTF-8")), "|";
+echo mb_detect_encoding("héllo", "UTF-8"), "|";
+echo strlen(mb_strimwidth("The quick brown fox jumps over the lazy dog", 0, 10, "...", "UTF-8")), "|";
+echo count(mb_str_split("abcdefghij", 2, "UTF-8")), "|";
+echo strlen(mb_scrub("héllo", "UTF-8")), "|";
+echo (int)mb_strpos("abcdef", "cd", 0, "UTF-8"), "|";
+echo (int)mb_strripos("abcABC", "a", 0, "UTF-8"), "|";
+echo strlen(mb_strstr("abcdef", "cd", false, "UTF-8")), "|";
+echo strlen(mb_strrichr("abcABC", "a", false, "UTF-8")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "65|1|3|UTF-8|10|5|6|2|3|4|3|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the numeric-entity, literal-split, regex-replace, and raw-position fast paths.
+#[test]
+fn test_mb_numericentity_and_regex_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r##"<?php
+$map = [0x80, 0x10FFFF, 0, 0x1FFFFF];
+echo strlen(mb_encode_numericentity("héllo wörld", $map, "UTF-8")), "|";
+echo mb_encode_numericentity("€", $map, "UTF-8"), "|";
+echo strlen(mb_encode_numericentity("a\x80b", $map, "UTF-8")), "|";
+echo strlen(mb_decode_numericentity("h&#233;llo w&#246;rld", $map, "UTF-8")), "|";
+echo mb_decode_numericentity("h&#233;llo", $map, "UTF-8"), "|";
+echo strlen(mb_decode_numericentity("a&b", $map, "UTF-8")), "|";
+echo count(mb_split(",", "1,2,3")), "|";
+echo count(mb_split(",", "")), "|";
+echo count(mb_split(",", ",a,")), "|";
+$regexSplit = mb_split("a+", "baaac");
+echo count($regexSplit), "|";
+echo strlen(mb_ereg_replace("[0-9]+", "#", "abc123def456")), "|";
+echo mb_ereg_replace("[0-9]+", "#", "abc123def456"), "|";
+echo strlen(mb_ereg_replace("[0-9]+", "#", "a1b22c333")), "|";
+echo strlen(mb_ereg_replace("[a-z]+", "#", "abc123")), "|";
+echo (int)mb_strpos("abcdef", "cd", 0, "UTF-8"), "|";
+echo (int)mb_strrpos("abcdef", "cd", 0, "UTF-8"), "|";
+echo count(mb_encoding_aliases("UTF-8")), "|";
+echo count(mb_list_encodings()), "|";
+echo strlen(mb_preferred_mime_name("UTF-8")), "|";
+echo strlen(mb_get_info("internal_encoding")), "|";
+echo "\n";
+"##);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "21|&#8364;|3|13|héllo|3|3|1|3|2|8|abc#def#|6|4|2|2|1|79|5|5|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the allocation-free mbstring setting fast paths and boxed boolean results.
+#[test]
+fn test_mb_setting_fast_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo (int)mb_internal_encoding("UTF-8"), "|";
+echo (int)mb_language("neutral"), "|";
+echo (int)mb_http_output("pass"), "|";
+echo (int)mb_regex_encoding("UTF-8"), "|";
+echo (int)mb_substitute_character(0xFFFD), "|";
+echo mb_internal_encoding(), "|";
+echo mb_http_output(), "|";
+echo mb_regex_encoding(), "|";
+echo strlen((string)mb_regex_set_options("r")), "|";
+echo strlen((string)mb_http_input("G")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|1|1|1|1|UTF-8|pass|UTF-8|2|0|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the MIME base64 fast path, the ASCII passthrough, and the bridge fallback for an
+/// ASCII prefix before the first non-ASCII byte.
+#[test]
+fn test_mb_encode_mimeheader_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_encode_mimeheader("héllo", "UTF-8"), "|";
+echo mb_encode_mimeheader("héllo wörld", "UTF-8"), "|";
+echo mb_encode_mimeheader("hello", "UTF-8"), "|";
+echo mb_encode_mimeheader("a b é", "UTF-8"), "|";
+echo mb_encode_mimeheader("日本", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "=?UTF-8?B?aMOpbGxv?=|=?UTF-8?B?aMOpbGxvIHfDtnJsZA==?=|hello|\
+         a b =?UTF-8?B?w6k=?=|=?UTF-8?B?5pel5pys?=|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the `K` half-width katakana converter, including the voiced-mark bridge fallback.
+#[test]
+fn test_mb_convert_kana_halfwidth_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_convert_kana("ｱｲｳｴｵ", "K", "UTF-8"), "|";
+echo mb_convert_kana("ｱｲ abc", "K", "UTF-8"), "|";
+echo mb_convert_kana("アイウエオ", "K", "UTF-8"), "|";
+echo mb_convert_kana("aｱb", "K", "UTF-8"), "|";
+echo mb_convert_kana("ｱﾞ", "K", "UTF-8"), "|";
+echo mb_convert_kana("｡｢｣､･ｦｰ", "K", "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "アイウエオ|アイ abc|アイウエオ|aアb|ア゛|。「」、・ヲー|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+
+/// Repeats the explicit UTF-8 internal-encoding setter so the no-op fast path is exercised.
+#[test]
+fn test_mb_internal_encoding_repeated_setter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$ok = true;
+for ($i = 0; $i < 100; $i++) { $ok = $ok && mb_internal_encoding("UTF-8"); }
+echo $ok ? "ok" : "fail", "|", mb_internal_encoding(), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "ok|UTF-8\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the UTF-8-to-UTF-8 output-handler passthrough retains its subject without copying.
+#[test]
+fn test_mb_output_handler_utf8_passthrough() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo mb_output_handler("héllo", 0), "|";
+echo bin2hex(mb_output_handler("\x80", 0)), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "héllo|80|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the literal UTF-8 detection-order specialization, the getter, and the invalid fallback.
+#[test]
+fn test_mb_detect_order_literal_fast_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+var_dump(mb_detect_order(["UTF-8"]));
+var_dump(mb_detect_order());
+try { mb_detect_order(["NOPE"]); } catch (ValueError $e) { echo "error\n"; }
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\narray(1) {\n  [0]=>\n  string(5) \"UTF-8\"\n}\nerror\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the dedicated progressive-search init/step/position path and invalid-subject fallback.
+#[test]
+fn test_mb_ereg_search_native_state_path() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+var_dump(mb_ereg_search_init("abc123", "[0-9]+"));
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_setpos(3));
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search());
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_init("\x80", "[0-9]+"));
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nint(6)\nbool(true)\nint(3)\nbool(true)\nint(6)\nbool(false)\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the constant-local length folds and the non-ASCII fallbacks they must leave alone.
+#[test]
+fn test_mb_constant_local_length_folds() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = str_repeat("abcdefgh", 16);
+$t = "   hello world   ";
+$w = "The quick brown fox";
+$e = "héllo wörld";
+$n = str_repeat("a", 100);
+$p = "abcdefghijklmnopqrst";
+echo mb_strlen($s, "UTF-8"), "|";
+echo strlen(mb_strtoupper($s, "UTF-8")), "|";
+echo strlen(mb_convert_case($s, MB_CASE_TITLE, "UTF-8")), "|";
+echo strlen(mb_trim($t, " \n\r\t\v\0", "UTF-8")), "|";
+echo mb_strwidth($w, "UTF-8"), "|";
+echo mb_check_encoding($e, "UTF-8") ? "1" : "0", "|";
+echo mb_substr_count($n, "a", "UTF-8"), "|";
+echo count(mb_str_split($p, 2, "UTF-8")), "|";
+echo strlen(mb_str_pad("x", 32, "-", STR_PAD_RIGHT, "UTF-8")), "|";
+echo mb_substr($p, 10, 5, "UTF-8"), "|";
+echo strlen(mb_strcut($s, 10, 20, "UTF-8")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "128|128|128|11|19|1|100|10|32|klmno|20|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies that omitted optional mbstring arguments never take the constant-local fold.
+#[test]
+fn test_mb_constant_local_fold_optional_arguments() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "abcdef";
+echo strlen(mb_substr($s, 1, 2)), "|";
+echo strlen(mb_trim("  hi  ")), "|";
+echo strlen(mb_ltrim("  hi  ")), "|";
+echo strlen(mb_str_pad("x", 3)), "|";
+echo strlen(mb_convert_case($s, MB_CASE_TITLE)), "|";
+echo strlen(mb_ucfirst($s)), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "2|2|4|3|6|6|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies that escape-generated byte strings keep their exact bytes through the folds.
+#[test]
+fn test_mb_constant_folds_preserve_escape_bytes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$bad = "\x80";
+$valid = "héllo";
+$escaped = "\xC3\xA9";
+echo mb_check_encoding($bad, "UTF-8") ? "1" : "0", "|";
+echo mb_strlen($bad, "UTF-8"), "|";
+echo mb_strlen($escaped, "UTF-8"), "|";
+echo mb_strlen($valid, "UTF-8"), "|";
+echo mb_strwidth($valid, "UTF-8"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "0|1|1|5|5|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+
+/// Verifies the native array-returning `mb_ereg_search_pos`/`regs`/`getregs` paths.
+///
+/// The returned arrays must own copies of the session match, so mutating one result never
+/// changes what a later `getregs()` reads. The no-match and uninitialized branches keep PHP's
+/// `false` result.
+#[test]
+fn test_mb_ereg_search_native_array_paths() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+mb_ereg_search_init("abc123", "[0-9]+");
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_getpos());
+var_dump(mb_ereg_search_getregs());
+mb_ereg_search_init("abc123", "[0-9]+");
+$r = mb_ereg_search_regs();
+var_dump($r);
+$r[0] = "changed";
+var_dump(mb_ereg_search_getregs());
+mb_ereg_search_init("abc", "[0-9]+");
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_regs());
+var_dump(mb_ereg_search_getregs());
+mb_ereg_search_init("abc", "[0-9]*");
+var_dump(mb_ereg_search_pos());
+var_dump(mb_ereg_search_getregs());
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(2) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(3)\n}\n\
+bool(false)\nint(6)\nbool(false)\n\
+array(1) {\n  [0]=>\n  string(3) \"123\"\n}\n\
+array(1) {\n  [0]=>\n  string(3) \"123\"\n}\n\
+bool(false)\nbool(false)\nbool(false)\n\
+array(2) {\n  [0]=>\n  int(0)\n  [1]=>\n  int(0)\n}\n\
+array(1) {\n  [0]=>\n  string(0) \"\"\n}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 macro_rules! supported_target_lowering_test {
     ($name:ident, $target:literal) => {
         /// Checks one supported target so its compile has an independent CI timeout.

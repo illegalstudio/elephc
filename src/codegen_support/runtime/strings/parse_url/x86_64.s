@@ -1,9 +1,12 @@
+.globl __rt_parse_url_common_x86
+__rt_parse_url_common_x86:
     push rbp
     mov rbp, rsp
     sub rsp, 208
     mov QWORD PTR [rbp - 8], rax
     mov QWORD PTR [rbp - 16], rdx
     mov QWORD PTR [rbp - 24], rdi
+    mov QWORD PTR [rbp - 200], r11
     mov QWORD PTR [rbp - 32], 0
     mov QWORD PTR [rbp - 40], 0
     mov QWORD PTR [rbp - 48], 0
@@ -562,6 +565,12 @@ Lparse_url_null_x86:
     jmp Lparse_url_return_x86
 
 Lparse_url_invalid_x86:
+    cmp QWORD PTR [rbp - 200], 0
+    je Lparse_url_invalid_build_x86
+    xor eax, eax
+    xor edx, edx
+    jmp Lparse_url_return_x86
+Lparse_url_invalid_build_x86:
     mov rax, 3
     xor edi, edi
     xor esi, esi
@@ -575,6 +584,8 @@ Lparse_url_component_error_x86:
     jmp __rt_parse_url_throw_component
 
 Lparse_url_array_x86:
+    cmp QWORD PTR [rbp - 200], 0
+    jne Lparse_url_count_x86
     mov rdi, 16
     mov rsi, 7
     call __rt_hash_new
@@ -665,6 +676,23 @@ Lparse_url_return_x86:
     mov rsp, rbp
     pop rbp
     ret
+
+Lparse_url_count_x86:
+    mov rax, QWORD PTR [rbp - 32]
+    and eax, 0xff
+    xor ecx, ecx
+Lparse_url_count_loop_x86:
+    test rax, rax
+    jz Lparse_url_count_done_x86
+    mov rdx, rax
+    and edx, 1
+    add rcx, rdx
+    shr rax, 1
+    jmp Lparse_url_count_loop_x86
+Lparse_url_count_done_x86:
+    mov rax, rcx
+    mov rdx, 1
+    jmp Lparse_url_return_x86
 
 # Copy a component into owned storage and replace PHP-disallowed control bytes.
 Lparse_url_copy_component_x86:

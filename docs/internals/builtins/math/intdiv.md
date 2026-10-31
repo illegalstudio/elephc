@@ -10,19 +10,18 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/intdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/intdiv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:729](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L729) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.intdiv` through `BuiltinLoweringContext`.
-- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+- Uses the `eir_graph` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
 ## Semantic descriptor
 
-- **Target strategy**: `runtime_call`
+- **Target strategy**: `eir_graph`
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
@@ -33,8 +32,7 @@ sidebar:
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.intdiv`
-- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

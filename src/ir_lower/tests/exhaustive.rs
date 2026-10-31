@@ -137,6 +137,7 @@ fn dummy_check_result() -> CheckResult {
         return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
+        closure_param_hints: HashMap::new(),
         interfaces: HashMap::new(),
         classes,
         enums,

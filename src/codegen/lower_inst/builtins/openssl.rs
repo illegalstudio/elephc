@@ -48,7 +48,7 @@ pub(crate) fn lower_openssl_encrypt(
     stage_openssl_int_field(ctx, inst, 7, 88, 16, "openssl_encrypt tag_length")?;
     stage_openssl_empty_string_field(ctx, 96);
     stage_openssl_flag_field(ctx, 112, tag_slot.is_some());
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     stage_openssl_frame_pointer(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_encrypt");
     preserve_openssl_string_result(ctx, 112);
@@ -81,7 +81,7 @@ pub(crate) fn lower_openssl_decrypt(
     stage_openssl_optional_string_field(ctx, inst, 4, 56, "openssl_decrypt iv")?;
     stage_openssl_optional_string_field(ctx, inst, 6, 72, "openssl_decrypt aad")?;
     stage_openssl_optional_string_field(ctx, inst, 5, 88, "openssl_decrypt tag")?;
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     stage_openssl_frame_pointer(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_decrypt");
     abi::emit_release_temporary_stack(ctx.emitter, FRAME_SIZE);
@@ -95,7 +95,7 @@ pub(crate) fn lower_openssl_cipher_iv_length(
     inst: &Instruction,
 ) -> Result<()> {
     load_single_string_arg(ctx, inst, "openssl_cipher_iv_length")?;
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_cipher_iv_length");
     box_openssl_int_or_false_result(ctx, "openssl_iv_length");
     store_if_result(ctx, inst)
@@ -113,7 +113,7 @@ pub(crate) fn lower_openssl_get_cipher_methods(
         )));
     }
     materialize_truthy_flag(ctx, inst, 0, "openssl_get_cipher_methods")?;
-    crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
+    crate::codegen::hash_crypto::publish_elephc_openssl_function_pointers(ctx.emitter);
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass aliases flag to the method-list helper
     }

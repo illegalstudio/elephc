@@ -598,6 +598,17 @@ impl<'a> FunctionContext<'a> {
         self.ref_cell_state_offsets.get(&slot).copied()
     }
 
+    /// Returns the distinct frame offsets of checked numeric cells, sorted ascending.
+    ///
+    /// A pointer equal to one of these addresses is a transient int/float cell owned by the
+    /// current frame, so retiring it must not run the heap refcount helper.
+    pub(super) fn numeric_cell_offsets_sorted(&self) -> Vec<usize> {
+        let mut offsets: Vec<usize> = self.numeric_cell_offsets.values().copied().collect();
+        offsets.sort_unstable();
+        offsets.dedup();
+        offsets
+    }
+
     /// Returns the required runtime representation flag offset for one dynamic local slot.
     fn dynamic_ref_cell_state_offset(&self, slot: LocalSlotId) -> Result<usize> {
         self.ref_cell_state_offset(slot).ok_or_else(|| {

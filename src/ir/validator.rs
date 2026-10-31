@@ -333,6 +333,14 @@ fn validate_instruction_effects(
         && matches!(inst.immediate, Some(Immediate::PropertyRef { .. }))
     {
         inst.op.default_effects() | Effects::ALLOC_HEAP
+    } else if matches!(
+        inst.op,
+        Op::ICheckedAddToInt | Op::ICheckedSubToInt | Op::ICheckedMulToInt
+    ) && matches!(inst.immediate, Some(Immediate::Data(_)))
+    {
+        // A declared-int return boundary turns the checked arithmetic overflow into PHP's
+        // catchable TypeError, so the specialized producer carries throw/fatal effects.
+        inst.op.default_effects() | Effects::MAY_THROW | Effects::MAY_FATAL
     } else {
         inst.op.default_effects()
     };
@@ -879,6 +887,59 @@ fn validate_opcode_rules(
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
+        }
+        // The producer proved the receiver is a private, int-shaped array with reserved capacity.
+        ArrayPushReserved => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // requested range is in bounds; the helper returns an owned Mixed int/float cell.
+        ArraySumInt => {
+            check_count(inst_id, inst, 4, "4")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 3, IrType::Heap(IrHeapKind::Mixed), "Heap(Mixed)")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::Heap(IrHeapKind::Mixed) {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Mixed
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
+        }
+        // The producer pass proved the receiver is a private int-shaped packed array and the
+        // index is in `[0, length)`; the result is a raw PHP int, never PHP null.
+        ArrayGetUnchecked => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            let result = inst
+                .result
+                .ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 {
+                return Err(ValidationError::ResultTypeMismatch(result));
+            }
+            if function
+                .value(result)
+                .ok_or(ValidationError::UnknownValue(result))?
+                .php_type
+                != PhpType::Int
+            {
+                return Err(ValidationError::PhpTypeMismatch(result));
+            }
+            Ok(())
         }
         // Typed fetch-for-write reads require an already integer-coerced key. Mixed-result
         // nested parents instead use the storage-aware runtime reader, which accepts string

@@ -302,6 +302,14 @@ pub(super) fn lower_closure_with_context(
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+    let hinted_param_types = if contextual_arg_types.is_empty() {
+        crate::ir_lower::closure_param_hints::param_hints(expr.span)
+    } else {
+        None
+    };
+    let contextual_arg_types = hinted_param_types
+        .as_deref()
+        .unwrap_or(contextual_arg_types);
     let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
         function::lower_closure_function(
             ctx,

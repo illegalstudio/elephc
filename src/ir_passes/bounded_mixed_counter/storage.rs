@@ -49,7 +49,10 @@ pub(crate) fn prove_integer_slots(
     let incrementing: HashSet<_> = candidates.iter().copied().filter(|&slot| {
         function.instructions.iter().any(|inst| {
             inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
-                && inst.operands.first().is_some_and(|&value| increment_writer(function, value))
+                && inst
+                    .operands
+                    .first()
+                    .is_some_and(|&value| increment_writer(function, slot, value))
         })
     }).collect();
     // Mutually observed counters cannot assume each other's tags independently.
@@ -157,7 +160,10 @@ pub(super) fn owner_source(function: &Function, mut value: ValueId) -> Option<&I
 }
 
 /// Follows ownership wrappers only; another local's increment is not this slot's recurrence.
-fn increment_writer(function: &Function, mut value: ValueId) -> bool {
+///
+/// Both PHP increment forms count: `$i++`/`$i--` (`str_inc_dec`) and the compound
+/// `$i += 1`/`$i -= 1` shape, which lowers to checked or mixed `+`/`-` with a constant step.
+fn increment_writer(function: &Function, slot: LocalSlotId, mut value: ValueId) -> bool {
     for _ in 0..function.values.len() {
         let Some(inst) = super::defining_instruction(function, value) else { return false; };
         match inst.op {
@@ -166,7 +172,7 @@ fn increment_writer(function: &Function, mut value: ValueId) -> bool {
                 let Some(&source) = inst.operands.first() else { return false; };
                 value = source;
             }
-            _ => return false,
+            _ => return super::counter_step(function, slot, inst),
         }
     }
     false

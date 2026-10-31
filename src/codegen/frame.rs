@@ -1773,9 +1773,26 @@ pub(super) fn emit_owned_local_cleanup(
 ) {
     if ctx.numeric_local_slots.contains(&slot) {
         // -- numeric cells have no child that can run a PHP destructor --
-        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result, offset);
+        let done = ctx.next_label("numeric_local_cleanup_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
         abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        let cells = ctx.numeric_cell_offsets_sorted();
+        if !cells.is_empty() && cells.len() <= 4 {
+            // -- a checked numeric local may hold a transient frame cell instead of a heap box --
+            let scratch = abi::secondary_scratch_reg(ctx.emitter);
+            for cell_offset in cells {
+                abi::emit_frame_slot_address(ctx.emitter, scratch, cell_offset);
+                ctx.emitter.instruction(&format!(                                  // compare the retiring pointer with this frame cell
+                    "cmp {}, {}",
+                    result, scratch
+                ));
+                abi::emit_branch_if_equal_wide(ctx.emitter, &done);                // frame cells own no heap payload
+            }
+        }
         abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        ctx.emitter.label(&done);
         return;
     }
     let done = ctx

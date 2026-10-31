@@ -172,6 +172,55 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the boxed mixed pointer in x0
 }
 
+/// Emits `__rt_mixed_from_owned_string`, which boxes an already-owned string pair.
+///
+/// AArch64 input: `x1`/`x2` = owned string pointer/length; x86_64 input: `rax`/`rdx`.
+/// Output: `x0`/`rax` = a fresh Mixed cell whose string tag owns the transferred bytes.
+/// The transfer is direct: no persistence, identity lookup, or byte copy is performed.
+pub fn emit_mixed_from_owned_string(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.blank();
+        emitter.comment("--- runtime: mixed_from_owned_string ---");
+        emitter.label_global("__rt_mixed_from_owned_string");
+        emitter.instruction("push rbp");                                        // preserve the caller frame across cell allocation
+        emitter.instruction("mov rbp, rsp");                                    // establish a stable boxer frame
+        emitter.instruction("sub rsp, 32");                                     // reserve the transferred string pair
+        emitter.instruction("mov QWORD PTR [rbp - 8], rax");                    // save the owned string pointer
+        emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                   // save the owned string length
+        emitter.instruction("mov rax, 24");                                     // mixed cells store tag plus two payload words
+        emitter.instruction("call __rt_heap_alloc");                            // allocate the boxed cell
+        emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))); // stamp the mixed-cell heap kind
+        emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // install the uniform heap header
+        emitter.instruction("mov r10, 1");                                      // runtime tag 1 = string
+        emitter.instruction("mov QWORD PTR [rax], r10");                        // publish the string tag
+        emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                    // reload the owned string pointer
+        emitter.instruction("mov QWORD PTR [rax + 8], r10");                    // transfer the string pointer into the cell
+        emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                   // reload the owned string length
+        emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // transfer the string length into the cell
+        emitter.instruction("leave");                                           // restore the caller frame pointer
+        emitter.instruction("ret");                                            // return the boxed string cell
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: mixed_from_owned_string ---");
+    emitter.label_global("__rt_mixed_from_owned_string");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve the transferred string pair and linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable boxer frame
+    emitter.instruction("stp x1, x2, [sp, #0]");                                // save the owned string pointer and length
+    emitter.instruction("mov x0, #24");                                         // mixed cells store tag plus two payload words
+    emitter.instruction("bl __rt_heap_alloc");                                 // allocate the boxed cell
+    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
+    emitter.instruction("str x9, [x0, #-8]");                                   // install the uniform heap header
+    emitter.instruction("mov x9, #1");                                          // runtime tag 1 = string
+    emitter.instruction("str x9, [x0]");                                        // publish the string tag
+    emitter.instruction("ldp x10, x11, [sp, #0]");                              // reload the transferred string pointer and length
+    emitter.instruction("stp x10, x11, [x0, #8]");                              // transfer the string pair into the cell
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the boxer frame
+    emitter.instruction("ret");                                                // return the boxed string cell
+}
+
 /// x86_64 Linux implementation of `__rt_mixed_from_value`.
 /// Detects the runtime value tag in `rax`, applies ownership normalization (string persistence or refcount retention),
 /// allocates a 24-byte mixed cell on the heap, and writes the tagged payload at offsets 0, 8, and 16.

@@ -391,13 +391,23 @@ pub(super) fn lower_mixed_numeric_binop(
         && is_mixed_like(&lhs_ty)
         && ctx.value_ir_type(lhs)? == IrType::Heap(IrHeapKind::Mixed)
     {
+        let rhs_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x1",
+            Arch::X86_64 => "rdi",
+        };
         if let Some(integer) = integer_rhs_constant(ctx.function, rhs) {
             ctx.load_value_to_result(lhs)?;
-            let rhs_reg = match ctx.emitter.target.arch {
-                Arch::AArch64 => "x1",
-                Arch::X86_64 => "rdi",
-            };
             abi::emit_load_int_immediate(ctx.emitter, rhs_reg, integer);
+            assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
+            return store_if_result(ctx, inst);
+        }
+        // A proven scalar counter is already an integer payload. Lend it to the same
+        // read-only integer-rhs helper instead of allocating a Mixed box for it.
+        if ctx.value_ir_type(rhs)? == IrType::I64
+            && matches!(rhs_ty.codegen_repr(), PhpType::Int | PhpType::Bool)
+        {
+            ctx.load_value_to_result(lhs)?;
+            ctx.load_value_to_reg(rhs, rhs_reg)?;
             assert!(abi::emit_mixed_numeric_integer_rhs_call(ctx.emitter, op));
             return store_if_result(ctx, inst);
         }

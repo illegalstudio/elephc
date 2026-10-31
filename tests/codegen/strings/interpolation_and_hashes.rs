@@ -290,17 +290,18 @@ fn hash_equals_timing_safe_compare() {
     assert_eq!(compile_and_run(r#"<?php echo hash_equals("x","") ? "T" : "F";"#), "F");
 }
 
-/// Verifies hash_algos() returns the supported-algorithm set: representative
-/// members are present, an unsupported PHP algo is absent, and — the key drift
-/// guard — every advertised name is actually hashable by hash() (would throw a
-/// ValueError if a name were not in the crate's make() table).
+/// Verifies hash_algos() returns PHP's complete catalog: representative legacy
+/// members are present, a nonexistent name is absent, and — the key drift guard —
+/// every advertised name is actually hashable by hash() (would throw a ValueError
+/// if a name were not in the crate's make() table).
 #[test]
 fn hash_algos_lists_supported_and_each_is_hashable() {
     assert_eq!(compile_and_run(r#"<?php echo in_array("sha256", hash_algos()) ? "1" : "0";"#), "1");
     assert_eq!(compile_and_run(r#"<?php echo in_array("crc32c", hash_algos()) ? "1" : "0";"#), "1");
     assert_eq!(compile_and_run(r#"<?php echo in_array("whirlpool", hash_algos()) ? "1" : "0";"#), "1");
-    // tiger is a documented gap — must NOT be advertised
-    assert_eq!(compile_and_run(r#"<?php echo in_array("tiger128,3", hash_algos()) ? "1" : "0";"#), "0");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("tiger128,3", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("haval256,5", hash_algos()) ? "1" : "0";"#), "1");
+    assert_eq!(compile_and_run(r#"<?php echo in_array("nope", hash_algos()) ? "1" : "0";"#), "0");
     // Every advertised algorithm must hash without throwing.
     assert_eq!(
         compile_and_run(r#"<?php $ok = 1; foreach (hash_algos() as $a) { if (hash($a, "x") === "") $ok = 0; } echo $ok;"#),
@@ -478,4 +479,52 @@ fn test_empty_comments_in_interpolation_parse_in_eval_and_dynamic_includes() {
         "main.php",
     );
     assert_eq!(out, "eval:v|v|v\ninclude:v|v|v\n");
+}
+
+/// Verifies the literal SHA-256 and HMAC-SHA-256 folds while a runtime-built input stays on
+/// the crypto bridge.
+#[test]
+fn test_hash_constant_fold_and_dynamic_fallback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "abc";
+$key = "key";
+echo hash("sha256", $s), "|";
+echo hash_hmac("sha256", $s, $key), "|";
+echo hash("sha256", "abc" . $argc), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad|\
+9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab|\
+dbfcfd0d87220f629339bd3adcf452d083fde3246625fb3a93e314f833e20d37|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the complete PHP hash catalog and legacy algorithm digests match PHP.
+#[test]
+fn test_hash_algos_full_catalog_and_legacy_digests() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+echo count(hash_algos()), "|";
+echo hash("tiger192,3", "abc"), "|";
+echo hash("haval256,5", "abc"), "|";
+echo hash("gost-crypto", "abc"), "|";
+echo hash("snefru256", "abc"), "|";
+echo hash("murmur3f", "abc"), "|";
+echo hash("xxh128", "abc"), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "60|2aab1484e8c158f2bfb8c5ff41b57a525129131c957b5f93|\
+976cd6254c337969e5913b158392a2921af16fca51f5601d486e0a9de01156e7|\
+b285056dbf18d7392d7677369524dd14747459ed8143997e163b2986f92fd42c|\
+7d033205647a2af3dc8339f6cb25643c33ebc622d32979c4b612b02c4903031b|\
+b4963f3f3fad78673ba2744126ca2d52|\
+06b05ab6733a618578af5f94892f3950|\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

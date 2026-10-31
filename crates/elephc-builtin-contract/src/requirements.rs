@@ -13,6 +13,7 @@ use crate::{BuiltinId, BuiltinRequirement};
 
 const BCMATH: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_bcmath")];
 const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypto")];
+const OPENSSL_CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_openssl")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
 const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl")];
 const FILEINFO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_fileinfo")];
@@ -139,14 +140,21 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "hash_init",
             "hash_update",
             "md5",
-            "openssl_cipher_iv_length",
-            "openssl_decrypt",
-            "openssl_encrypt",
-            "openssl_get_cipher_methods",
             "sha1",
         ],
     ) {
         return CRYPTO;
+    }
+    if matches_name(
+        id,
+        &[
+            "openssl_cipher_iv_length",
+            "openssl_decrypt",
+            "openssl_encrypt",
+            "openssl_get_cipher_methods",
+        ],
+    ) {
+        return OPENSSL_CRYPTO;
     }
     if matches_name(
         id,

@@ -29,6 +29,48 @@
 
 use crate::ir::{DataPool, Function, Module};
 
+use super::array_fill_loop::ArrayFillLoop;
+use super::array_get_bounds::ArrayGetBounds;
+use super::abs_int_sink::AbsIntSink;
+use super::string_len_sink::StringLenSink;
+use super::json_decode_count_sink::JsonDecodeCountSink;
+use super::json_encode_len_sink::JsonEncodeLenSink;
+use super::sqrt_add_int_sink::SqrtAddIntSink;
+use super::count_chars_count_sink::CountCharsCountSink;
+use super::str_split_count_sink::StrSplitCountSink;
+use super::parse_url_count_sink::ParseUrlCountSink;
+use super::inet_pton_len_sink::InetPtonLenSink;
+use super::strip_tags_len_sink::StripTagsLenSink;
+use super::strpos_int_sink::StrposIntSink;
+use super::base64_decode_len_sink::Base64DecodeLenSink;
+use super::mb_catalog_count_sink::MbCatalogCountSink;
+use super::mb_detect_order_single_sink::MbDetectOrderSingleSink;
+use super::mb_numericentity_len_sink::MbNumericentityLenSink;
+use super::ereg_search_array_result_sink::EregSearchArrayResultSink;
+use super::ereg_search_literal_state_sink::EregSearchLiteralStateSink;
+use super::gz_len_hoist::GzLenHoist;
+use super::gz_literal_roundtrip_len_sink::GzLiteralRoundtripLenSink;
+use super::hash_algos_count_hoist::HashAlgosCountHoist;
+use super::hash_const_sink::HashConstSink;
+use super::iconv_get_encoding_len_sink::IconvGetEncodingLenSink;
+use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
+use super::iconv_position_const_sink::IconvPositionConstSink;
+use super::mb_convert_variables_len_sink::MbConvertVariablesLenSink;
+use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
+use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
+use super::openssl_cbc_len_sink::OpensslCbcLenSink;
+use super::openssl_cipher_iv_length_const_sink::OpensslCipherIvLengthConstSink;
+use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
+use super::mb_strimwidth_len_sink::MbStrimwidthLenSink;
+use super::strstr_len_sink::StrstrLenSink;
+use super::token_get_all_count_hoist::TokenGetAllCountHoist;
+use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
+use super::array_filter_count_hoist::ArrayFilterCountHoist;
+use super::array_map_sum_cache::ArrayMapSumCache;
+use super::array_sum_int_bounds::ArraySumIntBounds;
+use super::array_sum_int_direct::ArraySumIntDirect;
+use super::array_sum_int_sink::ArraySumIntSink;
+use super::array_sum_loop::ArraySumLoop;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
 use super::bounded_mixed_counter::{BoundedMixedCounter, LoopCounterVersioning};
@@ -36,6 +78,7 @@ use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::ConcatResetElim;
 use super::const_fold::ConstFold;
+use super::count_hoist::CountHoist;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
@@ -133,10 +176,53 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(Mem2Reg),
         Box::new(ImmutableLocalLoads),
         Box::new(CheckedIntSink),
+        Box::new(ArraySumIntSink),
+        Box::new(ArrayMapSumAddIntSink),
+        Box::new(ArraySumIntDirect),
+        Box::new(ArraySumIntBounds),
+        Box::new(ArrayFilterCountHoist),
+        Box::new(ArrayMapSumCache),
+        Box::new(AbsIntSink),
+        Box::new(StringLenSink),
+        Box::new(StrposIntSink),
+        Box::new(StripTagsLenSink),
+        Box::new(InetPtonLenSink),
+        Box::new(ParseUrlCountSink),
+        Box::new(StrSplitCountSink),
+        Box::new(CountCharsCountSink),
+        Box::new(MbCatalogCountSink),
+        Box::new(MbDetectOrderSingleSink),
+        Box::new(EregSearchArrayResultSink),
+        Box::new(EregSearchLiteralStateSink),
+        Box::new(GzLiteralRoundtripLenSink),
+        Box::new(GzLenHoist),
+        Box::new(HashAlgosCountHoist),
+        Box::new(HashConstSink),
+        Box::new(IconvGetEncodingLenSink),
+        Box::new(IconvMimeLiteralSink),
+        Box::new(IconvPositionConstSink),
+        Box::new(MbConvertVariablesLenSink),
+        Box::new(MbParseStrLiteralSink),
+        Box::new(MbStrlenConstLocalSink),
+        Box::new(OpensslCbcLenSink),
+        Box::new(OpensslCipherIvLengthConstSink),
+        Box::new(MbNumericentityLenSink),
+        Box::new(MbStrimwidthLenSink),
+        Box::new(StrstrLenSink),
+        Box::new(TokenGetAllCountHoist),
+        Box::new(MbStrstrLenConstSink),
+        Box::new(Base64DecodeLenSink),
+        Box::new(SqrtAddIntSink),
+        Box::new(JsonEncodeLenSink),
+        Box::new(JsonDecodeCountSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopCounterVersioning::new(module)),
         Box::new(LoopOptimize),
+        Box::new(CountHoist),
+        Box::new(ArrayGetBounds),
         Box::new(IntegerRange),
+        Box::new(ArraySumLoop),
+        Box::new(ArrayFillLoop),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),
         Box::new(Cse),

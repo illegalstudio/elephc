@@ -83,6 +83,30 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
     store_if_result(ctx, inst)
 }
 
+/// Lowers the raw integer absolute value selected by the abs int sink.
+///
+/// The operand is a concrete int, bool, or null-capable tagged scalar; tagged null reads as
+/// zero exactly like the ordinary `abs()` lowering. `INT_MIN` still terminates in PHP's warned
+/// float-to-int conversion inside the runtime helper.
+pub(crate) fn lower_abs_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "abs", 1)?;
+    let value = expect_operand(inst, 0)?;
+    match ctx.load_value_to_result(value)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {}
+        PhpType::TaggedScalar => {
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "abs_int for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_abs_int");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `floor()` for concrete integer-like and floating operands.
 pub(crate) fn lower_floor(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     lower_float_rounding_builtin(ctx, inst, "floor", "frintm", 1)
@@ -123,6 +147,28 @@ pub(crate) fn lower_sqrt(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             ctx.emitter.instruction("sqrtsd xmm0, xmm0");                       // compute the square root in the floating-point result register
         }
     }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the fused `(int)sqrt(a + b)` target selected by the sqrt add sink.
+///
+/// Both operands are proven concrete integers by the producing pass; the runtime helper keeps
+/// PHP's checked-add promotion, NAN warning and truncation semantics.
+pub(crate) fn lower_sqrt_add_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "sqrt", 2)?;
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(lhs, "x0")?;
+            ctx.load_value_to_reg(rhs, "x1")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(lhs, "rdi")?;
+            ctx.load_value_to_reg(rhs, "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_sqrt_add_int");
     store_if_result(ctx, inst)
 }
 

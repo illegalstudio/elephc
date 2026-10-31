@@ -19903,9 +19903,11 @@ fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
     );
 }
 
-/// Verifies AOT and dynamic eval OpenSSL calls share Magician's embedded crypto objects.
+/// Verifies AOT and dynamic eval OpenSSL calls link and run together. AOT uses
+/// the libcrypto-backed `elephc_openssl` bridge for the full provider catalog;
+/// eval keeps Magician's embedded pure-Rust hash/cipher bridge.
 #[test]
-fn test_eval_and_aot_openssl_share_one_crypto_bridge() {
+fn test_eval_and_aot_openssl_link_and_run() {
     let dir = make_cli_test_dir("elephc_eval_aot_openssl_bridge_dedup");
     fs::write(
         dir.join("main.php"),
@@ -19919,8 +19921,12 @@ eval($code);
     )
     .expect("write AOT and eval OpenSSL fixture");
 
-    let compile = elephc_cli_command(&dir)
-        .args(["--quiet", "main.php"])
+    let Some(mut command) = openssl_cli_command(&dir) else {
+        eprintln!("ELEPHC_OPENSSL_NATIVE_SKIP_GATE skipping test_eval_and_aot_openssl_link_and_run");
+        return;
+    };
+    let compile = command
+        .args(["--php-version", "8.5", "--quiet", "main.php"])
         .output()
         .expect("compile AOT and eval OpenSSL fixture");
     assert!(

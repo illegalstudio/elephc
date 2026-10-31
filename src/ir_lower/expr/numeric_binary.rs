@@ -248,6 +248,9 @@ fn lower_numeric_binary_values(
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
         if should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type) {
+            let (lhs_ir, rhs_ir) = (lhs.ir_type, rhs.ir_type);
+            let lhs = narrow_tagged_scalar_numeric_operand(ctx, lhs, rhs_ir, Some(expr.span));
+            let rhs = narrow_tagged_scalar_numeric_operand(ctx, rhs, lhs_ir, Some(expr.span));
             let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
             release_binary_operand_temporary(ctx, lhs, expr.span);
             if rhs.value != lhs.value {
@@ -326,6 +329,9 @@ fn lower_numeric_binary_values(
         return LoweredValue { value, ir_type: result_type };
     }
     if let Some(mixed_op) = mixed_numeric_op(op) {
+        let (lhs_ir, rhs_ir) = (lhs.ir_type, rhs.ir_type);
+        let lhs = narrow_tagged_scalar_numeric_operand(ctx, lhs, rhs_ir, Some(expr.span));
+        let rhs = narrow_tagged_scalar_numeric_operand(ctx, rhs, lhs_ir, Some(expr.span));
         let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
         release_binary_operand_temporary(ctx, lhs, expr.span);
         if rhs.value != lhs.value {
@@ -443,6 +449,24 @@ pub(super) fn array_union_value_type(left: &PhpType, right: &PhpType) -> PhpType
 pub(super) fn should_use_mixed_numeric_binop(lhs: IrType, rhs: IrType) -> bool {
     !matches!(lhs, IrType::I64 | IrType::F64)
         || !matches!(rhs, IrType::I64 | IrType::F64)
+}
+
+/// Narrows a `?int` TaggedScalar operand to PHP's null-as-zero integer value.
+///
+/// A boxed Mixed operand used to box the TaggedScalar pair into a fresh heap cell before the
+/// numeric helper. The pair is PHP int|null only, and the existing null-to-zero cast turns it
+/// into a raw I64, which keeps the borrowed-integer-rhs path and lets the accumulator's numeric
+/// domain proof accept the update as a plain integer.
+fn narrow_tagged_scalar_numeric_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    operand: LoweredValue,
+    other: IrType,
+    span: Option<Span>,
+) -> LoweredValue {
+    if operand.ir_type != IrType::TaggedScalar || other != IrType::Heap(IrHeapKind::Mixed) {
+        return operand;
+    }
+    super::unary_logic::lower_tagged_scalar_to_int(ctx, operand, span)
 }
 
 /// Emits a mixed-numeric EIR opcode with the operation immediate required by the backend.

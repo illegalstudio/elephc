@@ -20,6 +20,29 @@ use super::*;
 /// Proven-invalid allow types raise PHP's `TypeError`; boxed Mixed/Union values
 /// are dispatched at runtime.
 pub(crate) fn lower_strip_tags(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_strip_tags_impl(ctx, inst, "__rt_strip_tags", &PhpType::Str)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the allocation-free `strlen(strip_tags(...))` helper.
+///
+/// The scanner runs in a count-only mode and returns the retained byte count in
+/// the integer result register; it never publishes or persists the output.
+pub(crate) fn lower_strip_tags_len(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_strip_tags_impl(ctx, inst, "__rt_strip_tags", &PhpType::Int)?;
+    store_if_result(ctx, inst)
+}
+
+/// Emits the shared strip-tags argument materialization and call for one result shape.
+fn lower_strip_tags_impl(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    label: &str,
+    result_ty: &PhpType,
+) -> Result<()> {
     if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
             "strip_tags expected 1 or 2 args, got {}",
@@ -58,17 +81,35 @@ pub(crate) fn lower_strip_tags(ctx: &mut FunctionContext<'_>, inst: &Instruction
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_strip_tags");
+    match (ctx.emitter.target.arch, result_ty.codegen_repr() == PhpType::Int) {
+        (Arch::AArch64, true) => {
+            ctx.emitter.instruction("mov x5, #1");                              // count bytes without publishing a string
+        }
+        (Arch::AArch64, false) => {
+            ctx.emitter.instruction("mov x5, #0");                              // publish the stripped string
+        }
+        (Arch::X86_64, true) => {
+            ctx.emitter.instruction("mov r8d, 1");                              // count bytes without publishing a string
+        }
+        (Arch::X86_64, false) => {
+            ctx.emitter.instruction("xor r8d, r8d");                            // publish the stripped string
+        }
+    }
+    abi::emit_call_label(ctx.emitter, label);
     if owns_allow {
         abi::emit_pop_call_operand_owner(ctx.emitter);
-        abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+        abi::emit_push_result_value(ctx.emitter, result_ty);
         abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
         abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
-        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        if result_ty.codegen_repr() == PhpType::Str {
+            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+            abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+        } else {
+            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
         abi::emit_release_temporary_stack(ctx.emitter, 16);
     }
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Materializes `$allowed_tags` into the target string-result registers.

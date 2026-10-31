@@ -31,6 +31,39 @@ pub(super) fn lower(
         RuntimeFnId::ArraySum => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_sum(ctx, inst)
         }),
+        RuntimeFnId::Base64EncodedLen => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base64_encoded_len(ctx, inst)
+        }),
+        RuntimeFnId::ArraySumInt => Some({
+            crate::codegen::lower_inst::arrays::lower_array_sum_int_value(ctx, inst)
+        }),
+        RuntimeFnId::ArraySumProbeSmall => Some({
+            crate::codegen::lower_inst::arrays::lower_array_sum_probe_small(ctx, inst)
+        }),
+        RuntimeFnId::ArraySumIntCached => Some({
+            crate::codegen::lower_inst::arrays::lower_array_sum_int_cached(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSumAdd => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSumAddInt => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add_int(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSumProbeInt => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_probe_int(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSumAddIntCached => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add_int_cached(ctx, inst)
+        }),
+        RuntimeFnId::ArrayMapSumAddSafe => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add_safe(ctx, inst)
+        }),
+        RuntimeFnId::ArrayFilterCountMod => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_filter_count_mod(ctx, inst)
+        }),
+        RuntimeFnId::ArrayElementTypeCheck => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_element_type_check(ctx, inst)
+        }),
         RuntimeFnId::ArrayUdiff => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_udiff(ctx, inst)
         }),

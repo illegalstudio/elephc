@@ -1,0 +1,15 @@
+[package]
+name = "elephc-openssl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "libcrypto-backed OpenSSL cipher catalog and EVP bridge for elephc"
+publish = false
+
+# Built as a C-callable staticlib linked into compiled PHP programs that use the
+# openssl_* cipher surface, and an rlib so the FFI wrapper is unit-testable with
+# `ELEPHC_OPENSSL_LIB_DIR` pointing at a pinned libcrypto.a.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]

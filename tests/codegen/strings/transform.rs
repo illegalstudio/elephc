@@ -217,6 +217,23 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Integer implode formats large and negative values without overwriting its own output via
+/// the shared `_concat_buf` itoa scratch area.
+#[test]
+fn test_implode_int_content_with_large_and_negative_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", range(1, 100)), "\n";
+echo implode("::", [0, 9, 10, 99, 100, 101, -1, -9, -10, -99, -100, PHP_INT_MAX, PHP_INT_MIN]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100\n\
+0::9::10::99::100::101::-1::-9::-10::-99::-100::9223372036854775807::-9223372036854775808\n"
+    );
+}
+
 /// Verifies `implode()` and `join()` accept an ASSOCIATIVE array, joining its values.
 ///
 /// PHP ignores the keys entirely, so this is ordinary code — but the renderers walk a dense
@@ -938,4 +955,115 @@ echo (int)$finite, ",";
         out,
         "0,0,0,0,0,9223372036854775807,"
     );
+}
+
+/// Case conversion crosses sixteen-byte vector and eight-byte word boundaries, preserves empty
+/// and already-correct strings, and leaves non-ASCII UTF-8 bytes untouched.
+#[test]
+fn test_case_conversion_vector_boundaries_and_high_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+$a = str_repeat("AbC", 7);
+echo strtolower($a), "|", strtoupper("aBc"), "|",
+     strtolower(""), "|", strtoupper("ABC"), "|",
+     strtolower("a\xc3\xa9Z"), "|", strtoupper("z\xc3\xa9A"), "\n";
+"#,
+    );
+    assert_eq!(out, "abcabcabcabcabcabcabc|ABC||ABC|a\u{e9}z|Z\u{e9}A\n");
+}
+
+/// Reversal moves whole words then a byte tail, so lengths at and around the word boundary and
+/// repeated-copy growth both return the exact source bytes.
+#[test]
+fn test_strrev_and_str_repeat_word_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "abcdefghijklmnopq";
+echo strrev($s), "|", strrev("a"), "|", strrev(""), "|",
+     strlen(str_repeat("ab", 32)), "|", str_repeat("x", 1), "|",
+     strlen(str_repeat("abc", 40)), "\n";
+"#,
+    );
+    assert_eq!(out, "qponmlkjihgfedcba|a||64|x|120\n");
+}
+
+/// Constant `str_repeat()` lengths fold without allocating; a runtime count keeps the call.
+#[test]
+fn test_strlen_str_repeat_lengths_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "ab";
+echo strlen(str_repeat($s, 7)), '|';
+echo strlen(str_repeat("abc", 0)), '|';
+$n = $argc + 3;
+echo strlen(str_repeat($s, $n)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "14|0|8\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Length-only ASCII case conversion folds to the source length and keeps heap ownership clean.
+#[test]
+fn test_strlen_case_conversion_lengths_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = "Hello Wörld";
+$t = str_repeat("ab", 7);
+echo strlen(strtolower($s)), '|', strlen(strtoupper($s)), '|', strlen(strtolower($t)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "12|12|14\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Length-only md5/base64 observations fold to their exact encoded lengths while preserving
+/// operand evaluation, the binary md5 form, and heap ownership.
+#[test]
+fn test_strlen_md5_and_base64_lengths_match_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = str_repeat("abc", 40);
+echo strlen(md5($s)), '|', strlen(base64_encode($s)), '|';
+foreach ([0, 1, 2, 3, 4, 5, 119, 120, 121] as $n) {
+    $t = str_repeat("a", $n);
+    echo strlen(base64_encode($t)), ',';
+}
+echo '|', strlen(md5('abc', true)), '|';
+$c = 0;
+function f() { global $c; $c++; return 'abc'; }
+echo strlen(md5(f())), '|', $c, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "32|160|0,4,4,4,8,8,160,160,164,|16|32|1\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Disabling EIR optimization keeps the real md5/base64 calls and produces the same lengths.
+#[test]
+fn test_strlen_md5_and_base64_lengths_no_ir_opt() {
+    without_ir_opt(|| {
+        let out = compile_and_run(
+            r#"<?php
+$s = str_repeat("abc", 40);
+echo strlen(md5($s)), '|', strlen(base64_encode($s)), "\n";
+"#,
+        );
+        assert_eq!(out, "32|160\n");
+    });
 }

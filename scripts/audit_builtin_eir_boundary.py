@@ -47,6 +47,70 @@ NON_REGISTRY_ROUTES = {
 HOST_ONLY_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
 COMPILER_TRANSFORM_NAMES = {"func_get_arg", "func_get_args", "func_num_args"}
+# Typed runtime targets selected by AST fusions or EIR specialization passes rather than by a
+# PHP-visible builtin's own semantic descriptor. They still require a backend implementation
+# arm and a stable `RuntimeFnId` spelling, but they are not part of any builtin's inventory.
+COMPILER_INTERNAL_RUNTIME_FNS = {
+    "AbsInt",
+    "Base64EncodedLen",
+    "StrposInt",
+    "StrstrLen",
+    "ChunkSplitLen",
+    "Bin2HexLen",
+    "StrSplitCount",
+    "Base64DecodedLen",
+    "ParseUrlCount",
+    "CountCharsDistinct",
+    "InetPtonLen",
+    "Ip2longInt",
+    "StripTagsLen",
+    "StriposInt",
+    "StrrposInt",
+    "StrriposInt",
+    "SqrtAddInt",
+    "MbChrLen",
+    "MbConvertEncodingLen",
+    "MbDecodeNumericentityLen",
+    "MbDetectEncodingLen",
+    "MbEncodeNumericentityLen",
+    "MbEncodingAliasesCount",
+    "MbEregReplaceLen",
+    "MbGetInfoLen",
+    "MbListEncodingsCount",
+    "MbOrdInt",
+    "MbPreferredMimeNameLen",
+    "MbSplitCount",
+    "MbStrSplitCount",
+    "MbStrimwidthLen",
+    "MbStriposInt",
+    "MbStristrLen",
+    "MbStrposInt",
+    "MbStrrchrLen",
+    "MbStrrichrLen",
+    "MbStrriposInt",
+    "MbStrrposInt",
+    "MbStrstrLen",
+    "MbInternalEncodingInt",
+    "MbLanguageInt",
+    "MbHttpOutputInt",
+    "MbRegexEncodingInt",
+    "MbSubstituteCharacterInt",
+    "MbHttpInputLen",
+    "MbDetectOrderSingle",
+    "MbRegexSetOptionsLen",
+    "JsonEncodeStr",
+    "JsonDecodeCount",
+    "ArrayElementTypeCheck",
+    "ArrayFilterCountMod",
+    "ArraySumProbeSmall",
+    "ArrayMapSumAdd",
+    "ArrayMapSumAddInt",
+    "ArrayMapSumAddIntCached",
+    "ArrayMapSumProbeInt",
+    "ArrayMapSumAddSafe",
+    "ArraySumInt",
+    "ArraySumIntCached",
+}
 
 
 def read(path: Path) -> str:
@@ -496,11 +560,17 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
     referenced_runtime_variants = set(
         re.findall(r"RuntimeFnId::([A-Za-z0-9_]+)", builtin_semantics_source)
     )
-    for variant in sorted(set(builtin_target_variants) - referenced_runtime_variants):
+    for variant in sorted(
+        set(builtin_target_variants)
+        - referenced_runtime_variants
+        - COMPILER_INTERNAL_RUNTIME_FNS
+    ):
         errors.append(f"RuntimeFnId::{variant}: runtime function is not referenced by builtin semantics")
+    for variant in sorted(COMPILER_INTERNAL_RUNTIME_FNS - set(builtin_target_variants)):
+        errors.append(f"RuntimeFnId::{variant}: unknown compiler-internal runtime function")
     for variant in sorted(referenced_runtime_variants - set(builtin_target_variants)):
         errors.append(f"RuntimeFnId::{variant}: builtin semantics reference an unknown runtime function")
-    for variant in sorted(referenced_runtime_variants):
+    for variant in sorted(referenced_runtime_variants | COMPILER_INTERNAL_RUNTIME_FNS):
         if f"RuntimeFnId::{variant}" not in builtin_backend_source:
             errors.append(f"RuntimeFnId::{variant}: runtime function has no backend implementation arm")
     for record in inventory["registry_builtins"]:

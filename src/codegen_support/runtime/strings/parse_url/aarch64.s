@@ -1,9 +1,12 @@
+.globl __rt_parse_url_common
+__rt_parse_url_common:
     sub sp, sp, #224
     stp x29, x30, [sp, #208]
     add x29, sp, #208
     str x1, [sp, #0]
     str x2, [sp, #8]
     str x3, [sp, #16]
+    str x5, [sp, #192]
     stp xzr, xzr, [sp, #24]
     stp xzr, xzr, [sp, #40]
     stp xzr, xzr, [sp, #56]
@@ -582,6 +585,12 @@ Lparse_url_null:
     b Lparse_url_return
 
 Lparse_url_invalid:
+    ldr x9, [sp, #192]
+    cbz x9, Lparse_url_invalid_build
+    mov x0, #0
+    mov x1, #0
+    b Lparse_url_return
+Lparse_url_invalid_build:
     mov x0, #3
     mov x1, #0
     mov x2, #0
@@ -595,6 +604,8 @@ Lparse_url_component_error:
     b __rt_parse_url_throw_component
 
 Lparse_url_array:
+    ldr x9, [sp, #192]
+    cbnz x9, Lparse_url_array_count
     mov x0, #16
     mov x1, #7
     bl __rt_hash_new
@@ -686,6 +697,16 @@ Lparse_url_return:
     ldp x29, x30, [sp, #208]
     add sp, sp, #224
     ret
+
+Lparse_url_array_count:
+    ldr x9, [sp, #24]
+    and x9, x9, #0xff
+    fmov d0, x9
+    cnt v0.8b, v0.8b
+    addv b0, v0.8b
+    umov w0, v0.b[0]
+    mov x1, #1
+    b Lparse_url_return
 
 // Copy a component into owned storage and replace PHP-disallowed control bytes.
 Lparse_url_copy_component:

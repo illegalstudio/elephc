@@ -868,3 +868,129 @@ $d = [10]; pushViaRef($d); echo implode(",", $d), "\n";
         )
     );
 }
+
+/// A raw-int append emits the inline fast path and keeps the helper as the cold fallback.
+///
+/// The fast path only fires for a unique, int-shaped, capacity-available array; the slow label
+/// still covers the first append, COW splits, growth, null receivers and hash promotion. The
+/// storage-kind dispatch is inline, so the loop body must not call `__rt_heap_kind` either.
+#[test]
+fn test_array_push_int_inline_fast_path_on_all_supported_targets() {
+    let source = r#"<?php
+function fill(int $n): int {
+    $data = [];
+    $i = 0;
+    while ($i < $n) {
+        $data[] = $i & 63;
+        $i += 1;
+    }
+    return count($data);
+}
+echo fill($argc + 9);
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_array_push_int_inline");
+        let path = dir.join("main.php");
+        fs::write(&path, source).unwrap();
+        let mut cmd = elephc_cli_command(&dir);
+        cmd.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            cmd.args(["--emit", "staticlib"]);
+        }
+        let output = cmd.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(path.with_extension("s")).unwrap();
+        let push_body = asm
+            .split("@block name=while.body")
+            .find(|body| body.contains("op=array_push"))
+            .unwrap_or_else(|| panic!("{target}: missing push loop body\n{asm}"));
+        assert!(
+            push_body.contains("array_push_int_slow"),
+            "{target}: the inline fast path and its slow label must be emitted\n{push_body}"
+        );
+        assert!(
+            !push_body.contains("__rt_heap_kind"),
+            "{target}: append dispatch must be inline\n{push_body}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// `array_sum` takes the packed int fast path and falls back for overflow, hash and float arrays.
+#[test]
+fn test_array_sum_typed_int_fast_path_matches_php() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = []; $a[] = 1; $a[] = 2; $a[] = 3;
+echo array_sum($a), '|';
+$b = []; $b[] = PHP_INT_MAX; $b[] = 1;
+echo gettype(array_sum($b)), ':', array_sum($b), '|';
+$c = []; $c[] = 1; $c['x'] = 5;
+echo array_sum($c), '|';
+$d = []; $d[] = 1.5; $d[] = 2.5;
+echo gettype(array_sum($d)), ':', array_sum($d), '|';
+$e = [];
+echo gettype(array_sum($e)), ':', array_sum($e), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "6|double:9.2233720368548E+18|6|double:4|integer:0\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// The SIMD `array_sum` fast path accepts positive ranges only when elements fit in 32 unsigned
+/// bits and the total stays below `2^63`; every other range restarts the exact scalar sequence.
+#[test]
+fn test_array_sum_simd_gate_matches_php_fallbacks() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$positive = [];
+for ($i = 0; $i < 101; $i++) { $positive[] = $i + 1; }
+echo array_sum($positive), '|';
+$odd = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+echo array_sum($odd), '|';
+$negative = [];
+for ($i = 0; $i < 100; $i++) { $negative[] = $i - 50; }
+echo array_sum($negative), '|';
+$wide = [4294967296];
+for ($i = 0; $i < 99; $i++) { $wide[] = 1; }
+echo array_sum($wide), '|';
+$overflow = [PHP_INT_MAX];
+for ($i = 0; $i < 99; $i++) { $overflow[] = 1; }
+echo gettype(array_sum($overflow)), ':', array_sum($overflow), '|';
+$loop = -7;
+for ($i = 0; $i < 101; $i++) { $loop += $positive[$i]; }
+echo $loop, '|';
+$float = 1.5;
+for ($i = 0; $i < 101; $i++) { $float += $positive[$i]; }
+echo gettype($float), ':', $float, "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "5151|45|-50|4294967395|double:9.2233720368548E+18|5144|double:5152.5\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

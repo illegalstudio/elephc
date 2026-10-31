@@ -353,6 +353,10 @@ fn check_array_callback_builtin_call_in_engine_frame(
             env,
             &param_hints,
         )?;
+        checker.closure_param_hints.insert(
+            callback.span,
+            sig.params.iter().map(|param| param.1.clone()).collect(),
+        );
         return checker.check_known_callable_call(
             &sig,
             &callback_args,

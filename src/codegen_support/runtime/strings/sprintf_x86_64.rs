@@ -547,6 +547,15 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("je __rt_sprintf_bin_go_x64");                          // yes → generate binary digits by hand
     emitter.instruction("cmp r8b, 99");                                         // is this the single-character conversion?
     emitter.instruction("je __rt_sprintf_chr_go_x64");                          // yes → emit the low byte directly
+    emitter.instruction("cmp r8b, 100");                                        // is this plain signed decimal?
+    emitter.instruction("jne __rt_sprintf_int_go_x64");                         // other conversions keep the libc path
+    emitter.instruction("cmp QWORD PTR [rbp - 88], 0");                         // any parsed flags?
+    emitter.instruction("jne __rt_sprintf_int_go_x64");                         // flags require libc field rules
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // any parsed field width?
+    emitter.instruction("jne __rt_sprintf_int_go_x64");                         // width requires libc padding rules
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // parsed precision
+    emitter.instruction("test rax, rax");                                       // is the absent-precision sentinel set?
+    emitter.instruction("js __rt_sprintf_int_itoa_x64");                        // yes → direct decimal digits
     emitter.label("__rt_sprintf_int_go_x64");
     emitter.instruction("lea r9, [rbp - 160]");                                 // mini C format cursor
     emitter.instruction("mov BYTE PTR [r9], 37");                               // write the '%' introducer
@@ -581,6 +590,15 @@ fn emit_integer_conversion(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // no SSE variadic registers are live
     emitter.bl_c("snprintf");                                                   // render the integer body through libc
     emitter.instruction("jmp __rt_sprintf_snret_x64");                          // clamp and take the result
+
+    // -- unadorned `%d`: format the decimal digits without libc --
+    emitter.label("__rt_sprintf_int_itoa_x64");
+    emitter.instruction("mov rdi, r10");                                        // integer operand
+    emitter.instruction("lea rsi, [rbp - 672]");                                // private decimal scratch
+    emitter.instruction("call __rt_itoa_into");                                 // write the digits without a libc format parse
+    emitter.instruction("mov r10, rax");                                        // body pointer = first decimal digit
+    emitter.instruction("mov r11, rdx");                                        // body length = formatted byte count
+    emitter.instruction("jmp __rt_sprintf_emit_x64");                           // pad and copy the decimal body
 }
 
 /// Emits the x86_64 float conversions (`%f`, `%F`, `%e`, `%E`, `%g`, `%G`).

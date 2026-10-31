@@ -224,6 +224,20 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _spl_float_string_suffix\n_spl_float_string_suffix:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::spl::SPL_FLOAT_STRING_SUFFIX
     ));
+    out.push_str(".p2align 4\n.globl _ascii_lower\n_ascii_lower:\n");
+    for byte in 0u16..256 {
+        let folded = if (b'A' as u16..=b'Z' as u16).contains(&byte) {
+            byte + 32
+        } else {
+            byte
+        };
+        out.push_str(&format!("    .byte {folded}\n"));
+    }
+    out.push_str(".globl _hex_digits\n_hex_digits:\n    .ascii \"0123456789abcdef\"\n");
+    out.push_str(".p2align 8\n.globl _crc32_table\n_crc32_table:\n");
+    for entry in crate::codegen_support::runtime::strings::CRC32_TABLE {
+        out.push_str(&format!("    .long {entry}\n"));
+    }
     out.push_str(".globl _sprintf_closure_class_name\n_sprintf_closure_class_name:\n    .ascii \"Closure\"\n");
     out.push_str(".globl _mbstring_tostring_name\n_mbstring_tostring_name:\n    .ascii \"__toString\"\n");
     out.push_str(".globl _mbstring_warning_prefix\n_mbstring_warning_prefix:\n    .ascii \"Warning: \"\n");
@@ -966,6 +980,7 @@ pub(crate) fn emit_runtime_data_fixed(
         ("_diag_float_key_precision_suffix", " to int loses precision\n"),
         ("_diag_float_key_range_prefix", "Warning: The float "),
         ("_diag_float_key_range_suffix", " is not representable as an int, cast occurred\n"),
+        ("_diag_sqrt_nan_warning", crate::codegen_support::runtime::numeric::SQRT_NAN_WARNING),
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
@@ -1185,17 +1200,17 @@ pub(crate) fn emit_runtime_data_fixed(
     // Symmetric-cipher bridge slots. OpenSSL call sites publish these separately
     // from the hash family so hash-only programs never reference cipher symbols.
     out.push_str(&comm_directive(
-        "_elephc_crypto_cipher_iv_length_fn",
+        "_elephc_openssl_cipher_iv_length_fn",
         8,
         target,
     ));
     out.push_str(&comm_directive(
-        "_elephc_crypto_cipher_methods_fn",
+        "_elephc_openssl_cipher_methods_fn",
         8,
         target,
     ));
-    out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
-    out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_openssl_encrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_openssl_decrypt_fn", 8, target));
     // BCMath bridge slots are published only by `bc*` call sites. Shared runtime
     // helpers call through these slots so unrelated programs never reference the
     // optional elephc-bcmath archive.
@@ -1750,6 +1765,11 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _ucwords_default_seps\n_ucwords_default_seps:\n    .byte 32, 9, 13, 10, 12, 11\n",
     );
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
+    // Half-width katakana U+FF61..U+FF9D mapped to their full-width UTF-8 triples, in
+    // codepoint order. `__rt_mb_convert_kana_k_utf8` indexes one triple per accepted
+    // character; voiced sound marks are rejected because they combine with the previous
+    // character and must stay on the shared bridge.
+    out.push_str(".globl _mb_halfwidth_kana_tbl\n_mb_halfwidth_kana_tbl:\n    .byte 227, 128, 130, 227, 128, 140, 227, 128, 141, 227, 128, 129, 227, 131, 187, 227, 131, 178, 227, 130, 161, 227, 130, 163, 227, 130, 165, 227, 130, 167, 227, 130, 169, 227, 131, 163, 227, 131, 165, 227, 131, 167, 227, 131, 131, 227, 131, 188, 227, 130, 162, 227, 130, 164, 227, 130, 166, 227, 130, 168, 227, 130, 170, 227, 130, 171, 227, 130, 173, 227, 130, 175, 227, 130, 177, 227, 130, 179, 227, 130, 181, 227, 130, 183, 227, 130, 185, 227, 130, 187, 227, 130, 189, 227, 130, 191, 227, 131, 129, 227, 131, 132, 227, 131, 134, 227, 131, 136, 227, 131, 138, 227, 131, 139, 227, 131, 140, 227, 131, 141, 227, 131, 142, 227, 131, 143, 227, 131, 146, 227, 131, 149, 227, 131, 152, 227, 131, 155, 227, 131, 158, 227, 131, 159, 227, 131, 160, 227, 131, 161, 227, 131, 162, 227, 131, 164, 227, 131, 166, 227, 131, 168, 227, 131, 169, 227, 131, 170, 227, 131, 171, 227, 131, 172, 227, 131, 173, 227, 131, 175, 227, 131, 179\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
     // php-src's `base64_reverse_table`, transposed from its signed `short` entries onto

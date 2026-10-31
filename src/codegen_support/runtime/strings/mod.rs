@@ -28,6 +28,7 @@ mod atoi;
 mod grapheme_strrev;
 mod strcopy;
 mod str_inc_dec;
+mod str_new_owned;
 mod str_persist;
 mod strtolower;
 mod ascii_case;
@@ -37,6 +38,7 @@ mod ltrim;
 mod rtrim;
 mod strpos;
 mod strrpos;
+mod strstr_len;
 mod stripos;
 mod strripos;
 mod str_repeat;
@@ -63,18 +65,22 @@ mod substr_replace;
 mod str_offset_set;
 mod str_pad;
 mod str_split;
+mod str_split_count;
 mod str_word_count;
 mod addslashes;
 mod stripslashes;
 mod nl2br;
 mod base_convert;
 mod chunk_split;
+mod chunk_split_len;
 mod count_chars;
+mod count_chars_distinct;
 mod strtr;
 mod quotemeta;
 mod quoted_printable_encode;
 mod wordwrap;
 mod bin2hex;
+mod bin2hex_len;
 mod base_to_number;
 mod dec_to_base;
 mod hex2bin;
@@ -90,6 +96,7 @@ mod urldecode;
 mod rawurlencode;
 mod base64_encode;
 mod base64_decode;
+mod base64_decode_len;
 mod sprintf;
 mod sprintf_mixed_cast;
 mod sprintf_pack_mixed;
@@ -144,9 +151,10 @@ pub use number_format::emit_number_format;
 /// Emit number formatting helper.
 pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
-pub use strcopy::emit_strcopy;
+pub use strcopy::{emit_str_dup_owned, emit_strcopy};
 /// Emit string copy helper.
 pub use concat_scratch::emit_concat_scratch;
+pub use str_new_owned::emit_str_new_owned;
 /// Fixed capacity shared by emitters that prove a result fits the concat scratch buffer.
 pub(crate) use concat_scratch::{FLOAT_SPILL_SLOTS, FLOAT_WINDOW_BYTES};
 pub use strbuf::emit_strbuf;
@@ -169,6 +177,7 @@ pub use rtrim::emit_rtrim;
 pub use strpos::emit_strpos;
 /// Emit string position lookup (first occurrence).
 pub use strrpos::emit_strrpos;
+pub use strstr_len::emit_strstr_len;
 /// Emit string position lookup (last occurrence).
 pub use stripos::emit_stripos;
 /// Emit case-insensitive string position lookup (first occurrence).
@@ -221,6 +230,7 @@ pub use str_offset_set::emit_str_offset_set;
 pub use str_pad::emit_str_pad;
 /// Emit string padding helper.
 pub use str_split::emit_str_split;
+pub use str_split_count::emit_str_split_count;
 /// Emit string to array split helper.
 pub use addslashes::emit_addslashes;
 /// Emit addslashes escaping helper.
@@ -231,8 +241,10 @@ pub use nl2br::emit_nl2br;
 pub use base_convert::emit_base_convert;
 /// Emit the chunk_split fixed-length splitter.
 pub use chunk_split::emit_chunk_split;
+pub use chunk_split_len::emit_chunk_split_len;
 /// Emit the count_chars byte-frequency tally.
 pub use count_chars::emit_count_chars;
+pub use count_chars_distinct::emit_count_chars_distinct;
 /// Emit the strtr pairwise and replacement-pair translators.
 pub use strtr::emit_strtr;
 /// Emit the quotemeta regular-expression metacharacter escaper.
@@ -245,6 +257,7 @@ pub use str_word_count::emit_str_word_count;
 pub use wordwrap::emit_wordwrap;
 /// Emit wordwrap helper.
 pub use bin2hex::emit_bin2hex;
+pub use bin2hex_len::emit_bin2hex_len;
 /// Emit the shared unsigned integer-to-base renderer used by dechex/decbin/decoct.
 pub use dec_to_base::emit_dec_to_base;
 /// Emit the shared base-digit parser used by hexdec/bindec/octdec.
@@ -275,6 +288,7 @@ pub use rawurlencode::emit_rawurlencode;
 pub use base64_encode::emit_base64_encode;
 /// Emit Base64 encoding helper.
 pub use base64_decode::emit_base64_decode;
+pub use base64_decode_len::emit_base64_decoded_len;
 /// Emit Base64 decoding helper.
 /// Re-export the php-src reverse-table sentinels so `runtime::data::fixed` builds
 /// `_b64_decode_tbl` from the exact classification `__rt_base64_decode` reads back.
@@ -288,7 +302,7 @@ pub use md5::emit_md5;
 /// Emit MD5 hash helper.
 pub use sha1::emit_sha1;
 /// Emit CRC-32 checksum helper.
-pub use crc32::emit_crc32;
+pub use crc32::{emit_crc32, CRC32_TABLE};
 /// Emits the optional shared mbstring bridge result adapters.
 pub use iconv::emit_iconv;
 pub use mbstring::emit_mbstring;

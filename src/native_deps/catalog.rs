@@ -248,6 +248,38 @@ const OPENSSL_VERSIONS: &[PackageVersion] = &[PackageVersion {
     retained_headers: OPENSSL_HEADERS,
     provides: &["openssl"],
 }];
+/// The libcrypto-only OpenSSL build used by the cipher bridge. It is deliberately
+/// separate from curl's 3.5.8 TLS pin: PHP 8.5's 135-cipher default-provider list
+/// gained nine AES-CBC-HMAC-ETM entries in 3.6.4, and curl's TLS link must not be
+/// forced onto that newer ABI by an unrelated cipher feature.
+const OPENSSL_CRYPTO_ARCHIVES: &[&str] = &["lib/libcrypto.a"];
+const OPENSSL_CRYPTO_HEADERS: &[&str] = &[
+    "include/openssl/core_dispatch.h",
+    "include/openssl/core_names.h",
+    "include/openssl/crypto.h",
+    "include/openssl/evp.h",
+    "include/openssl/objects.h",
+    "include/openssl/opensslv.h",
+    "include/openssl/params.h",
+    "include/openssl/provider.h",
+    "include/openssl/types.h",
+];
+const OPENSSL_CRYPTO_VERSIONS: &[PackageVersion] = &[PackageVersion {
+    version: "3.6.4",
+    source: SourceArchive {
+        https_url:
+            "https://github.com/openssl/openssl/releases/download/openssl-3.6.4/openssl-3.6.4.tar.gz",
+        sha256: "9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef",
+        exact_size: 55_003_802,
+        body_limit: 128 * 1024 * 1024,
+    },
+    recipe_revision: 1,
+    dependencies: &["zlib"],
+    supported_targets: TARGETS,
+    ordered_link_outputs: OPENSSL_CRYPTO_ARCHIVES,
+    retained_headers: OPENSSL_CRYPTO_HEADERS,
+    provides: &["openssl-crypto"],
+}];
 /// libcurl's HTTP/2 framing library. Built `--enable-lib-only`, which is why it has no
 /// dependencies of its own: only nghttp2's *applications* need zlib/OpenSSL/libev/c-ares.
 const NGHTTP2_VERSIONS: &[PackageVersion] = &[PackageVersion {
@@ -397,6 +429,11 @@ const PACKAGES: &[PackageSpec] = &[
         name: "openssl",
         default_version: "3.5.8",
         versions: OPENSSL_VERSIONS,
+    },
+    PackageSpec {
+        name: "openssl-crypto",
+        default_version: "3.6.4",
+        versions: OPENSSL_CRYPTO_VERSIONS,
     },
     PackageSpec {
         name: "nghttp2",
@@ -550,7 +587,7 @@ mod tests {
     fn catalog_rejects_unknown_selection() {
         assert_eq!(
             package("libfoo").unwrap_err().to_string(),
-            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
+            "native catalog error: unknown native package 'libfoo'; known packages: libmagic, pcre2, zlib, openssl, openssl-crypto, nghttp2, libssh2, curl, oniguruma, libxml2, gmp"
         );
         assert!(version("pcre2", Some("10.46")).is_err());
     }
@@ -572,6 +609,25 @@ mod tests {
         assert!(version.retained_headers.contains(&"include/openssl/ssl.h"));
         assert!(version.retained_headers.contains(&"include/openssl/crypto.h"));
         assert!(version.dependencies.is_empty());
+        assert_eq!(version.supported_targets, TARGETS);
+    }
+
+    /// Verifies the libcrypto-only OpenSSL 3.6.4 source identity and its exact
+    /// `libcrypto.a` contract, including the zlib dependency used by its
+    /// compression BIO paths.
+    #[test]
+    fn openssl_crypto_catalog_snapshot_is_exact() {
+        let version = version("openssl-crypto", None).expect("catalogue entry");
+        assert_eq!(version.version, "3.6.4");
+        assert_eq!(version.recipe_revision, 1);
+        assert_eq!(version.source.exact_size, 55_003_802);
+        assert_eq!(
+            version.source.sha256,
+            "9bffaa1ad1e07b354c21bd3324ec02fa15579f45a7d0494b3e74bc449b7333ef"
+        );
+        assert_eq!(version.ordered_link_outputs, &["lib/libcrypto.a"]);
+        assert_eq!(version.retained_headers, OPENSSL_CRYPTO_HEADERS);
+        assert_eq!(version.dependencies, &["zlib"]);
         assert_eq!(version.supported_targets, TARGETS);
     }
 
