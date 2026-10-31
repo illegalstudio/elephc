@@ -20,10 +20,13 @@ pub(super) fn supports_interface_receiver(
         return false;
     };
     ctx.interfaces.contains_key(&name)
-        && ctx.classes.keys().any(|class| {
+        && ctx.classes.iter().any(|(class, info)| {
             crate::types::builtin_classes::spl_storage_write_fetch_owner(class, ctx.classes)
                 .is_some()
-                && ctx.type_is_or_implements_interface(class, &name)
+                && info
+                    .interfaces
+                    .iter()
+                    .any(|interface| interface.eq_ignore_ascii_case(&name))
         })
 }
 

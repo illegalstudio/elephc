@@ -222,7 +222,7 @@ pub(super) fn try_lower_array_root(
                 && (matches!(
                     ty.codegen_repr(),
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-                ) || super::nested_spl_writes::supports_interface_receiver(ctx, &ty))
+                ) || type_satisfies_array_access_for_ir(ctx, &ty))
         }
         ExprKind::StaticPropertyAccess { .. } =>
             super::nested_array_writes::nested_target_has_static_array_root(ctx, target)

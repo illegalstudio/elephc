@@ -22,10 +22,9 @@ pub(super) fn owned_mixed_slots(function: &Function) -> HashSet<LocalSlotId> {
             continue;
         };
         match (inst.op, inst.immediate.as_ref()) {
-            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
-                if function.locals.get(second.as_raw() as usize).is_some_and(|owner| {
-                    owner.kind == crate::ir::LocalKind::RefCell
-                        && owner.php_type.codegen_repr() == PhpType::Mixed
+            (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { .. })) => {
+                if function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+                    local.php_type.codegen_repr() == PhpType::Mixed
                 }) {
                     candidates.insert(slot);
                 } else {
@@ -68,15 +67,10 @@ pub(super) fn stable_payload_types(
             // conflict with a narrower payload ABI established by an external binding.
             (
                 Op::PromoteLocalRefCell,
-                Some(Immediate::LocalSlotPair { second, .. }),
+                Some(Immediate::LocalSlotPair { .. }),
             ) => (!definite_ref_cell_slots_before_inst
                 .contains(&(InstId::from_raw(index as u32), slot)))
-                .then(|| {
-                    function
-                        .locals
-                        .get(second.as_raw() as usize)
-                        .map(|owner| owner.php_type.clone())
-                })
+                .then(|| function.locals.get(slot.as_raw() as usize).map(|local| local.php_type.clone()))
                 .flatten(),
             (Op::AliasLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
                 if conflicts.contains(second) {

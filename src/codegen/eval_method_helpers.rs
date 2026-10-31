@@ -2038,10 +2038,12 @@ fn emit_aarch64_ref_arg_cells(
     for slot in &mut ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, arg_array_frame_offset, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
+        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             slot.raw_refcounted_owned = true;
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -2079,10 +2081,12 @@ fn emit_x86_64_ref_arg_cells(
     for slot in &mut ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
+        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             slot.raw_refcounted_owned = true;
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -3145,6 +3149,88 @@ mod source_entry_tests {
             let static_slot = static_slots.iter().find(|slot| slot.method == "staticitems").unwrap();
             assert!(static_slot.by_ref_return && !static_slot.return_uses_marker, "{name}: physical static ABI");
             assert_eq!(static_slot.entry_symbol, static_method_symbol("PhysicalReferenceOwner", "staticitems"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod reference_argument_tests {
+    use super::*;
+    use crate::codegen::eval_callable_helpers::emit_eval_callable_descriptor_support;
+    use crate::codegen::platform::Target;
+
+    const SUPPORTED_TARGETS: &[&str] = &[
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ];
+
+    /// Stages one by-reference method argument and returns its bridge assembly.
+    fn method_reference_argument_asm(target: Target, param_ty: PhpType) -> String {
+        let module = Module::new(target);
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let callable_support =
+            emit_eval_callable_descriptor_support(&module, &mut emitter, &mut data, false);
+        let slot = EvalMethodSlot {
+            class_id: 7,
+            class_name: "Fixture".to_string(),
+            method: "mutate".to_string(),
+            impl_class: "Fixture".to_string(),
+            visibility: Visibility::Public,
+            allowed_scopes: Vec::new(),
+            params: vec![param_ty],
+            ref_params: vec![true],
+            return_ty: PhpType::Void,
+            by_ref_return: false,
+            return_is_owned: false,
+            return_uses_marker: false,
+            is_hidden_shadow: false,
+            entry_symbol: "fixture_mutate".to_string(),
+            runtime_helper: None,
+        };
+        match target.arch {
+            Arch::AArch64 => {
+                emit_aarch64_prepare_method_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+            Arch::X86_64 => {
+                emit_x86_64_prepare_method_args(
+                    &module,
+                    &mut emitter,
+                    &mut data,
+                    &slot,
+                    "fail",
+                    &callable_support,
+                );
+            }
+        }
+        emitter.output()
+    }
+
+    /// Method writeback targets the concrete child without destroying PHP reference identity.
+    #[test]
+    fn method_reference_arguments_dereference_original_cells_on_every_target() {
+        for name in SUPPORTED_TARGETS {
+            let target = Target::parse(name).unwrap();
+            for param_ty in [PhpType::Str, PhpType::Mixed] {
+                let asm = method_reference_argument_asm(target, param_ty.clone());
+                let sequence = match target.arch {
+                    Arch::AArch64 => "ldr x0, [x29, #-16]\n    bl __rt_mixed_deref",
+                    Arch::X86_64 => {
+                        "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref"
+                    }
+                };
+                assert!(asm.contains(sequence), "{name} {param_ty:?}: {asm}");
+            }
         }
     }
 }

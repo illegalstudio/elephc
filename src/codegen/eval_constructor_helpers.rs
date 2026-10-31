@@ -1320,9 +1320,11 @@ fn emit_aarch64_constructor_ref_arg_cells(
     for slot in &ref_slots {
         emit_aarch64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("ldr x0, [x29, #-16]");                             // reload the original eval Mixed cell for by-reference writeback
+        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("ldr x0, [x29, #-16]");                         // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -1360,9 +1362,11 @@ fn emit_x86_64_constructor_ref_arg_cells(
     for slot in &ref_slots {
         emit_x86_64_load_eval_arg(module, emitter, slot.param_index, fail_label);
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // reload the original eval Mixed cell for by-reference writeback
+        abi::emit_call_label(emitter, "__rt_mixed_deref");                    // write through the concrete child without destroying PHP reference identity
         abi::emit_push_result_value(emitter, &PhpType::Mixed);
         if matches!(slot.param_ty.codegen_repr(), PhpType::Mixed) {
             emitter.instruction("mov rax, QWORD PTR [rbp - 40]");               // seed the mutable by-reference Mixed slot with the original cell
+            abi::emit_call_label(emitter, "__rt_mixed_deref");                // give the native activation the concrete child cell
             abi::emit_push_result_value(emitter, &PhpType::Mixed);
         } else {
             let arg_label = format!("{}_ref_arg_{}", label_prefix, slot.param_index);
@@ -2090,6 +2094,13 @@ mod argument_ownership_tests {
                 true,
             );
             assert_eq!(asm.matches("__rt_incref").count(), 1, "{name}: {asm}");
+            let sequence = match target.arch {
+                Arch::AArch64 => "ldr x0, [x29, #-16]\n    bl __rt_mixed_deref",
+                Arch::X86_64 => {
+                    "mov rax, QWORD PTR [rbp - 40]\n    call __rt_mixed_deref"
+                }
+            };
+            assert!(asm.contains(sequence), "{name}: {asm}");
         }
     }
 
