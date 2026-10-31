@@ -430,7 +430,9 @@ fn load_container(
                 },
                 span,
             );
-            lower_expr(ctx, &access)
+            crate::ir_lower::expr::lower_nested_assignment_property_source(
+                ctx, object, property, &access, super::PropertyDimensionFetchMode::Write,
+            )
         }
         BaseKind::StaticProperty { receiver, property } => {
             let access = Expr::new(

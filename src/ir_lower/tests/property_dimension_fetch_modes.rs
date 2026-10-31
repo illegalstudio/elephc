@@ -10,6 +10,27 @@
 
 use crate::ir::Op;
 
+/// Fused property appends perform a W initialization fetch before probing an uninitialized array.
+#[test]
+fn nested_property_append_initializes_nullable_array_before_read_on_every_target() {
+    let source = r#"<?php
+class NestedAppendUninitializedArray { public ?array $items; }
+function initializeNestedAppendArray(mixed $box): void { $box->items[0][] = 'x'; }
+initializeNestedAppendArray(new NestedAppendUninitializedArray());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "initializeNestedAppendArray").unwrap();
+        let initialized = function.instructions.iter().position(|inst| inst.op == Op::PropInitialized)
+            .expect("a nested W append must probe initialization before reading its declared root");
+        let read = function.instructions.iter().position(|inst| matches!(inst.op, Op::PropGet | Op::PropGetForWrite))
+            .expect("the root property must be read after initialization");
+        assert!(initialized < read, "{target}: nested append read precedes initialization");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Concrete XML parents never create a raw-object call to an array-only writable-cell helper.
 #[test]
 fn nested_native_object_parent_selection_emits_on_every_target() {
