@@ -9,6 +9,15 @@
 
 use super::*;
 
+/// Wide builtin handlers retain the null write from a failing declared-return boundary.
+#[test]
+fn test_nullable_fallback_flow_review_builtin_catch_parents() {
+    for parent in ["Error", "Throwable"] {
+        let source = format!("<?php function run(?int $value, mixed $returned): int {{ $value ??= 7; try {{ $value = null; return $returned; }} catch ({parent} $error) {{}} return $value; }}");
+        expect_error(&source, "return type expects int, got int|null");
+    }
+}
+
 /// Complete integer fallback joins retain nullable storage and invalidate their read after calls.
 #[test]
 fn test_nullable_fallback_flow_review_integer_read_proof_lifecycle() {

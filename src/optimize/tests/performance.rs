@@ -69,7 +69,7 @@ fn test_callable_casefold_lookup_preserves_exception_domain() {
     use super::*;
     let tokens = crate::lexer::tokenize("<?php function CaseFoldThrow(): never { throw new RuntimeException('x'); } function CaseFoldRelay(): never { CASEFOLDTHROW(); } CASEFOLDRELAY();").unwrap();
     let program = crate::parser::parse(&tokens).unwrap();
-    let analysis = CheckerExceptionAnalysis::new(&program);
+    let analysis = CheckerExceptionAnalysis::new(&program, &[]);
     let StmtKind::ExprStmt(call) = &program.last().unwrap().kind else { panic!("missing call"); };
     let thrown = analysis.operation_throws(call, None);
     let (caught, remaining) = analysis.split(thrown, &["RuntimeException".to_string()]);
@@ -83,7 +83,7 @@ fn test_declared_int_return_does_not_add_throw_after_never_call() {
     use super::*;
     let tokens = crate::lexer::tokenize("<?php function StopResult(): never { throw new LogicException('x'); } function relayResult(): int { return STOPRESULT(); } relayResult();").unwrap();
     let program = crate::parser::parse(&tokens).unwrap();
-    let analysis = CheckerExceptionAnalysis::new(&program);
+    let analysis = CheckerExceptionAnalysis::new(&program, &[]);
     let StmtKind::ExprStmt(call) = &program.last().unwrap().kind else { panic!("missing call"); };
     let thrown = analysis.operation_throws(call, None);
     let (caught, remaining) = analysis.split(thrown, &["LogicException".to_string()]);

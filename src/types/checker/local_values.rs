@@ -22,7 +22,7 @@ impl Checker {
         }) {
             return;
         }
-        let is_integer = *ty == PhpType::Int;
+        let is_integer = *ty == PhpType::Int && self.local_flow_read_is_stable(name);
         self.integer_local_read_sites
             .entry((self.current_loop_storage_scope.clone(), span, name.to_string()))
             .and_modify(|previous| *previous &= is_integer)

@@ -87,7 +87,6 @@ pub(super) fn check_types_impl(
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
-    checker.exception_analysis = Some(crate::optimize::CheckerExceptionAnalysis::new(program));
     checker.strict_locals = options.strict_locals;
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
@@ -286,6 +285,11 @@ pub(super) fn check_types_impl(
     ) {
         errors.extend(error.flatten());
     }
+    // Builtin parent edges such as TypeError -> Error must exist before checking bodies.
+    // Keep AST callable discovery until checked signatures are available.
+    let registered_parents: Vec<_> = class_map.iter().filter_map(|(name, class)|
+        class.extends.as_ref().map(|parent| (name.clone(), parent.clone()))).collect();
+    checker.exception_analysis = Some(crate::optimize::CheckerExceptionAnalysis::new(program, &registered_parents));
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();

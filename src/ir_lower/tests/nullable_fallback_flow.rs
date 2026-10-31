@@ -31,6 +31,25 @@ function projectedGuardConsumer(?int $value): Closure {
     if ($value === null) { $value = 40; }
     return fn(): int => $value + 2;
 }
+function aliasedIntegerRead(?int $value): void {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; var_dump($value); var_dump([$value]); }
+}
+function incomingAliasedIntegerRead(?int &$value, ?int &$alias): void {
+    if ($value !== null) { $alias = null; var_dump([$value]); }
+}
+function builtinErrorCatchRead(mixed $value): int {
+    $local = $value === 0 ? 1 : null;
+    if ($local === null) { $local = 7; }
+    try { $local = null; return $value; } catch (Error $error) { var_dump($local); }
+    var_dump($local); return 0;
+}
+function builtinThrowableCatchRead(mixed $value): int {
+    $local = $value === 0 ? 1 : null;
+    if ($local === null) { $local = 7; }
+    try { $local = null; return $value; } catch (Throwable $error) { var_dump($local); }
+    var_dump($local); return 0;
+}
 function projectedGeneratorCapture(?int $value): Generator {
     $value ??= 40;
     yield fn(): int => $value + 1;

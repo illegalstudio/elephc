@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Writes through aliases do not turn a stale integer guard into an integer value read.
+#[test]
+fn test_nullable_fallback_flow_review_aliased_integer_reads_runtime() {
+    let source = r#"<?php
+function localAliasRead(?int $value): void {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; var_dump($value); var_dump([$value]); }
+}
+function parameterAliasRead(?int &$value, ?int &$alias): void {
+    if ($value !== null) { $alias = null; var_dump([$value]); }
+}
+function invokeParameterAlias(?int $value): void { parameterAliasRead($value, $value); }
+localAliasRead($argc > 0 ? 5 : null);
+invokeParameterAlias($argc > 0 ? 5 : null);
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "NULL\narray(1) {\n  [0]=>\n  NULL\n}\narray(1) {\n  [0]=>\n  NULL\n}\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
+/// The production CLI preserves catch exits for builtin Error and Throwable parents.
+#[test]
+fn test_nullable_fallback_flow_review_builtin_catch_parents_cli_runtime() {
+    for parent in ["Error", "Throwable"] {
+        let source = format!("<?php function run(mixed $value): int {{ $local = $value === 0 ? 1 : null; if ($local === null) {{ $local = 7; }} try {{ $local = null; return $value; }} catch ({parent} $error) {{ var_dump($local); }} var_dump($local); return 0; }} echo run('abc'), \"\\n\";");
+        assert_nullable_flow_cli_heap_output(&source, "NULL\nNULL\n0\n");
+    }
+}
+
 /// Opaque alternative guards preserve nullable and Stringable parameter/property conversions.
 #[test]
 fn test_nullable_fallback_flow_review_opaque_alternative_boundaries_runtime() {
@@ -564,6 +595,29 @@ fn assert_nullable_flow_heap_output(source: &str, expected: &str) {
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, expected);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Checks production exception pruning and read views with owned fixture cleanup in both IR modes.
+fn assert_nullable_flow_cli_heap_output(source: &str, expected: &str) {
+    /// Owns only the CLI artifacts created for this fixture.
+    struct FixtureDirectory(std::path::PathBuf);
+    impl Drop for FixtureDirectory {
+        /// Removes this fixture on both assertion failure and successful completion.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+    let directory = FixtureDirectory(make_cli_test_dir("elephc_nullable_flow_catch"));
+    let path = directory.0.join("main.php");
+    std::fs::write(&path, source).unwrap();
+    for mode in ["on", "off"] {
+        let compiled = elephc_cli_command(&directory.0)
+            .args(["--heap-debug", &format!("--ir-opt={mode}")]).arg(&path).output().unwrap();
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        let output = run_binary(&path.with_extension(""), &directory.0);
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{}", String::from_utf8_lossy(&output.stderr));
+    }
 }
 
 /// Exhaustive switch return inference includes broken arms and fresh bindings.

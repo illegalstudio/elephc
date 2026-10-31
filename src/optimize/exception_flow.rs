@@ -271,6 +271,19 @@ impl ExceptionFlowAnalysis {
             &HashMap<String, InterfaceInfo>,
         )>,
     ) -> Self {
+        Self::from_program_with_registered_parents(program, type_metadata, &[])
+    }
+
+    /// Adds registered nominal parents without replacing AST callable and default discovery.
+    pub(super) fn from_program_with_registered_parents(
+        program: &[Stmt],
+        type_metadata: Option<(
+            &HashMap<String, FunctionSig>,
+            &HashMap<String, ClassInfo>,
+            &HashMap<String, InterfaceInfo>,
+        )>,
+        registered_parents: &[(String, String)],
+    ) -> Self {
         let mut function_bodies = HashMap::new();
         let mut static_method_bodies = HashMap::new();
         let mut instance_method_bodies = HashMap::new();
@@ -370,6 +383,7 @@ impl ExceptionFlowAnalysis {
             ExceptionHierarchy::from_program(program, declared_classes)
         };
         hierarchy.collect_program_declarations(program);
+        hierarchy.add_registered_parents(registered_parents);
         let function_bodies = attach_class_contexts(function_bodies, &class_contexts);
         let static_method_bodies = attach_class_contexts(static_method_bodies, &class_contexts);
         let instance_method_bodies = attach_class_contexts(instance_method_bodies, &class_contexts);

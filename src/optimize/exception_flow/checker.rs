@@ -21,11 +21,11 @@ pub(crate) struct CheckerExceptionAnalysis {
 pub(crate) struct CheckerThrownTypes(ThrownTypes);
 
 impl CheckerExceptionAnalysis {
-    /// Computes summaries once before body checking, without requiring checked metadata.
-    pub(crate) fn new(program: &Program) -> Self {
+    /// Computes AST summaries with registered nominal parents before body checking.
+    pub(crate) fn new(program: &Program, registered_parents: &[(String, String)]) -> Self {
         let effects = CallableEffectAnalysis::from_program(program);
         let analysis = with_callable_effect_analysis(&effects, ||
-            ExceptionFlowAnalysis::from_program(program, None));
+            ExceptionFlowAnalysis::from_program_with_registered_parents(program, None, registered_parents));
         Self { effects, analysis }
     }
 
