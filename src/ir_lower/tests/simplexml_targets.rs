@@ -241,10 +241,9 @@ $targetMetadataDocument->loadXML('<r><![CDATA[q]]><?work data?></r>');
 $targetMetadataChildren = $targetMetadataDocument->documentElement->childNodes;
 echo $targetMetadataChildren->item(0)->nodeName;
 $targetMetadataPi = $targetMetadataChildren->item(1);
-if ($targetMetadataPi instanceof DOMProcessingInstruction) {
-    $targetMetadataPi->data = 'changed';
-    echo $targetMetadataPi->data;
-} else { throw new Error('expected processing instruction'); }
+if (!($targetMetadataPi instanceof DOMProcessingInstruction)) { throw new Error('expected processing instruction'); }
+$targetMetadataPi->data = 'changed';
+echo $targetMetadataPi->data;
 $targetMetadataDocument->loadXML('<!--before--><?work data?><r/><!---->');
 echo $targetMetadataDocument->childNodes->length, $targetMetadataDocument->documentElement->previousSibling->nodeName;
 echo $targetMetadataDocument->saveXML($targetMetadataDocument);

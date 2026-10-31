@@ -23,9 +23,7 @@ pub(super) fn owned_mixed_slots(function: &Function) -> HashSet<LocalSlotId> {
         };
         match (inst.op, inst.immediate.as_ref()) {
             (Op::PromoteLocalRefCell, Some(Immediate::LocalSlotPair { .. })) => {
-                if function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
-                    local.php_type.codegen_repr() == PhpType::Mixed
-                }) {
+                if inst.result_php_type.codegen_repr() == PhpType::Mixed {
                     candidates.insert(slot);
                 } else {
                     external.insert(slot);
@@ -70,8 +68,7 @@ pub(super) fn stable_payload_types(
                 Some(Immediate::LocalSlotPair { .. }),
             ) => (!definite_ref_cell_slots_before_inst
                 .contains(&(InstId::from_raw(index as u32), slot)))
-                .then(|| function.locals.get(slot.as_raw() as usize).map(|local| local.php_type.clone()))
-                .flatten(),
+                .then(|| inst.result_php_type.clone()),
             (Op::AliasLocalRefCell, Some(Immediate::LocalSlotPair { second, .. })) => {
                 if conflicts.contains(second) {
                     conflicts.insert(slot);

@@ -59,8 +59,16 @@ pub(super) fn fetch_interface_parent(
     ctx.restore_initialized_slots(initialized.clone());
     let child = lower_array_access_from_lowered_receiver(ctx, receiver, index, expr);
     let child = if ctx.builder.value_php_type(child.value).codegen_repr() == PhpType::Mixed {
-        if ctx.value_is_owning_temporary(child) { child }
-        else { crate::ir_lower::ownership::acquire_if_refcounted(ctx, child, Some(span)) }
+        let copied = ctx.emit_owned_value(
+            Op::RuntimeCall,
+            vec![child.value],
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedCellCopyForWrite)),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, child, Some(span));
+        copied
     } else { ctx.box_value_as_mixed(child, PhpType::Mixed, Some(span)) };
     ctx.builder.terminate(Terminator::Br { target: done, args: vec![child.value] });
     ctx.builder.position_at_end(done);
