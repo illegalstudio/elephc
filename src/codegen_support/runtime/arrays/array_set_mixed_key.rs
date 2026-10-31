@@ -160,6 +160,8 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     // -- indexed destination + string key: promote to hash then set --
     emitter.label("__rt_array_set_mixed_key_string_promote");
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key payload (x1/x2) into a hash key pair
+    emitter.instruction("cmn x2, #1");                                         // a numeric string names the same existing indexed slot as its integer key
+    emitter.instruction("b.eq __rt_array_set_mixed_key_int_ready");             // validate nullable markers before promotion can consume the indexed owner
     emitter.instruction("str x1, [sp, #24]");                                   // save the normalized key low word across helper calls
     emitter.instruction("str x2, [sp, #32]");                                   // save the normalized key high word across helper calls
     emitter.label("__rt_array_set_mixed_key_promote_alloc");
@@ -343,6 +345,11 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_set_mixed_key_string_promote");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the normalizer input
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key into a hash key pair in rax/rdx
+    emitter.instruction("cmp rdx, -1");                                        // detect a numeric string normalized to an integer index
+    emitter.instruction("jne __rt_array_set_mixed_key_string_ready");           // retain hash promotion for actual string keys
+    emitter.instruction("mov rdi, rax");                                       // publish the normalized integer in the indexed dispatch register
+    emitter.instruction("jmp __rt_array_set_mixed_key_int_ready");              // validate the existing marker before consuming any indexed owner
+    emitter.label("__rt_array_set_mixed_key_string_ready");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the normalized key low word across helper calls
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the normalized key high word across helper calls
     emitter.label("__rt_array_set_mixed_key_promote_alloc");
@@ -476,6 +483,22 @@ fn emit_tagged_marker_write_or_promote(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Numeric strings reach the indexed marker guard before any promotion can release storage.
+    #[test]
+    fn normalized_numeric_string_keys_validate_indexed_markers_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_array_set_mixed_key(&mut emitter);
+            let assembly = emitter.output();
+            let normalized = assembly.split("__rt_array_set_mixed_key_string_promote:").nth(1).unwrap()
+                .split("__rt_array_set_mixed_key_promote_alloc:").next().unwrap();
+            assert!(normalized.find("__rt_hash_normalize_key").unwrap()
+                < normalized.find("__rt_array_set_mixed_key_int_ready").unwrap(), "{name}: {normalized}");
+            assert!(!normalized.contains("__rt_decref_array") && !normalized.contains("__rt_hash_new"),
+                "{name}: normalization must not consume a destination owner");
+        }
+    }
 
     /// Mixed keys validate nullable marker writes before consuming the original array owner.
     #[test]

@@ -53,6 +53,8 @@ fn nullable_reference_marker_runtime_keys_lower_to_mixed_key_writes_on_every_tar
 function nullableMixedKeyTarget(&...$items): void {
     $key = array_key_first($items);
     try { $items[$key] = 'invalid'; } catch (Error $error) { echo count($items); }
+    $key = json_decode('"0"');
+    try { $items[$key] = 'invalid string key'; } catch (Error $error) { echo count($items); }
     $items[$key] = 7; $items[$key] = null;
 }
 $value = null; nullableMixedKeyTarget($value);
@@ -62,7 +64,7 @@ $value = null; nullableMixedKeyTarget($value);
             source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
         );
         let function = module.functions.iter().find(|function| function.name == "nullableMixedKeyTarget").unwrap();
-        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ArraySetMixedKey).count(), 3,
+        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ArraySetMixedKey).count(), 4,
             "{name}: a literal-key regression would miss the consuming promotion path");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }

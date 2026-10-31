@@ -50,6 +50,12 @@ function mixedKeyNullableWriter(MixedKeyNullableProperty $holder, &...$items): v
         echo $error->getMessage(), ':', json_encode($items[$key]), ':', count($items), ':', count($copy), '|';
         unset($error);
     }
+    $key = json_decode('"0"');
+    try { $items[$key] = mixedKeyNullableReplacement(); }
+    catch (Error $error) {
+        echo 'numeric-string:', json_encode($holder->value), ':', count($items), ':', count($copy), '|';
+        unset($error);
+    }
     $items[$key] = 7;
     echo json_encode($holder->value), ':', json_encode($copy[$key]), '|';
     $items[$key] = null; echo json_encode($holder->value);
@@ -62,7 +68,7 @@ $target($holder, $value);
 unset($value, $holder, $target);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "Unsupported assignment through a nullable integer reference: value must be int or null:null:1:1|7:7|null");
+    assert_eq!(out.stdout, "Unsupported assignment through a nullable integer reference: value must be int or null:null:1:1|numeric-string:null:1:1|7:7|null");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
