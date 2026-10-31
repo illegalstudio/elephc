@@ -123,12 +123,13 @@ pub(super) fn load_ref_cell_local_to_result_as(
     ty: &PhpType,
 ) -> Result<PhpType> {
     let result_ty = ty.codegen_repr();
-    // Incoming references and externally rebound aliases already carry their ABI view.
-    // A frame-owned Mixed promotion needs decoding before applying a narrower logical view.
+    // Incoming references and externally rebound aliases keep their stable physical payload ABI,
+    // which may be narrower than this load's logical result. A frame-owned Mixed promotion is the
+    // exception: its cell physically stores boxed Mixed before applying a narrower logical view.
     let ty = if ctx.owns_mixed_ref_cell_payload(slot) {
         PhpType::Mixed
     } else {
-        result_ty.clone()
+        ctx.ref_cell_payload_type(slot)?
     };
     reject_multiword_ref_param_local(&ty, "load")?;
     let offset = ctx.local_offset(slot)?;

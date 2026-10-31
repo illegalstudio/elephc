@@ -219,10 +219,10 @@ pub(super) fn try_lower_array_root(
         ExprKind::Variable(name) => {
             let ty = ctx.local_type(name);
             ctx.has_local_slot(name)
-                && (matches!(
+                && matches!(
                     ty.codegen_repr(),
                     PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-                ) || super::nested_spl_writes::supports_interface_receiver(ctx, &ty))
+                )
         }
         ExprKind::StaticPropertyAccess { .. } =>
             super::nested_array_writes::nested_target_has_static_array_root(ctx, target)

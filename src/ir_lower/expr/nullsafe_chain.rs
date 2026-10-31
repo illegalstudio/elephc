@@ -62,13 +62,16 @@ pub(super) fn lower_with_missing_warning(
 pub(super) fn lower_empty(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Option<LoweredValue> {
     let mut chain = flatten_nullsafe_postfix_chain(expr)?;
     let tail = chain.segments.pop()?;
-    let (key, dimension, nullsafe) = match tail {
+    let (key, dimension, nullsafe, named_property) = match tail {
         PostfixSegment::Property { property, nullsafe, .. } => {
             if property.starts_with("__elephc_") { return None; }
-            (Expr::new(ExprKind::StringLiteral(property.into()), expr.span), false, nullsafe)
+            (Expr::new(ExprKind::StringLiteral(property.into()), expr.span),
+                false, nullsafe, Some(property))
         }
-        PostfixSegment::DynamicProperty { property, nullsafe, .. } => (property.clone(), false, nullsafe),
-        PostfixSegment::Array { index, .. } => (index.clone(), true, false),
+        PostfixSegment::DynamicProperty { property, nullsafe, .. } => {
+            (property.clone(), false, nullsafe, None)
+        }
+        PostfixSegment::Array { index, .. } => (index.clone(), true, false, None),
         _ => return None,
     };
     let temp = ctx.declare_hidden_temp(PhpType::Bool);
@@ -86,7 +89,9 @@ pub(super) fn lower_empty(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Opt
         if !ctx.builder.insertion_block_is_terminated()
             && (!nullsafe || guard_nullsafe_chain_receiver(ctx, value, absent, expr))
         {
-            let result = super::native_xml_empty::lower_from_receiver(ctx, value, &key, dimension, expr);
+            let result = super::native_xml_empty::lower_from_receiver(
+                ctx, value, &key, dimension, named_property, expr,
+            );
             store_value_into_temp(ctx, &temp, PhpType::Bool, result, expr.span);
             branch_to(ctx, done);
             present_reachable = true;

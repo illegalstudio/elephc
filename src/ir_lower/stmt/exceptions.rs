@@ -156,6 +156,11 @@ pub(super) fn lower_try_catch_finally(
     lower_block(ctx, try_body);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
+    // The finalizer is emitted once for the normal edge and again for every exceptional edge.
+    // Preserve the try exit facts before the first copy: an `unset` or retype in that copy must
+    // not change how the handler-side copies lower their earlier statements.
+    let handler_types = ctx.local_types_snapshot();
+    let handler_initialized = ctx.initialized_slots_snapshot();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         lower_block(ctx, finally_body);
@@ -166,6 +171,8 @@ pub(super) fn lower_try_catch_finally(
     }
 
     ctx.builder.position_at_end(handler_block);
+    ctx.restore_local_types(handler_types);
+    ctx.restore_initialized_slots(handler_initialized);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     after_reachable |=
@@ -196,7 +203,11 @@ pub(super) fn lower_catch_dispatch(
     span: Span,
 ) -> bool {
     let mut after_reachable = false;
+    let dispatch_types = ctx.local_types_snapshot();
+    let dispatch_initialized = ctx.initialized_slots_snapshot();
     for catch in catches {
+        ctx.restore_local_types(dispatch_types.clone());
+        ctx.restore_initialized_slots(dispatch_initialized.clone());
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
@@ -260,6 +271,10 @@ pub(super) fn lower_catch_dispatch_with_finally(
         lower_block(ctx, &catch.body);
         ctx.pop_try_loop_depth();
         pop_finally_frame_if_active(ctx, depth);
+        // The unwind handler emits a second copy of the same finalizer. Keep the catch-body exit
+        // facts independent from mutations performed by the normal-edge copy below.
+        let unwind_types = ctx.local_types_snapshot();
+        let unwind_initialized = ctx.initialized_slots_snapshot();
         if !ctx.builder.insertion_block_is_terminated() {
             emit_try_pop_handler(ctx, body_token, span);
             lower_block(ctx, finally_body);
@@ -270,6 +285,8 @@ pub(super) fn lower_catch_dispatch_with_finally(
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(body_handler);
+        ctx.restore_local_types(unwind_types);
+        ctx.restore_initialized_slots(unwind_initialized);
         emit_try_pop_handler(ctx, body_token, span);
         lower_finally_with_pending_exception(ctx, finally_body, span);
         ctx.clear_static_callable_locals();
@@ -277,6 +294,8 @@ pub(super) fn lower_catch_dispatch_with_finally(
     }
 
     // No catch matched: the finalizer runs with the exception pending, then rethrows it.
+    ctx.restore_local_types(dispatch_types);
+    ctx.restore_initialized_slots(dispatch_initialized);
     lower_finally_with_pending_exception(ctx, finally_body, span);
     after_reachable
 }

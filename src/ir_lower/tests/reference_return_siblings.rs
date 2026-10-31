@@ -15,7 +15,7 @@ fn nullable_object_reference_return_switch_siblings_promote_on_every_target() {
 class SiblingReferenceNode {}
 class SiblingReferenceHolder {
     public ?SiblingReferenceNode $node = null;
-    public mixed $fallback = null;
+    public ?SiblingReferenceNode $fallback = null;
 }
 
 function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): ?SiblingReferenceNode {

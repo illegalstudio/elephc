@@ -251,14 +251,15 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # like `codegen::eval`, but run in the non-codegen shards, where they had only
 # the plain 60s cap. Two of them were terminated at 60s on both attempts on one
 # slow macOS runner while the same shard had passed in 11 minutes the run before.
-# Give them the eval budget too.
+# Give them five minutes: the expanded builtin catalog makes the two largest binaries reach the
+# three-minute cap on both Linux architectures, while successful siblings remain below two minutes.
 [[profile.default.overrides]]
 filter = 'binary(/^eval_/)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 [[profile.ci.overrides]]
 filter = 'binary(/^eval_/)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 # The `opcache_*` integration binaries are in the same position: most of their programs call
 # `eval()` or `include` a path known only at run time — the only ways to reach the runtime

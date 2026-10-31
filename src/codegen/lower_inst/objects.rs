@@ -178,6 +178,7 @@ mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
+mod runtime_magic_reads;
 mod dynamic_property_read_entry;
 mod unset_property_reads;
 mod dynamic_property_read_resolution;
@@ -223,6 +224,8 @@ use property_defaults::*;
 use known_property_reads::*;
 #[allow(unused_imports)]
 use mixed_property_reads::*;
+#[allow(unused_imports)]
+use runtime_magic_reads::*;
 #[allow(unused_imports)]
 use dynamic_property_read_entry::*;
 #[allow(unused_imports)]

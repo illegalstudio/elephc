@@ -19,18 +19,26 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, construct: &str, arg: &Expr, expr: &Expr,
 ) -> Option<LoweredValue> {
     if !ctx.classes.contains_key("SimpleXMLElement") { return None; }
-    let (object, key, dimension, nullsafe) = match &arg.kind {
+    let (object, key, dimension, nullsafe, named_property) = match &arg.kind {
         ExprKind::PropertyAccess { object, property } => {
             if property.starts_with("__elephc_") { return None; }
-            (object.as_ref(), Expr::new(ExprKind::StringLiteral(property.clone()), arg.span), false, false)
+            (object.as_ref(), Expr::new(ExprKind::StringLiteral(property.clone()), arg.span),
+                false, false, Some(property.as_str()))
         }
-        ExprKind::DynamicPropertyAccess { object, property } => (object.as_ref(), *property.clone(), false, false),
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            (object.as_ref(), *property.clone(), false, false, None)
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             if property.starts_with("__elephc_") { return None; }
-            (object.as_ref(), Expr::new(ExprKind::StringLiteral(property.clone()), arg.span), false, true)
+            (object.as_ref(), Expr::new(ExprKind::StringLiteral(property.clone()), arg.span),
+                false, true, Some(property.as_str()))
         }
-        ExprKind::NullsafeDynamicPropertyAccess { object, property } => (object.as_ref(), *property.clone(), false, true),
-        ExprKind::ArrayAccess { array, index } => (array.as_ref(), *index.clone(), true, false),
+        ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+            (object.as_ref(), *property.clone(), false, true, None)
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            (array.as_ref(), *index.clone(), true, false, None)
+        }
         _ => return None,
     };
     let ty = array_cast_source::array_cast_source_type_for_ir(ctx, object);
@@ -59,7 +67,7 @@ pub(super) fn lower(
         ctx.builder.position_at_end(present);
         ctx.restore_initialized_slots(initial.clone());
         let key = capture_key(ctx, &key, dimension);
-        let value = dispatch(ctx, &receiver, &key, dimension, construct, arg, expr);
+        let value = dispatch(ctx, &receiver, &key, dimension, named_property, construct, arg, expr);
         retire(ctx, key, arg.span);
         store_value_into_temp(ctx, &temp, PhpType::Bool, value, arg.span);
         branch_to(ctx, merge);
@@ -70,7 +78,7 @@ pub(super) fn lower(
         take_owned_temp(ctx, &temp, arg.span)
     } else {
         let key = early_key.unwrap_or_else(|| capture_key(ctx, &key, dimension));
-        let value = dispatch(ctx, &receiver, &key, dimension, construct, arg, expr);
+        let value = dispatch(ctx, &receiver, &key, dimension, named_property, construct, arg, expr);
         if key_first {
             retire(ctx, receiver, arg.span);
             retire(ctx, key, arg.span);
@@ -86,11 +94,11 @@ pub(super) fn lower(
 /// Probes a chain's final access while its receiver is still on the guarded continuation.
 pub(super) fn lower_from_receiver(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, key: &Expr,
-    dimension: bool, arg: &Expr,
+    dimension: bool, named_property: Option<&str>, arg: &Expr,
 ) -> LoweredValue {
     let receiver = capture(ctx, value, arg.span);
     let key = capture_key(ctx, key, dimension);
-    let value = dispatch(ctx, &receiver, &key, dimension, "empty", arg, arg);
+    let value = dispatch(ctx, &receiver, &key, dimension, named_property, "empty", arg, arg);
     retire(ctx, key, arg.span);
     retire(ctx, receiver, arg.span);
     value
@@ -126,12 +134,12 @@ fn retire(ctx: &mut LoweringContext<'_, '_>, captured: Capture, span: Span) {
 /// Joins native container emptiness with the existing ordinary-object behavior.
 fn dispatch(
     ctx: &mut LoweringContext<'_, '_>, receiver: &Capture, key: &Capture,
-    dimension: bool, construct: &str, arg: &Expr, expr: &Expr,
+    dimension: bool, named_property: Option<&str>, construct: &str, arg: &Expr, expr: &Expr,
 ) -> LoweredValue {
     let object = ctx.load_local(&receiver.name, Some(arg.span));
     let ty = ctx.builder.value_php_type(object.value);
     if !may_be_native(ctx, &ty) {
-        return lower_regular(ctx, receiver, key, dimension, construct, arg, expr);
+        return lower_regular(ctx, receiver, key, dimension, named_property, construct, arg, expr);
     }
     if native_dimension_method_for_type(ctx, &ty,
         elephc_builtin_contract::ObjectDimension::Get).is_some()
@@ -173,7 +181,7 @@ fn dispatch(
     let native_slots = ctx.initialized_slots_snapshot();
     ctx.builder.position_at_end(regular);
     ctx.restore_initialized_slots(initial.clone());
-    let value = lower_regular(ctx, receiver, key, dimension, construct, arg, expr);
+    let value = lower_regular(ctx, receiver, key, dimension, named_property, construct, arg, expr);
     store_value_into_temp(ctx, &temp, PhpType::Bool, value, arg.span);
     branch_to(ctx, merge);
     let regular_slots = ctx.initialized_slots_snapshot();
@@ -228,12 +236,18 @@ fn may_be_native(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
 /// Applies the ordinary property or dimension protocol without emitting an XML method call.
 fn lower_regular(
     ctx: &mut LoweringContext<'_, '_>, receiver: &Capture, key: &Capture,
-    dimension: bool, construct: &str, arg: &Expr, expr: &Expr,
+    dimension: bool, named_property: Option<&str>, construct: &str, arg: &Expr, expr: &Expr,
 ) -> LoweredValue {
     let object = Box::new(Expr::new(ExprKind::Variable(receiver.name.clone()), arg.span));
     let key = Box::new(Expr::new(ExprKind::Variable(key.name.clone()), arg.span));
-    let access = Expr::new(if dimension { ExprKind::ArrayAccess { array: object, index: key } }
-        else { ExprKind::DynamicPropertyAccess { object, property: key } }, arg.span);
+    let kind = if dimension {
+        ExprKind::ArrayAccess { array: object, index: key }
+    } else if let Some(property) = named_property {
+        ExprKind::PropertyAccess { object, property: property.to_string() }
+    } else {
+        ExprKind::DynamicPropertyAccess { object, property: key }
+    };
+    let access = Expr::new(kind, arg.span);
     lazy_isset::lower_lazy_empty_without_native(ctx, construct, &[access.clone()], expr)
         .unwrap_or_else(|| {
             let value = lower_expr(ctx, &access);

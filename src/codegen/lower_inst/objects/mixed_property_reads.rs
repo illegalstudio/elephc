@@ -280,14 +280,14 @@ pub(super) struct MixedMagicArm {
     pub(super) class_id: u64,
     pub(super) class_name: String,
     /// `__get`, when the class has one whose result boxes without dropping an owner.
-    get: Option<MethodCallTarget>,
+    pub(super) get: Option<MethodCallTarget>,
     /// `__isset`, consulted first by a probe, when it returns a plain bool.
-    isset: Option<MethodCallTarget>,
+    pub(super) isset: Option<MethodCallTarget>,
     /// An `isset()` probe: `__isset` answers alone.
-    isset_only: bool,
+    pub(super) isset_only: bool,
     /// An `isset()` or `empty()` probe on a class without `__isset`: php reports the name absent
     /// and never calls `__get`.
-    absent_without_isset: bool,
+    pub(super) absent_without_isset: bool,
 }
 
 /// Whether a magic accessor's result can become the ladder's owned Mixed cell: an owned Mixed
@@ -309,7 +309,7 @@ fn magic_result_boxes_cleanly(ty: &PhpType) -> bool {
 }
 
 /// Converts the getter's physical return ABI into one owned Mixed value snapshot.
-fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCallTarget) {
+pub(super) fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCallTarget) {
     if getter.by_ref_return {
         crate::codegen::runtime_callable_invoker::reference_return::emit_boxed_reference_return(
             ctx.emitter, &getter.return_ty,
@@ -331,7 +331,7 @@ fn box_magic_result(ctx: &mut FunctionContext<'_>, getter: &MethodCallTarget) {
 
 /// The magic accessors class `class_name` answers a `mode` read through, or `None` when it has
 /// none this ladder can call.
-fn magic_property_arm(
+pub(super) fn magic_property_arm(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     mode: PropertyFetchMode,
