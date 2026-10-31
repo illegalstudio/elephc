@@ -160,7 +160,7 @@ pub fn emit_array_set_mixed_key(emitter: &mut Emitter) {
     // -- indexed destination + string key: promote to hash then set --
     emitter.label("__rt_array_set_mixed_key_string_promote");
     emitter.instruction("bl __rt_hash_normalize_key");                          // normalize the string key payload (x1/x2) into a hash key pair
-    emitter.instruction("cmn x2, #1");                                         // a numeric string names the same existing indexed slot as its integer key
+    emitter.instruction("cmn x2, #1");                                          // a numeric string names the same existing indexed slot as its integer key
     emitter.instruction("b.eq __rt_array_set_mixed_key_int_ready");             // validate nullable markers before promotion can consume the indexed owner
     emitter.instruction("str x1, [sp, #24]");                                   // save the normalized key low word across helper calls
     emitter.instruction("str x2, [sp, #32]");                                   // save the normalized key high word across helper calls
@@ -345,9 +345,9 @@ fn emit_array_set_mixed_key_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_array_set_mixed_key_string_promote");
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the normalizer input
     emitter.instruction("call __rt_hash_normalize_key");                        // normalize the string key into a hash key pair in rax/rdx
-    emitter.instruction("cmp rdx, -1");                                        // detect a numeric string normalized to an integer index
+    emitter.instruction("cmp rdx, -1");                                         // detect a numeric string normalized to an integer index
     emitter.instruction("jne __rt_array_set_mixed_key_string_ready");           // retain hash promotion for actual string keys
-    emitter.instruction("mov rdi, rax");                                       // publish the normalized integer in the indexed dispatch register
+    emitter.instruction("mov rdi, rax");                                        // publish the normalized integer in the indexed dispatch register
     emitter.instruction("jmp __rt_array_set_mixed_key_int_ready");              // validate the existing marker before consuming any indexed owner
     emitter.label("__rt_array_set_mixed_key_string_ready");
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the normalized key low word across helper calls
