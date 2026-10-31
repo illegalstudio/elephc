@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Relative object parameters retain the catch exit of their argument type guard.
+#[test]
+fn test_nullable_fallback_flow_review_relative_object_guard() {
+    for (declaration, receiver, call) in [
+        ("class Node { static function accept(self $other): int { return 1; } }", "Node", "Node::accept($maybe)"),
+        ("class Node { function accept(self $other): int { return 1; } }", "Node", "(new Node())->accept($maybe)"),
+        ("class Root {} class Node extends Root { static function accept(parent $other): int { return 1; } }", "Root", "Node::accept($maybe)"),
+    ] {
+        let source = format!("<?php {declaration} function run(?{receiver} $maybe, ?int $value): int {{ $value ??= 7; try {{ $value = null; {call}; return 1; }} catch (TypeError $error) {{}} return $value; }}");
+        expect_error(&source, "return type expects int, got int|null");
+    }
+}
+
 /// Wide builtin handlers retain the null write from a failing declared-return boundary.
 #[test]
 fn test_nullable_fallback_flow_review_builtin_catch_parents() {

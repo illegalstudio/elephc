@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Relative class entry guards retain the nullable continuation through the production CLI.
+#[test]
+fn test_nullable_fallback_flow_review_relative_object_guard_cli_runtime() {
+    for (declaration, receiver, call) in [
+        ("class Node { static function accept(self $other): int { return 1; } }", "Node", "Node::accept($maybe)"),
+        ("class Node { function accept(self $other): int { return 1; } }", "Node", "(new Node())->accept($maybe)"),
+        ("class Root {} class Node extends Root { static function accept(parent $other): int { return 1; } }", "Root", "Node::accept($maybe)"),
+    ] {
+        let source = format!("<?php {declaration} function run(?{receiver} $maybe, ?int $value): mixed {{ $value ??= 7; try {{ $value = null; {call}; return 1; }} catch (TypeError $error) {{ echo \"caught\\n\"; }} var_dump($value); return $value; }} var_dump(run(null, 7)); var_dump(run(new {receiver}(), 7));");
+        assert_nullable_flow_cli_heap_output(&source, "caught\nNULL\nNULL\nint(1)\n");
+    }
+}
+
 /// Writes through aliases do not turn a stale integer guard into an integer value read.
 #[test]
 fn test_nullable_fallback_flow_review_aliased_integer_reads_runtime() {

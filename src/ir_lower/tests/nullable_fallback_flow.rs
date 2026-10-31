@@ -31,6 +31,30 @@ function projectedGuardConsumer(?int $value): Closure {
     if ($value === null) { $value = 40; }
     return fn(): int => $value + 2;
 }
+class RelativeGuardRoot {}
+class RelativeGuardNode extends RelativeGuardRoot {
+    static function accept(self $other): int { return 1; }
+    static function ancestor(parent $other): int { return 1; }
+    function instance(self $other): int { return 1; }
+}
+function relativeGuardContinuation(?RelativeGuardNode $maybe, ?int $value): mixed {
+    $value ??= 7;
+    try { $value = null; RelativeGuardNode::accept($maybe); return 1; }
+    catch (TypeError $error) { var_dump($value); }
+    return $value;
+}
+function relativeParentContinuation(?RelativeGuardRoot $maybe, ?int $value): mixed {
+    $value ??= 7;
+    try { $value = null; RelativeGuardNode::ancestor($maybe); return 1; }
+    catch (TypeError $error) { var_dump($value); }
+    return $value;
+}
+function relativeInstanceContinuation(?RelativeGuardNode $maybe, ?int $value): mixed {
+    $value ??= 7;
+    try { $value = null; (new RelativeGuardNode())->instance($maybe); return 1; }
+    catch (TypeError $error) { var_dump($value); }
+    return $value;
+}
 function aliasedIntegerRead(?int $value): void {
     $alias = &$value;
     if ($value !== null) { $alias = null; var_dump($value); var_dump([$value]); }
