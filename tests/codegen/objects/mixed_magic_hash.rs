@@ -78,15 +78,26 @@ MixedGetterOwnerBorrowed::$cache = [1, 2];
 $borrowed = new MixedGetterOwnerBorrowed();
 $first = MixedGetterOwnerRead($borrowed);
 $second = MixedGetterOwnerRead($borrowed);
+$first[0] = 9;
+echo json_encode($second), ':', json_encode(MixedGetterOwnerBorrowed::$cache), "\n";
 unset($first, $second);
 echo json_encode(MixedGetterOwnerBorrowed::$cache), "\n";
 MixedGetterOwnerBorrowed::$cache = null;
 unset($reference, $borrowed);
+$holder = new stdClass();
+$holder->rows = ['a' => 1];
+$holder->node = new stdClass();
+$node = $holder->node;
+$copy = $holder->rows;
+$copy['z'] = 9;
+$node->label = 'shared';
+echo json_encode($holder->rows), ':', $holder->node->label, "\n";
+unset($node, $copy, $holder);
 "#;
     let renamed = source.replace("MixedGetterOwner", "EvalMixedGetterOwner");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
-    let expected = format!("{}[1,2]\n", "{\"a\":1,\"b\":2,\"z\":9}|{\"a\":1,\"b\":2}\n".repeat(3));
+    let expected = format!("{}[1,2]:[1,2]\n[1,2]\n{{\"a\":1}}:shared\n", "{\"a\":1,\"b\":2,\"z\":9}|{\"a\":1,\"b\":2}\n".repeat(3));
     assert_bundle_with(&[
         BundleCase { name: "mixed_getter_owners_aot", source, expected: &expected },
         BundleCase { name: "mixed_getter_owners_eval", source: &eval, expected: &expected },

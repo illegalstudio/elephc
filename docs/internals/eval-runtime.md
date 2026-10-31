@@ -20,6 +20,11 @@ property changed through another native alias. AOT eval scope writes remain dirt
 literal scope reload keeps its existing path. Eval barriers preserve the payload
 types of already-bound native references rather than widening shared cells to Mixed.
 
+Owned property value reads detach array boxes even when the getter already returned
+an owning lease. Retaining the same property box is insufficient: a COW write replaces
+the payload in that box. The copy preserves array and callable metadata; object reads
+keep their shared identity. Write-context property fetches retain their attached path.
+
 Constructorless native allocation probes dynamic classes through the private
 `__elephc_eval_try_allocate_object_v1` ABI when Magician is linked. Prelude
 factories with no eval local borrow the context of the active interpreter-to-native
