@@ -10,6 +10,40 @@
 use crate::{codegen::platform::Target, ir::Op, types::PhpType};
 use std::path::Path;
 
+/// Packed literal writes consume a fresh object's owner only after rooting the refusal Error.
+#[test]
+fn packed_nullable_refusal_protects_the_transferred_object_on_every_target() {
+    let source = r#"<?php
+class PackedNullableRefusalReplacement {
+    public function __destruct() { throw new Exception('cleanup'); }
+}
+function packedNullableRefusalIr(&...$items): void {
+    try { $items[0] = new PackedNullableRefusalReplacement(); }
+    catch (Throwable $error) { echo $error->getMessage(); }
+}
+$value = null; packedNullableRefusalIr($value);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, Path::new("main.php"),
+            Path::new("."), Target::parse(name).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "packedNullableRefusalIr").unwrap();
+        let write = function.instructions.iter().find(|inst| inst.op == Op::ArraySet).unwrap();
+        let value = write.operands[2];
+        let replacement = function.value(value).unwrap();
+        assert_eq!(replacement.php_type, PhpType::Object("PackedNullableRefusalReplacement".into()), "{name}");
+        assert_eq!(replacement.ownership, crate::ir::Ownership::Owned, "{name}");
+        assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
+            && inst.operands.first() == Some(&value)), "{name}: the setter must consume the owner");
+        assert!(!function.instructions.iter().any(|inst| inst.op == Op::StoreLocal
+            && inst.operands == [value]), "{name}: a scoped owner would hide premature setter cleanup");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let refusal = &assembly[assembly.find("__rt_tagged_reference_assignment_error_new").unwrap()..];
+        let cleanup = refusal.find("__rt_cleanup_preserve_exception").unwrap();
+        let thrown = refusal.find("__rt_throw_current").unwrap();
+        assert!(cleanup < thrown, "{name}: {refusal}");
+    }
+}
+
 /// A copied named variadic reaches marker validation before any consuming hash conversion.
 #[test]
 fn nullable_variadic_copies_use_mixed_key_string_writes_on_every_target() {

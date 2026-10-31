@@ -3225,9 +3225,8 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(
         ctx.emitter, "x12", &scalar_valid, &scalar_invalid,
     );
     ctx.emitter.label(&scalar_invalid);
-    ctx.emitter.instruction("mov x0, x2");                                      // consume the rejected replacement and its owned payload
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    abi::emit_call_label(ctx.emitter, "__rt_tagged_reference_assignment_error");
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(ctx.emitter, "x2");
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&scalar_valid);
     ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement nullable-integer payload
     ctx.emitter.instruction("str x12, [x10]");                                  // publish the new scalar payload
@@ -3342,9 +3341,8 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(
         ctx.emitter, "r11", &scalar_valid, &scalar_invalid,
     );
     ctx.emitter.label(&scalar_invalid);
-    ctx.emitter.instruction("mov rax, rdx");                                    // consume the rejected replacement and its owned payload
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    abi::emit_call_label(ctx.emitter, "__rt_tagged_reference_assignment_error");
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(ctx.emitter, "rdx");
+    abi::emit_call_label(ctx.emitter, "__rt_throw_current");
     ctx.emitter.label(&scalar_valid);
     ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement nullable-integer payload
     ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // publish the new scalar payload

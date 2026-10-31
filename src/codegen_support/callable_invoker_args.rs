@@ -21,6 +21,17 @@ pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 /// Internal source layout for inline nullable integers, matching tagged-scalar property metadata.
 pub(crate) const INVOKER_ARG_TAGGED_SCALAR_SOURCE: i64 = 12;
 
+/// Roots a nullable-reference refusal before retiring its owned rejected Mixed value.
+/// Leaves the accumulated exception pending so callers can finish their own owner cleanup.
+pub(crate) fn emit_tagged_scalar_ref_assignment_pending_error(emitter: &mut Emitter, value: &str) {
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, value);
+    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error_new");
+    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
+    abi::emit_pop_reg(emitter, result);
+    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", result);
+}
+
 /// Branches before publication so inline nullable-integer references only receive int or null.
 pub(crate) fn emit_tagged_scalar_ref_assignment_guard(
     emitter: &mut Emitter, tag: &str, valid: &str, invalid: &str,

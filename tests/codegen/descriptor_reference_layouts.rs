@@ -57,12 +57,22 @@ function throwingNullableReferenceTarget(&...$items): void {
     }
 }
 function throwingNullableReferenceOther(&...$items): void { echo 'unexpected'; }
+function throwingPackedNullableReferenceTarget(&...$items): void {
+    try { $items[0] = new ThrowingNullableReferenceReplacement(); }
+    catch (Throwable $error) {
+        echo $error->getMessage(), '|'; $previous = $error->getPrevious();
+        if ($previous !== null) { echo $previous->getMessage(), '|'; } else { echo 'missing|'; }
+        echo json_encode($items[0]); unset($previous, $error);
+    }
+}
 $holder = new ThrowingNullableReferenceHolder(); $value =& $holder->value;
 $target = $argc > 0 ? 'throwingNullableReferenceTarget' : 'throwingNullableReferenceOther';
-$target(last: $value); unset($target, $value, $holder);
+$target(last: $value); echo '|';
+$target = $argc > 0 ? 'throwingPackedNullableReferenceTarget' : 'throwingNullableReferenceOther';
+$target($value); unset($target, $value, $holder);
 "#);
     assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
-    assert_eq!(out.stdout, "cleanup|Unsupported assignment through a nullable integer reference: value must be int or null|null");
+    assert_eq!(out.stdout, "cleanup|Unsupported assignment through a nullable integer reference: value must be int or null|null|cleanup|Unsupported assignment through a nullable integer reference: value must be int or null|null");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

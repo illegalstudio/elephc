@@ -35,11 +35,7 @@ pub(super) fn emit_release(emitter: &mut Emitter) {
 /// Consumes the boxed rejected value and optional extra destination owner before propagating Error.
 pub(super) fn emit_throw(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
-    abi::emit_push_reg(emitter, result);
-    abi::emit_call_label(emitter, "__rt_tagged_reference_assignment_error_new");
-    abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
-    abi::emit_pop_reg(emitter, result);
-    abi::emit_unary_cleanup_preserving_exception(emitter, "__rt_decref_mixed", result);
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_assignment_pending_error(emitter, result);
     emit_release(emitter);
     abi::emit_call_label(emitter, "__rt_throw_current");
 }
