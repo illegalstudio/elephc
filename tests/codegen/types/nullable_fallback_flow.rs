@@ -9,6 +9,93 @@
 
 use super::*;
 
+/// Total scalar conversions keep parameters, declared returns and properties PHP-equivalent.
+#[test]
+fn test_nullable_fallback_flow_review_total_scalar_boundaries_runtime() {
+    let source = r#"<?php
+class ScalarBoundaryHolder { public string $text = ''; public static string $shared = ''; }
+function scalarString(string $value): string { return $value; }
+function scalarInteger(int $value): int { return $value; }
+function callScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { return scalarString($value); }
+    return 'other';
+}
+function clauseScalarString(mixed $value): string {
+    if (!is_int($value) && !is_string($value)) { return 'other'; }
+    return scalarString(value: $value);
+}
+function returnScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { return $value; }
+    return 'other';
+}
+function propertyScalarString(mixed $value): string {
+    $box = new ScalarBoundaryHolder();
+    if (is_int($value) || is_string($value)) { $box->text = $value; }
+    return $box->text;
+}
+function callScalarInteger(mixed $value): int {
+    if (is_int($value) || is_bool($value)) { return scalarInteger($value); }
+    return -1;
+}
+function floatScalarString(mixed $value): string {
+    if (is_float($value) || is_bool($value)) { return scalarString($value); }
+    return 'other';
+}
+function copiedScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { $copy = $value; return scalarString($copy); }
+    return 'other';
+}
+function capturedScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) {
+        $closure = function () use ($value): string { return scalarString($value); };
+        return $closure();
+    }
+    return 'other';
+}
+function arrowScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) {
+        $closure = fn(): string => scalarString($value);
+        return $closure();
+    }
+    return 'other';
+}
+function staticScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { ScalarBoundaryHolder::$shared = $value; }
+    return ScalarBoundaryHolder::$shared;
+}
+function assignedScalarString(mixed $value): string {
+    if (is_int($value) || is_string($value)) { return ($value = $value); }
+    return 'other';
+}
+function inferredScalarValue(mixed $value) {
+    if (is_int($value) || is_string($value)) { return $value; }
+    return 0;
+}
+function floatScalarInteger(mixed $value): int {
+    if (is_float($value) || is_bool($value)) { return scalarInteger($value); }
+    return -1;
+}
+echo callScalarString(42), ':', callScalarString('ok'), "\n";
+echo clauseScalarString(42), ':', clauseScalarString('ok'), ':', clauseScalarString(null), "\n";
+echo returnScalarString(42), ':', returnScalarString('ok'), "\n";
+echo propertyScalarString(42), ':', propertyScalarString('ok'), "\n";
+var_dump(callScalarInteger(true), callScalarInteger(false), callScalarInteger(7));
+echo floatScalarString(2.5), ':', floatScalarString(true), ':', floatScalarString(false), "\n";
+echo copiedScalarString(42), ':', copiedScalarString('ok'), "\n";
+echo capturedScalarString(42), ':', capturedScalarString('ok'), "\n";
+echo arrowScalarString(42), ':', arrowScalarString('ok'), "\n";
+echo staticScalarString(42), ':', staticScalarString('ok'), "\n";
+echo assignedScalarString(42), ':', assignedScalarString('ok'), "\n";
+echo scalarString(inferredScalarValue(42)), ':', scalarString(inferredScalarValue('ok')), "\n";
+var_dump(floatScalarInteger(2.0), floatScalarInteger(true), floatScalarInteger(false));
+"#;
+    for optimized in [true, false] {
+        let run = || assert_nullable_flow_heap_output(source,
+            "42:ok\n42:ok:other\n42:ok\n42:ok\nint(1)\nint(0)\nint(7)\n2.5:1:\n42:ok\n42:ok\n42:ok\n42:ok\n42:ok\n42:ok\nint(2)\nint(1)\nint(0)\n");
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// A nullable object invalidated on a loop back edge reaches the runtime guard before entry.
 #[test]
 fn test_nullable_fallback_flow_review_loop_object_argument_guard_runtime() {

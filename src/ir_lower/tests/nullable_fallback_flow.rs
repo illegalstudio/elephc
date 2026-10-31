@@ -13,6 +13,27 @@ use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 #[test]
 fn test_nullable_fallback_flow_storage_all_targets() {
     let source = r#"<?php
+class ScalarBoundaryTarget { public string $text = ''; public static string $shared = ''; }
+function scalarStringTarget(string $value): string { return $value; }
+function scalarIntegerTarget(int $value): int { return $value; }
+function scalarBoundaryTarget(mixed $value): string {
+    if (is_int($value) || is_string($value)) {
+        $box = new ScalarBoundaryTarget();
+        $box->text = $value;
+        ScalarBoundaryTarget::$shared = $value;
+        $copy = $value;
+        $closure = function () use ($value): string { return scalarStringTarget($value); };
+        echo scalarStringTarget($copy), $closure(), ScalarBoundaryTarget::$shared;
+        echo scalarStringTarget(value: $value), $box->text;
+        return ($value = $value);
+    }
+    if (is_float($value) || is_bool($value)) { return scalarStringTarget($value); }
+    return 'other';
+}
+function integerBoundaryTarget(mixed $value): int {
+    if (is_int($value) || is_bool($value)) { return scalarIntegerTarget($value); }
+    return -1;
+}
 class LoopArgumentTarget {}
 function needLoopArgumentTarget(LoopArgumentTarget $value): void {}
 function loopArgumentGuardTarget(?LoopArgumentTarget $value, array $items): void {

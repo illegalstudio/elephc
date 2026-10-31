@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Scalar alternatives over Mixed retain weak bindings through every value boundary.
+#[test]
+fn test_nullable_fallback_flow_review_total_scalar_boundaries() {
+    for guard in ["is_int($value) || is_string($value)", "!(!is_int($value) && !is_string($value))",
+        "is_float($value) || is_bool($value)"]
+    {
+        for body in ["return need($value);", "return $value;",
+            "$box = new ScalarBoundaryBox(); $box->text = $value; return $box->text;",
+            "ScalarBoundaryBox::$shared = $value; return ScalarBoundaryBox::$shared;",
+            "$copy = $value; return need($copy);", "return ($value = $value);",
+            "$closure = function () use ($value): string { return need($value); }; return $closure();",
+            "$closure = fn(): string => need($value); return $closure();"]
+        {
+            let source = format!("<?php class ScalarBoundaryBox {{ public string $text = ''; public static string $shared = ''; }} function need(string $value): string {{ return $value; }} function run(mixed $value): string {{ if ({guard}) {{ {body} }} return 'other'; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    check_source("<?php function need(int $value): int { return $value; } function run(mixed $value): int { if (is_int($value) || is_bool($value)) { return need($value); } return -1; }").unwrap();
+    check_source("<?php class GuardedMethodBoundary { function run(mixed $value): string { if (is_int($value) || is_string($value)) { return $value; } return 'other'; } } $closure = function (mixed $value): string { if (is_float($value) || is_bool($value)) { return $value; } return 'other'; };").unwrap();
+    let checked = check_source_full("<?php function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return false; }").unwrap();
+    assert_eq!(checked.functions["logical"].return_type, types::PhpType::Mixed);
+    check_source("<?php function need(string $value): string { return $value; } function logical(mixed $value) { if (is_int($value) || is_string($value)) { return $value; } return 0; } echo need(logical(42));").unwrap();
+    expect_error("<?php function need(string $value): void {} function declared(int|string $value): void { need($value); }", "expects string");
+    expect_error("<?php function need(string $value): void {} function sentinel(string|false $value): void { need($value); }", "expects string");
+    expect_error("<?php function need(string &$value): void {} function shared(mixed $value): void { if (is_int($value) || is_string($value)) { need($value); } }", "by-reference storage");
+}
+
 /// Possibly absent raw bindings retain compatibility diagnostics instead of false non-null returns.
 #[test]
 fn test_nullable_fallback_flow_review_maybe_unbound_coalesce() {
@@ -950,15 +977,17 @@ fn test_nullable_fallback_flow_review_fresh_guard_widening() {
     }
 }
 
-/// Float-bearing scalar unions keep the same explicit-conversion guidance as a float.
+/// Multiple scalar alternatives stay opaque, while a proven float needs an explicit int cast.
 #[test]
 fn test_nullable_fallback_flow_review_union_coercion_diagnostic() {
     let _strict = elephc::strict_php::scoped_enable();
     let source = "<?php function toInt(int $value): int { return $value; } function run(mixed $value): int { if (is_float($value) || is_bool($value)) { return toInt($value); } return 0; }";
-    let error = check_source(source).expect_err(source);
-    assert!(error.contains("got float|bool") || error.contains("got bool|float"), "{error}");
+    check_source(source).unwrap();
+    let single = source.replace("is_float($value) || is_bool($value)", "is_float($value)");
+    let error = check_source(&single).expect_err(&single);
+    assert!(error.contains("got float"), "{error}");
     assert!(error.contains("add an explicit cast at the call site"), "{error}");
-    check_source(&source.replace("toInt($value)", "toInt((int)$value)")).unwrap();
+    check_source(&single.replace("toInt($value)", "toInt((int)$value)")).unwrap();
 }
 
 /// Loop headers reject tagged references before a later checked update boxes the same slot.
