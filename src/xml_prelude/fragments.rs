@@ -385,7 +385,7 @@ final class XMLParser {
             return true;
         }
         if ($option === 4) {
-            $this->__elephc_skip_white = (bool) $value;
+            elephc_xml_parser_set_option($raw, 4, $value ? 1 : 0);
             return true;
         }
         if ($option === 5) {
@@ -422,7 +422,7 @@ final class XMLParser {
             return $this->__elephc_skip_tagstart;
         }
         if ($option === 4) {
-            return $this->__elephc_skip_white;
+            return elephc_xml_parser_get_option($raw, 4) === 1;
         }
         if ($option === 5) {
             return elephc_xml_parser_get_option($raw, 5) === 1;
@@ -492,6 +492,9 @@ final class XMLParser {
         if ($this->__elephc_parsing) {
             throw new Error("Parser must not be called recursively");
         }
+        // The bridge owns option state across procedural wrapper calls. Cache the hot
+        // whitespace flag on this parser for the character-data loop below.
+        $this->__elephc_skip_white = elephc_xml_parser_get_option($this->__elephc_handle, 4) === 1;
         $this->__elephc_collecting = true;
         $this->__elephc_collect_index = $with_index;
         $this->__elephc_struct_values = [];

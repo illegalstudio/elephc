@@ -465,7 +465,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                     s_if(
                         e_binop(e_var("option"), BinOp::StrictEq, e_int(4)),
                         vec![
-                            s_prop_assign(e_this(), "__elephc_skip_white", e_cast(CastType::Bool, e_var("value"))),
+                            s_expr(e_call("elephc_xml_parser_set_option", vec![e_var("raw"), e_int(4), e_ternary(e_var("value"), e_int(1), e_int(0))])),
                             s_return(e_bool(true)),
                         ],
                         vec![],
@@ -551,7 +551,7 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                     s_if(
                         e_binop(e_var("option"), BinOp::StrictEq, e_int(4)),
                         vec![
-                            s_return(e_this_prop("__elephc_skip_white")),
+                            s_return(e_binop(e_call("elephc_xml_parser_get_option", vec![e_var("raw"), e_int(4)]), BinOp::StrictEq, e_int(1))),
                         ],
                         vec![],
                         None,
@@ -665,6 +665,15 @@ pub(super) fn decl_class_xmlparser() -> Stmt {
                         ],
                         vec![],
                         None,
+                    ),
+                    s_prop_assign(
+                        e_this(),
+                        "__elephc_skip_white",
+                        e_binop(
+                            e_call("elephc_xml_parser_get_option", vec![e_this_prop("__elephc_handle"), e_int(4)]),
+                            BinOp::StrictEq,
+                            e_int(1),
+                        ),
                     ),
                     s_prop_assign(e_this(), "__elephc_collecting", e_bool(true)),
                     s_prop_assign(e_this(), "__elephc_collect_index", e_var("with_index")),
