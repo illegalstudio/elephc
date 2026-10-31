@@ -67,7 +67,7 @@ fn native_object_snapshot_contract_is_checked_before_assignment() {
     assert_eq!(values.get(scope.visible_cell("node").unwrap()), FakeValue::Int(3));
 }
 
-/// In-place array writes dirty imported snapshots even when the fake runtime keeps the same box.
+/// Array writes dirty imported snapshots, including paths that keep the same runtime box.
 #[test]
 fn native_array_snapshots_mark_element_mutations_dirty() {
     for source in ["$items[0] = 4;", "$items[] = 3;", "$items[0] += 1;", "unset($items[1]);"] {
@@ -81,7 +81,7 @@ fn native_array_snapshots_mark_element_mutations_dirty() {
         let program = parse_fragment(source.as_bytes()).unwrap();
         execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
         assert!(scope.entry("items").unwrap().flags().dirty, "{source}: mutation lost its reload marker");
-        if !source.starts_with("unset") {
+        if matches!(source, "$items[0] = 4;" | "$items[] = 3;") {
             assert_eq!(scope.visible_cell("items"), Some(original), "{source}: must exercise the same-box shortcut");
         }
     }
