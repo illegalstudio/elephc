@@ -153186,7 +153186,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_error_string",
-      "codegen_line": 1522,
+      "codegen_line": 1531,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -153270,7 +153270,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_get_current_byte_index",
-      "codegen_line": 1555,
+      "codegen_line": 1564,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -153354,7 +153354,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_get_current_column_number",
-      "codegen_line": 1544,
+      "codegen_line": 1553,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -153438,7 +153438,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_get_current_line_number",
-      "codegen_line": 1533,
+      "codegen_line": 1542,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -153522,7 +153522,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_get_error_code",
-      "codegen_line": 1511,
+      "codegen_line": 1520,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -153634,7 +153634,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_parse",
-      "codegen_line": 1463,
+      "codegen_line": 1472,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -153937,7 +153937,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_parser_create",
-      "codegen_line": 1346,
+      "codegen_line": 1355,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -154035,7 +154035,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_parser_create_ns",
-      "codegen_line": 1357,
+      "codegen_line": 1366,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -154126,7 +154126,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_parser_free",
-      "codegen_line": 1566,
+      "codegen_line": 1575,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -154224,7 +154224,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_parser_get_option",
-      "codegen_line": 1598,
+      "codegen_line": 1607,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -154343,7 +154343,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_parser_set_option",
-      "codegen_line": 1585,
+      "codegen_line": 1594,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
@@ -155370,7 +155370,7 @@
       "checker_line": null,
       "codegen_file": "src/xml_prelude/build/parser.rs",
       "codegen_function": "xml_set_object",
-      "codegen_line": 1369,
+      "codegen_line": 1378,
       "notes": [
         "Implemented by the compiler-injected xml prelude."
       ],
