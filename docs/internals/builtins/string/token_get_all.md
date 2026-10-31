@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/tokenizer_prelude.rs`:48](https://github.com/illegalstudio/elephc/blob/main/src/tokenizer_prelude.rs#L48) (`token_get_all`)
+- **Lowering**: [`src/tokenizer_prelude.rs`:71](https://github.com/illegalstudio/elephc/blob/main/src/tokenizer_prelude.rs#L71) (`token_get_all`)
 - **Function symbol**: `token_get_all()`
 
 

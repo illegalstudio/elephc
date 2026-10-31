@@ -21,7 +21,7 @@ Let's follow this through every phase.
 
 ## Phase 1: Lexing
 
-**File:** `src/lexer/` — See [The Lexer](the-lexer.md) for details.
+**File:** `crates/elephc-syntax/src/lexer/` — See [The Lexer](the-lexer.md) for details.
 
 The lexer reads the source character by character and produces a sequence of tokens:
 
@@ -49,7 +49,7 @@ Each token also carries a **Span** — its line and column number — for error 
 
 ## Phase 2: Parsing
 
-**File:** `src/parser/` — See [The Parser](the-parser.md) for details.
+**File:** `crates/elephc-syntax/src/parser/` — See [The Parser](the-parser.md) for details.
 
 The parser reads the token stream and builds an **Abstract Syntax Tree** (AST):
 

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Declares the Core INI settings consumed by mbstring query parsing.
+//! Declares the shared Core INI settings consumed by mbstring requests and tokenizer guards.
 //!
 //! Called from:
 //! - Compiler startup selection and the shared Core request-state provider.
@@ -13,18 +13,19 @@ use super::catalog::Directive;
 /// Stable indices in sorted Core directive storage.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
-pub enum Key { Separators, DisplayErrors, MaxNesting, MaxVariables }
+pub enum Key { Separators, DisplayErrors, MaxNesting, MaxVariables, MemoryLimit }
 
 /// Core declarations needed by the query parser and its diagnostic policy.
-pub const DIRECTIVES: [Directive; 4] = [
+pub const DIRECTIVES: [Directive; 5] = [
     Directive { name: "arg_separator.input", default: Some("&"), access: 6 },
     Directive { name: "display_errors", default: Some("1"), access: 7 },
     Directive { name: "max_input_nesting_level", default: Some("64"), access: 6 },
     Directive { name: "max_input_vars", default: Some("1000"), access: 6 },
+    Directive { name: "memory_limit", default: Some("128M"), access: 7 },
 ];
 
 /// Core startup handler order, before extension INI registration.
-pub const REGISTRATION_ORDER: [Key; 4] = [Key::DisplayErrors, Key::Separators, Key::MaxNesting, Key::MaxVariables];
+pub const REGISTRATION_ORDER: [Key; 5] = [Key::DisplayErrors, Key::Separators, Key::MaxNesting, Key::MaxVariables, Key::MemoryLimit];
 
 /// Looks up a supported Core directive without accepting case changes or embedded NUL suffixes.
 pub fn lookup(name: &[u8]) -> Option<Key> {

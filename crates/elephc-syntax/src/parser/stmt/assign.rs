@@ -1,0 +1,45 @@
+//! Purpose:
+//! Groups assignment-statement parsers and re-exports their shared lowering helpers.
+//! Separates compound, list, local, postfix, and simple assignment surfaces.
+//!
+//! Called from:
+//! - `crate::parser::stmt::parse_stmt()`.
+//!
+//! Key details:
+//! - Assignment statement parsing is split to keep PHP l-value and evaluation-order rules localized.
+
+mod compound;
+mod list;
+mod locals;
+mod postfix;
+mod simple;
+
+pub use list::{
+    parse_destructuring_pattern_unpack,
+    starts_destructuring_pattern,
+};
+pub(super) use list::{
+    parse_list_construct_unpack,
+    parse_list_unpack,
+};
+pub(super) use locals::{
+    looks_like_typed_assign,
+    parse_global,
+    parse_incdec_stmt,
+    parse_static_var,
+    parse_typed_assign,
+};
+pub use postfix::{
+    assignment_target_store_stmt, lower_nested_append_assignment,
+    can_replay_assignment_target,
+    lower_postfix_incdec_assignment,
+    update_dimension_base_is_snapshotted,
+    update_index_needs_snapshot,
+};
+pub(super) use postfix::{
+    try_parse_postfix_assignment,
+    try_parse_postfix_incdec,
+    try_parse_scoped_postfix_incdec,
+    try_parse_scoped_property_assignment,
+};
+pub(super) use simple::parse_variable_stmt;

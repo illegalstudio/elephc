@@ -160,6 +160,7 @@ pub(super) fn emit_shared_mixed_string_helpers(
     shared: &mut SharedCodegenState,
     regalloc_linear: bool,
 ) -> Result<()> {
+    let mut emitted = false;
     if module_shares_mixed_string_ladder(module, &MixedStringContextMode::Result, shared) {
         emit_one_helper(
             module,
@@ -171,6 +172,7 @@ pub(super) fn emit_shared_mixed_string_helpers(
             MixedStringContextMode::Result,
             PhpType::Str,
         )?;
+        emitted = true;
     }
     if module_shares_mixed_string_ladder(module, &MixedStringContextMode::Stdout, shared) {
         emit_one_helper(
@@ -183,6 +185,13 @@ pub(super) fn emit_shared_mixed_string_helpers(
             MixedStringContextMode::Stdout,
             PhpType::Void,
         )?;
+        emitted = true;
+    }
+    if emitted {
+        // The ladder raises a PHP Error on an unconvertible object and preserves the throwable
+        // frame on that path, so the runtime needs the handler-pop and shallow-clone families
+        // even when the source module itself never used them.
+        shared.require_mixed_string_runtime();
     }
     Ok(())
 }

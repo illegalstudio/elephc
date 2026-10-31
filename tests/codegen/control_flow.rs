@@ -30,3 +30,19 @@ mod match_expressions;
 mod closures;
 #[path = "control_flow/guarded_reassignment.rs"]
 mod guarded_reassignment;
+
+/// PHP expression statements whose result is discarded still compile and run as no-ops.
+#[test]
+fn test_discarded_literal_and_unary_expression_statements() {
+    let out = compile_and_run(r#"<?php
+1;
+"text";
+true;
+null;
+-1;
+!false;
+1 + 2;
+echo 'ok';
+"#);
+    assert_eq!(out, "ok");
+}

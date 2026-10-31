@@ -5,19 +5,31 @@
 //! - The standalone tokenizer C bridge and Magician's tokenizer builtin bindings.
 //!
 //! Key details:
-//! - Mago provides the PHP grammar independently of elephc's compilable language subset.
+//! - The native lexer preserves Zend boundaries; TOKEN_PARSE uses elephc's AST parser.
+//! - The `parse` feature is opt-in: a lexer-only embedder links no parser, and the
+//!   tokenizer bridge and Magician turn it on to keep PHP's TOKEN_PARSE semantics.
 //! - The adapter preserves Zend token boundaries and uses the shared PHP 8.5 token catalog.
 //! - No operation launches PHP, reads files, or retains a borrowed source buffer.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+mod keywords;
 mod lex;
 mod names;
+#[cfg(feature = "parse")]
 mod parse;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "parse")]
+pub(crate) use lex::LexError;
+
 pub use names::token_name;
 
 /// Enables parser validation and reserved-word feedback, as PHP's TOKEN_PARSE does.
+///
+/// Only available when the `parse` feature is enabled; a lexer-only build rejects it.
 pub const TOKEN_PARSE: i64 = 1;
 
 /// One token's identifier and original source coordinates.
@@ -33,6 +45,26 @@ pub struct Token {
     pub line: usize,
 }
 
+/// One non-fatal diagnostic PHP raises while scanning with TOKEN_PARSE.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    /// PHP's exact parser-facing message, without a "Deprecated: " prefix.
+    pub message: String,
+    /// One-based source line.
+    pub line: usize,
+    /// Zero-based byte offset.
+    pub pos: usize,
+}
+
+/// A successful scan with its non-fatal diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenizeOutput {
+    /// Tokens in source order.
+    pub tokens: Vec<Token>,
+    /// Non-fatal diagnostics raised by TOKEN_PARSE.
+    pub warnings: Vec<Warning>,
+}
+
 /// A catchable ParseError from TOKEN_PARSE validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseError {
@@ -44,23 +76,65 @@ pub struct ParseError {
 
 /// Splits source into PHP tokens, optionally validating its PHP syntax.
 pub fn tokenize(source: &[u8], flags: i64) -> Result<Vec<Token>, ParseError> {
+    tokenize_with_warnings(source, flags).map(|output| output.tokens)
+}
+
+/// Splits source into tokens and keeps TOKEN_PARSE's non-fatal diagnostics.
+pub fn tokenize_with_warnings(source: &[u8], flags: i64) -> Result<TokenizeOutput, ParseError> {
     if source.len() > u32::MAX as usize {
         return Err(ParseError { message: "PHP source exceeds the tokenizer size limit".into(), line: 1 });
     }
-    let mut tokens = lex::tokenize(source);
+    #[cfg(feature = "parse")]
+    let (mut tokens, lexical, warnings) = lex::scan(source);
+    #[cfg(not(feature = "parse"))]
+    let (tokens, lexical, warnings) = lex::scan(source);
     if flags & TOKEN_PARSE != 0 {
-        parse::validate(source, &mut tokens)?;
+        #[cfg(feature = "parse")]
+        {
+            let mut lexical = lexical;
+            lexical.sort_by_key(|error| error.pos);
+            parse::validate(source, &mut tokens, &lexical)?;
+            return Ok(TokenizeOutput { tokens, warnings: warnings.into_iter().map(|warning| Warning {
+                message: warning.message,
+                line: 1 + newline_count(&source[..warning.pos.min(source.len())]),
+                pos: warning.pos,
+            }).collect() });
+        }
+        #[cfg(not(feature = "parse"))]
+        {
+            let _ = (lexical, warnings);
+            return Err(ParseError {
+                message: "TOKEN_PARSE requires the tokenizer engine's 'parse' feature".into(),
+                line: 1,
+            });
+        }
     }
-    Ok(tokens)
+    #[cfg(not(feature = "parse"))]
+    let _ = (lexical, warnings);
+    Ok(TokenizeOutput { tokens, warnings: Vec::new() })
 }
 
 /// Resolves one token constant from the authoritative shared catalog.
 pub(crate) fn id(name: &str) -> i64 {
-    match elephc_builtin_contract::lookup_constant(name).map(|c| c.value) {
-        Some(elephc_builtin_contract::ConstValue::Int(value)) => value,
-        _ => panic!("missing tokenizer constant {name}"),
-    }
+    *TOKEN_IDS
+        .get_or_init(|| {
+            elephc_builtin_contract::constants()
+                .iter()
+                .filter(|constant| constant.module == elephc_builtin_contract::PhpModule::Tokenizer)
+                .filter_map(|constant| match constant.value {
+                    elephc_builtin_contract::ConstValue::Int(value) => {
+                        Some((constant.name, value))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .get(name)
+        .unwrap_or_else(|| panic!("missing tokenizer constant {name}"))
 }
+
+/// Immutable tokenizer-name to identifier index, built once per process.
+static TOKEN_IDS: OnceLock<HashMap<&'static str, i64>> = OnceLock::new();
 
 /// Counts logical PHP newlines, treating a CRLF pair as one line break.
 pub(crate) fn newline_count(bytes: &[u8]) -> usize {

@@ -43,10 +43,14 @@ pub(in crate::interpreter) fn eval_tokenizer_values(
     let flags = match args.get(1) {
         Some(value) => tokenizer_int(*value, name, 2, "flags", context, values)?, None => 0,
     };
-    let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
-        Ok(tokens) => tokens,
+    let output = match elephc_tokenizer_engine::tokenize_with_warnings(&code, flags) {
+        Ok(output) => output,
         Err(error) => return location::throw_parse_error(&error, context, values),
     };
+    for warning in &output.warnings {
+        values.warning(&format!("Deprecated: {}\n", warning.message))?;
+    }
+    let tokens = output.tokens;
     let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
     for (index, token) in tokens.iter().enumerate() {
         let text = &code[token.pos..token.pos + token.len];
@@ -79,10 +83,14 @@ pub(in crate::interpreter) fn eval_tokenizer_static_method(
             Some(value) => tokenizer_int(*value, "PhpToken::tokenize", 2, "flags", context, values)?,
             None => 0,
         };
-        let tokens = match elephc_tokenizer_engine::tokenize(&code, flags) {
-            Ok(tokens) => tokens,
+        let output = match elephc_tokenizer_engine::tokenize_with_warnings(&code, flags) {
+            Ok(output) => output,
             Err(error) => return location::throw_parse_error(&error, context, values),
         };
+        for warning in &output.warnings {
+            values.warning(&format!("Deprecated: {}\n", warning.message))?;
+        }
+        let tokens = output.tokens;
         let mut out = EvalArrayBuilder::indexed(values, tokens.len())?;
         for (index, token) in tokens.iter().enumerate() {
             out.index(index, |values| {

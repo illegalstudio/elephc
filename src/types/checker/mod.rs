@@ -1328,6 +1328,11 @@ pub(crate) struct FnDecl {
     /// Attribute groups attached to the original `function` declaration.
     /// Currently consulted only for `#[\Deprecated]` detection.
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
+    /// Whether this declaration came from compiler-injected `SourceMode::Internal` code.
+    ///
+    /// Such functions model PHP internals, so a matching `PreludeProvided` contract keeps the
+    /// internal maximum arity instead of PHP's user-function surplus-argument tolerance.
+    pub internal_prelude: bool,
 }
 
 /// Runs the type checker on `program` for the given `target` with default

@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-**Source:** `src/lexer/` — `mod.rs`, `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs` (with the `literals/` submodules `identifiers.rs`, `numbers.rs`, `strings.rs`)
+**Source:** `crates/elephc-syntax/src/lexer/` — `mod.rs`, `scan.rs`, `cursor.rs`, `token.rs`, `literals.rs` (with the `literals/` submodules `identifiers.rs`, `numbers.rs`, `strings.rs`)
 
 The lexer (also called tokenizer or scanner) is the first phase of compilation. It takes raw source text and breaks it into **tokens** — the smallest meaningful units of the language.
 
@@ -32,7 +32,7 @@ Some tokens carry data (the variable name, the number value). Others are just ma
 
 ## The Cursor
 
-**File:** `src/lexer/cursor.rs`
+**File:** `crates/elephc-syntax/src/lexer/cursor.rs`
 
 The cursor is the lowest-level component. It walks through the source text one character at a time, tracking the current position:
 
@@ -54,7 +54,7 @@ It provides three essential operations:
 | `advance()` | Move to the next character, return the one we just passed |
 | `remaining()` | Get the rest of the source as a string slice |
 
-The cursor automatically tracks line and column — when it sees a `\n`, it increments `line` and resets `col` to 1. This information is stored in a `Span` and attached to every token, so error messages can say "error at line 5, column 12". A `Span` (`src/span.rs`) carries both the start position (`line`, `col`) and an *exclusive* end position (`end_line`, `end_col`); the scanner fills in the end position from the cursor position after the token is consumed.
+The cursor automatically tracks line and column — when it sees a `\n`, it increments `line` and resets `col` to 1. This information is stored in a `Span` and attached to every token, so error messages can say "error at line 5, column 12". A `Span` (`crates/elephc-syntax/src/span.rs`) carries both the start position (`line`, `col`) and an *exclusive* end position (`end_line`, `end_col`); the scanner fills in the end position from the cursor position after the token is consumed.
 
 `Span` stays 16 bytes, so it has no separate field for the source file. For a token of an included or autoloaded file, `end_col` also carries that file's source identity (`Span::new_in_source`): bit 31 marks the packed form, bits 16 to 29 hold the identity, and bits 0 to 15 hold the end column. A pair that does not fit (an end column past 65535, as on a long minified line, or an identity past 16383) goes to a process-wide table instead: bit 30 is set and the low bits index the exact `(source identity, end column)` pair. A pair always gets the same index and entries are never removed, so equal positions still compare equal and spans stay usable as map keys. A root-file end column is stored bare unless it reaches bit 31, where it is interned with identity 0. Read positions through `Span::end_column()` and `Span::source_id()`, never the raw `end_col` field.
 
@@ -66,7 +66,7 @@ A literal `eval` fragment parsed at EIR lowering carries its own identity from `
 
 ## The Scanner
 
-**File:** `src/lexer/scan.rs`
+**File:** `crates/elephc-syntax/src/lexer/scan.rs`
 
 The scanner is the main loop. It uses the cursor to read characters and decides what token each sequence represents:
 
@@ -79,9 +79,9 @@ pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
 }
 ```
 
-`SpannedToken` (defined in `src/lexer/token.rs`) is `(Token, TokenMetadata)` — every token is paired with metadata that carries its `Span` and, for word-like tokens, an optionally retained source spelling (see [Token metadata](#token-metadata) below).
+`SpannedToken` (defined in `crates/elephc-syntax/src/lexer/token.rs`) is `(Token, TokenMetadata)` — every token is paired with metadata that carries its `Span` and, for word-like tokens, an optionally retained source spelling (see [Token metadata](#token-metadata) below).
 
-The public lexer entry point used by the rest of the compiler is `tokenize()` in `src/lexer/mod.rs`, which wraps `scan_tokens()` and returns the final `Vec<SpannedToken>`.
+The public lexer entry point used by the rest of the compiler is `tokenize()` in `crates/elephc-syntax/src/lexer/mod.rs`, which wraps `scan_tokens()` and returns the final `Vec<SpannedToken>`.
 
 ### The scanning algorithm
 
@@ -114,7 +114,7 @@ These are discarded entirely — they don't produce tokens.
 
 ## Token types
 
-**File:** `src/lexer/token.rs`
+**File:** `crates/elephc-syntax/src/lexer/token.rs`
 
 The full set of tokens elephc recognizes:
 
@@ -282,7 +282,7 @@ Single-quoted strings only support `\\` and `\'` — everything else is literal.
 
 ## Heredoc and nowdoc
 
-**File:** `src/lexer/literals/strings.rs` — `scan_heredoc()`
+**File:** `crates/elephc-syntax/src/lexer/literals/strings.rs` — `scan_heredoc()`
 
 Heredoc and nowdoc are multi-line string syntaxes from PHP. The lexer recognizes `<<<` followed by a label:
 

@@ -1046,3 +1046,69 @@ try { Consumer::$items[index()] = value(); } catch (Error $e) { echo 'E'; }
 "#);
     assert_eq!(out, "vE|kvE");
 }
+
+/// A property default may reference a constant defined at runtime by `define()`.
+#[test]
+fn test_property_default_review_runtime_define_constant() {
+    let out = crate::support::compile_and_run(r#"<?php
+define('RUNTIME_DEFAULT', 7);
+class Consumer { public int $value = RUNTIME_DEFAULT; }
+echo (new Consumer())->value;
+"#);
+    assert_eq!(out, "7");
+}
+
+/// A constant branch PHP folds away cannot report its dead arm as undefined.
+#[test]
+fn test_property_default_review_folded_constant_branch() {
+    let out = crate::support::compile_and_run(r#"<?php
+class Switch_ { public const ON = true; }
+class Consumer { public int $value = Switch_::ON ? 1 : MISSING_DEFAULT; }
+echo (new Consumer())->value;
+"#);
+    assert_eq!(out, "1");
+}
+
+/// Property defaults resolve predefined catalog constants instead of deferring an error.
+#[test]
+fn test_property_default_review_predefined_constants() {
+    let out = crate::support::compile_and_run(r#"<?php
+class Consumer {
+    public int $flags = E_ALL;
+    public string $version = PHP_VERSION;
+    public int $seek = SEEK_SET;
+    public mixed $stderr = STDERR;
+    public static int $staticFlags = E_ALL;
+}
+$consumer = new Consumer();
+echo $consumer->flags === E_ALL ? 'flags|' : 'bad|';
+echo $consumer->version === PHP_VERSION ? 'version|' : 'bad|';
+echo $consumer->seek, '|', is_resource($consumer->stderr) ? 'stderr|' : 'bad|';
+echo Consumer::$staticFlags === E_ALL ? 'static' : 'bad';
+"#);
+    assert_eq!(out, "flags|version|0|stderr|static");
+}
+
+/// `define()` is discovered in every statement condition, not only statement bodies.
+#[test]
+fn test_property_default_review_defines_in_control_expressions() {
+    let out = crate::support::compile_and_run(r#"<?php
+class IfDefault { public int $value = IF_DEFAULT; }
+class ForeachDefault { public int $value = FOREACH_DEFAULT; }
+class SwitchDefault { public int $value = SWITCH_DEFAULT; }
+class ForDefault { public int $value = FOR_DEFAULT; }
+class WhileDefault { public int $value = WHILE_DEFAULT; }
+class DoDefault { public int $value = DO_DEFAULT; }
+if (define('IF_DEFAULT', 7)) {}
+foreach ([define('FOREACH_DEFAULT', 3)] as $ignored) {}
+switch (define('SWITCH_DEFAULT', 5)) { default: break; }
+for (define('FOR_DEFAULT', 11); false; ) {}
+$i = 0;
+while ($i < 1 && define('WHILE_DEFAULT', 13)) { $i++; }
+do { $i++; } while (define('DO_DEFAULT', 17) && false);
+echo (new IfDefault())->value, '|', (new ForeachDefault())->value, '|';
+echo (new SwitchDefault())->value, '|', (new ForDefault())->value, '|';
+echo (new WhileDefault())->value, '|', (new DoDefault())->value;
+"#);
+    assert_eq!(out, "7|3|5|11|13|17");
+}

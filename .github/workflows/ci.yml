@@ -2989,7 +2989,7 @@ jobs:
       - name: Check the shared tokenizer against PHP
         env:
           ELEPHC_TOKENIZER_REQUIRE_PHP85: '1'
-        run: cargo test --locked -p elephc-tokenizer-engine --lib
+        run: cargo test --locked -p elephc-tokenizer-engine --lib --features parse
 
   tokenizer-native-smoke:
     name: Tokenizer native smoke
@@ -3011,6 +3011,9 @@ jobs:
           examples/tokenizer/main > "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'Function declaration at line 1, byte ' "$RUNNER_TEMP/tokenizer-example.out"
           grep -F 'First token: T_OPEN_TAG' "$RUNNER_TEMP/tokenizer-example.out"
+      - name: Run vendored php-src tokenizer phpt suite
+        run: cargo test --locked --test tokenizer_php_src -- --ignored --nocapture
+
       - name: Run focused native, eval and argument regressions
         run: |
           cargo test --locked --test codegen_tests test_tokenizer_

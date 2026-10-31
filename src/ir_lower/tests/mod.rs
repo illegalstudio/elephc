@@ -200,7 +200,7 @@ fn try_lower_source_at_for_target(
     let ast = crate::curl_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::xml_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::fileinfo_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::tokenizer_prelude::inject_if_used(ast, false, 134_217_728, &mut prelude_inventory);
     let ast = crate::dom_html_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::version_prelude::inject_if_used(
         ast,

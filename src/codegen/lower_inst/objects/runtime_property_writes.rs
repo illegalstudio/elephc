@@ -1872,6 +1872,10 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset_runtime(
     let object = expect_operand(inst, 0)?;
     let property_value = expect_operand(inst, 1)?;
     if let Some(property) = const_string_operand(ctx, property_value)? {
+        let receiver_ty = ctx.value_php_type(object)?.codegen_repr();
+        if matches!(receiver_ty, PhpType::Mixed | PhpType::Union(_)) {
+            return lower_runtime_mixed_prop_unset(ctx, object, property_value, inst);
+        }
         let property = property.to_string();
         return lower_named_prop_unset(ctx, object, &property, inst);
     }

@@ -241,3 +241,104 @@ eval($code);
     assert_eq!(out.stderr.matches("Implicit conversion from float-string \"\u{b}1.5\u{b}\" to int loses precision").count(), 3, "{}", out.stderr);
     assert_eq!(out.stderr.matches("Passing null to parameter").count(), 4, "{}", out.stderr);
 }
+
+/// TOKEN_PARSE reports PHP's E_DEPRECATED level for every non-canonical cast spelling.
+#[test]
+fn test_tokenizer_non_canonical_cast_deprecations() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, ':', $message, "\n";
+    return true;
+});
+foreach (['(double)', '(integer)', '(boolean)', '(binary)', '(float)', '(int)'] as $cast) {
+    token_get_all('<?php ' . $cast . ' $x;', TOKEN_PARSE);
+}
+PhpToken::tokenize('<?php (double) $x;', TOKEN_PARSE);
+"#);
+    assert_eq!(
+        out,
+        "8192:Non-canonical cast (double) is deprecated, use the (float) cast instead\n8192:Non-canonical cast (integer) is deprecated, use the (int) cast instead\n8192:Non-canonical cast (boolean) is deprecated, use the (bool) cast instead\n8192:Non-canonical cast (binary) is deprecated, use the (string) cast instead\n8192:Non-canonical cast (double) is deprecated, use the (float) cast instead\n"
+    );
+}
+
+/// Runtime eval raises the same non-canonical-cast deprecations through TOKEN_PARSE.
+#[test]
+fn test_tokenizer_eval_non_canonical_cast_deprecations() {
+    let out = compile_and_run(r#"<?php
+$code = $argc > 0 ? '
+set_error_handler(function (int $level, string $message): bool {
+    echo $level, ":", $message, "\n";
+    return true;
+});
+token_get_all("<?php (double) \$x;", TOKEN_PARSE);
+PhpToken::tokenize("<?php (binary) \$x;", TOKEN_PARSE);
+' : '';
+eval($code);
+"#);
+    assert_eq!(
+        out,
+        "8192:Non-canonical cast (double) is deprecated, use the (float) cast instead\n\
+8192:Non-canonical cast (binary) is deprecated, use the (string) cast instead\n"
+    );
+}
+
+/// PhpToken tokens come from a Mixed array element; unset must dispatch on the runtime class.
+#[test]
+fn test_tokenizer_phptoken_unset_mixed_receiver_property() {
+    let out = compile_and_run(r#"<?php
+$tokens = PhpToken::tokenize('<?php function foo() {}');
+$token = $tokens[1];
+unset($token->id);
+unset($token->text);
+echo get_class($token), ':', $token->pos;
+"#);
+    assert_eq!(out, "PhpToken:6");
+}
+
+/// An undefined constant in a subclass property default throws at instantiation, as PHP does.
+#[test]
+fn test_tokenizer_subclass_undefined_property_default_throws() {
+    let out = compile_and_run(r#"<?php
+class BrokenSourceToken extends PhpToken { public $extra = UNKNOWN; }
+try { BrokenSourceToken::tokenize('<?php foo'); echo 'wrong'; }
+catch (Error $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "Undefined constant \"UNKNOWN\"");
+}
+
+/// TOKEN_PARSE preserves a throwing user error handler for non-canonical casts.
+#[test]
+fn test_tokenizer_deprecation_handler_throw_propagates() {
+    let out = compile_and_run(r#"<?php
+set_error_handler(function (int $level, string $message): bool {
+    throw new RuntimeException('handler: ' . $message);
+});
+try { PhpToken::tokenize('<?php (double) $x;', TOKEN_PARSE); echo 'wrong'; }
+catch (RuntimeException $error) { echo $error->getMessage(); }
+"#);
+    assert_eq!(out, "handler: Non-canonical cast (double) is deprecated, use the (float) cast instead");
+}
+
+/// A tokenizer-only program enforces the compiled heap capacity without `ini_set`.
+#[test]
+fn test_tokenizer_memory_limit_defaults_without_ini_set() {
+    let out = compile_and_run_expect_failure(r#"<?php
+$tokens = token_get_all(str_repeat('<?php echo 1;', 8000));
+echo count($tokens);
+"#);
+    assert!(out.contains("Allowed memory size"), "{out}");
+    assert!(out.contains("on line 2"), "{out}");
+    assert!(!out.contains("tokenizer.php"), "{out}");
+}
+
+/// The tokenizer allocation guard reports the caller's file and line, not a synthetic prelude.
+#[test]
+fn test_tokenizer_memory_limit_reports_call_site() {
+    let out = compile_cli_file_expect_runtime_failure(r#"<?php
+ini_set('memory_limit', '1');
+token_get_all('<?php echo 1;');
+"#);
+    assert!(out.contains("Allowed memory size"), "{out}");
+    assert!(out.contains("on line 3"), "{out}");
+    assert!(!out.contains("tokenizer.php"), "{out}");
+}

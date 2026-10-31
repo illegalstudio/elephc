@@ -26,7 +26,15 @@ foreach (PhpToken::tokenize($source) as $token) {
 single-character strings and arrays containing `[token ID, original text, starting
 line]`. Input without an opening PHP tag is inline HTML. Whitespace, comments,
 opening and closing tags, interpolation, heredocs and non-UTF-8 source bytes are
-preserved. PHP tokenization is independent of the language subset elephc compiles.
+preserved. Lexing does not depend on the language subset elephc compiles.
+
+`token_get_all()` checks the current `memory_limit` while materializing the token
+array and emits PHP's allocation-exhausted fatal at the caller's file and line.
+When the program links the Core INI runtime, the configured `memory_limit` wins
+(including `ini_set('memory_limit', ...)`). A tokenizer-only program has no Core
+INI state, so the check falls back to the compiled heap capacity (`--heap-size`,
+128 MB by default); the guard therefore applies even when the program never
+mentions `ini_set`.
 
 `token_name(int $id): string` returns the symbolic `T_*` name, or `"UNKNOWN"` for
 punctuation and unknown IDs. Token IDs and the `T_DOUBLE_COLON` alias follow the
@@ -54,16 +62,27 @@ when the source is empty.
 
 ## Parser validation
 
-Passing `TOKEN_PARSE` validates the source with a PHP parser and reclassifies
-reserved words used as identifiers in contexts where PHP permits them, such as
-class constant names. Syntax errors throw a catchable `ParseError`. Without the
-flag, incomplete and malformed PHP remains tokenizable. Parser error wording may
-differ from Zend while retaining the catchable `ParseError` class. Other flag bits are
-ignored, matching PHP.
+Passing `TOKEN_PARSE` validates the source through elephc's lexer and AST parser
+and reclassifies reserved words used as identifiers in contexts where PHP
+permits them, such as class constant names, trait adaptation names and static or
+instance member names. Valid PHP constructs outside elephc's own grammar are
+normalized in the parser view first, so `goto`, variable variables, dynamic
+`::` chains, DNF types, abstract property hooks and first-class callables remain
+accepted. Syntax errors throw a catchable `ParseError` with PHP's parser-facing
+wording for the grammar elephc models, including heredoc indentation and invalid
+escape diagnostics. Because this validation reuses the compiler frontend, a
+diagnostic can differ from Zend's exact token name or column on syntax outside
+that grammar. Without the flag, incomplete and malformed PHP remains tokenizable.
+Other flag bits are ignored, matching PHP.
 
-The optional bridge embeds the Mago PHP lexer and parser. It does not execute PHP
-or require a PHP installation or a managed native package at runtime. Lexer
-compatibility adaptation and constant lookup are shared with runtime `eval()`.
+Non-canonical casts (`integer`, `boolean`, `double` and `binary`) raise
+`E_DEPRECATED` only under `TOKEN_PARSE`, exactly as PHP does. The `(real)` cast is
+rejected with PHP's removed-cast message.
+
+The optional bridge embeds a native Rust lexer and uses the leaf `elephc-syntax`
+frontend for validation. It does not execute PHP or require a PHP installation,
+managed native package or third-party PHP grammar at runtime. Tokenization,
+parser feedback and constant lookup are shared with runtime `eval()`.
 
 See [the tokenizer example](https://github.com/illegalstudio/elephc/tree/main/examples/tokenizer)
 for a source inspector that removes comments without changing the remaining text.

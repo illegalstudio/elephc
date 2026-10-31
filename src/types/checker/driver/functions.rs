@@ -140,6 +140,7 @@ impl Checker {
                         span: stmt.span,
                         body: body.clone(),
                         attributes: stmt.attributes.clone(),
+                        internal_prelude: stmt.source_mode == crate::source::SourceMode::Internal,
                     },
                 );
             }

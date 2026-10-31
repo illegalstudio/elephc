@@ -50,8 +50,13 @@ mb_strlen("");
 for ($i = 0; $i < 8; $i++) { for ($mode = 0; $mode < 8; $mode++) { run_ini($mode); } }
 echo "done\n";
 "#;
-    let expected = concat!("0:1:1:7800ff:1\n", "1:1:1::1\n", "2:1:1:61:1\n",
-        "3:1:4:1\n", "4:1:8:1\n", "5:1:MB_STRINGS:1\n", "6:1:3:1\n", "7:1:0:1:1\n");
+    // Modes 3/4 enumerate the Core INI catalog; derive the leaf counts from the
+    // catalog so adding a directive does not silently stale this fixture.
+    let core_directives = elephc_builtin_contract::mbstring_abi::ini::core::DIRECTIVES.len();
+    let expected = format!(
+        "0:1:1:7800ff:1\n1:1:1::1\n2:1:1:61:1\n3:1:{core_directives}:1\n4:1:{}:1\n5:1:MB_STRINGS:1\n6:1:3:1\n7:1:0:1:1\n",
+        core_directives * 2
+    );
     let directory = make_cli_test_dir("mbstring_ini_materialize");
     let (assembly, runtime, libraries) = compile_source_to_asm_with_options(source, &directory, 8_388_608, true, true);
     let jump = if target().arch == Arch::AArch64 { "b" } else { "jmp" };

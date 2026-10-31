@@ -289,10 +289,17 @@ fn disk_cached_runtime_obj(runtime_asm: &str) -> std::path::PathBuf {
 /// through the shared on-disk cache, and keeps the path for the rest of the process.
 pub(crate) fn get_runtime_obj() -> &'static Path {
     RUNTIME_OBJ.get_or_init(|| {
+        // The shared test runtime is a superset: fixtures that inline the mixed-string
+        // ladder (notably the tokenizer prelude's PhpToken) need the handler-pop and
+        // shallow-clone families even without a source-level handler or clone.
         let runtime_asm = elephc::codegen::generate_runtime_with_features(
             8_388_608,
             target(),
-            elephc::codegen::RuntimeFeatures::none(),
+            elephc::codegen::RuntimeFeatures {
+                handler_state: true,
+                object_clone: true,
+                ..elephc::codegen::RuntimeFeatures::none()
+            },
         );
         disk_cached_runtime_obj(&runtime_asm)
     })
@@ -332,7 +339,11 @@ pub(crate) fn assemble_custom_runtime(heap_size: usize) -> std::path::PathBuf {
     let runtime_asm = elephc::codegen::generate_runtime_with_features(
         heap_size,
         target(),
-        elephc::codegen::RuntimeFeatures::none(),
+        elephc::codegen::RuntimeFeatures {
+            handler_state: true,
+            object_clone: true,
+            ..elephc::codegen::RuntimeFeatures::none()
+        },
     );
     disk_cached_runtime_obj(&runtime_asm)
 }
@@ -345,15 +356,20 @@ mod runtime_cache_tests {
     /// assembly gets a different one, and every returned object is a non-empty file.
     #[test]
     fn runtime_objects_are_shared_on_disk_by_assembly_hash() {
+        let base_features = elephc::codegen::RuntimeFeatures {
+            handler_state: true,
+            object_clone: true,
+            ..elephc::codegen::RuntimeFeatures::none()
+        };
         let base = elephc::codegen::generate_runtime_with_features(
             8_388_608,
             target(),
-            elephc::codegen::RuntimeFeatures::none(),
+            base_features,
         );
         let bigger = elephc::codegen::generate_runtime_with_features(
             16_777_216,
             target(),
-            elephc::codegen::RuntimeFeatures::none(),
+            base_features,
         );
         let first = disk_cached_runtime_obj(&base);
         let second = disk_cached_runtime_obj(&base);

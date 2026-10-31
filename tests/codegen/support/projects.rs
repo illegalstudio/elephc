@@ -198,6 +198,33 @@ pub(crate) fn compile_cli_file_with_flags_expect_failure(source: &str, flags: &[
     String::from_utf8(compile_out.stderr).unwrap()
 }
 
+/// Compiles a CLI fixture, asserts the program fails at runtime, and returns both output streams.
+///
+/// Unlike the library-level failure helpers, this runs the real `elephc` binary through the
+/// prelude-injection pipeline, so a fixture may depend on Core INI or another prelude function.
+pub(crate) fn compile_cli_file_expect_runtime_failure(source: &str) -> String {
+    let dir = make_cli_test_dir("elephc_cli_test_runtime_fail");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).unwrap();
+
+    let compile_out = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI");
+    assert!(
+        compile_out.status.success(),
+        "elephc CLI failed: {}",
+        String::from_utf8_lossy(&compile_out.stderr)
+    );
+
+    let output = run_binary(&dir.join("main"), &dir);
+    assert!(!output.status.success(), "CLI-compiled binary unexpectedly succeeded");
+    let mut combined = String::from_utf8(output.stdout).unwrap();
+    combined.push_str(&String::from_utf8(output.stderr).unwrap());
+    let _ = fs::remove_dir_all(&dir);
+    combined
+}
+
 /// Compiles a CLI fixture with flags, asserts it SUCCEEDS, and returns the compiler's stderr.
 ///
 /// `--report-generics` and `--timings` write to stderr on a successful compile, which
@@ -352,7 +379,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, 8_388_608, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =

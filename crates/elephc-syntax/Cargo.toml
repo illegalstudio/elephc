@@ -1,0 +1,21 @@
+[package]
+name = "elephc-syntax"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Shared PHP lexer, parser, AST and source-profile contracts for elephc"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }
+stacker = "0.1"
+
+[features]
+default = []
+# The tokenizer's TOKEN_PARSE build validates syntax but discards every AST. This
+# feature skips the compiler's assignment lowering, which is the largest chunk of
+# AST construction the validator never reads.
+tokenizer-validation = []

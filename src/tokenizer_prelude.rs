@@ -12,8 +12,22 @@
 use crate::parser::ast::{Program, Stmt};
 
 /// Parses the small declaration-only tokenizer surface in internal source mode.
-pub(crate) fn tokenizer_declarations() -> Program {
-    let tokens = crate::lexer::tokenize(TOKENIZER_PRELUDE_SRC).expect("tokenizer prelude must tokenize");
+///
+/// The source carries the program's compiled heap capacity because a tokenizer-only
+/// program has no Core INI state; that capacity is the fallback `memory_limit`.
+pub(crate) fn tokenizer_declarations(heap_size: usize, ini_set_available: bool) -> Program {
+    let body = if ini_set_available {
+        INI_MEMORY_LIMIT_BODY
+    } else {
+        "    return __ELEPHC_TOKENIZER_HEAP_LIMIT__;"
+    };
+    let source = TOKENIZER_PRELUDE_SRC
+        .replace("__ELEPHC_TOKENIZER_MEMORY_LIMIT_BODY__", body)
+        .replace(
+            "__ELEPHC_TOKENIZER_HEAP_LIMIT__",
+            &heap_size.to_string(),
+        );
+    let tokens = crate::lexer::tokenize(&source).expect("tokenizer prelude must tokenize");
     crate::parser::parse_internal(&tokens).expect("tokenizer prelude must parse")
 }
 
@@ -21,12 +35,13 @@ pub(crate) fn tokenizer_declarations() -> Program {
 pub fn inject_if_used(
     program: Program,
     force: bool,
+    heap_size: usize,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         let used = force || program_uses_surface(&program);
         if !used { return program; }
-        let mut declarations = tokenizer_declarations();
+        let mut declarations = tokenizer_declarations(heap_size, program_has_ini_set(&program));
         inventory.record_program("tokenizer", &declarations);
         declarations.extend(program);
         declarations
@@ -41,8 +56,16 @@ extern "elephc_tokenizer" {
     function elephc_tokenizer_field(ptr $scan, int $index, int $field): int;
     function elephc_tokenizer_error(ptr $scan): string;
     function elephc_tokenizer_error_line(ptr $scan): int;
+    function elephc_tokenizer_warning_count(ptr $scan): int;
+    function elephc_tokenizer_warning_message(ptr $scan, int $index): string;
+    function elephc_tokenizer_warning_line(ptr $scan, int $index): int;
+    function elephc_tokenizer_warning_pos(ptr $scan, int $index): int;
     function elephc_tokenizer_release(ptr $scan): void;
     function elephc_tokenizer_name(int $id): string;
+}
+
+function __elephc_tokenizer_memory_limit(): int {
+__ELEPHC_TOKENIZER_MEMORY_LIMIT_BODY__
 }
 
 function token_get_all(string $code, int $flags = 0): array {
@@ -54,6 +77,24 @@ function token_get_all(string $code, int $flags = 0): array {
             $error = new \ParseError($message);
             __elephc_tokenizer_error_location($error, elephc_tokenizer_error_line($scan));
             throw $error;
+        }
+        $limit = __elephc_tokenizer_memory_limit();
+        $need = strlen($code) + $count * 256;
+        if ($limit >= 0 && $need > $limit) {
+            $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 4);
+            $origin = $frames[0] ?? [];
+            foreach ($frames as $frame) {
+                if (($frame['class'] ?? '') === 'PhpToken' && ($frame['function'] ?? '') === 'tokenize') {
+                    $origin = $frame;
+                    break;
+                }
+            }
+            echo "Fatal error: Allowed memory size of ", $limit, " bytes exhausted (tried to allocate ", $need, " bytes) in ", ($origin['file'] ?? 'unknown'), " on line ", ($origin['line'] ?? 0), "\n";
+            exit(255);
+        }
+        $warningCount = elephc_tokenizer_warning_count($scan);
+        for ($w = 0; $w < $warningCount; $w++) {
+            __elephc_builtin_deprecated(elephc_tokenizer_warning_message($scan, $w));
         }
         $result = [];
         for ($i = 0; $i < $count; $i++) {
@@ -148,6 +189,30 @@ class PhpToken implements \Stringable {
     }
 }
 "#;
+
+/// The `memory_limit` body used when the opcache prelude declared `ini_set`.
+///
+/// A direct call keeps the prelude free of a runtime string callable; a tokenizer-only
+/// program without that wrapper returns the compiled heap capacity instead.
+const INI_MEMORY_LIMIT_BODY: &str = r#"    $heapLimit = __ELEPHC_TOKENIZER_HEAP_LIMIT__;
+    $limit = ini_set('memory_limit', '-1');
+    if ($limit === false) { return $heapLimit; }
+    ini_set('memory_limit', $limit);
+    if ($limit === '' || $limit === '-1') { return -1; }
+    $value = (int)$limit;
+    $suffix = strtolower(substr($limit, -1));
+    if ($suffix === 'k') { $value = $value * 1024; }
+    elseif ($suffix === 'm') { $value = $value * 1024 * 1024; }
+    elseif ($suffix === 'g') { $value = $value * 1024 * 1024 * 1024; }
+    return $value;"#;
+
+/// Returns whether the program already declares the `ini_set()` wrapper.
+fn program_has_ini_set(program: &[Stmt]) -> bool {
+    program.iter().any(|stmt| matches!(
+        &stmt.kind,
+        crate::parser::ast::StmtKind::FunctionDecl { name, .. } if name.eq_ignore_ascii_case("ini_set")
+    ))
+}
 
 /// Detects tokenizer references in entry files and the probed autoload closure.
 pub(crate) fn program_uses_surface(program: &[Stmt]) -> bool {

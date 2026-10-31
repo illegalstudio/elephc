@@ -1,0 +1,222 @@
+//! Purpose:
+//! Parses PHP trait use declarations and adaptation clauses.
+//! Handles insteadof and as adaptations, aliases, visibility changes, and scoped trait targets.
+//!
+//! Called from:
+//! - `crate::parser::stmt::oop::body::parse_class_like_body()`.
+//!
+//! Key details:
+//! - Trait adaptation names remain syntactic until class flattening and name resolution bind them.
+
+use crate::errors::CompileError;
+use crate::lexer::{SpannedToken, Token};
+use crate::names::Name;
+use crate::parser::ast::{TraitAdaptation, TraitUse, Visibility};
+use crate::span::Span;
+
+use super::super::params::parse_inherited_name;
+use super::super::{expect_semicolon, expect_token, parse_name};
+
+/// Parses a `use TraitName [, TraitName]*` declaration with optional `{ ... }` adaptation block.
+/// Consumes the `use` keyword, collects one or more trait names, then optionally parses an
+/// opening `{` to consume zero or more adaptation clauses (`Alias` or `InsteadOf`) terminated by
+/// `;`, and a closing `}`. Outside the block, a trailing `;` is consumed. Returns `TraitUse`
+/// with the collected trait names and any adaptations.
+pub(in crate::parser::stmt) fn parse_trait_use(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<TraitUse, CompileError> {
+    *pos += 1; // consume 'use'
+    let mut trait_names = Vec::new();
+    let mut type_args = Vec::new();
+    loop {
+        // A generic trait is used at its type arguments (`use Holder<int>;`), read by the same
+        // routine as an inherited `implements Repository<User>`.
+        let (name, args) =
+            parse_inherited_name(tokens, pos, span, "Expected trait name after 'use'")?;
+        trait_names.push(name);
+        type_args.push(args);
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+            *pos += 1;
+            continue;
+        }
+        break;
+    }
+
+    let mut adaptations = Vec::new();
+    if *pos < tokens.len() && tokens[*pos].0 == Token::LBrace {
+        *pos += 1;
+        while *pos < tokens.len() && !matches!(tokens[*pos].0, Token::RBrace | Token::Eof) {
+            let (trait_name, method) = parse_trait_adaptation_target(tokens, pos, span)?;
+            if *pos >= tokens.len() {
+                return Err(CompileError::new(
+                    span,
+                    "Unexpected end of trait adaptation block",
+                ));
+            }
+            match &tokens[*pos].0 {
+                Token::As => {
+                    *pos += 1;
+                    let visibility = match tokens.get(*pos).map(|(t, _)| t) {
+                        Some(Token::Public) => {
+                            *pos += 1;
+                            Some(Visibility::Public)
+                        }
+                        Some(Token::Protected) => {
+                            *pos += 1;
+                            Some(Visibility::Protected)
+                        }
+                        Some(Token::Private) => {
+                            *pos += 1;
+                            Some(Visibility::Private)
+                        }
+                        _ => None,
+                    };
+                    let alias = match tokens.get(*pos) {
+                        Some((token, metadata)) => {
+                            let name = crate::parser::keyword_name::bareword_name_from_token(token, metadata);
+                            if name.is_some() {
+                                *pos += 1;
+                            }
+                            name
+                        }
+                        None => None,
+                    };
+                    if visibility.is_none() && alias.is_none() {
+                        return Err(CompileError::new(
+                            span,
+                            "Trait alias adaptation requires a visibility and/or alias name",
+                        ));
+                    }
+                    adaptations.push(TraitAdaptation::Alias {
+                        trait_name,
+                        method,
+                        alias,
+                        visibility,
+                    });
+                }
+                Token::InsteadOf => {
+                    *pos += 1;
+                    let mut instead_of = Vec::new();
+                    loop {
+                        match tokens.get(*pos).map(|(t, _)| t) {
+                            // `name_starts_at` also takes the relative `insteadof namespace\B`
+                            // (#825), like the adaptation target before it.
+                            Some(_) if super::super::name_starts_at(tokens, *pos) => {
+                                instead_of.push(parse_name(
+                                    tokens,
+                                    pos,
+                                    span,
+                                    "Expected trait name after 'insteadof'",
+                                )?);
+                            }
+                            _ => {
+                                return Err(CompileError::new(
+                                    span,
+                                    "Expected trait name after 'insteadof'",
+                                ))
+                            }
+                        }
+                        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+                            *pos += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    if instead_of.is_empty() {
+                        return Err(CompileError::new(
+                            span,
+                            "Trait insteadof adaptation requires at least one suppressed trait",
+                        ));
+                    }
+                    adaptations.push(TraitAdaptation::InsteadOf {
+                        trait_name,
+                        method,
+                        instead_of,
+                    });
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected 'as' or 'insteadof' inside trait adaptation block",
+                    ))
+                }
+            }
+            expect_semicolon(tokens, pos)?;
+        }
+        expect_token(
+            tokens,
+            pos,
+            &Token::RBrace,
+            "Expected '}' after trait adaptations",
+        )?;
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Semicolon {
+            *pos += 1;
+        }
+    } else {
+        expect_semicolon(tokens, pos)?;
+    }
+    Ok(TraitUse {
+        trait_names,
+        type_args,
+        adaptations,
+        span,
+    })
+}
+
+/// Parses the left-hand side of a trait adaptation clause: either `TraitName::methodName`
+/// returning `(Some(trait_name), method)` or just `methodName` returning `(None, method)`.
+/// `parse_name` is called first; if a `::` follows, the next token must be an identifier
+/// representing the method name on the trait. Otherwise the name's last segment is used as
+/// the method name, allowing bare `methodName` shorthand.
+fn parse_trait_adaptation_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<(Option<Name>, String), CompileError> {
+    if !super::super::name_starts_at(tokens, *pos) {
+        if let Some((token, metadata)) = tokens.get(*pos) {
+            if let Some(name) = crate::parser::keyword_name::bareword_name_from_token(token, metadata) {
+                *pos += 1;
+                return Ok((None, name));
+            }
+        }
+    }
+    let first = parse_name(
+        tokens,
+        pos,
+        span,
+        "Expected method or trait name in adaptation",
+    )?;
+    if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
+        *pos += 1;
+        let method = match tokens.get(*pos) {
+            Some((token, metadata)) => match crate::parser::keyword_name::bareword_name_from_token(token, metadata) {
+                Some(name) => {
+                    *pos += 1;
+                    name
+                }
+                None => {
+                    return Err(CompileError::new(
+                        span,
+                        "Expected method name after 'TraitName::' in adaptation",
+                    ))
+                }
+            },
+            None => {
+                return Err(CompileError::new(
+                    span,
+                    "Expected method name after 'TraitName::' in adaptation",
+                ))
+            }
+        };
+        Ok((Some(first), method))
+    } else {
+        let method = first
+            .last_segment()
+            .map(str::to_string)
+            .ok_or_else(|| CompileError::new(span, "Expected method name in adaptation"))?;
+        Ok((None, method))
+    }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "elephc-syntax-validate"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Validation-only build of elephc's shared PHP parser"
+publish = false
+
+[lib]
+name = "elephc_syntax_validate"
+path = "../elephc-syntax/src/lib.rs"
+# This is the same source compiled for validation; its inherited AST-shape tests
+# assert the compiler parser's tree and do not apply here. The tokenizer engine
+# and the vendored php-src suite exercise this build.
+test = false
+doctest = false
+
+[features]
+default = ["tokenizer-validation"]
+tokenizer-validation = []
+
+[dependencies]
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }
+stacker = "0.1"

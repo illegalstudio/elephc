@@ -12,14 +12,14 @@ Source (.php or .lfc)
     │
     ▼
 ┌─────────┐
-│  Lexer   │  src/lexer/
+│  Lexer   │  crates/elephc-syntax/src/lexer/
 │          │  scan.rs, literals.rs, cursor.rs, token.rs
 │          │  Source text -> Vec<SpannedToken> (Token + TokenMetadata)
 └────┬─────┘
      │
      ▼
 ┌─────────┐
-│  Parser  │  src/parser/
+│  Parser  │  crates/elephc-syntax/src/parser/
 │          │  expr/, stmt/, control.rs, ast/
 │          │  Tokens → Program (Vec<Stmt>)
 └────┬─────┘
@@ -278,6 +278,31 @@ at the cost of reworking the debug-info path: the linker's debug map records the
 object path **as handed to it** (`keep_obj_for_debug` in `pipeline/backend.rs`
 deliberately keeps the object at that path for debuggers to follow), and
 `dsymutil` names its bundle after the binary it is given.
+
+The lexer, parser, AST, source profile, span, and name types live in the leaf
+`elephc-syntax` crate. The compiler re-exports them, and the tokenizer bridge links
+the same crate for `TOKEN_PARSE`, so the runtime bridge never depends on the
+compiler backend or its network, TLS, and database dependencies.
+
+`elephc-tokenizer-engine` treats that parser as an opt-in `parse` feature. Its
+default build is the byte-preserving lexer alone, which keeps an embedder that
+only needs `token_get_all` from linking the compiler's full AST. The tokenizer
+bridge and Magician enable `parse` so `TOKEN_PARSE` keeps PHP's validation and
+semi-reserved-word reclassification.
+
+The full parser-enabled engine can be measured with
+`scripts/measure-tokenizer-engine-size.sh size` or `fast`. Both profiles use
+`panic = "immediate-abort"` through `-Z build-std=std,panic_abort`, which removes
+the std panic/backtrace formatter from the executable. `size` keeps opt-level z;
+`fast` keeps the lexer at opt-level 3 and compiles only the validation parser at
+opt-level z. On macOS ARM64 the full engine measures 451,216 bytes for `size` and
+483,936 bytes for `fast`. The Mago 1.51 binaries measured in the same comparison
+are 634,352 bytes (`size-z`) and 798,784 bytes (`release-lto`); Mago built with
+the same immediate-abort profile is 367,504 bytes (`size`) and 498,736 bytes
+(`fast`). The fast profile is therefore below Mago's matching artifact, while the
+pure size profile still pays the AST parser premium. The default engine build
+without immediate-abort is larger, and the `parse` feature should only be enabled
+when `TOKEN_PARSE` is required.
 
 ## Target Model
 
@@ -628,7 +653,7 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 - rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists($name)` keeps PHP's introspection semantics instead — a literal name is not namespace-resolved, and a dynamic name is matched at run time against the declared-function set baked into the binary
 - flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
 
-`src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
+`crates/elephc-syntax/src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:
 
 - canonical declaration names
 - namespace qualification rules

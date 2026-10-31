@@ -401,8 +401,9 @@ fn test_error_unexpected_token_in_expr() {
 /// Verifies the error diagnostic for unexpected token in stmt.
 #[test]
 fn test_error_unexpected_token_in_stmt() {
-    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
-    expect_error("<?php 42;", "Unexpected token");
+    // Bare literal expressions are valid PHP statements and compile as discarded no-ops
+    // (`tests/codegen/control_flow.rs`). A malformed operator still reports "Unexpected token".
+    expect_error("<?php * 1;", "Unexpected token");
 }
 
 /// Verifies the error diagnostic for missing function name.

@@ -171,7 +171,46 @@ pub(in crate::types::checker) fn record_runtime_callable_clone_override_destinat
     if !clone_call_may_carry_overrides(args) {
         return;
     }
+    // `clone()` needs an object and an array of overrides. A call whose arguments are
+    // syntactically scalars cannot reach a property write, so ordinary runtime calls such as
+    // the tokenizer prelude's `$writer('memory_limit', '-1')` must not charge every class a
+    // property hash. A variable or call argument stays unknown and keeps the conservative
+    // widening.
+    if args.first().is_some_and(definitely_not_object) {
+        return;
+    }
+    if !args.iter().skip(1).any(call_argument_may_carry_overrides) {
+        return;
+    }
     checker.clone_override_destinations.any_class = true;
+}
+
+/// Returns whether one syntactic argument can carry `clone()` property overrides.
+fn call_argument_may_carry_overrides(arg: &Expr) -> bool {
+    match &arg.kind {
+        ExprKind::Spread(_) => true,
+        ExprKind::NamedArg { name, value } => {
+            name == "withProperties" && !definitely_not_array(value)
+        }
+        _ => !definitely_not_array(arg),
+    }
+}
+
+/// Returns whether an expression is syntactically incapable of holding an array.
+fn definitely_not_array(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    )
+}
+
+/// Returns whether an expression is syntactically incapable of holding an object.
+fn definitely_not_object(expr: &Expr) -> bool {
+    definitely_not_array(expr) || matches!(expr.kind, ExprKind::ArrayLiteral(_))
 }
 
 /// Returns whether a `clone()` call site can carry the optional `withProperties` overrides.
@@ -565,6 +604,19 @@ mod tests {
             "withProperties",
             Expr::var("overrides")
         )]));
+    }
+
+    /// A runtime callable whose arguments are syntactic scalars cannot be `clone()` with
+    /// property overrides, so it must not reserve a property hash on every class.
+    #[test]
+    fn scalar_runtime_call_arguments_cannot_carry_clone_overrides() {
+        let text = |value: &str| Expr::new(ExprKind::StringLiteral(value.to_string()), Span::dummy());
+        let array = Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy());
+        assert!(definitely_not_object(&text("memory_limit")));
+        assert!(definitely_not_array(&text("-1")));
+        assert!(!call_argument_may_carry_overrides(&text("-1")));
+        assert!(call_argument_may_carry_overrides(&array));
+        assert!(call_argument_may_carry_overrides(&Expr::var("overrides")));
     }
 
     /// Builds one layout view whose every slot is widenable.

@@ -10,5 +10,5 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine" }
+elephc-tokenizer-engine = { path = "../elephc-tokenizer-engine", features = ["parse"] }
 elephc-builtin-contract = { path = "../elephc-builtin-contract" }
