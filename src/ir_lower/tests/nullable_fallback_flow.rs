@@ -9,6 +9,24 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Assignment guards retain reachable float returns before emission on every target.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_all_targets() {
+    let source = "<?php function entryGuard(int $key) { $ints = [10]; $result = 1; foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) !== null) { continue; } $result = 2.5; break; } return $result; } function staleNull(int $key) { $ints = [10]; $result = 1; foreach ([1, 2] as $item) { $value = null; if (($value = $ints[$key]) === null) { continue; } $result = 2.5; break; } return $result; } var_dump(entryGuard(5), staleNull(0));";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        for function_name in ["entryGuard", "staleNull"] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            let result = &function.return_php_type;
+            assert!(*result == crate::types::PhpType::Mixed || matches!(result, crate::types::PhpType::Union(members)
+                if members.contains(&crate::types::PhpType::Float)), "{name}: {function_name}: {result:?}");
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Condition-prefix value proofs retain reachable float returns on every supported target.
 #[test]
 fn test_nullable_fallback_flow_r42_condition_prefix_all_targets() {

@@ -9,6 +9,49 @@
 
 use super::*;
 
+/// Assignment guards retain every reachable suffix exit, including old-null entry states.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_effects() {
+    let bodies = [
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) !== null) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (null !== ($value = $ints[$key])) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (!(($value = $ints[$key]) === null)) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) === null) {} elseif ($value !== null) { continue; } $result = 2.5; break; }",
+        "$value = 7; switch ($subject) { case 1: if (($value = $ints[$key]) !== null) { break; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = null; if (($value = $ints[$key]) === null) { continue; } $result = 2.5; break; }",
+    ];
+    for body in bodies {
+        let source = format!("<?php function run(int $subject, int $key) {{ $ints = [10]; $result = 1; {body} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        let result = &checked.functions["run"].return_type;
+        assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+            if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+    }
+    for (prefix, guard) in [("$value = 7;", "$value !== null"), ("$value = null;", "$value === null")] {
+        let source = format!("<?php function run() {{ $result = 1; foreach ([1, 2] as $item) {{ {prefix} if ({guard}) {{ continue; }} $result = 2.5; break; }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
+/// A reachable null store after an assignment guard cannot disappear from a typed call's input.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_admission() {
+    for coalesce in ["$w ??= 1;", "$w = $w ?? 1;"] {
+        for (prefix, guard) in [
+            ("$value = 7;", "if (($value = $ints[$key]) !== null) { continue; }"),
+            ("$value = 7;", "if (null !== ($value = $ints[$key])) { continue; }"),
+            ("$value = 7;", "if (!(($value = $ints[$key]) === null)) { continue; }"),
+            ("$value = 7;", "if (($value = $ints[$key]) === null) {} elseif ($value !== null) { continue; }"),
+            ("$value = null;", "if (($value = $ints[$key]) === null) { continue; }"),
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $w, array $ints, int $key): void {{ {coalesce} foreach ([1, 2] as $item) {{ {prefix} {guard} $w = null; break; }} need($w); }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+        }
+    }
+}
+
 /// Default dispatch includes later label writes on every path that can reach a back edge.
 #[test]
 fn test_nullable_fallback_flow_r42_default_backedge_labels() {

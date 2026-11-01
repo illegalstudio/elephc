@@ -9,6 +9,38 @@
 
 use super::*;
 
+/// Strict assignment guards preserve float exits in loops, switches and sibling chains.
+#[test]
+fn test_nullable_fallback_flow_r43_entry_guard_runtime() {
+    let bodies = [
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) !== null) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (null !== ($value = $ints[$key])) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (!(($value = $ints[$key]) === null)) { continue; } $result = 2.5; break; }",
+        "foreach ([1, 2] as $item) { $value = 7; if (($value = $ints[$key]) === null) {} elseif ($value !== null) { continue; } $result = 2.5; break; }",
+        "$value = 7; switch ($subject) { case 1: if (($value = $ints[$key]) !== null) { break; } $result = 2.5; break; }",
+    ];
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for (index, body) in bodies.into_iter().enumerate() {
+        source.push_str(&format!("function entryGuard{index}(int $subject, int $key) {{ $ints = [10]; $result = 1; {body} return $result; }}\nvar_dump(entryGuard{index}(1, 5)); echo entryGuard{index}(1, 0), \"\\n\";\n"));
+        // Base already promotes a skipped float alternative on an integer hit.
+        expected.push_str("float(2.5)\n1\n");
+    }
+    source.push_str(r#"function staleNull(int $key) {
+    $ints = [10]; $result = 1;
+    foreach ([1, 2] as $item) {
+        $value = null;
+        if (($value = $ints[$key]) === null) { continue; }
+        $result = 2.5; break;
+    }
+    return $result;
+}
+var_dump(staleNull(0)); echo staleNull(5), "\n";
+"#);
+    expected.push_str("float(2.5)\n1\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
 /// Condition effects reach else and elseif bodies without resurrecting earlier raw proofs.
 #[test]
 fn test_nullable_fallback_flow_r42_condition_prefix_runtime() {

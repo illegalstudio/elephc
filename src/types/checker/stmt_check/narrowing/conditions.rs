@@ -35,8 +35,12 @@ impl Checker {
         if let ExprKind::Not(inner) = &condition.kind {
             return self.known_null_guard_truth(inner, env).map(|truth| !truth);
         }
-        let ExprKind::BinaryOp { op, .. } = &condition.kind else { return None; };
+        let ExprKind::BinaryOp { left, op, right } = &condition.kind else { return None; };
         if !matches!(op, BinOp::StrictEq | BinOp::StrictNotEq) { return None; }
+        // This query precedes operand effects, so an assignment cannot use its target's old value.
+        if !matches!((&left.kind, &right.kind),
+            (ExprKind::Variable(_), ExprKind::Null) | (ExprKind::Null, ExprKind::Variable(_)))
+        { return None; }
         let (receiver, GuardTarget::Exact(PhpType::Void), negated) = guard_receiver_and_target(condition)? else { return None; };
         // Only local reads are stable and free of user-code effects at this point.
         let ExprKind::Variable(name) = &receiver.kind else { return None; };
