@@ -17,7 +17,7 @@ pub(in crate::ir_lower::stmt) fn native(
 ) {
     let expression = Expr::new(ExprKind::Null, span);
     let selected = crate::ir_lower::expr::lower_native_dimension_incdec_select_from_values(
-        ctx, child, index, &expression,
+        ctx, child, index, true, &expression,
     );
     step(ctx, selected, increment, false, span, |_, _| {});
 }

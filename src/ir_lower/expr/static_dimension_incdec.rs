@@ -71,7 +71,7 @@ fn native(
     let lease = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, owned, expr.span);
     let receiver = borrow_native_xml_property_receiver(ctx, lease.value, expr.span);
     let key = lower_expr(ctx, index);
-    let selected = lower_native_dimension_incdec_select_from_values(ctx, receiver, key, expr);
+    let selected = lower_native_dimension_incdec_select_from_values(ctx, receiver, key, !post, expr);
     let mut result = None;
     crate::ir_lower::stmt::with_dimension_incdec_value(ctx, selected, increment, post, expr.span,
         |ctx, value| {

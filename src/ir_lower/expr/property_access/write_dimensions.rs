@@ -14,7 +14,7 @@ use super::*;
 pub(crate) fn lower_native_dimension_write_select(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: &Expr, expr: &Expr,
 ) -> LoweredValue {
-    lower_dimension_select(ctx, object, index, expr, true)
+    lower_dimension_select(ctx, object, index, expr, true, true)
 }
 
 /// Admits only opaque receiver storage or classes whose dimensions can use native XML adapters.
@@ -29,7 +29,7 @@ pub(crate) fn may_have_native_xml_dimensions(ctx: &LoweringContext<'_, '_>, ty: 
 /// Distinguishes a dereferencing write from incdec's non-throwing native scalar conversion.
 fn lower_dimension_select(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: &Expr, expr: &Expr,
-    throw_on_failure: bool,
+    throw_on_failure: bool, numeric: bool,
 ) -> LoweredValue {
     let ty = ctx.builder.value_php_type(object.value);
     if !may_have_native_xml_dimensions(ctx, &ty) {
@@ -48,7 +48,11 @@ fn lower_dimension_select(
     let result = native_xml_reads::dispatch(
         ctx, borrowed, expr, PhpType::Mixed, false,
         |ctx, receiver| lower_method_call_with_receiver(ctx, receiver,
-            "__elephc_dimension_select", &[key.clone(), Expr::new(ExprKind::BoolLiteral(throw_on_failure), expr.span)], Op::MethodCall, expr),
+            "__elephc_dimension_select", &[
+                key.clone(), Expr::new(ExprKind::BoolLiteral(throw_on_failure), expr.span),
+                Expr::new(ExprKind::BoolLiteral(true), expr.span),
+                Expr::new(ExprKind::BoolLiteral(numeric), expr.span),
+            ], Op::MethodCall, expr),
         |ctx, receiver| lower_array_access_from_lowered_receiver(ctx, receiver, &key, expr),
     );
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
@@ -58,9 +62,10 @@ fn lower_dimension_select(
     take_prepublished_call_result(ctx, staging, result, expr.span)
 }
 
-/// Selects an incdec offset with a captured key and non-throwing native conversion semantics.
+/// Selects an incdec offset with a captured key, optionally retaining the postfix node view.
 pub(crate) fn lower_native_dimension_incdec_select_from_values(
-    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue, expr: &Expr,
+    ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, index: LoweredValue,
+    numeric: bool, expr: &Expr,
 ) -> LoweredValue {
     let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
     let ty = ctx.builder.value_php_type(index.value);
@@ -70,7 +75,7 @@ pub(crate) fn lower_native_dimension_incdec_select_from_values(
     if rooted { register_owned_call_operand(ctx, slot, expr.span); }
     store_value_into_temp(ctx, &name, ty, index, expr.span);
     let key = Expr::new(ExprKind::Variable(name), expr.span);
-    let result = lower_dimension_select(ctx, object, &key, expr, false);
+    let result = lower_dimension_select(ctx, object, &key, expr, false, numeric);
     stage_call_result(ctx, staging.as_ref(), result, expr.span);
     if rooted { unregister_owned_call_operand(ctx, slot, expr.span); }
     ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),

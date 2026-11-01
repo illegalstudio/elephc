@@ -168,13 +168,15 @@ $doc->a = 12;
 echo 'view:', (string)$old, '|';
 NativeStaticStep::$erased = [4, 9];
 echo NativeStaticStep::$erased[0]++, ':', ++NativeStaticStep::$erased[1], ':', json_encode(NativeStaticStep::$erased), '|';
+$created = NativeStaticStep::$typed[1]++;
+echo 'created:', gettype($created), ':', count($doc->a), ':', (string)$doc->a[1], '|';
 NativeStaticStep::$erased = null;
-unset($old, $doc);
+unset($old, $created, $doc);
 "#;
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
     let operations = "object:7:7|integer:8:7|object:7:7|integer:6:7|".repeat(2);
-    assert_eq!(output.stdout, format!("key|{operations}discard:7|view:12|4:10:[5,10]|"));
+    assert_eq!(output.stdout, format!("key|{operations}discard:7|view:12|4:10:[5,10]|created:object:2:|"));
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
