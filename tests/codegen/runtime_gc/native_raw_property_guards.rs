@@ -17,7 +17,8 @@ class NativeRawPropertyNode {}
 class NativeRawPropertyOwner { public NativeRawPropertyNode $node; }
 $box = new NativeRawPropertyOwner(); $box->node = new NativeRawPropertyNode();
 $property = new ReflectionProperty(NativeRawPropertyOwner::class, 'node');
-eval('try { $property->setRawValue($box, null); } catch (TypeError $error) { echo $error->getMessage(), "|"; }');
+$property->setValue($box, $box->node);
+eval('$rawProperty = new ReflectionProperty(NativeRawPropertyOwner::class, "node"); try { $rawProperty->setRawValue($box, null); } catch (TypeError $error) { echo $error->getMessage(), "|"; } unset($rawProperty);');
 echo get_class($box->node);
 unset($box, $property, $error);
 "#);

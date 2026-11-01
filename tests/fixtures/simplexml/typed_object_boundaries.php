@@ -122,7 +122,7 @@ try { $box->{$property} = $missing; } catch (TypeError $error) { reportBoundaryX
 $instanceProperty = new ReflectionProperty(BoundaryXmlBox::class, 'node');
 try { $instanceProperty->setValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }
 // Raw reflection is exposed through eval, including writes to generated instance storage.
-eval('try { $instanceProperty->setRawValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); }');
+eval('$rawProperty = new ReflectionProperty(BoundaryXmlBox::class, "node"); try { $rawProperty->setRawValue($box, $missing); } catch (TypeError $error) { reportBoundaryXml($error); } unset($rawProperty);');
 // Eval can replace visible locals; retain a checked root for the following typed boundaries.
 if ($root instanceof BoundaryXmlElement) {
 echo $box->node->getName(), "\n";
