@@ -182,14 +182,17 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
             // Marking it `MaybeOwned` made every consumer add a second `Acquire` on top, which is
             // one leaked object per `static::$prop = $mixed` store.
             let effects = Op::mixed_unbox_effects(&target);
-            ctx.emit_owned_value(
+            let extracted = ctx.emit_owned_value(
                 Op::MixedUnbox,
                 vec![value.value],
                 None,
                 target,
                 effects,
                 Some(span),
-            )
+            );
+            // Extraction retains the payload independently of the temporary source cell.
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            extracted
         }
         _ => value,
     }

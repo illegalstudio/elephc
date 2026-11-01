@@ -9,6 +9,31 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Typed static extraction retires temporary Mixed cells while preserving borrowed inputs.
+#[test]
+fn test_static_typed_object_store_retires_mixed_source_cells() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+class StaticMixedItem {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo 'drop:', $this->name, '|'; }
+}
+class StaticMixedHolder { public static StaticMixedItem $item; }
+function staticMixedOpaque(mixed $value): mixed { return $value; }
+StaticMixedHolder::$item = staticMixedOpaque(new StaticMixedItem('first'));
+echo 'set|';
+StaticMixedHolder::$item = staticMixedOpaque(new StaticMixedItem('second'));
+echo 'replaced|';
+$borrowed = staticMixedOpaque(new StaticMixedItem('borrowed'));
+StaticMixedHolder::$item = $borrowed;
+echo $borrowed->name, '|';
+unset($borrowed);
+echo 'end|';
+"#);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "set|drop:first|replaced|drop:second|borrowed|end|drop:borrowed|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Keeps nullable static object assignments boxed and retained across caller cleanup.
 #[test]
 fn test_static_nullable_object_store_owns_boxed_payload() {
