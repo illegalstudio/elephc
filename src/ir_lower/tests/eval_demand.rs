@@ -76,6 +76,8 @@ fn opaque_evals_demand_everything() {
     ] {
         let module = lower_source(source);
         assert_eq!(eval_demand(&module), EvalDemand::Everything, "{source}");
+        assert!(!module.required_runtime_features.regex,
+            "{source}: opaque eval must not activate PCRE2 through unused SPL bodies");
         let lowered = lowered_methods(&module);
         assert!(lowered.contains("DateTime::createFromFormat"), "{source}");
         assert!(lowered.contains("ReflectionClass::getName"), "{source}");
@@ -86,6 +88,14 @@ fn opaque_evals_demand_everything() {
         assert!(matches!(serializer.return_php_type,
             crate::types::PhpType::AssocArray { .. }), "{source}: serializer must retain named entries");
     }
+}
+
+/// An explicit regex capability still provides regex iterator methods to opaque eval.
+#[test]
+fn opaque_eval_with_static_regex_use_lowers_regex_iterator_methods() {
+    let module = lower_source("<?php preg_match('/x/', 'x'); eval($argv[1]);");
+    assert!(module.required_runtime_features.regex);
+    assert!(lowered_methods(&module).contains("RegexIterator::accept"));
 }
 
 /// Methods invoked only by a bridge fragment still need their native SPL implementation.

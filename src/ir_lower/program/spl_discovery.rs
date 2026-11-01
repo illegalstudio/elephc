@@ -63,6 +63,13 @@ pub(super) fn referenced_builtin_spl_methods(module: &Module) -> Vec<(String, St
             }
         }
     }
+    // Opaque eval can reach native methods without enabling optional providers. Regex iterator
+    // bodies introduce preg_* calls, so only an already enabled regex surface may demand them
+    // implicitly. Ordinary EIR references below still lower explicit iterator use as before.
+    if !module.required_runtime_features.regex {
+        methods.retain(|(class_name, _)| !matches!(class_name.as_str(),
+            "RegexIterator" | "RecursiveRegexIterator"));
+    }
     for function in module
         .functions
         .iter()
