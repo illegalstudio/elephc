@@ -311,7 +311,7 @@ pub(super) fn flush_dynamic_eval_global_scope(
     flush_eval_global_scope_with_mask(ctx, globals, Some(EVAL_SCOPE_ACCESS_MASK_OFFSET))
 }
 
-/// Flushes supported program globals, optionally guarding each name through a runtime mask.
+/// Flushes independently owned program-global cells, optionally guarded by a runtime mask.
 fn flush_eval_global_scope_with_mask(
     ctx: &mut FunctionContext<'_>,
     globals: &[EvalSyncGlobal],
@@ -327,12 +327,10 @@ fn flush_eval_global_scope_with_mask(
             skip
         });
         load_global_to_result(ctx, global);
-        if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
-        }
+        emit_owned_eval_scope_value(ctx.emitter, &global.ty);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_global_scope_set(ctx, global, scope_set_flags_for_type(&global.ty));
+        emit_eval_global_scope_set(ctx, global, EVAL_SCOPE_FLAG_OWNED);
         if let Some(skip) = skip {
             ctx.emitter.label(&skip);
         }
@@ -375,19 +373,17 @@ fn eval_scope_name_mask(name: &str) -> u64 {
     1_u64 << (hash & 63)
 }
 
-/// Flushes global-backed variables into the local eval scope for scope-read EIR AOT.
+/// Gives scope-read EIR AOT an independent owner for every synchronized global cell.
 pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, globals: &[EvalSyncGlobal]) {
     for global in globals {
         if main_eval_local_supplies_global(ctx, &global.name) {
             continue;
         }
         load_global_to_result(ctx, global);
-        if !matches!(global.ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-            emit_box_current_value_as_mixed(ctx.emitter, &global.ty);
-        }
+        emit_owned_eval_scope_value(ctx.emitter, &global.ty);
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
-        emit_eval_scope_set_name(ctx, &global.name, scope_set_flags_for_type(&global.ty));
+        emit_eval_scope_set_name(ctx, &global.name, EVAL_SCOPE_FLAG_OWNED);
     }
 }
 
@@ -410,12 +406,15 @@ pub(super) fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &Eval
     abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
 }
 
-/// Returns ABI flags for a scope value produced from the given native type.
-pub(super) fn scope_set_flags_for_type(ty: &PhpType) -> i64 {
+/// Retains existing Mixed cells or boxes raw values before transferring ownership to eval.
+/// Native reentry can replace the source slot while eval still reads its original cell.
+pub(super) fn emit_owned_eval_scope_value(
+    emitter: &mut crate::codegen_support::emit::Emitter, ty: &PhpType,
+) {
     if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        0
+        abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
     } else {
-        EVAL_SCOPE_FLAG_OWNED
+        emit_box_current_value_as_mixed(emitter, ty);
     }
 }
 
