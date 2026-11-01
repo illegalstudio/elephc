@@ -262,6 +262,9 @@ fn lower_property_write_source_from_value(
             receiver: None,
         };
     }
+    if !mixed_root {
+        guard_by_ref_foreach_property_initialized(ctx, object_value, property, expr.span);
+    }
     let data = ctx.intern_string(property);
     let result_type =
         property_slot_result_type(ctx, object_value.value, property, Op::PropGet, expr);
@@ -300,6 +303,72 @@ fn lower_property_write_source_from_value(
         value: result,
         receiver: Some(object_value),
     }
+}
+
+/// Rejects an uninitialized typed container before its mutable foreach fetch reaches codegen.
+///
+/// `PropGetForWrite` still keeps its backend guard for every other caller. A by-reference
+/// `foreach`, however, establishes several iterator blocks after selecting its source. Keeping
+/// this state test in EIR makes the typed-property `Error` an explicit edge of the surrounding
+/// `try` region instead of relying on an inline throw while the iterator CFG is being entered.
+fn guard_by_ref_foreach_property_initialized(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    span: Span,
+) {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object.value).codegen_repr()
+    else {
+        return;
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return;
+    };
+    if !class_info.declared_properties.contains(property) {
+        return;
+    }
+    let declaring = class_info
+        .property_declaring_classes
+        .get(property)
+        .map(String::as_str)
+        .unwrap_or(normalized)
+        .trim_start_matches('\\')
+        .to_string();
+    let data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(span),
+    );
+    let ready = ctx
+        .builder
+        .create_named_block("foreach.property.initialized", vec![]);
+    let uninitialized = ctx
+        .builder
+        .create_named_block("foreach.property.uninitialized", vec![]);
+    let initialized_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: ready,
+        then_args: vec![],
+        else_target: uninitialized,
+        else_args: vec![],
+    });
+    ctx.builder.position_at_end(uninitialized);
+    crate::ir_lower::stmt::lower_throw_access_exception(
+        ctx,
+        "Error",
+        &format!(
+            "Typed property {declaring}::${property} must not be accessed before initialization"
+        ),
+        span,
+    );
+    ctx.builder.position_at_end(ready);
+    ctx.restore_initialized_slots(initialized_slots);
 }
 
 /// A by-reference `foreach` property source, plus the receiver the loop borrows through.

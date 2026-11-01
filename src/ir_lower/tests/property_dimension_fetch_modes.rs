@@ -210,6 +210,37 @@ initFetchWrite(new InitFetchRoot()); initFetchReadWrite(new InitFetchRoot());
     }
 }
 
+/// By-reference foreach rejects an uninitialized typed array before its mutable slot fetch.
+#[test]
+fn by_ref_foreach_guards_uninitialized_array_property_on_every_target() {
+    let source = r#"<?php
+class ForeachUninitializedArray { public array $items; }
+function iterateUninitializedProperty(ForeachUninitializedArray $box): void {
+    try { foreach ($box->items as &$value) {} }
+    catch (Throwable $error) { echo get_class($error); }
+}
+iterateUninitializedProperty(new ForeachUninitializedArray());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function|
+            function.name == "iterateUninitializedProperty").unwrap();
+        let handler = function.instructions.iter().position(|inst| inst.op == Op::TryPushHandler)
+            .expect("the surrounding catch must publish its handler");
+        let initialized = function.instructions.iter().position(|inst| inst.op == Op::PropInitialized)
+            .expect("by-reference foreach must probe the typed property state");
+        let fetch = function.instructions.iter().position(|inst| inst.op == Op::PropGetForWrite)
+            .expect("an initialized array property keeps its attached mutable fetch");
+        assert!(handler < initialized && initialized < fetch,
+            "{target}: handler={handler} initialized={initialized} fetch={fetch}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Erased append selects attached declared or hash cells on every supported ABI.
 #[test]
 fn erased_property_append_uses_attached_storage_on_every_target() {
