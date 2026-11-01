@@ -21,10 +21,14 @@ class OwnedAdapterClass {
     public function __construct(string $text, int $number) { echo $text, $number, "|"; }
     public static function invoke(string $text, int $number): int { echo $text, $number, "|"; return $number; }
     public static function fail(string $text, int $number): void { throw new RuntimeException($text); }
+}
+class ThrowingAdapterClass {
+    public function __construct(string $text, mixed $temporary) { throw new RuntimeException($text); }
 }' : '';
 eval($adapterCode);
 echo ownedAdapterFunction('function', 7), '|';
 $adapterObject = new OwnedAdapterClass('constructor', 8);
+new OwnedAdapterClass('discard', 13);
 $adapterName = str_repeat('OwnedAdapterClass', 1);
 $dynamicAdapter = new $adapterName('dynamic', 11);
 $reboundAdapter = new $adapterName(($adapterName = 'stdClass'), 12);
@@ -32,10 +36,13 @@ echo OwnedAdapterClass::invoke('static', 9), '|';
 echo OwnedAdapterClass::$calls, '|';
 try { OwnedAdapterClass::fail('failure', 10); }
 catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+$adapterName = str_repeat('ThrowingAdapterClass', 1);
+try { new $adapterName(str_repeat('ctor-failure', 1), new stdClass()); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
 unset($adapterObject, $dynamicAdapter, $reboundAdapter, $adapterName, $adapterCode, $error);
 "#;
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
-    assert_eq!(out.stdout, "function7|7|constructor8|dynamic11|stdClass12|static9|9|1|failure|");
+    assert_eq!(out.stdout, "function7|7|constructor8|discard13|dynamic11|stdClass12|static9|9|1|failure|ctor-failure|");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

@@ -458,6 +458,12 @@ pub(super) fn lower_new_dynamic_generic(
     let mut operands = vec![name_value.value];
     let uses_runtime_arg_container =
         args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
+    let result_staging = if uses_runtime_arg_container { None } else {
+        prepublish_call_result(ctx, &PhpType::Mixed, expr.span)
+    };
+    let mut positional = Vec::new();
+    let mut intermediates = Vec::new();
+    let mut roots = Vec::new();
     let arg_container = if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
         operands.push(arg_container.value);
@@ -467,7 +473,12 @@ pub(super) fn lower_new_dynamic_generic(
         }
         Some((arg_container, owns_arguments))
     } else {
-        operands.extend(lower_args(ctx, args));
+        begin_call_argument_evaluation(ctx);
+        positional = lower_args(ctx, args);
+        intermediates = finish_call_argument_evaluation(ctx, &mut positional);
+        roots = root_user_call_operands(ctx, &mut positional, None, &ReturnArgAlias::None,
+            &PhpType::Mixed, expr.span);
+        operands.extend(positional.iter().copied());
         None
     };
     let result = ctx.emit_value(
@@ -478,6 +489,7 @@ pub(super) fn lower_new_dynamic_generic(
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
     );
+    stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
     if let Some((arg_container, true)) = arg_container {
         let guard_result = ctx.value_is_owning_temporary(result);
         if guard_result {
@@ -488,8 +500,12 @@ pub(super) fn lower_new_dynamic_generic(
         if guard_result {
             ctx.unguard_call_argument(result.value, expr.span);
         }
+    } else if !uses_runtime_arg_container {
+        release_owned_call_arg_temporaries_with_roots(ctx, &positional, None,
+            &ReturnArgAlias::None, None, &roots, expr.span);
+        retire_call_argument_intermediates(ctx, &intermediates);
     }
-    result
+    take_prepublished_call_result(ctx, result_staging, result, expr.span)
 }
 
 /// Lowers dynamic object construction.

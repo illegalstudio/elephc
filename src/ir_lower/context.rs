@@ -3929,6 +3929,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
                     | Op::ObjectNew
+                    | Op::EvalObjectNew
                     | Op::ObjectCloneShallow
                     | Op::DynamicObjectNew
                     | Op::DynamicObjectNewMixed

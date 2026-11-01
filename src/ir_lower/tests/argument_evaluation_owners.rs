@@ -115,6 +115,41 @@ echo castViewOwner(' kept ');
     }
 }
 
+/// Eval-only object results own their boxes and positional dynamic arguments have unwind roots.
+#[test]
+fn eval_constructor_results_and_dynamic_arguments_own_storage_on_all_targets() {
+    use crate::ir::{Immediate, Op, Ownership};
+    let source = r#"<?php
+$code = $argc > 0 ? 'class OnlyOwnerEval { public function __construct(mixed $a, mixed $b) {} }' : '';
+eval($code);
+$made = new OnlyOwnerEval('first', 1);
+function ownerConstructorArgument(): mixed { return str_repeat('fresh', 2); }
+$name = $argc > 0 ? 'OnlyOwnerEval' : 'stdClass';
+$dynamic = new $name(ownerConstructorArgument(), new stdClass());
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = lower_for(source, target);
+        let function = module.functions.iter().find(|function| function.name == "main").unwrap();
+        let named = function.instructions.iter().find(|inst| inst.op == Op::EvalObjectNew).unwrap();
+        assert_eq!(named.result_ownership, Ownership::Owned, "{target}: constructor results own their boxes");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::Release && inst.operands == [named.result.unwrap()]),
+            "{target}: copying the named constructor result must retire its original box");
+        let (call_index, call) = function.instructions.iter().enumerate()
+            .find(|(_, inst)| inst.op == Op::DynamicObjectNewMixed).unwrap();
+        let operand = call.operands[1];
+        let slot = function.instructions[..call_index].iter().find_map(|inst| {
+            if inst.op == Op::StoreLocal && inst.operands == [operand] {
+                if let Some(Immediate::LocalSlot(slot)) = inst.immediate { return Some(slot); }
+            }
+            None
+        }).expect("dynamic constructor arguments must be visible to exception cleanup");
+        assert!(function.instructions[..call_index].iter().any(|inst| inst.op == Op::PushCallOperandOwner
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+        assert!(function.instructions[call_index + 1..].iter().any(|inst| inst.op == Op::ReleaseLocalSlot
+            && inst.immediate == Some(Immediate::LocalSlot(slot))), "{target}");
+    }
+}
+
 /// Lowers the argument-owner regression program for one supported target.
 fn lower_for(source: &str, target: &str) -> crate::ir::Module {
     super::lower_source_at_for_target(
