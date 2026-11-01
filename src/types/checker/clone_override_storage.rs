@@ -433,11 +433,11 @@ fn reserve_property_hash_storage(checker: &mut Checker, class_name: &str) {
     // Same exclusions as `widen_class`: a checker-injected builtin, a packed class and an enum
     // all own their physical layout together with the code that reads it.
     //
-    // The builtin catalog, NOT `declared_classes`, is the authority for the first of those. The
-    // driver repopulates `declared_classes` from the class map AFTER builtin injection, so that
-    // set contains the injected SPL, Reflection, DateTime and throwable classes too and excludes
-    // nothing here. A user subclass of a builtin is absent from the catalog and stays eligible.
-    if elephc_builtin_contract::lookup_class(class_name).is_some()
+    // The catalog route, not `declared_classes`, is the authority for the first exclusion. The
+    // driver repopulates `declared_classes` from the class map after injection, so that set also
+    // contains prelude classes whose ordinary PHP layouts remain eligible for storage. A user
+    // subclass of a compiler-owned builtin is absent from the catalog and stays eligible too.
+    if super::scope_dynamic_storage::catalog_class_owns_physical_layout(class_name)
         || !checker.declared_classes.contains(class_name)
         || checker.packed_classes.contains_key(class_name)
         || checker.enums.contains_key(class_name)
@@ -507,12 +507,12 @@ fn slot_is_widenable(info: &ClassInfo, slot: usize) -> bool {
 /// runtime-shaped two-argument `clone()` restamped builtin slots and an SPL constructor then
 /// refused to lower its own declared `callable` parameter into its own `Callable` slot.
 ///
-/// The builtin catalog, NOT `declared_classes`, is the authority for the injected classes: the
-/// driver repopulates `declared_classes` from the class map AFTER builtin injection, so that set
-/// contains the injected SPL, Reflection, DateTime and throwable classes too. A user subclass of a
-/// builtin is absent from the catalog and stays eligible.
+/// The catalog route, not `declared_classes`, is the authority for injected classes: the driver
+/// repopulates `declared_classes` from the class map after injection, so that set contains both
+/// compiler-owned classes and prelude declarations. Prelude classes retain ordinary PHP layouts,
+/// while a user subclass of a compiler-owned builtin is absent from the catalog and stays eligible.
 fn owns_physical_layout(checker: &Checker, class_name: &str) -> bool {
-    elephc_builtin_contract::lookup_class(class_name).is_some()
+    super::scope_dynamic_storage::catalog_class_owns_physical_layout(class_name)
         || !checker.declared_classes.contains(class_name)
         || checker.packed_classes.contains_key(class_name)
         || checker.enums.contains_key(class_name)

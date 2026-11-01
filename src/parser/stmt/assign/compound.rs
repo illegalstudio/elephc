@@ -126,6 +126,8 @@ fn is_valid_reference_source(kind: &ExprKind) -> bool {
         ExprKind::Variable(_)
             | ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::FunctionCall { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticMethodCall { .. }
