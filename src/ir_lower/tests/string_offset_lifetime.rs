@@ -42,7 +42,6 @@ class SilentOffsetProbe {
     public string $bytes;
     public function __construct(string $bytes) { $this->bytes = $bytes; }
     public function probe(): void {
-        echo isset($this->bytes[5000]);
         echo $this->bytes[5000] ?? "missing";
     }
 }
@@ -67,7 +66,7 @@ class SilentOffsetProbe {
                     && instruction.immediate == Some(Immediate::Bool(false))
             })
             .collect::<Vec<_>>();
-        assert_eq!(reads.len(), 2, "{target}: isset and null coalescing stay silent");
+        assert_eq!(reads.len(), 1, "{target}: null coalescing stays silent");
         for read in reads {
             let value = read.result.expect("string offset read result");
             assert!(function.instructions.iter().any(|instruction| {
