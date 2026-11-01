@@ -215,7 +215,6 @@ pub(crate) struct LoweringSnapshot {
     taken_owned_temp_values: HashSet<ValueId>,
     call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     borrowed_string_call_operands: HashSet<ValueId>,
-    borrowed_call_results: HashSet<ValueId>,
     /// Provisional offset receiver reads belonging to this speculative function state.
     string_offset_receivers: Vec<(Span, ValueId)>,
     borrowed_string_calls_enabled: bool,
@@ -318,9 +317,6 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) call_argument_evaluation_scopes: Vec<CallArgumentEvaluationScope>,
     /// String subjects borrowed through read-only builtin calls whose result must be detached.
     pub(crate) borrowed_string_call_operands: HashSet<ValueId>,
-    /// User call results that hand back an argument the caller only lent; see
-    /// `value_is_borrowed_user_call_result`.
-    pub(crate) borrowed_call_results: HashSet<ValueId>,
     pub(crate) borrowed_string_calls_enabled: bool,
     /// PHP locals whose `(string)` cast must copy: the finished frame slot frees the load.
     ///
@@ -683,7 +679,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),
             borrowed_string_call_operands: HashSet::new(),
-            borrowed_call_results: HashSet::new(),
             string_offset_receivers: Vec::new(),
             owned_string_offset_sites: HashSet::new(),
             borrowed_string_calls_enabled: true,
@@ -760,7 +755,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             taken_owned_temp_values: self.taken_owned_temp_values.clone(),
             call_argument_evaluation_scopes: self.call_argument_evaluation_scopes.clone(),
             borrowed_string_call_operands: self.borrowed_string_call_operands.clone(),
-            borrowed_call_results: self.borrowed_call_results.clone(),
             string_offset_receivers: self.string_offset_receivers.clone(),
             borrowed_string_calls_enabled: self.borrowed_string_calls_enabled,
             owned_string_cast_locals: self.owned_string_cast_locals.clone(),
@@ -873,7 +867,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.taken_owned_temp_values = snapshot.taken_owned_temp_values;
         self.call_argument_evaluation_scopes = snapshot.call_argument_evaluation_scopes;
         self.borrowed_string_call_operands = snapshot.borrowed_string_call_operands;
-        self.borrowed_call_results = snapshot.borrowed_call_results;
         self.string_offset_receivers = snapshot.string_offset_receivers;
         self.borrowed_string_calls_enabled = snapshot.borrowed_string_calls_enabled;
         self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
@@ -4017,13 +4010,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Callee-owned entry shadows and by-value reads from reference parameters return independent owners.
     /// Boxing a by-value string into Mixed also creates an independent result cell.
     /// Other refcounted parameters may forward a borrowed argument, or transfer
-    /// the owner of a temporary argument through the call. Function calls are answered from the
-    /// function's summary here; method, static-method and nullsafe results are recorded in
-    /// `borrowed_call_results` when their arguments are released, where the summary is at hand.
+    /// the owner of a temporary argument through the call. Only plain function calls use this
+    /// summary rule. Method and static-method boundaries normalize their by-value results to
+    /// independent owners, including strings borrowed from a caller argument.
     fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
-        if self.borrowed_call_results.contains(&result) {
-            return true;
-        }
         let Some(inst) = self.builder.value_defining_instruction(result) else {
             return false;
         };

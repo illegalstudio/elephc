@@ -368,6 +368,11 @@ pub(super) fn lower_unset_array_access_property_offset(
     let key = park_unset_operand(ctx, index, &mut owners);
     let join_block = if typed {
         let object_value = lower_expr(ctx, &receiver);
+        if !matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) {
+            // This private parked slot already owns the receiver. Its guard read shares
+            // the exact storage representation, unlike a PHP local projected from Mixed.
+            ctx.builder.set_value_ownership(object_value.value, Ownership::Borrowed);
+        }
         let data = ctx.intern_string(property);
         let initialized = ctx.emit_value(
             Op::PropInitialized,

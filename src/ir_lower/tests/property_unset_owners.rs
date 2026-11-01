@@ -8,7 +8,36 @@
 //! - Delayed variable reads can acquire an object owner from final Mixed storage.
 //! - The removal and uninitialized no-op paths must both retire the receiver lease.
 
-use crate::ir::{Immediate, Op};
+use crate::ir::{Immediate, Op, Ownership};
+
+/// A parked expression receiver stays owned by its slot while initialization is probed.
+#[test]
+fn typed_offset_unset_borrows_parked_guard_receivers_on_all_targets() {
+    let source = r#"<?php
+class ParkedGuardBag implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return false; }
+    public function offsetGet(mixed $key): mixed { return null; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+class ParkedGuardHolder { public ParkedGuardBag $items; }
+function parkedGuardIdentity(ParkedGuardHolder $holder): ParkedGuardHolder { return $holder; }
+function unsetParkedGuard(ParkedGuardHolder $holder): void {
+    unset(parkedGuardIdentity($holder)->items[0]);
+}
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(target).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == "unsetParkedGuard").unwrap();
+        let probe = function.instructions.iter().find(|inst| inst.op == Op::PropInitialized).unwrap();
+        assert_eq!(function.value(probe.operands[0]).unwrap().ownership, Ownership::Borrowed,
+            "{target}: probing a private parked slot must not consume its receiver");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
 
 /// Guard-only loads retire before either initialized or uninitialized ArrayAccess branches.
 #[test]
