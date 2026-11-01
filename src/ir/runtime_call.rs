@@ -65,6 +65,12 @@ pub enum RuntimeArgumentLayout {
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
+    /// Releases the native owner represented by one private PHP host lease.
+    PhpextObjectRelease,
+    /// Publishes graph roots after excluding ordinary owners held by PHP wrappers.
+    PhpextPublishObjectRoots,
+    /// Reclaims native cycles after PHP has retired wrapper leases, even under heap pressure.
+    PhpextCollectObjectCycles,
     /// Returns an owned string naming the currently running executable.
     ExecutablePath,
     /// Returns the unique live weak wrapper for an object, acquiring its returned owner.
@@ -178,6 +184,12 @@ impl RuntimeCallTarget {
         match self {
             RuntimeCallTarget::SplStorageHasAttachedWriteFetch => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::I64,
+        }),
+            RuntimeCallTarget::PhpextObjectRelease => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::I64], result: IrType::Void,
+            }),
+            RuntimeCallTarget::PhpextPublishObjectRoots | RuntimeCallTarget::PhpextCollectObjectCycles => Some(RuntimeCallSignature::Fixed {
+                parameters: &[], result: IrType::Void,
             }),
             RuntimeCallTarget::WeakObjectId => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
@@ -303,6 +315,9 @@ impl RuntimeCallTarget {
     pub fn as_eir(self) -> &'static str {
         match self {
             RuntimeCallTarget::SplStorageHasAttachedWriteFetch => "object.spl_has_attached_write_fetch",
+            RuntimeCallTarget::PhpextObjectRelease => "phpext.object_release",
+            RuntimeCallTarget::PhpextPublishObjectRoots => "phpext.publish_object_roots",
+            RuntimeCallTarget::PhpextCollectObjectCycles => "phpext.collect_object_cycles",
             RuntimeCallTarget::WeakObjectId => "object.weak_identity",
             RuntimeCallTarget::WeakReferenceCreate => "object.weak_reference_create",
             RuntimeCallTarget::WeakReferenceGet => "object.weak_reference_get",

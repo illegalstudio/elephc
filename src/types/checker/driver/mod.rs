@@ -48,6 +48,7 @@ use super::schema::{
 use super::yield_validation::validate_yield_contexts;
 use super::{CheckOptions, Checker};
 
+mod constants;
 mod declaration_metadata;
 mod externs;
 mod functions;
@@ -104,6 +105,7 @@ pub(super) fn check_types_impl(
     errors.extend(validate_yield_contexts(program));
     errors.extend(validate_trait_property_defaults(program));
 
+    constants::prescan(&mut checker, program);
     checker.collect_function_decls(program, &mut errors);
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);

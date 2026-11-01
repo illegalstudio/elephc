@@ -180,7 +180,7 @@ pub fn public_c_name(php_name: &str) -> String {
 /// Returns `true` if `stmt` carries an `#[Export]` (or `#[\Elephc\Export]`)
 /// attribute. The match is on the last segment of the attribute name so both
 /// the bare and fully-qualified spellings are accepted.
-fn has_export_attribute(stmt: &Stmt) -> bool {
+pub(crate) fn has_export_attribute(stmt: &Stmt) -> bool {
     for group in &stmt.attributes {
         for attr in &group.attributes {
             if attr
@@ -273,7 +273,7 @@ pub fn is_string_return_signature(sig: &FunctionSig) -> bool {
 /// when an unrelated `eval()` or backtrace call exists in the program. That slot remains in the
 /// internal signature, but it must never become a host-visible parameter. A source variadic,
 /// including one paired with the generated argc slot, remains unsupported for fixed exports.
-fn source_signature(
+pub(crate) fn source_signature(
     name: &str,
     internal: &FunctionSig,
     span: Span,

@@ -19,12 +19,19 @@ pub fn assembly(user: &str, heap_size: usize, target: Target, features: RuntimeF
 }
 
 /// Uses the verified SDK compiler to assemble and atomically publish one extension module.
-pub fn link(asm: &str, exports: &HashMap<String, ExportedFunction>, target: Target, output: &Path) -> Result<(), String> {
-    if exports.is_empty() { return Err("--emit phpext requires at least one #[Export] function".into()); }
+pub fn link(asm: &str, exports: &HashMap<String, ExportedFunction>, constants: &[super::ExportedConstant], classes: &[super::classes::ExportedClass], target: Target, output: &Path) -> Result<(), String> {
+    if exports.is_empty() && constants.is_empty() { return Err("--emit phpext requires at least one exported function or constant".into()); }
     let parent = output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let sdk_path = std::env::var_os("ELEPHC_PHPEXT_PHP_CONFIG").map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("php-config"));
     let sdk = super::PhpSdk::discover(&sdk_path, target, parent)?;
+    let default_module = output.file_stem().and_then(|s| s.to_str()).ok_or("invalid PHP module filename")?;
+    let module = std::env::var("ELEPHC_PHPEXT_MODULE_NAME").unwrap_or_else(|_| default_module.to_string());
+    let version = std::env::var("ELEPHC_PHPEXT_MODULE_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
+    let mut sorted = exports.values().collect::<Vec<_>>();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let adapter = super::producer::render(&module, &version, &sorted, constants, classes)?;
+    if exports.is_empty() { return sdk.compile_extension(&adapter, output); }
     let scratch = super::scratch::Scratch::create(parent)?;
     let source = scratch.join("native.s");
     let object = scratch.join("native.o");
@@ -38,11 +45,5 @@ pub fn link(asm: &str, exports: &HashMap<String, ExportedFunction>, target: Targ
     if !result.status.success() {
         return Err(format!("PHP native assembly failed:\n{}", String::from_utf8_lossy(&result.stderr)));
     }
-    let default_module = output.file_stem().and_then(|s| s.to_str()).ok_or("invalid PHP module filename")?;
-    let module = std::env::var("ELEPHC_PHPEXT_MODULE_NAME").unwrap_or_else(|_| default_module.to_string());
-    let version = std::env::var("ELEPHC_PHPEXT_MODULE_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
-    let mut sorted = exports.values().collect::<Vec<_>>();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    let source = super::producer::render(&module, &version, &sorted)?;
-    sdk.compile_extension_with_objects(&source, output, &[object])
+    sdk.compile_extension_with_objects(&adapter, output, &[object])
 }

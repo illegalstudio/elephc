@@ -43,6 +43,8 @@ pub(super) struct BackendInputs<'a> {
     pub(super) instrument: crate::codegen::Instrumentation,
     pub(super) heap_debug: bool,
     pub(super) exported_functions: &'a HashMap<String, exports::ExportedFunction>,
+    pub(super) exported_constants: &'a [crate::phpext::ExportedConstant],
+    pub(super) exported_classes: &'a [crate::phpext::classes::ExportedClass],
     pub(super) regalloc_linear: bool,
     pub(super) emit_debug_info: bool,
     pub(super) keep_symbols: bool,
@@ -91,6 +93,8 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         instrument,
         heap_debug,
         exported_functions,
+        exported_constants,
+        exported_classes,
         regalloc_linear,
         emit_debug_info,
         keep_symbols,
@@ -304,7 +308,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if emit == Emit::Phpext {
         crate::progress::phase("php-extension-link");
         let phase_started = Instant::now();
-        if let Err(error) = crate::phpext::build::link(&user_asm, exported_functions, target, &output_paths.bin) {
+        if let Err(error) = crate::phpext::build::link(&user_asm, exported_functions, exported_constants, exported_classes, target, &output_paths.bin) {
             crate::progress::clear();
             eprintln!("PHP extension error: {error}");
             process::exit(1);

@@ -12,23 +12,52 @@ use crate::{exports::ExportedFunction, parser::ast::ExprKind, types::PhpType};
 use super::signature::{default_text, parameter_type};
 
 /// Renders a complete host adapter using one fixed handler for each exported function.
-pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Result<String, String> {
+pub fn render(name: &str, version: &str, exports: &[&ExportedFunction], constants: &[super::ExportedConstant], classes: &[super::classes::ExportedClass]) -> Result<String, String> {
     let mut registration = super::render_registration(name, version)?;
+    if exports.is_empty() {
+        let declarations = super::constants::registration(constants);
+        registration = registration.replacen("    return SUCCESS;", "    return ep_register_constants(module_number);", 1);
+        return Ok(registration.replacen("static const zend_function_entry", &format!("{declarations}\nstatic const zend_function_entry"), 1));
+    }
     // Select the original MINIT before helper functions add their own success returns.
     registration = registration.replacen("    return SUCCESS;", "    return ep_module_startup();", 1);
+    if !constants.is_empty() {
+        let declarations = super::constants::registration(constants);
+        registration = registration.replace("    return ep_module_startup();",
+            "    if (ep_module_startup() != SUCCESS) { return FAILURE; }\n    if (ep_register_constants(module_number) != SUCCESS) { free(ep_template); ep_template = NULL; return FAILURE; }\n    return SUCCESS;");
+        registration = registration.replacen("static const zend_function_entry", &format!("{declarations}\nstatic const zend_function_entry"), 1);
+    }
+    if !classes.is_empty() {
+        registration = registration.replace("    return ep_module_startup();",
+            "    if (ep_module_startup() != SUCCESS) { return FAILURE; }\n    if (ep_register_classes() != SUCCESS) { free(ep_template); ep_template = NULL; return FAILURE; }\n    return SUCCESS;");
+        if !constants.is_empty() {
+            registration = registration.replace("    if (ep_register_constants(module_number) != SUCCESS)",
+                "    if (ep_preflight_constants() != SUCCESS || ep_register_classes() != SUCCESS || ep_register_constants(module_number) != SUCCESS)");
+        }
+    }
     let ident = format!("elephc_generated_{name}");
     let mut entries = String::new();
     let mut handlers = String::new();
     for export in exports {
+        if classes.iter().flat_map(|class| &class.helpers).any(|helper| helper.export.name == export.name) { continue; }
+        let method = classes.iter().enumerate().find_map(|(class_index, class)| class.methods.iter()
+            .find(|method| method.export.name == export.name).map(|method| (class_index, class, method)));
+        let hidden = usize::from(method.is_some());
         let symbol = &export.c_name;
-        let sig = &export.source_sig;
+        let mut sig = export.source_sig.clone();
+        if hidden != 0 {
+            sig.params.remove(0); sig.defaults.remove(0); sig.declared_params.remove(0);
+            sig.ref_params.remove(0); sig.param_attributes.remove(0); sig.param_type_exprs.remove(0);
+        }
         let required = sig.defaults.iter().rposition(Option::is_none).map_or(0, |i| i + 1);
         handlers.push_str(&format!("extern void {symbol}(const zval *const *);\n"));
-        if export.php_void_return || sig.return_type == PhpType::Never {
+        if method.is_some_and(|(_, _, method)| method.name.eq_ignore_ascii_case("__construct")) {
+            handlers.push_str(&format!("ZEND_BEGIN_ARG_INFO_EX(arginfo_{symbol}, 0, 0, {required})\n"));
+        } else if export.php_void_return || sig.return_type == PhpType::Never {
             let ty = if export.php_void_return { "IS_VOID" } else { "IS_NEVER" };
             handlers.push_str(&format!("ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_{symbol}, 0, {required}, {ty}, 0)\n"));
         } else {
-            handlers.push_str(&format!("ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX(arginfo_{symbol}, 0, {required}, {})\n", mask(&sig.return_type)?));
+            handlers.push_str(&format!("static const zend_internal_arg_info arginfo_{symbol}[] = {{\n    {{ (const char *)(uintptr_t){required}, {}, NULL }},\n", super::class_registration::reflection_type_initializer(&sig.return_type, method.and_then(|(_, _, method)| method.declared_return.as_ref()), true, "0")?));
         }
         for (i, (param, ty)) in sig.params.iter().enumerate() {
             let expr = sig.defaults.get(i).and_then(Option::as_ref);
@@ -38,13 +67,20 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                     default = Some(format!("{:?}", *value as f64));
                 }
             }
-            handlers.push_str(&format!("    {{ {}, ZEND_TYPE_INIT_MASK(({}) | _ZEND_ARG_INFO_FLAGS(0, 0, 0)), {} }},\n", c_string(param.as_bytes()), mask(ty)?, default.as_ref().map(|s| c_string(s.as_bytes())).unwrap_or("NULL".into())));
+            let promoted = method.is_some_and(|(_, class, method)| method.name.eq_ignore_ascii_case("__construct")
+                && class.info.promoted_properties.contains(param));
+            let flags = if promoted { "_ZEND_IS_PROMOTED_BIT" } else { "0" };
+            handlers.push_str(&format!("    {{ {}, {}, {} }},\n", c_string(param.as_bytes()), super::class_registration::reflection_type_initializer(ty, method.and_then(|(_, _, method)| method.declared_params.get(i).and_then(Option::as_ref)), true, flags)?, default.as_ref().map(|s| c_string(s.as_bytes())).unwrap_or("NULL".into())));
         }
-        handlers.push_str(&format!("ZEND_END_ARG_INFO()\nstatic ZEND_FUNCTION({symbol})\n{{\n    zval values[{}];\n", sig.params.len().max(1)));
+        handlers.push_str(&format!("ZEND_END_ARG_INFO()\nstatic ZEND_FUNCTION({symbol})\n{{\n    zval values[{}] = {{0}};\n", (sig.params.len() + hidden).max(1)));
+        if let Some((_, class, method)) = method {
+            if method.is_static { handlers.push_str(&format!("    ZVAL_LONG(&values[0], (zend_long)UINT64_C({}));\n", class.info.class_id)); }
+            else { handlers.push_str("    ZVAL_COPY_VALUE(&values[0], getThis());\n"); }
+        }
         let mut parse = String::new();
         let mut normalize = String::new();
         for (i, (_, ty)) in sig.params.iter().enumerate() {
-            let value = format!("values[{i}]");
+            let value = format!("values[{}]", i + hidden);
             let initial = default_c(sig.defaults.get(i).and_then(Option::as_ref), &value)?;
             handlers.push_str(&format!("    {initial}\n"));
             if i == required { parse.push_str("        Z_PARAM_OPTIONAL\n"); }
@@ -81,6 +117,14 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
                     // ZPP owns any coercion temporary until this handler returns.
                     normalize.push_str(&format!("    if (arg_{i}) {{ ZVAL_STR(&{value}, (zend_string *)(arg_{i} - offsetof(zend_string, val))); }} else {{ ZVAL_NULL(&{value}); }}\n"));
                 }
+                PhpType::Object(class_name) => {
+                    let class = classes.iter().position(|class| class.name.eq_ignore_ascii_case(class_name))
+                        .ok_or_else(|| format!("PHP object class '{class_name}' is not exported by this module"))?;
+                    handlers.push_str(&format!("    zval *arg_{i} = &{value};\n"));
+                    parse.push_str(&format!("        Z_PARAM_OBJECT_OF_CLASS{suffix}(arg_{i}, ep_class_entries[{class}])\n"));
+                    if nullable { normalize.push_str(&format!("    if (!arg_{i}) {{ ZVAL_NULL(&{value}); arg_{i} = &{value}; }}\n")); }
+                    normalize.push_str(&format!("    ZVAL_DEREF(arg_{i});\n    ZVAL_COPY_VALUE(&{value}, arg_{i});\n"));
+                }
                 _ => {
                     handlers.push_str(&format!("    zval *arg_{i} = &{value};\n"));
                     let array = base.is_php_array() || matches!(base, PhpType::Array(_) | PhpType::AssocArray { .. });
@@ -102,24 +146,32 @@ pub fn render(name: &str, version: &str, exports: &[&ExportedFunction]) -> Resul
             }
         }
         let integer_to_float = sig.return_type.coerces_integer_to_float();
-        handlers.push_str(&format!("    ZEND_PARSE_PARAMETERS_START({required}, {})\n{parse}    ZEND_PARSE_PARAMETERS_END();\n{normalize}    ep_invoke(INTERNAL_FUNCTION_PARAM_PASSTHRU, {symbol}, values, {}, {integer_to_float});\n}}\n", sig.params.len(), sig.params.len()));
-        entries.push_str(&format!("    ZEND_RAW_FENTRY({}, zif_{symbol}, arginfo_{symbol}, 0, NULL, NULL)\n", c_string(export.name.trim_start_matches('\\').as_bytes())));
+        handlers.push_str(&format!("    ZEND_PARSE_PARAMETERS_START({required}, {})\n{parse}    ZEND_PARSE_PARAMETERS_END();\n{normalize}    ep_invoke(INTERNAL_FUNCTION_PARAM_PASSTHRU, {symbol}, values, {}, {integer_to_float});\n}}\n", sig.params.len(), sig.params.len() + hidden));
+        if method.is_none() {
+            entries.push_str(&format!("    ZEND_RAW_FENTRY({}, zif_{symbol}, arginfo_{symbol}, 0, NULL, NULL)\n", c_string(export.name.trim_start_matches('\\').as_bytes())));
+        }
     }
-    registration = registration.replace("static const zend_function_entry", &format!("{}\n{}\n{handlers}\nstatic const zend_function_entry", include_str!("transport.c"), include_str!("activation.c")));
-    registration = registration.replace("    ZEND_FE_END", &format!("{entries}    ZEND_FE_END"));
+    let class_registration = if classes.is_empty() { String::new() } else { super::class_registration::render(classes)? };
+    let objects = if classes.is_empty() { String::new() } else {
+        [include_str!("objects_index.c"), include_str!("objects_registry.c"), include_str!("objects_sync.c"),
+            include_str!("objects_host.c"), include_str!("objects_lifecycle.c")].join("\n")
+    };
+    registration = registration.replacen("static const zend_function_entry", &format!("{}\n{}\n{}\n{handlers}\n{class_registration}\n{objects}\nstatic const zend_function_entry", super::class_registration::prelude(classes), include_str!("transport.c"), include_str!("activation.c")), 1);
+    registration = registration.replace("static const zend_function_entry elephc_functions[] = {\n    ZEND_FE_END",
+        &format!("static const zend_function_entry elephc_functions[] = {{\n{entries}    ZEND_FE_END"));
     // Registration metadata was validated before inserting the C templates.
     registration = registration.replace("@IDENT@", &ident);
     let shutdown = format!("static PHP_MSHUTDOWN_FUNCTION({ident})\n{{\n    (void)type;\n    (void)module_number;\n");
     registration = registration.replace(&shutdown, &format!("{shutdown}    free(ep_template);\n    ep_template = NULL;\n"));
     registration = registration.replace("    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return SUCCESS;", "    ZEND_TSRMLS_CACHE_UPDATE();\n#endif\n    return ep_request_startup();");
     let rshutdown = format!("static PHP_RSHUTDOWN_FUNCTION({ident})\n{{\n    (void)type;\n    (void)module_number;\n");
-    registration = registration.replace(&rshutdown, &format!("{rshutdown}    EP_GLOBAL(initialized) = false;\n"));
+    registration = registration.replace(&rshutdown, &format!("{rshutdown}    EP_GLOBAL(initialized) = false;\n#ifdef ELEPHC_PHPEXT_OBJECTS\n    ep_objects_shutdown();\n#endif\n"));
     registration = registration.replace("    STANDARD_MODULE_PROPERTIES", &format!("    ZEND_MODULE_GLOBALS({ident}),\n    PHP_GINIT({ident}),\n    PHP_GSHUTDOWN({ident}),\n    ZEND_MODULE_POST_ZEND_DEACTIVATE_N({ident}),\n    STANDARD_MODULE_PROPERTIES_EX"));
     Ok(registration)
 }
 
 /// Encodes PHP-visible reflection types using the selected headers' type masks.
-fn mask(ty: &PhpType) -> Result<String, String> {
+pub(super) fn mask(ty: &PhpType) -> Result<String, String> {
     Ok(match ty {
         PhpType::Int => "MAY_BE_LONG".into(), PhpType::Float => "MAY_BE_DOUBLE".into(),
         PhpType::Str => "MAY_BE_STRING".into(), PhpType::Bool => "MAY_BE_BOOL".into(),
@@ -132,7 +184,7 @@ fn mask(ty: &PhpType) -> Result<String, String> {
 }
 
 /// Serializes byte strings without allowing source text to inject generated C.
-fn c_string(bytes: &[u8]) -> String {
+pub(super) fn c_string(bytes: &[u8]) -> String {
     let body = bytes.iter().map(|byte| format!("\\{:03o}", byte)).collect::<String>();
     format!("\"{body}\"")
 }

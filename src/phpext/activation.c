@@ -87,6 +87,12 @@ ZEND_BEGIN_MODULE_GLOBALS(@IDENT@)
     unsigned char *snapshot;
     ep_call *active;
     bool initialized;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_object_request *objects;
+    uint64_t generation;
+    uint64_t object_sequence;
+    bool broken;
+#endif
 ZEND_END_MODULE_GLOBALS(@IDENT@)
 ZEND_DECLARE_MODULE_GLOBALS(@IDENT@)
 #define EP_GLOBAL(member) ZEND_MODULE_GLOBALS_ACCESSOR(@IDENT@, member)
@@ -99,6 +105,13 @@ static int ep_request_startup(void)
     EP_GLOBAL(snapshot) = NULL;
     EP_GLOBAL(active) = NULL;
     EP_GLOBAL(initialized) = true;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_abandon(EP_GLOBAL(objects));
+    EP_GLOBAL(objects) = NULL;
+    EP_GLOBAL(generation)++;
+    EP_GLOBAL(object_sequence) = 0;
+    EP_GLOBAL(broken) = false;
+#endif
     return SUCCESS;
 }
 
@@ -603,7 +616,7 @@ static void ep_detach_host_predecessor(ep_call *call, bool force)
 /* Park the native image around a guarded Zend callback, including nested module calls. */
 static int ep_deliver(const char *bytes, size_t length, bool warning)
 {
-    ep_call *call = ep_current;
+    ep_call *volatile call = ep_current;
     if (call->error || call->host_bailout || ep_is_host_exit()) { return 1; }
     if (!length) { return 0; }
     if (!call->checkpoint) {
@@ -620,12 +633,22 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
     }
     memcpy(call->output, bytes, length);
     call->output_len = length;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_capture(call);
+    if (call->error) { ep_objects_break(call); return 1; }
+    ep_objects_commit(call);
+#endif
     ep_state_save(call->snapshot);
     ep_state_reset();
     if (warning) { call->parked_warning_buffer = (char *)bytes; }
     ep_current = NULL;
     pthread_mutex_unlock(&ep_native_lock);
     zend_try {
+#ifdef ELEPHC_PHPEXT_OBJECTS
+        ep_objects_publish(call);
+        ep_objects_reset_transport(call);
+        ep_objects_retire(call->object_identity);
+#endif
         ep_clear_discarded_host_exception(call);
         ep_commit_crossed_host_exceptions(call);
         ep_clear_discarded_host_predecessors(call);
@@ -676,12 +699,30 @@ static int ep_deliver(const char *bytes, size_t length, bool warning)
         call->previous_exception_anchor = saved_exception_can_anchor ? saved_exception_object : NULL;
     }
     call->host_exception = EG(exception) != NULL;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    if (!call->host_bailout && !EP_GLOBAL(broken)) {
+        zend_try {
+            const char *binding_error = ep_objects_bind_graph(NULL, 0);
+            if (binding_error) { call->error = binding_error; }
+            if (!call->error) { ep_objects_prepare(call); }
+        } zend_catch {
+            call->host_bailout = true;
+        } zend_end_try();
+    }
+#endif
     /* The module-local normal mutex remains initialized for every active request. */
     pthread_mutex_lock(&ep_native_lock);
     ep_state_restore(call->snapshot);
     ep_native_stack_limit = ep_native_stack_limit_main = call->stack_floor;
     ep_current = call;
-    return call->host_bailout || callback_exception;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    if (!call->host_bailout && !call->error && !EP_GLOBAL(broken)) {
+        ep_objects_release_pending(call);
+        if (!call->error) { ep_objects_import(call); }
+    }
+    ep_objects_break(call);
+#endif
+    return call->host_bailout || call->error || callback_exception;
 }
 
 /* No Zend bailout escapes this C frame into the native stack. */
@@ -697,6 +738,17 @@ void elephc_php_result(const zval *value)
         const char *error = ep_infrastructure_error(ep_boundary_status);
         if (error) { ep_current->error = error; return; }
         ep_current->result = ep_copy(ep_current, value, false, 0);
+    }
+}
+
+/* Void helpers must remain callable when the managed heap is full and leases need releasing. */
+void elephc_php_void_result(void)
+{
+    static zval value = { .u1 = { .type_info = IS_NULL } };
+    if (ep_current && !ep_current->error) {
+        const char *error = ep_infrastructure_error(ep_boundary_status);
+        if (error) { ep_current->error = error; return; }
+        ep_current->result = &value;
     }
 }
 
@@ -1117,37 +1169,69 @@ static void ep_insert_previous(ep_call *call, ep_exception_copy *copy,
 }
 
 /* No Zend frame, allocation or callback lies below the native invocation. */
-static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function, zval *values,
-    size_t count, bool integer_to_float)
+static void ep_invoke_ex(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function, zval *values,
+    size_t count, bool integer_to_float, zend_object *target, const char **raw_error)
 {
     (void)execute_data;
+    (void)target;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    if (EP_GLOBAL(broken)) {
+        if (raw_error) { *raw_error = "PHP extension object context is unavailable until the next request"; }
+        else { zend_throw_error(NULL, "PHP extension object context is unavailable until the next request"); }
+        return;
+    }
+#endif
     if (!EP_GLOBAL(initialized)) {
-        zend_throw_error(NULL, "elephc PHP extension request is not initialized");
+        if (raw_error) { *raw_error = "elephc PHP extension request is not initialized"; }
+        else { zend_throw_error(NULL, "elephc PHP extension request is not initialized"); }
         return;
     }
     /* Request images contain pointers into parked native stacks. Only synchronous
      * reentry on their owning host context can safely share those handler chains. */
     if (EP_GLOBAL(active) && EP_GLOBAL(active)->fiber_context != EG(current_fiber_context)) {
-        zend_throw_error(NULL, "elephc PHP extension has an active native call on another Fiber");
+        if (raw_error) { *raw_error = "elephc PHP extension has an active native call on another Fiber"; }
+        else { zend_throw_error(NULL, "elephc PHP extension has an active native call on another Fiber"); }
         return;
     }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    if (!raw_error) {
+        const char *binding_error = ep_objects_bind_graph(values, count);
+        if (binding_error) { zend_throw_error(NULL, "%s", binding_error); return; }
+    }
+#endif
     ep_call *parent = EP_GLOBAL(active);
-    if (parent && EG(prev_exception)) {
+    if (!raw_error && parent && EG(prev_exception)) {
         parent->nested_prev_exception = EG(prev_exception);
         EG(prev_exception) = NULL;
     }
     if (!EP_GLOBAL(snapshot)) {
         EP_GLOBAL(snapshot) = calloc(1, ep_state_size);
-        if (!EP_GLOBAL(snapshot)) { zend_throw_error(NULL, "PHP extension snapshot allocation failed"); return; }
+        if (!EP_GLOBAL(snapshot)) {
+            if (raw_error) { *raw_error = "PHP extension snapshot allocation failed"; }
+            else { zend_throw_error(NULL, "PHP extension snapshot allocation failed"); }
+            return;
+        }
         memcpy(EP_GLOBAL(snapshot), ep_template, ep_data_size);
     }
     ep_call *call = calloc(1, sizeof(ep_call));
-    if (!call) { zend_throw_error(NULL, "PHP extension activation allocation failed"); return; }
+    if (!call) {
+        if (raw_error) { *raw_error = "PHP extension activation allocation failed"; }
+        else { zend_throw_error(NULL, "PHP extension activation allocation failed"); }
+        return;
+    }
     call->parent = parent;
     call->stack_floor = ep_stack_floor();
     call->fiber_context = EG(current_fiber_context);
     call->snapshot = EP_GLOBAL(snapshot);
-    ep_stash_ambient_prev_exception(call);
+    if (!raw_error) { ep_stash_ambient_prev_exception(call); }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    call->object_raw = raw_error != NULL;
+    call->object_target = target;
+    call->object_identity = ++EP_GLOBAL(object_sequence);
+    if (!call->object_identity) { call->object_identity = ++EP_GLOBAL(object_sequence); }
+    call->objects_published = parent && parent->objects_published;
+    if (!raw_error) { ep_objects_prepare(call); }
+#endif
     if (!call->stack_floor) { call->error = "Cannot determine the PHP thread stack boundary"; }
     const zval **inputs = ep_alloc(call, count * sizeof(zval *));
     if (inputs) {
@@ -1164,7 +1248,17 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             ep_state_restore(EP_GLOBAL(snapshot));
             EP_GLOBAL(active) = call;
             ep_current = call;
-            function(inputs);
+#ifdef ELEPHC_PHPEXT_OBJECTS
+            ep_objects_release_pending(call);
+            if (!call->error && !raw_error) { ep_objects_import(call); }
+#endif
+            if (!call->error) { function(inputs); }
+#ifdef ELEPHC_PHPEXT_OBJECTS
+            if (!call->error && !call->host_bailout && !raw_error && !EP_GLOBAL(broken)) { ep_objects_capture(call); }
+            ep_objects_break(call);
+            if (!call->error) { ep_objects_commit(call); }
+            else { ep_objects_rollback(call); }
+#endif
             ep_current = NULL;
             /* The thunk has retired every native frame, including contained unwinds. */
             EP_GLOBAL(active) = call->parent;
@@ -1176,8 +1270,26 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
             pthread_mutex_unlock(&ep_native_lock);
         }
     }
+    /* Constructorless lazy binding must preserve any pending callback exception. */
+    if (raw_error) {
+        if (call->error) { *raw_error = call->error; }
+        else if (!call->result || call->exception_message) { *raw_error = "PHP extension native object allocation failed"; }
+        else {
+            zend_try {
+                ep_to_zend(call, call->result, return_value);
+            } zend_catch {
+                ep_call_destroy(call);
+                zend_bailout();
+            } zend_end_try();
+        }
+        ep_call_destroy(call);
+        return;
+    }
     /* The call allocation is on the heap: setjmp cannot invalidate its cleanup fields. */
     zend_try {
+#ifdef ELEPHC_PHPEXT_OBJECTS
+        if (!call->error && !call->host_bailout && !EP_GLOBAL(broken)) { ep_objects_publish(call); }
+#endif
         if (call->host_bailout) { zend_bailout(); }
         ep_clear_discarded_host_exception(call);
         ep_commit_crossed_host_exceptions(call);
@@ -1227,7 +1339,7 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
                 ZVAL_UNDEF(&call->pending_exception);
                 zend_throw_exception_object(&thrown);
             } else if (call->result) {
-                ep_to_zend(call->result, return_value);
+                ep_to_zend(call, call->result, return_value);
                 if (integer_to_float && Z_TYPE_P(return_value) == IS_LONG) {
                     ZVAL_DOUBLE(return_value, (double)Z_LVAL_P(return_value));
                 }
@@ -1245,11 +1357,24 @@ static void ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function,
     ep_call_destroy(call);
 }
 
+/* Ordinary handlers enter with a fully parsed host argument vector. */
+static void __attribute__((unused)) ep_invoke(INTERNAL_FUNCTION_PARAMETERS, ep_native_function function, zval *values,
+    size_t count, bool integer_to_float)
+{
+    ep_invoke_ex(INTERNAL_FUNCTION_PARAM_PASSTHRU, function, values, count, integer_to_float, NULL, NULL);
+}
+
 static PHP_GINIT_FUNCTION(@IDENT@)
 {
     @IDENT@_globals->snapshot = NULL;
     @IDENT@_globals->active = NULL;
     @IDENT@_globals->initialized = false;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    @IDENT@_globals->objects = NULL;
+    @IDENT@_globals->generation = 0;
+    @IDENT@_globals->object_sequence = 0;
+    @IDENT@_globals->broken = false;
+#endif
 }
 
 /* Fiber destruction can resume parked callbacks after every module RSHUTDOWN.
@@ -1262,6 +1387,10 @@ static ZEND_MODULE_POST_ZEND_DEACTIVATE_D(@IDENT@)
     EP_GLOBAL(snapshot) = NULL;
     EP_GLOBAL(active) = NULL;
     EP_GLOBAL(initialized) = false;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_abandon(EP_GLOBAL(objects));
+    EP_GLOBAL(objects) = NULL;
+#endif
     return SUCCESS;
 }
 
@@ -1273,4 +1402,8 @@ static PHP_GSHUTDOWN_FUNCTION(@IDENT@)
     @IDENT@_globals->snapshot = NULL;
     @IDENT@_globals->active = NULL;
     @IDENT@_globals->initialized = false;
+#ifdef ELEPHC_PHPEXT_OBJECTS
+    ep_objects_abandon(@IDENT@_globals->objects);
+    @IDENT@_globals->objects = NULL;
+#endif
 }

@@ -1,13 +1,14 @@
 ---
 title: "PHP extensions"
-description: "Compile exported functions into modules loaded by real PHP 8.5."
+description: "Compile exported functions, classes and constants into real PHP 8.5 modules."
 sidebar:
   order: 7
 ---
 
 `--emit phpext` builds a module that real PHP loads with `extension=...`.
 Top-level functions carrying `#[Export]` become PHP functions, preserving their
-PHP names, parameter names and supported type declarations.
+PHP names, parameter names and supported type declarations. Exported final classes
+become real internal PHP classes, and selected constants become ordinary PHP constants.
 
 ```php
 <?php
@@ -46,11 +47,100 @@ and verifies that a generated module loads. Mixed SDKs fail compilation.
 The extension imports Zend from its host and links neither libphp nor Elephc's
 replacement Zend engine. Its only intentional dynamic export is `get_module`.
 
+## Classes and constants
+
+Apply `#[Export]` to an explicitly final class to expose its public constructor,
+instance/static methods, typed properties and public class constants:
+
+```php
+<?php
+namespace Demo;
+
+const VERSION = '1.0';
+
+#[Export]
+final class Pippo
+{
+    public const DEFAULT_NAME = 'mondo';
+    public string $name = self::DEFAULT_NAME;
+
+    public function __construct(string $name = 'mondo')
+    {
+        $this->name = $name;
+    }
+
+    public function greet(): string
+    {
+        return 'Ciao, ' . $this->name . '!';
+    }
+
+    public function same(): self
+    {
+        return $this;
+    }
+}
+```
+
+```sh
+elephc --emit phpext --heap-size=1048576 --export-constant='Demo\VERSION' pippo.php
+php -n -d extension=./pippo.so -r '$p = new Demo\Pippo("PHP"); echo $p->greet(), "\n"; var_dump($p->same() === $p, Demo\VERSION);'
+```
+
+PHP instantiates the class directly after loading the extension. No PHP wrapper
+or source `require` is needed. Reflection exposes the class, methods, property
+visibility, type declarations, constructor promotion, defaults and public class
+constants. Private implementation properties are mirrored too; implementation-only methods execute
+inside compiled code and are not registered as host methods.
+
+Exported objects can cross the boundary directly or inside supported arrays and
+`mixed` values. The same native instance reuses the same PHP object, preserving
+`===`, aliases and native owners such as function statics. PHP properties use
+standard Zend storage and typing. The adapter imports and publishes their state
+at native call boundaries and around host output/error callbacks. Standard clone,
+constructorless Reflection and serialization use ordinary Zend object storage;
+native storage is bound lazily when needed. Constructors execute once.
+
+A PHP variable can hold a reference to one property. Native assignments update
+that reference cell, and native `unset` detaches the property while leaving the
+external alias intact. A reference joining two properties exported by the same
+module is rejected at the next native boundary because they are distinct native
+slots. Other typed PHP properties sharing the reference must impose the same
+type constraints. String and array payloads still copy in each direction, preserving
+PHP copy-on-write behavior.
+
+Classes require explicit property types, including `mixed` when appropriate.
+Inheritance, interfaces, traits, enums, abstract/readonly classes, static or
+untyped properties, dynamic properties, property hooks, readonly/asymmetric
+properties, native reference properties, non-public constructors and magic methods
+other than `__construct` are currently rejected. Host subclasses are unavailable
+because the source class must be final. Unrelated host objects cannot cross the
+boundary. User-defined Throwable classes and custom destructors remain unsupported.
+
+Use repeatable `--export-constant NAME` options for global or namespaced constants.
+Attributes on global `const` declarations are not PHP syntax. Selection is
+case-sensitive and accepts only top-level source declarations, including resolved
+aliases and supported scalar/array constant expressions. Unknown names, dynamic
+`define()` values and unsupported expressions fail compilation. A module containing
+only selected constants is valid. The option requires `--emit phpext`.
+
+Public class constants are selected with their exported class. Zend owns every
+registered value, including binary strings, nested immutable arrays and typed
+class constant/default metadata. Changing a PHP array copy does not change a
+constant or another instance's default. Registration rejects existing class or
+constant names rather than replacing host declarations.
+Native class and interface constants preserve integer-to-float widening, including
+private declarations and nominal union members. In modules exporting classes,
+reachable constants requiring that widening must use supported compile-time expressions.
+Unresolved expressions are diagnosed before SDK discovery. Supported offset
+expressions include binary strings, constant arrays and unpacked arrays with
+lossless keys. Expressions needing runtime numeric-string conversion or warnings
+remain unsupported in this constant conversion path.
+
 ## Values and exceptions
 
 Supported boundary values are `int`, `float`, `bool`, binary `string`, `array`
-and `null`, including supported nullable signatures and `mixed` values that
-contain this subset. `void` and `never` returns are supported. Zend parses
+and `null`, plus objects of classes exported by the same module. Supported
+nullable signatures and `mixed` values can contain this subset. `void` and `never` returns are supported. Zend parses
 arguments, applies caller strictness and handles named and optional arguments.
 Supported defaults are scalar constants, null and empty arrays.
 Zend registers these handlers as internal functions, so non-variadic exports reject
@@ -63,14 +153,16 @@ nullable declaration such as `?int $value = null`; implicit nullability is rejec
 Arrays may be nested, sparse and heterogeneous. Copies preserve insertion
 order, integer and string keys, binary keys and the next append index. Both
 strings and arrays are copied in each direction. Neither allocator frees the
-other runtime's memory, and changing a returned array cannot mutate an input.
+other runtime's memory. Changing a returned array's structure or scalar entries
+cannot mutate an input array. Exported object elements retain their shared identity.
 The combined input and result transport allocations for one call are bounded
 by the module's native state image size, including allocation bookkeeping.
-Exceeding this budget throws a PHP `Error` and leaves later calls usable.
+Exceeding this budget throws a PHP `Error`. Function-only modules retain their
+rollback behavior; object-bearing callback failures follow the policy below.
 This also bounds expansion of shared nested arrays into independent copies.
 Transport uses the module's configured budget rather than PHP's `memory_limit`.
 
-By-reference and variadic exports, objects, resources, callables, recursive
+By-reference and variadic exports, unrelated objects, resources, callables, recursive
 arrays and shared references inside arrays are rejected. Unshared reference
 wrappers left by a completed by-reference `foreach` are copied as values. Nesting is limited to 64
 arrays. An ordinary reference supplied to a by-value parameter is dereferenced
@@ -78,15 +170,19 @@ and copied. Use the PHP `array` declaration for inputs; Elephc's specialized
 `array<T>` and `array<K,V>` input ABIs are not exposed by this mode.
 Native pointers, buffers and packed records cannot be converted or boxed into
 PHP values or their array elements. Unsupported dynamic results, including
-closures, raise a host PHP `Error` and leave later calls usable.
+closures, raise a host PHP `Error`.
 
 Compiled `Exception`, `RuntimeException`, `Error`, `TypeError`, `ValueError`,
 `ArithmeticError`, `DivisionByZeroError`, `ArgumentCountError` and `JsonException`
 become host PHP exceptions with their class, binary-safe message and integer code. Internal native unwinding terminates
 inside the invocation thunk. Native allocation and stack failures become PHP
-errors and leave subsequent calls usable. An infrastructure failure rolls
-back the native request image; ordinary PHP exceptions preserve completed
-state changes. Custom class construction is deferred.
+errors. Before publishing object identities to a host callback, an infrastructure
+failure rolls back the native request image and later calls remain usable.
+After publication, restoring the old image could invalidate objects already seen
+by PHP. Such an infrastructure failure disables further native calls to that
+module for the rest of the request. Existing PHP objects retain their identity
+and standard properties; a new request receives a fresh native context. Ordinary
+PHP exceptions preserve completed state changes and leave the module usable.
 
 ## Request state, output and concurrency
 
@@ -101,7 +197,8 @@ Fiber switching is blocked; it releases the snapshot and retires every abandoned
 native activation and its malloc-owned copies and checkpoints, including nested
 calls and warning buffers parked on abandoned Fiber stacks. MSHUTDOWN releases
 module resources. Zend values remain owned by PHP's
-request heap.
+request heap. Native owners release their extra Zend roots at request shutdown
+once every parked native call has finished, before Zend's final cycle collection.
 
 A module-local mutex serializes native execution while the adapter exchanges
 complete request images at stable addresses. This supports independent ZTS
@@ -180,7 +277,7 @@ contains pointers to the suspended native stack. Other ZTS requests retain
 their independent images and can continue while that Fiber is suspended.
 
 The initial capability policy permits the audited core value runtime and
-builtin Throwables. Transitive `exit`/`die`, eval, opaque invocation, native
+builtin Throwables and explicitly exported final classes. Transitive `exit`/`die`, eval, opaque invocation, native
 reference construction, bridges, hosted extensions, web mode and process
 monitoring are rejected. Builtin helpers require an explicit audited producer
 lifecycle; unsupported helpers receive a compilation diagnostic.
@@ -195,7 +292,9 @@ and their helpers in the entry source file.
 
 The [example](../../examples/php-extension/main.php) contains integer, string,
 array and exception exports. Its driver also runs calls within the declared
-arity against the identical PHP source for a byte-for-byte comparison.
+arity against the identical PHP source for a byte-for-byte comparison. The
+[class example](../../examples/php-extension-classes/main.php) demonstrates real
+`Pippo` objects, methods, properties, object identity and constants without a wrapper.
 
 ```sh
 cargo test -p elephc --test phpext_tests -- --include-ignored

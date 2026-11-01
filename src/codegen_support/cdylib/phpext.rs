@@ -19,6 +19,7 @@ pub(crate) fn emit_phpext_exports(
 ) {
     reserve_boundary_data(data);
     data.add_comm("_elephc_phpext_pack_depth".into(), 8);
+    data.add_comm("_elephc_phpext_root_scan".into(), 8);
     data.add_comm(PHPEXT_REPLACEMENT_OWNER_COUNT.into(), 8);
     data.add_comm(PHPEXT_REPLACEMENT_OWNER_BASE.into(), 8);
     data.add_comm(
@@ -28,7 +29,18 @@ pub(crate) fn emit_phpext_exports(
     let error = data.add_string(b"elephc PHP extension runtime failure");
     emit_error_helpers(emitter, target);
     lifecycle::emit(emitter, target, heap_debug, startup, (&error.0, error.1));
+    emit_object_retain(emitter);
     for export in exports { emit_export(emitter, export, heap_debug); }
+}
+
+/// Retains a validated instance while a malloc-only host callback copies its identity.
+fn emit_object_retain(emitter: &mut Emitter) {
+    emitter.label_global(&emitter.target.extern_symbol("elephc_php_native_object_retain"));
+    abi::emit_frame_prologue(emitter, 16);
+    abi::emit_reg_move(emitter, abi::int_result_reg(emitter), abi::int_arg_reg_name(emitter.target, 0));
+    abi::emit_call_label(emitter, "__rt_incref");
+    abi::emit_frame_restore(emitter, 16);
+    abi::emit_return(emitter);
 }
 
 /// Emits one fixed-signature native thunk with complete input-owner cleanup.
@@ -36,6 +48,9 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     let result = abi::int_result_reg(emitter);
     let scratch = abi::secondary_scratch_reg(emitter);
     let name = label_suffix(&export.c_name);
+    let raw_release = export.c_name.starts_with("elephc_php_object_") && export.c_name.ends_with("_release")
+        && export.name.starts_with("__elephc_phpext_object_")
+        && export.internal_sig.params.len() == 1 && export.internal_sig.params[0].1 == PhpType::Int;
     let escaped = format!("L_{name}_escaped");
     let cleanup = format!("L_{name}_cleanup");
     let rollback = format!("L_{name}_rollback");
@@ -100,6 +115,11 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
         .take(boxes.len()).zip(&params).enumerate() {
         abi::load_at_offset(emitter, scratch, args);
         abi::emit_load_from_address(emitter, result, scratch, index * 8);
+        if raw_release {
+            abi::emit_load_from_address(emitter, result, result, 0);
+            abi::store_at_offset(emitter, result, slots[0]);
+            continue;
+        }
         abi::emit_call_label(emitter, "__rt_zval_unpack");
         abi::store_at_offset(emitter, result, boxes[index]);
         match ty.codegen_repr() {
@@ -129,14 +149,18 @@ fn emit_export(emitter: &mut Emitter, export: &ExportedFunction, heap_debug: boo
     boundary::emit_prepare_hidden_collector(emitter, hidden);
     emit_call(emitter, export, &params, hidden);
     // -- copy the owned result into independent transport storage --
-    value_boxing::emit_box_current_owned_value_as_mixed(emitter, &export.internal_sig.return_type);
-    abi::store_at_offset(emitter, result, saved_result);
-    abi::emit_call_label(emitter, "__rt_zval_pack");
-    abi::emit_push_reg(emitter, result);
-    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
-    emitter.bl_c("elephc_php_result");
-    abi::emit_pop_reg(emitter, result);
-    abi::emit_call_label(emitter, "__rt_zval_free");
+    if export.internal_sig.return_type == PhpType::Void {
+        emitter.bl_c("elephc_php_void_result");
+    } else {
+        value_boxing::emit_box_current_owned_value_as_mixed(emitter, &export.internal_sig.return_type);
+        abi::store_at_offset(emitter, result, saved_result);
+        abi::emit_call_label(emitter, "__rt_zval_pack");
+        abi::emit_push_reg(emitter, result);
+        abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 0), result);
+        emitter.bl_c("elephc_php_result");
+        abi::emit_pop_reg(emitter, result);
+        abi::emit_call_label(emitter, "__rt_zval_free");
+    }
     boundary::emit_release_hidden_collector(emitter, hidden);
     abi::emit_store_zero_to_local_slot(emitter, status);
     abi::emit_jump(emitter, &cleanup);
@@ -276,6 +300,11 @@ fn emit_call(emitter: &mut Emitter, export: &ExportedFunction, params: &[Vec<usi
     let overflow = abi::materialize_outgoing_args(emitter, &assignments);
     let pad = abi::outgoing_call_stack_pad_bytes(emitter.target, overflow);
     abi::emit_reserve_temporary_stack(emitter, pad);
-    abi::emit_call_label(emitter, &crate::names::function_symbol(&export.name));
+    let symbol = if let Some((class, method)) = export.name.split_once("::") {
+        if matches!(export.internal_sig.params.first(), Some((_, PhpType::Object(_)))) {
+            crate::names::method_symbol(class, &crate::names::php_symbol_key(method))
+        } else { crate::names::static_method_symbol(class, &crate::names::php_symbol_key(method)) }
+    } else { crate::names::function_symbol(&export.name) };
+    abi::emit_call_label(emitter, &symbol);
     abi::emit_release_temporary_stack(emitter, pad + overflow);
 }

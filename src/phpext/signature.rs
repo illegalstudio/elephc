@@ -5,7 +5,8 @@
 //! - `crate::exports::collect_for_php()` after type checking.
 //!
 //! Key details:
-//! - References, objects, resources and variadics have no producer boundary in this phase.
+//! - References, resources and variadics have no producer boundary in this phase.
+//! - Object identities must additionally belong to the module's exported class set.
 
 use crate::{errors::CompileError, parser::ast::{Expr, ExprKind}, span::Span, types::{FunctionSig, PhpType}};
 
@@ -40,6 +41,9 @@ pub(crate) fn validate(name: &str, sig: &FunctionSig, span: Span) -> Result<(), 
         if !default_matches(ty, default) {
             return Err(fail("default value does not match the declared parameter type"));
         }
+    }
+    if contains_object(&sig.return_type) && parameter_type(&sig.return_type).is_err() {
+        return Err(fail("object returns require one exported class, optionally nullable"));
     }
     if !supported(&sig.return_type) && sig.return_type != PhpType::Never {
         return Err(fail(&format!("unsupported return type {:?}", sig.return_type)));
@@ -94,10 +98,10 @@ pub(super) fn parameter_type(ty: &PhpType) -> Result<(PhpType, bool), String> {
 }
 
 /// Recognizes recursively copyable types; Mixed values are checked again at runtime.
-fn supported(ty: &PhpType) -> bool {
+pub(super) fn supported(ty: &PhpType) -> bool {
     match ty {
         PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str
-            | PhpType::Void | PhpType::Mixed => true,
+            | PhpType::Void | PhpType::Mixed | PhpType::Object(_) => true,
         PhpType::Array(value) => supported(value),
         PhpType::AssocArray { key, value } => supported(key) && supported(value),
         PhpType::Union(members) => members.iter().all(supported),
@@ -117,7 +121,7 @@ pub(crate) fn runtime_supported(target: crate::ir::RuntimeFnId) -> bool {
 }
 
 /// Keeps nullable wrappers from accidentally exposing specialized native array layouts.
-fn input_storage_supported(ty: &PhpType) -> bool {
+pub(super) fn input_storage_supported(ty: &PhpType) -> bool {
     if ty.is_php_array() { return true; }
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } => false,
@@ -126,5 +130,14 @@ fn input_storage_supported(ty: &PhpType) -> bool {
             non_null.is_php_array() || members.iter().all(input_storage_supported)
         }
         _ => true,
+    }
+}
+
+/// Distinguishes object unions from primitive return masks without constraining array element types.
+fn contains_object(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members.iter().any(contains_object),
+        _ => false,
     }
 }

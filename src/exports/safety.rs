@@ -150,7 +150,8 @@ fn validate_call_graph(
                     }
                     if instruction.op == Op::ObjectNew {
                         if let Some(class) = immediate_class_name(module, instruction.immediate.as_ref()) {
-                            if !matches!(class, "Exception" | "RuntimeException" | "Error" | "TypeError"
+                            let exported = crate::phpext::class_helpers::is_exported_class(module, class);
+                            if !exported && !matches!(class, "Exception" | "RuntimeException" | "Error" | "TypeError"
                                 | "ValueError" | "ArithmeticError" | "DivisionByZeroError" | "ArgumentCountError"
                                 | "JsonException") {
                                 return Err(CompileError::new(instruction.span.unwrap_or(export.span),
@@ -210,7 +211,11 @@ fn validate_call_graph(
                     continue;
                 }
 
-                if opaque_dynamic_dispatch(instruction.op) {
+                if phpext && enqueue_exported_class_method(module, function, instruction,
+                    &functions, &mut queue, &path) { continue; }
+                let private_allocation = phpext && instruction.op == Op::DynamicObjectNewWithoutConstructorMixed
+                    && crate::phpext::class_helpers::is_allocation_helper(function);
+                if opaque_dynamic_dispatch(instruction.op) && !private_allocation {
                     return Err(CompileError::new(
                         instruction.span.unwrap_or(export.span),
                         &format!(
@@ -262,6 +267,36 @@ fn validate_call_graph(
         }
     }
     Ok(())
+}
+
+/// Resolves method calls whose receiver is one final class with an exported host layout.
+fn enqueue_exported_class_method<'a>(module: &Module, function: &Function,
+    instruction: &crate::ir::Instruction, functions: &HashMap<String, &'a Function>,
+    queue: &mut VecDeque<(String, Vec<String>)>, path: &[String]) -> bool {
+    if instruction.op == Op::StaticMethodCall {
+        let Some(Immediate::Data(data)) = instruction.immediate else { return false; };
+        let Some(name) = module.data.strings.get(data.as_raw() as usize) else { return false; };
+        let Some((receiver, method)) = name.rsplit_once("::") else { return false; };
+        let owner = if receiver.eq_ignore_ascii_case("self") || receiver.eq_ignore_ascii_case("static") {
+            let Some(owner) = function.lexical_class.as_deref() else { return false; };
+            owner
+        } else { receiver.trim_start_matches('\\') };
+        if !crate::phpext::class_helpers::is_exported_class(module, owner) { return false; }
+        let Some((class_name, class)) = module.class_infos.iter().find(|(name, _)| name.eq_ignore_ascii_case(owner)) else { return false; };
+        let method_key = php_symbol_key(method);
+        if !class.static_methods.contains_key(&method_key) && !class.methods.contains_key(&method_key) { return false; }
+        return enqueue_user_body(functions, queue, path, &format!("{class_name}::{method}"));
+    }
+    if !matches!(instruction.op, Op::MethodCall | Op::NullsafeMethodCall) { return false; }
+    let Some(receiver) = instruction.operands.first().and_then(|value| function.value(*value)) else { return false; };
+    let PhpType::Object(class_name) = receiver.php_type.codegen_repr() else { return false; };
+    let Some(class) = module.class_infos.get(&class_name) else { return false; };
+    if !class.is_final || !crate::phpext::class_helpers::is_exported_class(module, &class_name) { return false; }
+    let Some(Immediate::Data(data)) = instruction.immediate else { return false; };
+    let Some(method) = module.data.strings.get(data.as_raw() as usize) else { return false; };
+    let Some((name, _)) = class.methods.iter().find(|(name, _)| name.eq_ignore_ascii_case(method)) else { return false; };
+    enqueue_user_body(functions, queue, path, &format!("{class_name}::{name}"));
+    true
 }
 
 /// Identifies a call whose target depends on include-time variant activation.

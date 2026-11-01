@@ -140,6 +140,7 @@ Output modes:
   --emit-asm              Emit assembly (.s) instead of linking
   --emit KIND             Output kind: executable (default) | cdylib | staticlib | phpext
                           Aliases: exe/bin | dylib/shared | static/lib (`lib` is staticlib)
+  --export-constant NAME  Export a declared constant in phpext output (repeatable)
 
 Target:
   --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
@@ -216,6 +217,8 @@ pub(crate) struct CliConfig {
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
     pub(crate) emit: Emit,
+    /// Case-sensitive source constants explicitly selected for a PHP extension.
+    pub(crate) export_constants: Vec<String>,
     pub(crate) check_only: bool,
     pub(crate) emit_timings: bool,
     pub(crate) emit_source_map: bool,
@@ -369,6 +372,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
+    let mut export_constants = Vec::new();
     let mut check_only = false;
     let mut emit_timings = false;
     let mut emit_source_map = false;
@@ -474,6 +478,14 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             emit = parse_required_emit(args, i);
         } else if let Some(value) = arg.strip_prefix("--emit=") {
             emit = parse_emit(value);
+        } else if arg == "--export-constant" {
+            i += 1;
+            let name = args.get(i).filter(|name| !name.is_empty() && !name.starts_with('-'))
+                .unwrap_or_else(|| fail("--export-constant requires a constant name"));
+            export_constants.push(name.clone());
+        } else if let Some(name) = arg.strip_prefix("--export-constant=") {
+            if name.is_empty() { fail("--export-constant requires a constant name"); }
+            export_constants.push(name.to_string());
         } else if arg == "--check" {
             check_only = true;
         } else if arg == "--timings" {
@@ -615,6 +627,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if let Err(message) = validate_target_output(target, emit, check_only, emit_ir) {
         fail(message);
     }
+    if !export_constants.is_empty() && emit != Emit::Phpext {
+        fail("--export-constant requires --emit phpext");
+    }
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
@@ -678,6 +693,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         null_repr,
         emit_asm,
         emit,
+        export_constants,
         check_only,
         emit_timings,
         emit_source_map,
@@ -1005,6 +1021,16 @@ mod tests {
 
     use super::*;
     use crate::codegen::platform::{AppleVariant, Arch, Platform};
+
+    /// Preserves repeated constant names and both CLI spellings for producer selection.
+    #[test]
+    fn phpext_constant_selection_accepts_repeated_flags() {
+        let args = ["elephc", "--emit", "phpext", "--export-constant", "Demo\\VERSION",
+            "--export-constant=LIMIT", "module.php"].map(str::to_string);
+        let config = compile_config(&args);
+        assert_eq!(config.export_constants, ["Demo\\VERSION", "LIMIT"]);
+        assert_eq!(config.emit, Emit::Phpext);
+    }
 
     /// Extracts the compile configuration returned for a legacy invocation.
     fn compile_config(args: &[String]) -> CliConfig {
