@@ -25,10 +25,10 @@ const EMAIL_UNICODE: &str = r#"/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\
 ///
 /// PHP uses the first unescaped closing delimiter; everything after it must be a known PCRE
 /// modifier. Paired delimiters (`()`, `{}`, `[]`, `<>`) keep their matching nesting.
-fn split_php_pattern(pattern: &str) -> Option<(&str, &str)> {
-    let delimiter = pattern.chars().next()?;
+fn split_php_pattern(pattern: &str) -> Result<(&str, &str), String> {
+    let delimiter = pattern.chars().next().ok_or_else(|| "Empty regular expression".to_string())?;
     if delimiter.is_ascii_alphanumeric() || delimiter == '\\' || delimiter.is_whitespace() {
-        return None;
+        return Err("Delimiter must not be alphanumeric or backslash".to_string());
     }
     let paired = match delimiter {
         '(' => Some(')'),
@@ -39,36 +39,38 @@ fn split_php_pattern(pattern: &str) -> Option<(&str, &str)> {
     };
     let mut depth = 1usize;
     let mut escaped = false;
-    for (index, ch) in pattern.char_indices().skip(1) {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-        match paired {
-            Some(_) if ch == delimiter => depth += 1,
-            Some(close) if ch == close => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((&pattern[delimiter.len_utf8()..index], &pattern[index + close.len_utf8()..]));
+    let closing = (|| {
+        for (index, ch) in pattern.char_indices().skip(1) {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            match paired {
+                Some(_) if ch == delimiter => depth += 1,
+                Some(close) if ch == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(index);
+                    }
                 }
+                None if ch == delimiter => return Some(index),
+                _ => {}
             }
-            None if ch == delimiter => {
-                return Some((&pattern[delimiter.len_utf8()..index], &pattern[index + delimiter.len_utf8()..]));
-            }
-            _ => {}
         }
+        None
+    })()
+    .ok_or_else(|| format!("No ending delimiter '{delimiter}' found"))?;
+    let body_start = delimiter.len_utf8();
+    let close_len = paired.map_or(delimiter.len_utf8(), |close| close.len_utf8());
+    let modifiers = &pattern[closing + close_len..];
+    if let Some(flag) = modifiers.chars().find(|flag| !"imsxADSXUJunr".contains(*flag)) {
+        return Err(format!("Unknown modifier '{flag}'"));
     }
-    None
-}
-
-/// Returns true when every modifier is one PHP's PCRE accepts.
-fn valid_modifiers(modifiers: &str) -> bool {
-    const VALID: &str = "imsxADSXUJunr";
-    modifiers.chars().all(|flag| VALID.contains(flag))
+    Ok((&pattern[body_start..closing], modifiers))
 }
 
 /// Rewrites PCRE's `$` anchor to its precise end-of-subject semantics.
@@ -115,9 +117,6 @@ fn rewrite_dollar_anchors(body: &str, dollar_end_only: bool, multiline: bool) ->
 
 /// Builds one fancy-regex from a PHP pattern body and its modifiers.
 fn build(body: &str, modifiers: &str) -> Option<Regex> {
-    if !valid_modifiers(modifiers) {
-        return None;
-    }
     let mut inline = String::new();
     for flag in ['i', 'm', 's', 'x'] {
         if modifiers.contains(flag) {
@@ -136,17 +135,33 @@ fn build(body: &str, modifiers: &str) -> Option<Regex> {
     RegexBuilder::new(&source).build().ok()
 }
 
-/// Matches one value against a PHP-style regexp literal.
-pub(crate) fn php_pattern(value: &[u8], pattern: &[u8]) -> bool {
-    let Ok(pattern) = std::str::from_utf8(pattern) else { return false; };
-    let Some((body, modifiers)) = split_php_pattern(pattern) else { return false; };
+/// Matches one value and reports PHP-level pattern spelling errors separately.
+pub(crate) fn php_pattern_with_error(
+    value: &[u8],
+    pattern: &[u8],
+) -> (bool, Option<String>) {
+    let Ok(pattern) = std::str::from_utf8(pattern) else {
+        return (false, None);
+    };
+    let (body, modifiers) = match split_php_pattern(pattern) {
+        Ok(parts) => parts,
+        Err(error) => return (false, Some(error)),
+    };
     // PHP's `u` modifier rejects invalid UTF-8 instead of replacing it.
     if modifiers.contains('u') && std::str::from_utf8(value).is_err() {
-        return false;
+        return (false, None);
     }
     let value = String::from_utf8_lossy(value);
-    let Some(regex) = build(body, modifiers) else { return false; };
-    regex.is_match(&value).unwrap_or(false)
+    let Some(regex) = build(body, modifiers) else {
+        return (false, None);
+    };
+    (regex.is_match(&value).unwrap_or(false), None)
+}
+
+/// Matches one value against a PHP-style regexp literal (test helper).
+#[cfg(test)]
+pub(crate) fn php_pattern(value: &[u8], pattern: &[u8]) -> bool {
+    php_pattern_with_error(value, pattern).0
 }
 
 /// Returns php-src's compiled ASCII email validator.
@@ -163,7 +178,7 @@ fn email_unicode() -> &'static Regex {
 
 /// Compiles one hard-coded php-src email pattern.
 fn compile_email(pattern: &str) -> Option<Regex> {
-    let (body, modifiers) = split_php_pattern(pattern)?;
+    let (body, modifiers) = split_php_pattern(pattern).ok()?;
     build(body, modifiers)
 }
 

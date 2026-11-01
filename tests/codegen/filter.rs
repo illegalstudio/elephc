@@ -321,6 +321,24 @@ filter_var("x", 999);
     assert_eq!(output.stdout.trim(), "errno=2");
 }
 
+/// PCRE spelling errors warn at engine level and fail validation instead of matching.
+#[test]
+fn test_filter_regexp_unknown_modifier_warns_and_fails() {
+    let output = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    echo $errno, "|", $message, "\n";
+    return true;
+});
+var_dump(filter_var("foo/bar/", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" => "/foo/bar/"]]));
+"#,
+    );
+    assert_eq!(
+        output.stdout,
+        "2|filter_var(): Unknown modifier 'b'\nbool(false)\n"
+    );
+}
+
 /// Verifies function_exists, extension_loaded and literal eval see the filter surface.
 #[test]
 fn test_filter_surface_visibility_and_eval() {

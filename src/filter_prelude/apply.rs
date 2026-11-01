@@ -686,6 +686,22 @@ fn regexp_decl() -> Stmt {
                 "elephc_filter_apply_regexp",
                 vec![e_call("bin2hex", vec![e_var("value")]), e_call("bin2hex", vec![e_var("regexp")])],
             )),
+            s_assign(
+                "regexp_error",
+                e_call("elephc_filter_regexp_error", vec![]),
+            ),
+            s_if(
+                e_binop(e_var("regexp_error"), BinOp::StrictNotEq, e_str("")),
+                vec![s_expr(e_call("__elephc_builtin_warning", vec![
+                    e_concat_all(vec![
+                        e_var("caller"),
+                        e_str("(): "),
+                        e_var("regexp_error"),
+                    ]),
+                ]))],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(e_call("elephc_filter_result_bool", vec![]), BinOp::StrictEq, e_int(1)),
                 vec![s_return(e_var("value"))],
