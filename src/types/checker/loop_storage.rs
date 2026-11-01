@@ -86,6 +86,10 @@ pub(super) struct LoopWrites<'a> {
     pub calls: Vec<&'a Expr>,
     pub references: Vec<&'a str>,
     pub containers: Vec<&'a str>,
+    /// Local bindings that a reaching path explicitly removes.
+    pub unbound: HashSet<&'a str>,
+    /// Opaque caller-local effects can replace or remove every binding.
+    pub unbind_all: bool,
 }
 
 /// Stable physical contracts and the evidence used to reason about iteration entry reads.
@@ -887,6 +891,17 @@ pub(super) fn collect_value_assignments_from_expr<'a>(
     expr: &'a Expr,
     out: &mut LoopWrites<'a>,
 ) {
+    if let ExprKind::FunctionCall { name, args, .. } = &expr.kind {
+        let name = name.trim_start_matches('\\');
+        if name.eq_ignore_ascii_case("unset") {
+            out.unbound.extend(args.iter().filter_map(|arg| match &arg.kind {
+                ExprKind::Variable(name) => Some(name.as_str()),
+                _ => None,
+            }));
+        } else if name.eq_ignore_ascii_case("eval") || name.eq_ignore_ascii_case("extract") {
+            out.unbind_all = true;
+        }
+    }
     if let ExprKind::Closure { capture_refs, .. } = &expr.kind {
         out.references.extend(capture_refs.iter().map(String::as_str));
     }

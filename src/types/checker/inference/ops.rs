@@ -493,15 +493,17 @@ impl Checker {
             let projected = !capture_refs.contains(capture) && read.as_ref()
                 .is_some_and(|ty| self.record_local_value_read(capture, expr.span, ty, env));
             let variable = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
-            let physical = self.guarded_local_storage_type(&variable, env);
-            let use_storage = capture_refs.contains(capture) || (!projected && read == Some(PhpType::Int)
-                && physical.is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar));
-            let captured = if use_storage { physical.cloned() } else { read };
+            let physical = self.guarded_local_storage_type(&variable, env).cloned();
+            let boxed_snapshot = !capture_refs.contains(capture) && !projected && read == Some(PhpType::Int)
+                && physical.as_ref().is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar);
+            if boxed_snapshot { self.record_local_value_read(capture, expr.span, &PhpType::Mixed, env); }
+            let captured = if capture_refs.contains(capture) { physical }
+                else if boxed_snapshot { Some(PhpType::Mixed) } else { read };
             if let Some(captured) = captured {
                 if env.get(capture) != Some(&captured) { capture_storage.push((capture.clone(), captured)); }
             }
         }
-        // Reference and unproved tagged captures retain the physical type carried by their ABI.
+        // Reference captures keep their cell ABI; uncertain value snapshots use checked boxed values.
         let capture_env = (!capture_storage.is_empty()).then(|| {
             let mut captured = env.clone();
             captured.extend(capture_storage);

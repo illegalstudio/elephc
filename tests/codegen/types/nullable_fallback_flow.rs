@@ -9,6 +9,83 @@
 
 use super::*;
 
+/// Loop back edges retract facts killed by unset before captures, arrays and direct reads.
+#[test]
+fn test_nullable_fallback_flow_review_r35_loop_unset_runtime() {
+    for fallback in ["$value ??= 7;", "if ($value === null) { $value = 7; }"] {
+        let source = format!(r#"<?php
+function snapshotLoop(?int $parameter): void {{
+    $value = $parameter;
+    {fallback}
+    for ($i = 0; $i < 2; $i++) {{
+        $show = function () use ($value) {{ var_dump($value); }}; $show();
+        unset($value);
+    }}
+}}
+function arrayLoop(?int $parameter): void {{
+    $value = $parameter;
+    {fallback}
+    foreach ([1, 2] as $item) {{ $items = [$value]; var_dump($items[0]); unset($value); }}
+}}
+function plainLoop(?int $parameter): void {{
+    $value = $parameter;
+    {fallback}
+    for ($i = 0; $i < 2; $i++) {{ var_dump($value); unset($value); }}
+}}
+snapshotLoop(null); arrayLoop(null); plainLoop(null);
+"#);
+        assert_nullable_flow_cli_heap_output(&source, &"int(7)\nNULL\n".repeat(3));
+    }
+}
+
+/// Aliased snapshots preserve actual values and verify declared scalar boundaries at invocation.
+#[test]
+fn test_nullable_fallback_flow_review_r35_alias_snapshot_runtime() {
+    let source = r#"<?php
+function needSnapshotInt(int $value): int { return $value; }
+function arrowSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { return fn(): int => $value; } return fn(): int => 0;
+}
+function explicitSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { return function () use ($value): int { return $value; }; }
+    return fn(): int => 0;
+}
+function argumentSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { return fn() => needSnapshotInt($value); } return fn(): int => 0;
+}
+function detachedSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $show = fn(): int => $value; $alias = null; return $show; }
+    return fn(): int => 0;
+}
+function invalidSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; return fn(): int => $value; }
+    return fn(): int => 0;
+}
+function untypedSnapshot(?int $value): Closure {
+    $alias = &$value;
+    if ($value !== null) { $alias = null; return fn() => $value; }
+    return fn() => null;
+}
+function runSnapshots(): void {
+    $arrow = arrowSnapshot(4); var_dump($arrow());
+    $explicit = explicitSnapshot(4); var_dump($explicit());
+    $argument = argumentSnapshot(4); var_dump($argument());
+    $detached = detachedSnapshot(4); var_dump($detached());
+    $invalid = invalidSnapshot(4);
+    try { $invalid(); } catch (TypeError $error) { echo "return rejected\n"; }
+    $untyped = untypedSnapshot(4); var_dump($untyped());
+}
+runSnapshots();
+"#;
+    assert_nullable_flow_cli_heap_output(source,
+        "int(4)\nint(4)\nint(4)\nint(4)\nreturn rejected\nNULL\n");
+}
+
 /// Tagged captures retain integer, boolean and float payloads and null tags through invocation.
 #[test]
 fn test_nullable_fallback_flow_tagged_capture_abi_runtime() {

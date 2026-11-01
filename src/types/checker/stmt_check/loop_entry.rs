@@ -55,13 +55,13 @@ pub(super) fn stabilize_loop_storage(
     let entry_origins = checker.narrowed_local_origins.clone();
     let entry_captures = checker.by_ref_captured_locals.clone();
     let entry_pending_captures = checker.pending_ref_capture_invalidations.clone();
+    let entry_bound = checker.definitely_bound_locals.clone();
     let narrowed: HashSet<_> = snapshot.iter().filter_map(|(name, ty)| {
         checker.guarded_local_storage_type(&Expr::var(name), &snapshot)
             .filter(|physical| *physical != ty).map(|_| name.clone())
     }).collect();
-    let backedges = if narrowed.is_empty() { super::super::loop_storage::LoopWrites::default() }
-        else { super::super::loop_backedges::backedge_writes(body, update, condition,
-            &|expr| checker.expr_is_declared_never_call(expr)) };
+    let backedges = super::super::loop_backedges::backedge_writes(body, update, condition,
+        &|expr| checker.expr_is_declared_never_call(expr));
     let mut infer = |expr: &Expr, analysis_env: &TypeEnv| {
         let is_call = matches!(
             expr.kind,
@@ -127,6 +127,17 @@ pub(super) fn stabilize_loop_storage(
     checker.narrowed_local_origins = entry_origins;
     checker.by_ref_captured_locals = entry_captures;
     checker.pending_ref_capture_invalidations = entry_pending_captures;
+    checker.definitely_bound_locals = entry_bound;
+    let mut unbound = backedges.unbound;
+    if backedges.unbind_all { unbound.extend(snapshot.keys().map(String::as_str)); }
+    for name in unbound {
+        checker.definitely_bound_locals.remove(name);
+        let Some(read) = snapshot.get(name) else { continue; };
+        let physical = checker.guarded_local_storage_type(&Expr::var(name), &snapshot).unwrap_or(read);
+        if Checker::binding_storage_admits_null(physical) {
+            incoming.push((name.to_string(), PhpType::Void));
+        }
+    }
     let contracts = analysis.contracts;
     // An update-only binding can be read by a later iteration before this source position.
     // Preserve the existing for-header visibility without applying its writes out of order.

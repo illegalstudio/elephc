@@ -9,6 +9,34 @@
 
 use super::*;
 
+/// A continuing unset retracts the integer fact before the next loop-body read.
+#[test]
+fn test_nullable_fallback_flow_review_r35_loop_unset_contracts() {
+    for fallback in ["$value ??= 1;", "if ($value === null) { $value = 1; }"] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $items): void {{ {fallback} foreach ($items as $item) {{ need($value); unset($value); }} }}");
+        expect_error(&source, "parameter $value expects int, got int|null");
+    }
+    for body in [
+        "$value ??= 1; foreach ([1, 2] as $item) { break; unset($value); } return $value;",
+        "foreach ([1, 2] as $item) { $value ??= 1; need($value); unset($value); } return 1;",
+        "$raw = 3; foreach ([1, 2] as $item) { unset($raw); } return $raw;",
+    ] {
+        let source = format!("<?php function need(int $value): void {{}} function run(?int $value): int {{ {body} }}");
+        let checked = check_source(&source);
+        assert!(checked.is_ok(), "{source}: {checked:?}");
+    }
+}
+
+/// A value snapshot of an aliased guard remains admissible at checked scalar boundaries.
+#[test]
+fn test_nullable_fallback_flow_review_r35_alias_snapshot_contracts() {
+    for capture in ["fn(): int => $value", "function () use ($value): int { return $value; }", "fn() => need($value)"] {
+        let source = format!("<?php function need(int $input): int {{ return $input; }} function snapshot(?int $value): Closure {{ $alias = &$value; if ($value !== null) {{ return {capture}; }} return fn(): int => 0; }}");
+        let checked = check_source(&source);
+        assert!(checked.is_ok(), "{source}: {checked:?}");
+    }
+}
+
 /// Presence joins include skipped branches and intersect only reaching bindings.
 #[test]
 fn test_nullable_fallback_flow_definite_binding_joins() {

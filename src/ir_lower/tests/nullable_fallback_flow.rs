@@ -30,6 +30,7 @@ function conditionalProvenCapture(?int $value, bool $choose): Closure {
     }
     return fn(): int => 2;
 }
+function nullableIntegerCapture(?int $value): Closure { return fn() => var_dump($value); }
 function nullableBooleanCapture(?bool $value): Closure { return fn() => var_dump($value); }
 function nullableFloatCapture(?float $value): Closure { return fn() => var_dump($value); }
 class ProjectedValueHolder {
@@ -510,7 +511,8 @@ echo fallback(null);
                     "{name}: {}", crate::ir::print_function(function));
             }
         }
-        for (function_name, expected) in [("unprovedAliasCapture", IrType::TaggedScalar),
+        for (function_name, expected) in [("unprovedAliasCapture", IrType::Heap(IrHeapKind::Mixed)),
+            ("nullableIntegerCapture", IrType::TaggedScalar),
             ("nullableBooleanCapture", IrType::Heap(crate::ir::IrHeapKind::Mixed)),
             ("nullableFloatCapture", IrType::Heap(crate::ir::IrHeapKind::Mixed))] {
             let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
