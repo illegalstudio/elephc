@@ -14,6 +14,7 @@
 use crate::support::*;
 
 mod buffers;
+mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;
 
