@@ -210,7 +210,10 @@ pub(super) fn lower_subscript_receiver_silently(
     if let ExprKind::ArrayAccess { array: inner_array, index: inner_index } = &array.kind {
         return lower_array_access_with_missing_warning(ctx, inner_array, inner_index, array, false);
     }
-    lower_expr(ctx, array)
+    // Silent subscript probes must also suppress the uninitialized-property read at the root.
+    // This is the difference between `$object->items[0] ??= $value`, which may initialize an
+    // array-bearing slot, and an ordinary read or read-modify-write, which must still raise.
+    lower_null_coalesce_value(ctx, array)
 }
 
 /// Lowers array access once the receiver is already evaluated.
