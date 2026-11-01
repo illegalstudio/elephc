@@ -12,6 +12,10 @@ use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
+#[cfg(test)]
+#[path = "pcntl_ownership_tests.rs"]
+mod ownership_tests;
+
 /// PHP resource-usage key plus its byte offset in the stable bridge record.
 const RUSAGE_FIELDS: &[(&str, usize, usize)] = &[
     ("_pcntl_rusage_oublock", 10, 0),
@@ -273,15 +277,18 @@ fn emit_pcntl_invoke_descriptor_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #48]");                                   // preserve the boxed argument owner
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the raw argument array owner
     emitter.instruction("bl __rt_decref_any");                                  // transfer ownership to its Mixed box
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the callable descriptor
+    emitter.instruction("add x11, sp, #48");                                    // address the boxed arguments before reserving their unwind record
+    abi::emit_push_call_operand_owner(emitter, "x11", false);
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the descriptor above the 48-byte unwind record
     emitter.instruction("ldr x10, [x9, #56]");                                  // load its uniform invocation entry point
     emitter.instruction("cbz x10, __rt_pcntl_invoke_cleanup");                  // tolerate descriptors without an invoker
     emitter.instruction("mov x0, x9");                                          // invocation arg0 = callable descriptor
-    emitter.instruction("ldr x1, [sp, #48]");                                   // invocation arg1 = boxed arguments
+    emitter.instruction("ldr x1, [sp, #96]");                                   // invocation arg1 = boxed arguments above the unwind record
     emitter.instruction("blr x10");                                             // invoke the PHP signal handler
     emitter.instruction("cbz x0, __rt_pcntl_invoke_cleanup");                   // a void/null result needs no release
     emitter.instruction("bl __rt_decref_any");                                  // release the ignored callback result
     emitter.label("__rt_pcntl_invoke_cleanup");
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the boxed argument owner
     emitter.instruction("bl __rt_decref_any");                                  // release both callback arguments deeply
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
@@ -338,6 +345,8 @@ fn emit_pcntl_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the boxed argument owner
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the raw argument array owner
     emitter.instruction("call __rt_decref_any");                                // transfer ownership to its Mixed box
+    emitter.instruction("lea r11, [rbp - 56]");                                 // address the boxed callback argument owner
+    abi::emit_push_call_operand_owner(emitter, "r11", false);
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the callable descriptor
     emitter.instruction("mov r11, QWORD PTR [r10 + 56]");                       // load its uniform invocation entry point
     emitter.instruction("test r11, r11");                                       // does the descriptor provide an invoker?
@@ -349,6 +358,7 @@ fn emit_pcntl_invoke_descriptor_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pcntl_invoke_cleanup_x86");                    // a void/null result needs no release
     emitter.instruction("call __rt_decref_any");                                // release the ignored callback result
     emitter.label("__rt_pcntl_invoke_cleanup_x86");
+    abi::emit_pop_call_operand_owner(emitter);
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the boxed argument owner
     emitter.instruction("call __rt_decref_any");                                // release both callback arguments deeply
     emitter.instruction("leave");                                               // release adapter storage and restore rbp
