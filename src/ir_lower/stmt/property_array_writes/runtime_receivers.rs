@@ -164,7 +164,8 @@ fn dispatch(
         let property_ty = object_type_property_type(ctx, &PhpType::Object(name.clone()), property)?;
         let (_, (_, declared)) = info.visible_property(property)?;
         let object_container = type_satisfies_array_access_for_ir(ctx, declared);
-        let supported = property_ty.is_php_array() || property_ty == PhpType::Mixed
+        let supported = property_ty.is_php_array()
+            || matches!(property_ty.codegen_repr(), PhpType::Mixed | PhpType::Iterable)
             || matches!(property_ty.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. }
                 | PhpType::Buffer(_)) || object_container;
         let mut writable = supported && (object_container || !info.readonly_properties.contains(property));

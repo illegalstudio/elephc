@@ -59,11 +59,12 @@ pub(super) fn lower_property_assign(
         }
     }
     let value_expr = value;
-    let (mut receiver, lowered_value) = if crate::ir_lower::expr::is_static_property_write_chain(object)
+    let (mut receiver, lowered_value, deferred_value_owner) = if crate::ir_lower::expr::is_static_property_write_chain(object)
         || (!property.starts_with("__elephc_") && crate::ir_lower::expr::defer_native_property_write_receiver(ctx, object)) {
         let rhs = lower_expr(ctx, value_expr);
+        let (rhs, owner) = root_deferred_property_write_value(ctx, rhs, span);
         let receiver = crate::ir_lower::expr::lower_static_property_write_chain(ctx, object, rhs, span);
-        (receiver, rhs)
+        (receiver, rhs, owner)
     } else {
         let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let object = crate::ir_lower::expr::refine_member_receiver_at_span(ctx, object, span);
@@ -74,7 +75,7 @@ pub(super) fn lower_property_assign(
             }
             None => lower_expr(ctx, value_expr),
         };
-        (receiver, rhs)
+        (receiver, rhs, None)
     };
     let lowered_value = ctx.borrow_write_operand_if_needed(lowered_value, span);
     // Preserve the original PHP tag until the initialization probe has chosen its branch.
@@ -154,6 +155,33 @@ pub(super) fn lower_property_assign(
         lower_property_assign_value(ctx, object, property, value_expr, lowered_value, false, span);
     }
     receiver.finish(ctx, span);
+    if let Some(owner) = deferred_value_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
+}
+
+/// Publishes a deferred RHS below the receiver chain and lends the writer a borrowed view.
+fn root_deferred_property_write_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<LocalSlotId>) {
+    let (value, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, value, span);
+    let Some(owner) = owner else {
+        return (value, None);
+    };
+    let ty = ctx.builder.value_php_type(value.value);
+    let borrowed = ctx.emit_value(
+        Op::Borrow,
+        vec![value.value],
+        None,
+        ty,
+        Op::Borrow.default_effects(),
+        Some(span),
+    );
+    ctx.builder
+        .set_value_ownership(borrowed.value, Ownership::Borrowed);
+    (borrowed, Some(owner))
 }
 
 /// Confirms the lowered receiver's single object class owns the recorded Reflection handler.

@@ -12,6 +12,8 @@
 
 use super::*;
 
+mod iterable_property;
+
 /// Writes a leaf only after evaluating its computed dimensions and RHS.
 pub(super) fn lower_store(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: &Expr, span: Span,
@@ -20,6 +22,22 @@ pub(super) fn lower_store(
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
     let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
+    if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
+        lower_captured_store(ctx, target, value, span);
+    }) {
+        lower_captured_store(ctx, &target, value, span);
+    }
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    retire_owner(ctx, value_owner, span);
+    super::nested_write_sources::retire(ctx, sources, span);
+}
+
+/// Writes one captured target without re-evaluating its receiver, keys, or RHS.
+fn lower_captured_store(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
+) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
         .map_or(target, |(_, write)| write);
     let ExprKind::ArrayAccess { array, index } = &target.kind else { unreachable!() };
@@ -36,8 +54,6 @@ pub(super) fn lower_store(
     emit_store(ctx, parent, key, value, index, span);
     retire_owner(ctx, key_owner, span);
     retire_owner(ctx, parent_owner, span);
-    retire_owner(ctx, value_owner, span);
-    super::nested_write_sources::retire(ctx, sources, span);
 }
 
 /// Appends directly into a stored parent instead of cloning a detached read and writing it back.
@@ -48,6 +64,22 @@ pub(super) fn lower_append(
     let target = super::nested_write_sources::capture_target(ctx, target, &mut sources);
     let value = lower_expr(ctx, value);
     let (value, value_owner) = super::nested_array_writes::root_static_update_receiver(ctx, value, span);
+    if !iterable_property::dispatch(ctx, &target, span, |ctx, target| {
+        lower_captured_append(ctx, target, value, span);
+    }) {
+        lower_captured_append(ctx, &target, value, span);
+    }
+    if ctx.builder.insertion_block_is_terminated() {
+        return;
+    }
+    retire_owner(ctx, value_owner, span);
+    super::nested_write_sources::retire(ctx, sources, span);
+}
+
+/// Appends through one captured target without replaying its evaluated inputs.
+fn lower_captured_append(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, value: LoweredValue, span: Span,
+) {
     let target = super::nested_array_writes::bind_concrete_static_update_root(ctx, &target, &target)
         .map_or(target, |(_, write)| write);
     let parent = super::nested_array_writes::lower_nested_assign_parent_for_store(ctx, &target, span);
@@ -60,8 +92,6 @@ pub(super) fn lower_append(
     });
     emit_append(ctx, parent, value, span);
     retire_owner(ctx, parent_owner, span);
-    retire_owner(ctx, value_owner, span);
-    super::nested_write_sources::retire(ctx, sources, span);
 }
 
 /// Resolves boxed caller-reference markers before conversion or mutation of the selected cell.

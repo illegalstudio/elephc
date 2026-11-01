@@ -114,6 +114,12 @@ fn lower_property_array_push_value_direct(
         return;
     }
     if object_property_type(ctx, object.value, property)
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Iterable)
+    {
+        lower_iterable_property_write(ctx, object, property, None, value, span, false);
+        return;
+    }
+    if object_property_type(ctx, object.value, property)
         .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
     {
         lower_php_array_property_write(ctx, object, property, None, value, span, false);
@@ -536,6 +542,20 @@ fn lower_property_array_assign_value_direct(
     value: LoweredValue, span: Span, key_already_diagnosed: bool,
 ) {
     if object_property_type(ctx, object.value, property)
+        .is_some_and(|ty| ty.codegen_repr() == PhpType::Iterable)
+    {
+        lower_iterable_property_write(
+            ctx,
+            object,
+            property,
+            Some(index),
+            value,
+            span,
+            key_already_diagnosed,
+        );
+        return;
+    }
+    if object_property_type(ctx, object.value, property)
         .is_some_and(|ty| ty.is_php_array() || ty == PhpType::Mixed)
     {
         lower_php_array_property_write(
@@ -803,6 +823,78 @@ fn lower_php_array_property_write(
     }
     if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+}
+
+/// Mutates an erased array-or-Traversable property and publishes any COW replacement.
+fn lower_iterable_property_write(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    index: Option<LoweredValue>,
+    value: LoweredValue,
+    span: Span,
+    key_already_diagnosed: bool,
+) {
+    let data = ctx.intern_string(property);
+    let current = ctx.emit_owned_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Iterable,
+        Op::PropGet.default_effects(),
+        Some(span),
+    );
+    let boxed = ctx.box_value_as_mixed(current, PhpType::Mixed, Some(span));
+    let (boxed, owner) = crate::ir_lower::expr::root_owned_call_operand(ctx, boxed, span);
+    let borrowed = ctx.emit_value(
+        Op::Borrow,
+        vec![boxed.value],
+        None,
+        PhpType::Mixed,
+        Op::Borrow.default_effects(),
+        Some(span),
+    );
+    ctx.builder
+        .set_value_ownership(borrowed.value, Ownership::Borrowed);
+    if let Some(index) = index {
+        string_offset_writes::lower_boxed_set(
+            ctx,
+            borrowed,
+            index,
+            value,
+            span,
+            key_already_diagnosed,
+        );
+    } else if !native_dimension_append::lower(ctx, borrowed, value, span, |ctx, array, value| {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![array.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+    }) {
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![borrowed.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+    }
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, borrowed.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    if let Some(owner) = owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
     }
 }
 
