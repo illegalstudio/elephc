@@ -478,23 +478,23 @@ impl Parser {
         require_semicolon: bool,
     ) -> Result<Vec<EvalStmt>, EvalParseError> {
         let target = match target {
-            EvalExpr::PropertyCompoundAssign { object, property, op, value } => {
+            EvalExpr::PropertyCompoundAssign { object, property, dynamic, op, value } => {
                 if require_semicolon { self.expect_semicolon()?; }
-                let statement = match *property {
-                    EvalExpr::Const(EvalConst::String(property)) => EvalStmt::PropertyCompoundAssign {
+                let statement = match (*property, dynamic) {
+                    (EvalExpr::Const(EvalConst::String(property)), false) => EvalStmt::PropertyCompoundAssign {
                         object: *object, property, op, value: *value,
                     },
-                    property => EvalStmt::DynamicPropertyCompoundAssign {
+                    (property, _) => EvalStmt::DynamicPropertyCompoundAssign {
                         object: *object, property, op, value: *value,
                     },
                 };
                 return Ok(vec![statement]);
             }
-            EvalExpr::PropertyIncDec { object, property, increment, .. } => {
+            EvalExpr::PropertyIncDec { object, property, dynamic, increment, .. } => {
                 if require_semicolon { self.expect_semicolon()?; }
-                let place = match *property {
-                    EvalExpr::Const(EvalConst::String(property)) => EvalExpr::PropertyGet { object, property },
-                    property => EvalExpr::DynamicPropertyGet { object, property: Box::new(property) },
+                let place = match (*property, dynamic) {
+                    (EvalExpr::Const(EvalConst::String(property)), false) => EvalExpr::PropertyGet { object, property },
+                    (property, _) => EvalExpr::DynamicPropertyGet { object, property: Box::new(property) },
                 };
                 return property_inc_dec_stmt(place, increment).map(|stmt| vec![stmt]);
             }

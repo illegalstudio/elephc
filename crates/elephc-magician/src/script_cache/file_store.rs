@@ -97,7 +97,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 24 retained method reference-return flags and dimension-write statements.
 /// Format 23 on main added assignment expressions. Format 25 combines those distinct
 /// serialized layouts, so neither branch's earlier entries can decode as this build.
-pub(crate) const FORMAT_VERSION: u32 = 25;
+/// Format 26 adds property update expressions and preserves computed property name staging.
+pub(crate) const FORMAT_VERSION: u32 = 26;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

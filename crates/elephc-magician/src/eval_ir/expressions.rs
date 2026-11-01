@@ -120,6 +120,7 @@ pub enum EvalExpr {
     PropertyCompoundAssign {
         object: Box<EvalExpr>,
         property: Box<EvalExpr>,
+        dynamic: bool,
         op: EvalBinOp,
         value: Box<EvalExpr>,
     },
@@ -127,6 +128,7 @@ pub enum EvalExpr {
     PropertyIncDec {
         object: Box<EvalExpr>,
         property: Box<EvalExpr>,
+        dynamic: bool,
         increment: bool,
         prefix: bool,
     },

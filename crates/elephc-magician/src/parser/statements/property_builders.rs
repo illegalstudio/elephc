@@ -12,7 +12,8 @@ use super::*;
 /// Keeps plain local indexed stores on their fast path and shares all richer mutation tails.
 pub(super) fn needs_dimension_tail(target: &EvalExpr, next: &TokenKind) -> bool {
     match target {
-        EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. } => true,
+        EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }
+            | EvalExpr::PropertyCompoundAssign { .. } | EvalExpr::PropertyIncDec { .. } => true,
         EvalExpr::ArrayGet { array, .. } => !matches!(array.as_ref(), EvalExpr::LoadVar(_))
             || !matches!(next, TokenKind::Equal),
         _ => false,

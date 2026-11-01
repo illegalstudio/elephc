@@ -254,10 +254,10 @@ fn eval_expr_with_result_ownership(
             // `eval_owned_expr` retains once when the surrounding call needs its own lease.
             Ok(value.borrowed())
         }
-        EvalExpr::PropertyCompoundAssign { object, property, op, value } =>
-            eval_property_compound_expression(object, property, *op, value, context, scope, values),
-        EvalExpr::PropertyIncDec { object, property, increment, prefix } =>
-            eval_property_inc_dec_expression(object, property, *increment, *prefix, context, scope, values),
+        EvalExpr::PropertyCompoundAssign { object, property, dynamic, op, value } =>
+            eval_property_compound_expression(object, property, *dynamic, *op, value, context, scope, values),
+        EvalExpr::PropertyIncDec { object, property, dynamic, increment, prefix } =>
+            eval_property_inc_dec_expression(object, property, *dynamic, *increment, *prefix, context, scope, values),
         EvalExpr::Magic(magic) => eval_magic_const(magic, context, values),
         EvalExpr::Match {
             subject,

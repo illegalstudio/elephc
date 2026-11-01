@@ -36,14 +36,14 @@ impl Parser {
         // Keep the dedicated store parser for assignments and empty append dimensions.
         let mut expression = self.clone();
         if let Ok(value) = expression.parse_expr() {
-            if expression.consume(TokenKind::Semicolon) {
-                *self = expression;
-                return Ok(vec![EvalStmt::Expr(value)]);
-            }
             if needs_dimension_tail(&value, expression.current()) {
                 let statements = expression.parse_property_like_stmt_tail(value, true)?;
                 *self = expression;
                 return Ok(statements);
+            }
+            if expression.consume(TokenKind::Semicolon) {
+                *self = expression;
+                return Ok(vec![EvalStmt::Expr(value)]);
             }
         }
         self.advance();

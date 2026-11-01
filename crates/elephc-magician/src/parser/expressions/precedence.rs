@@ -142,10 +142,11 @@ impl Parser {
             },
             EvalExpr::PropertyGet { object, property } => EvalExpr::PropertyCompoundAssign {
                 object, property: Box::new(EvalExpr::Const(EvalConst::String(property))),
+                dynamic: false,
                 op: op.expect("compound property operator"), value: Box::new(value),
             },
             EvalExpr::DynamicPropertyGet { object, property } => EvalExpr::PropertyCompoundAssign {
-                object, property, op: op.expect("compound property operator"), value: Box::new(value),
+                object, property, dynamic: true, op: op.expect("compound property operator"), value: Box::new(value),
             },
             _ => unreachable!("validated expression assignment target"),
         })
@@ -440,13 +441,13 @@ impl Parser {
     pub(in crate::parser) fn property_inc_dec_expression(
         target: EvalExpr, increment: bool, prefix: bool,
     ) -> Result<EvalExpr, EvalParseError> {
-        let (object, property) = match target {
+        let (object, property, dynamic) = match target {
             EvalExpr::PropertyGet { object, property } =>
-                (object, Box::new(EvalExpr::Const(EvalConst::String(property)))),
-            EvalExpr::DynamicPropertyGet { object, property } => (object, property),
+                (object, Box::new(EvalExpr::Const(EvalConst::String(property))), false),
+            EvalExpr::DynamicPropertyGet { object, property } => (object, property, true),
             _ => return Err(EvalParseError::UnsupportedConstruct),
         };
-        Ok(EvalExpr::PropertyIncDec { object, property, increment, prefix })
+        Ok(EvalExpr::PropertyIncDec { object, property, dynamic, increment, prefix })
     }
 
     /// Returns the scalar cast target represented by the current `(type)` token window.

@@ -13,10 +13,10 @@ use super::*;
 
 /// Executes an expression compound write after evaluating its receiver, name and RHS once.
 pub(in crate::interpreter) fn eval_property_compound_expression(
-    object: &EvalExpr, property: &EvalExpr, op: EvalBinOp, value: &EvalExpr,
+    object: &EvalExpr, property: &EvalExpr, dynamic: bool, op: EvalBinOp, value: &EvalExpr,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let property = expression_property_name(property);
+    let property = expression_property_name(property, dynamic);
     with_eval_named_property_write_result(object, property, &[value], context, scope, values,
         |args, property, context, _, values|
             eval_property_compound_assign_value(args[0], property, op, args[1], context, values))
@@ -24,20 +24,20 @@ pub(in crate::interpreter) fn eval_property_compound_expression(
 
 /// Returns an increment's selected old or new value without replaying a property getter.
 pub(in crate::interpreter) fn eval_property_inc_dec_expression(
-    object: &EvalExpr, property: &EvalExpr, increment: bool, prefix: bool,
+    object: &EvalExpr, property: &EvalExpr, dynamic: bool, increment: bool, prefix: bool,
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let property = expression_property_name(property);
+    let property = expression_property_name(property, dynamic);
     with_eval_named_property_write_result(object, property, &[], context, scope, values,
         |args, property, context, _, values|
             eval_property_inc_dec_value(args[0], property, increment, prefix, context, values))
 }
 
 /// Reuses literal names directly while preserving delayed conversion of computed names.
-fn expression_property_name(property: &EvalExpr) -> DimensionProperty<'_> {
-    match property {
-        EvalExpr::Const(EvalConst::String(name)) => DimensionProperty::Literal(name),
-        property => DimensionProperty::Dynamic(property),
+fn expression_property_name(property: &EvalExpr, dynamic: bool) -> DimensionProperty<'_> {
+    match (property, dynamic) {
+        (EvalExpr::Const(EvalConst::String(name)), false) => DimensionProperty::Literal(name),
+        (property, _) => DimensionProperty::Dynamic(property),
     }
 }
 
