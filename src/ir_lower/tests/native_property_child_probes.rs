@@ -11,8 +11,7 @@
 use crate::ir::{Immediate, Op, RuntimeCallTarget, RuntimeFnId};
 
 /// Actual XML child selection supports concrete and erased temporaries on every supported ABI.
-#[test]
-fn actual_native_property_child_probes_on_every_target() {
+fn verify_actual_native_property_child_probes(target: &str) {
     let source = r#"<?php
 interface TargetGenericProbeMarker {}
 class TargetGenericProbe implements TargetGenericProbeMarker {
@@ -48,42 +47,42 @@ function targetGenericProbeBorrowed(TargetGenericProbe $box): void { $box->items
 targetGenericProbeComputed(); targetGenericProbeLate(0);
 $box = new TargetGenericProbe(); targetGenericProbeBorrowed($box); $box->targetGenericProbeThisHot();
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        let computed = module.functions.iter().find(|function| function.name == "targetGenericProbeComputed").unwrap();
-        assert!(computed.instructions.iter().any(|inst| inst.immediate == Some(Immediate::RuntimeCall(
-            RuntimeCallTarget::PropertyHashRead))), "{target}: stored getter-class entries need a raw read");
-        assert!(computed.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
-            "{target}: an ordinary probe must skip uninitialized storage without reading it");
-        let borrowed = module.functions.iter().chain(module.class_methods.iter()).filter(|function| function.name == "targetGenericProbeBorrowed"
-            || (function.flags.is_method && function.name.to_ascii_lowercase().contains("targetgenericprobethishot")))
-            .collect::<Vec<_>>();
-        assert_eq!(borrowed.len(), 2, "{target}: both borrowed receiver fixtures must remain reachable");
-        for function in borrowed {
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite),
-                "{target}: {} must keep the direct attached writer", function.name);
-            assert!(!function.instructions.iter().any(|inst| matches!(inst.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashRead))
-                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::GetClass))))),
-                "{target}: {} must not acquire a temporary-child class probe", function.name);
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let computed = module.functions.iter().find(|function| function.name == "targetGenericProbeComputed").unwrap();
+    assert!(computed.instructions.iter().any(|inst| inst.immediate == Some(Immediate::RuntimeCall(
+        RuntimeCallTarget::PropertyHashRead))), "{target}: stored getter-class entries need a raw read");
+    assert!(computed.instructions.iter().any(|inst| inst.op == Op::PropInitialized),
+        "{target}: an ordinary probe must skip uninitialized storage without reading it");
+    let borrowed = module.functions.iter().chain(module.class_methods.iter()).filter(|function| function.name == "targetGenericProbeBorrowed"
+        || (function.flags.is_method && function.name.to_ascii_lowercase().contains("targetgenericprobethishot")))
+        .collect::<Vec<_>>();
+    assert_eq!(borrowed.len(), 2, "{target}: both borrowed receiver fixtures must remain reachable");
+    for function in borrowed {
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PropGetForWrite),
+            "{target}: {} must keep the direct attached writer", function.name);
+        assert!(!function.instructions.iter().any(|inst| matches!(inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::PropertyHashRead))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::GetClass))))),
+            "{target}: {} must not acquire a temporary-child class probe", function.name);
+    }
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    if target == "linux-x86_64" {
+        let mut reads = 0;
+        for arm in assembly.split("property_hash_read_found").skip(1) {
+            // Only label definitions start a found arm; branch operands end at a newline.
+            let Some((suffix, body)) = arm.split_once(':') else { continue; };
+            if suffix.contains('\n') { continue; }
+            let body = body.split("property_hash_read_done").next().unwrap();
+            let lines = body.lines().collect::<Vec<_>>();
+            assert!(lines.windows(2).any(|pair| pair[0].contains("mov rax, rdi")
+                && pair[1].contains("call __rt_mixed_clone")),
+                "{target}: raw hash reads must use the custom Mixed input register\n{body}");
+            reads += 1;
         }
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-        if target == "linux-x86_64" {
-            let mut reads = 0;
-            for arm in assembly.split("property_hash_read_found").skip(1) {
-                // Only label definitions start a found arm; branch operands end at a newline.
-                let Some((suffix, body)) = arm.split_once(':') else { continue; };
-                if suffix.contains('\n') { continue; }
-                let body = body.split("property_hash_read_done").next().unwrap();
-                let lines = body.lines().collect::<Vec<_>>();
-                assert!(lines.windows(2).any(|pair| pair[0].contains("mov rax, rdi")
-                    && pair[1].contains("call __rt_mixed_clone")),
-                    "{target}: raw hash reads must use the custom Mixed input register\n{body}");
-                reads += 1;
-            }
-            assert!(reads > 0, "{target}: the dynamic child fixture must emit a hash read");
-        }
+        assert!(reads > 0, "{target}: the dynamic child fixture must emit a hash read");
     }
 }
+
+supported_target_cases!(actual_native_property_child_probes, verify_actual_native_property_child_probes);

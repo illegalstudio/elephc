@@ -14,6 +14,29 @@ use std::path::{Path, PathBuf};
 use crate::codegen::platform::Target;
 use crate::ir::{print_module, Terminator};
 
+/// Schedules expensive target fixtures independently while keeping all five ABIs covered.
+macro_rules! supported_target_cases {
+    ($name:ident, $verify:ident) => {
+        mod $name {
+            /// Verifies the fixture on macOS ARM64.
+            #[test]
+            fn macos_aarch64() { super::$verify("macos-aarch64"); }
+            /// Verifies the fixture on iOS devices.
+            #[test]
+            fn ios_arm64() { super::$verify("ios-arm64"); }
+            /// Verifies the fixture on the iOS ARM64 simulator.
+            #[test]
+            fn ios_sim_arm64() { super::$verify("ios-sim-arm64"); }
+            /// Verifies the fixture on Linux ARM64.
+            #[test]
+            fn linux_aarch64() { super::$verify("linux-aarch64"); }
+            /// Verifies the fixture on Linux x86_64.
+            #[test]
+            fn linux_x86_64() { super::$verify("linux-x86_64"); }
+        }
+    };
+}
+
 mod aggregate_operand_owners;
 mod argument_evaluation_owners;
 mod computed_property_update_owners;

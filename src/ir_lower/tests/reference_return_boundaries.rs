@@ -999,8 +999,7 @@ function &protectedStringReference(mixed $input): string {
 }
 
 /// Nullable object staging keeps handler reads valid across conditional runtime promotion.
-#[test]
-fn protected_nullable_object_reference_returns_use_dynamic_slot_state() {
+fn verify_protected_nullable_object_reference_returns_use_dynamic_slot_state(name: &str) {
     let sources = [("caughtNullableReference", r#"<?php
 function &caughtNullableReference(SimpleXMLElement $root): SimpleXMLElement {
     $value = $root->missing->child;
@@ -1014,24 +1013,25 @@ function &finallyObservedNullableReference(SimpleXMLElement $root): SimpleXMLEle
     finally { var_dump($value); }
 }
 "#)];
-    for name in TARGETS {
-        for (function_name, source) in sources {
-            let module = super::lower_source_at_for_target(
-                source,
-                Path::new("main.php"),
-                Path::new("."),
-                Target::parse(name).unwrap(),
-            );
-            let function = module.functions.iter().find(|function| function.name == function_name)
-                .unwrap_or_else(|| panic!("{name}: missing {function_name}"));
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::PromoteLocalRefCell),
-                "{name}: {function_name} must promote after its object guard");
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::AliasLocalRefCell),
-                "{name}: {function_name} must attach the source name to the staged cell");
-            assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadRefCell),
-                "{name}: {function_name} handler/finalizer reads must use dynamic ref-cell loads");
-            crate::codegen::generate_user_asm_from_ir(&module, false, false)
-                .unwrap_or_else(|error| panic!("{name}: {function_name}: {error:?}"));
-        }
+    for (function_name, source) in sources {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module.functions.iter().find(|function| function.name == function_name)
+            .unwrap_or_else(|| panic!("{name}: missing {function_name}"));
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::PromoteLocalRefCell),
+            "{name}: {function_name} must promote after its object guard");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::AliasLocalRefCell),
+            "{name}: {function_name} must attach the source name to the staged cell");
+        assert!(function.instructions.iter().any(|inst| inst.op == Op::LoadRefCell),
+            "{name}: {function_name} handler/finalizer reads must use dynamic ref-cell loads");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {function_name}: {error:?}"));
     }
 }
+
+supported_target_cases!(protected_nullable_object_reference_returns_use_dynamic_slot_state,
+    verify_protected_nullable_object_reference_returns_use_dynamic_slot_state);

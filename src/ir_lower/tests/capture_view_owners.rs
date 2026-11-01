@@ -261,9 +261,13 @@ function bumpStaticReferencePayload(string $key): void {
             })
             .unwrap_or_else(|| panic!("{target}: missing static array promotion write-back"));
         assert!(
-            matches!(store.result_php_type.codegen_repr(), crate::types::PhpType::Array(_)),
+            matches!(store.result_php_type.codegen_repr(),
+                crate::types::PhpType::Array(_) | crate::types::PhpType::AssocArray { .. }),
             "{target}: a borrowed static cell must not receive a boxed Mixed payload",
         );
+        assert_eq!(store.result_php_type.codegen_repr(),
+            function.value(store.operands[0]).unwrap().php_type.codegen_repr(),
+            "{target}: the static cell must keep the promoted container's raw payload type");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

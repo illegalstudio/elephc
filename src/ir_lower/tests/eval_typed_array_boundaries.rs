@@ -12,8 +12,7 @@ use crate::{codegen::platform::Target, ir_lower::LoweringError};
 use std::path::Path;
 
 /// Native typed-element aliases fail before eval can normalize their shared payload.
-#[test]
-fn opaque_eval_refuses_native_typed_indexed_aliases_on_every_target() {
+fn verify_opaque_eval_refuses_native_typed_indexed_aliases(name: &str) {
     let cases = [
         ("hash_parameter", r#"<?php
 function nativeHashParameter(array<string, int> &$items, string $source): void { eval($source); }
@@ -67,23 +66,23 @@ function nativeNestedArrayForeach(array<array<int>> &$rows, string $source): voi
 $rows = [[1]]; nativeNestedArrayForeach($rows, $argc > 0 ? '$item[0] = 2;' : '');
 "#),
     ];
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        for (case, source) in cases {
-            let error = match super::try_lower_source_at_for_target(
-                source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
-            ) {
-                Err(LoweringError::Unsupported(error)) => error,
-                other => panic!("{name}/{case}: expected native element-layout refusal, got {other:?}"),
-            };
-            assert!(error.message.contains("Unsupported eval: native reference")
-                && error.message.contains("unboxed array elements"), "{name}/{case}: {}", error.message);
-        }
+    for (case, source) in cases {
+        let error = match super::try_lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        ) {
+            Err(LoweringError::Unsupported(error)) => error,
+            other => panic!("{name}/{case}: expected native element-layout refusal, got {other:?}"),
+        };
+        assert!(error.message.contains("Unsupported eval: native reference")
+            && error.message.contains("unboxed array elements"), "{name}/{case}: {}", error.message);
     }
 }
 
+supported_target_cases!(opaque_eval_refuses_native_typed_indexed_aliases,
+    verify_opaque_eval_refuses_native_typed_indexed_aliases);
+
 /// Boxed whole-local aliases and literal writes to other names do not acquire this refusal.
-#[test]
-fn eval_keeps_boxed_array_aliases_and_name_precise_native_scopes_on_every_target() {
+fn verify_eval_keeps_boxed_array_aliases_and_name_precise_native_scopes(name: &str) {
     let source = r#"<?php
 function namedLiteralNativeArray(array<int> &$items): void {
     $other = 1; eval('$other = 3;'); echo $other, $items[0];
@@ -103,10 +102,11 @@ $boxed = ['value' => json_decode($argc > 0 ? '1' : '2')];
 nativeBoxedHash($boxed, $argc > 0 ? '$items["value"] = 4;' : '');
 boxedLocalEvalArray($argc > 0 ? '$items[0] = 4;' : '');
 "#;
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
-        );
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    }
+    let module = super::lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+    );
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
+
+supported_target_cases!(eval_keeps_boxed_array_aliases_and_name_precise_native_scopes,
+    verify_eval_keeps_boxed_array_aliases_and_name_precise_native_scopes);
