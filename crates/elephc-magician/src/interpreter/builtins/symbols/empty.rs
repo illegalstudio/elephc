@@ -80,32 +80,21 @@ pub(in crate::interpreter) fn eval_empty_arg(
         return Ok(!values.truthy(value)?);
     }
     if let EvalExpr::PropertyGet { object, property } = arg {
-        let object = eval_expr(object, context, scope, values)?;
-        if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(property), None)? {
-            return Ok(empty);
-        }
-        if !eval_property_isset_result(object, property, context, values)? {
-            return Ok(true);
-        }
-        let value = eval_property_get_result(object, property, context, values)?;
-        return empty_value(value, context, values);
+        return with_eval_probe_operand(object, context, scope, values, |object, context, _, values| {
+            property_empty(object, property, context, values)
+        });
     }
     if let EvalExpr::DynamicPropertyGet { object, property } = arg {
-        let (object, property) = if matches!(object.as_ref(), EvalExpr::LoadVar(_)) {
-            let property = eval_dynamic_member_name(property, context, scope, values)?;
-            (eval_expr(object, context, scope, values)?, property)
-        } else {
-            let object = eval_expr(object, context, scope, values)?;
-            (object, eval_dynamic_member_name(property, context, scope, values)?)
-        };
-        if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(&property), None)? {
-            return Ok(empty);
-        }
-        if !eval_property_isset_result(object, &property, context, values)? {
-            return Ok(true);
-        }
-        let value = eval_property_get_result(object, &property, context, values)?;
-        return empty_value(value, context, values);
+        let early_name = if matches!(object.as_ref(), EvalExpr::LoadVar(_)) {
+            Some(eval_dynamic_member_name(property, context, scope, values)?)
+        } else { None };
+        return with_eval_probe_operand(object, context, scope, values, |object, context, scope, values| {
+            let property = match early_name {
+                Some(name) => name,
+                None => eval_dynamic_member_name(property, context, scope, values)?,
+            };
+            property_empty(object, &property, context, values)
+        });
     }
     if let EvalExpr::NullsafePropertyGet { object, property } = arg {
         let object = eval_expr(object, context, scope, values)?;
@@ -194,6 +183,19 @@ pub(in crate::interpreter) fn eval_empty_arg(
         return Ok(empty);
     }
     eval_condition(arg, context, scope, values).map(|truthy| !truthy)
+}
+
+/// Applies native XML content checks before ordinary magic-property probing.
+fn property_empty(
+    object: RuntimeCellHandle, property: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(property), None)? {
+        return Ok(empty);
+    }
+    if !eval_property_isset_result(object, property, context, values)? { return Ok(true); }
+    let value = eval_property_get_result(object, property, context, values)?;
+    empty_value(value, context, values)
 }
 
 /// Reads a probe's truthiness and releases only an owned returned cell.

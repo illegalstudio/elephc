@@ -32,6 +32,8 @@ for ($i = 0; $i < 32; $i++) {
     if (isset($xml["missing" . str_repeat("x", 40)]) || !isset($xml[$key])) { echo "wrong|"; }
     if ($i === 0) { echo "fresh-loop|"; }
     if (isset((new SimpleXMLElement("<r/>"))["missing"]) || !empty((new SimpleXMLElement("<r/>"))["missing"])) { echo "wrong|"; }
+    if (isset((new SimpleXMLElement("<r/>"))->missing) || !empty((new SimpleXMLElement("<r/>"))->missing)) { echo "wrong|"; }
+    if (isset((new SimpleXMLElement("<r/>"))->{$key}) || !empty((new SimpleXMLElement("<r/>"))->{$key})) { echo "wrong|"; }
     if ($i === 0) { echo "chain-loop|"; }
     if (!empty($xml?->missing["key" . str_repeat("x", 40)])) { echo "wrong|"; }
 }
@@ -40,6 +42,12 @@ try { empty($xml[freshXmlEmptyKey()]); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
 echo "isset|";
 try { isset($xml[freshXmlEmptyKey()]); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
+echo "property-empty|";
+try { empty((new SimpleXMLElement("<r/>"))->{freshXmlEmptyKey()}); }
+catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
+echo "property-isset|";
+try { isset((new SimpleXMLElement("<r/>"))->{freshXmlEmptyKey()}); }
 catch (RuntimeException $error) { echo $error->getMessage(), "|"; }
 echo $key;
 ' : '';
@@ -63,7 +71,7 @@ eval($source);
 if ($argc !== 1) { restore_error_handler(); }
 "####, &[&[], &["warning-callers"]]);
     let cases = [
-        ("test_simplexml_eval_empty_dimension_key_owners", "probes|empty-loop|isset-loop|fresh-loop|chain-loop|empty|drop|cast|isset|drop|cast|z"),
+        ("test_simplexml_eval_empty_dimension_key_owners", "probes|empty-loop|isset-loop|fresh-loop|chain-loop|empty|drop|cast|isset|drop|cast|property-empty|drop|cast|property-isset|drop|cast|z"),
         ("test_simplexml_eval_assignment_warning_callers", concat!(
             "Unknown: Cannot assign to an array of nodes (duplicate subnodes or attr detected)|",
             "Unknown: Cannot add element item number 4 when only 2 such elements exist|",

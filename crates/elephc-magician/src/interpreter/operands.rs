@@ -223,6 +223,22 @@ pub(in crate::interpreter) fn eval_condition(
     result.and_then(|result| released.map(|()| result))
 }
 
+/// Keeps a quiet probe's receiver alive and retires its lease on success or failure.
+pub(in crate::interpreter) fn with_eval_probe_operand<V: RuntimeValueOps>(
+    expr: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    probe: impl FnOnce(
+        RuntimeCellHandle, &mut ElephcEvalContext, &mut ElephcEvalScope, &mut V,
+    ) -> Result<bool, EvalStatus>,
+) -> Result<bool, EvalStatus> {
+    let owner = eval_owned_expr(expr, context, scope, values)?;
+    let result = probe(owner.borrowed(), context, scope, values);
+    let cleanup = eval_release_value(context, values, owner);
+    result.and_then(|answer| cleanup.map(|()| answer))
+}
+
 /// Runs a consumer of borrowed operands and returns its independent result after releasing leases.
 pub(in crate::interpreter) fn with_eval_operands<V: RuntimeValueOps>(
     args: &[&EvalExpr],

@@ -84,28 +84,28 @@ pub(in crate::interpreter) fn eval_isset_arg(
         return Ok(!values.is_null(value)?);
     }
     if let EvalExpr::PropertyGet { object, property } = arg {
-        let object = eval_expr(object, context, scope, values)?;
-        return eval_property_isset_result(object, property, context, values);
+        return with_eval_probe_operand(object, context, scope, values, |object, context, _, values| {
+            eval_property_isset_result(object, property, context, values)
+        });
     }
     if let EvalExpr::DynamicPropertyGet { object, property } = arg {
-        let object = eval_expr(object, context, scope, values)?;
-        let property = eval_dynamic_member_name(property, context, scope, values)?;
-        return eval_property_isset_result(object, &property, context, values);
+        return with_eval_probe_operand(object, context, scope, values, |object, context, scope, values| {
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_isset_result(object, &property, context, values)
+        });
     }
     if let EvalExpr::NullsafePropertyGet { object, property } = arg {
-        let object = eval_expr(object, context, scope, values)?;
-        if values.is_null(object)? {
-            return Ok(false);
-        }
-        return eval_property_isset_result(object, property, context, values);
+        return with_eval_probe_operand(object, context, scope, values, |object, context, _, values| {
+            if values.is_null(object)? { return Ok(false); }
+            eval_property_isset_result(object, property, context, values)
+        });
     }
     if let EvalExpr::NullsafeDynamicPropertyGet { object, property } = arg {
-        let object = eval_expr(object, context, scope, values)?;
-        if values.is_null(object)? {
-            return Ok(false);
-        }
-        let property = eval_dynamic_member_name(property, context, scope, values)?;
-        return eval_property_isset_result(object, &property, context, values);
+        return with_eval_probe_operand(object, context, scope, values, |object, context, scope, values| {
+            if values.is_null(object)? { return Ok(false); }
+            let property = eval_dynamic_member_name(property, context, scope, values)?;
+            eval_property_isset_result(object, &property, context, values)
+        });
     }
     if let EvalExpr::StaticPropertyGet {
         class_name,

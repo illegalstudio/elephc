@@ -114,16 +114,3 @@ fn evaluate_receiver(
         }
     }
 }
-
-/// Applies native XML content checks before ordinary magic-property probing.
-fn property_empty(
-    object: RuntimeCellHandle, property: &str, context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    if let Some(empty) = runtime_ops::simplexml_properties::empty(values, object, Some(property), None)? {
-        return Ok(empty);
-    }
-    if !eval_property_isset_result(object, property, context, values)? { return Ok(true); }
-    let value = eval_property_get_result(object, property, context, values)?;
-    empty_value(value, context, values)
-}
