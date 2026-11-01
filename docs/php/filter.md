@@ -44,9 +44,8 @@ var_dump($email); // string(15) "ada@example.com"
 - `FILTER_VALIDATE_DOMAIN` with `FILTER_FLAG_HOSTNAME`.
 - `FILTER_VALIDATE_URL` with `FILTER_FLAG_PATH_REQUIRED`,
   `FILTER_FLAG_QUERY_REQUIRED` and `uri_parser_class`. The parser classes
-  (`Uri\Rfc3986Uri`, `Uri\WhatWgUri`) are not implemented yet; the option is
-  accepted for call-shape compatibility but validation always uses elephc's
-  RFC 3986-compatible parser.
+  (`Uri\Rfc3986\Uri`, `Uri\WhatWg\Url`) are accepted; validation uses the
+  RFC 3986-compatible parser, with the WhatWg parser's backslash-host acceptance.
 - `FILTER_VALIDATE_EMAIL` with `FILTER_FLAG_EMAIL_UNICODE`.
 - `FILTER_VALIDATE_IP` with `FILTER_FLAG_IPV4`, `FILTER_FLAG_IPV6`,
   `FILTER_FLAG_NO_PRIV_RANGE`, `FILTER_FLAG_NO_RES_RANGE` and
@@ -143,7 +142,7 @@ sanitized string; nested arrays are walked recursively.
 - `FILTER_VALIDATE_REGEXP` matches PCRE's delimiter, anchor and common modifier semantics and
   reports unknown modifiers/terminators as engine warnings; deeper PCRE compilation diagnostics
   may still differ from PCRE's exact text.
-- The `Uri\Rfc3986Uri` / `Uri\WhatWgUri` parser classes are not implemented; `uri_parser_class`
-  is accepted for call-shape compatibility and validation uses the RFC 3986-compatible parser.
+- `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` are accepted by `uri_parser_class`; the WhatWg
+  route currently adds its backslash-host acceptance while still sharing the RFC 3986 checks.
 - The `filter.default` deprecation points at the baked setup site rather than PHP's INI-startup
   `Unknown on line 0` location.

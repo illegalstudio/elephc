@@ -45,6 +45,12 @@ fn hex_arg_rejects_malformed_payloads() {
     assert_eq!(unsafe { super::hex_arg(value.as_ptr()) }, vec![0, 255]);
 }
 
+/// Verifies a non-ASCII single-byte decimal separator is used literally.
+#[test]
+fn float_accepts_non_ascii_decimal_separator() {
+    assert_eq!(float(b"1\xA45", 0, Some(0xA4), None), Some(1.5));
+}
+
 /// Verifies decimal integer validation and its exact overflow boundary.
 #[test]
 fn int_matches_php() {

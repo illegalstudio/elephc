@@ -19,6 +19,26 @@ use crate::synthetic_class::{
     t_int, t_mixed,
 };
 
+/// HTML 4.01 named entities accepted by php-src's `ENT_HTML401` double-encode guard.
+const HTML4_NAMED_ENTITIES: &str = concat!(
+    "|AElig|Aacute|Acirc|Agrave|Alpha|Aring|Atilde|Auml|Beta|Ccedil|Chi|Dagger|Delta|ETH|Eacute",
+    "|Ecirc|Egrave|Epsilon|Eta|Euml|Gamma|Iacute|Icirc|Igrave|Iota|Iuml|Kappa|Lambda|Mu|Ntilde|Nu",
+    "|OElig|Oacute|Ocirc|Ograve|Omega|Omicron|Oslash|Otilde|Ouml|Phi|Pi|Prime|Psi|Rho|Scaron|Sigma",
+    "|THORN|Tau|Theta|Uacute|Ucirc|Ugrave|Upsilon|Uuml|Xi|Yacute|Yuml|Zeta|aacute|acirc|acute|aelig",
+    "|agrave|alefsym|alpha|amp|and|ang|aring|asymp|atilde|auml|bdquo|beta|brvbar|bull|cap|ccedil",
+    "|cedil|cent|chi|circ|clubs|cong|copy|crarr|cup|curren|dArr|dagger|darr|deg|delta|diams|divide",
+    "|eacute|ecirc|egrave|empty|emsp|ensp|epsilon|equiv|eta|eth|euml|euro|exist|fnof|forall|frac12",
+    "|frac14|frac34|frasl|gamma|ge|gt|hArr|harr|hearts|hellip|iacute|icirc|iexcl|igrave|image|infin",
+    "|int|iota|iquest|isin|iuml|kappa|lArr|lambda|lang|laquo|larr|lceil|ldquo|le|lfloor|lowast|loz",
+    "|lrm|lsaquo|lsquo|lt|macr|mdash|micro|middot|minus|mu|nabla|nbsp|ndash|ne|ni|not|notin|nsub",
+    "|ntilde|nu|oacute|ocirc|oelig|ograve|oline|omega|omicron|oplus|or|ordf|ordm|oslash|otilde",
+    "|otimes|ouml|para|part|permil|perp|phi|pi|piv|plusmn|pound|prime|prod|prop|psi|quot|rArr|radic",
+    "|rang|raquo|rarr|rceil|rdquo|real|reg|rfloor|rho|rlm|rsaquo|rsquo|sbquo|scaron|sdot|sect|shy",
+    "|sigma|sigmaf|sim|spades|sub|sube|sum|sup|sup1|sup2|sup3|supe|szlig|tau|there4|theta|thetasym",
+    "|thinsp|thorn|tilde|times|trade|uArr|uacute|uarr|ucirc|ugrave|uml|upsih|upsilon|uuml|weierp|xi",
+    "|yacute|yen|yuml|zeta|zwj|zwnj|",
+);
+
 /// Returns the scalar dispatcher and its validation helpers.
 pub(super) fn declarations() -> Program {
     vec![
@@ -27,6 +47,8 @@ pub(super) fn declarations() -> Program {
         apply_decl(),
         walk_decl(),
         full_special_chars_decl(),
+        numeric_entity_decl(),
+        named_entity_decl(),
         userinfo_decl(),
         url_decl(),
         ipv6_decl(),
@@ -846,17 +868,9 @@ fn full_special_chars_decl() -> Stmt {
                         s_assign("semi", e_call("strpos", vec![e_var("value"), e_str(";"), e_binop(e_var("i"), BinOp::Add, e_int(1))])),
                         s_if(
                             e_binop(
-                                e_binop(
-                                    e_var("semi"),
-                                    BinOp::StrictNotEq,
-                                    e_bool(false),
-                                ),
-                                BinOp::And,
-                                e_binop(
-                                    e_binop(e_var("semi"), BinOp::Sub, e_var("i")),
-                                    BinOp::LtEq,
-                                    e_int(32),
-                                ),
+                                e_var("semi"),
+                                BinOp::StrictNotEq,
+                                e_bool(false),
                             ),
                             vec![
                                 s_assign("entity", e_call("substr", vec![
@@ -864,9 +878,25 @@ fn full_special_chars_decl() -> Stmt {
                                     e_var("i"),
                                     e_binop(e_binop(e_var("semi"), BinOp::Sub, e_var("i")), BinOp::Add, e_int(1)),
                                 ])),
-                                s_assign("decoded", e_call("html_entity_decode", vec![e_var("entity")])),
+                                s_assign("entity_ok", e_bool(false)),
                                 s_if(
-                                    e_binop(e_var("decoded"), BinOp::StrictNotEq, e_var("entity")),
+                                    e_binop(
+                                        e_call("substr", vec![e_var("entity"), e_int(0), e_int(2)]),
+                                        BinOp::StrictEq,
+                                        e_str("&#"),
+                                    ),
+                                    vec![s_assign(
+                                        "entity_ok",
+                                        e_call("__elephc_filter_numeric_entity", vec![e_var("entity")]),
+                                    )],
+                                    vec![],
+                                    Some(vec![s_assign(
+                                        "entity_ok",
+                                        e_call("__elephc_filter_named_entity", vec![e_var("entity")]),
+                                    )]),
+                                ),
+                                s_if(
+                                    e_var("entity_ok"),
                                     vec![
                                         s_assign("out", e_concat_all(vec![e_var("out"), e_var("entity")])),
                                         s_assign("i", e_binop(e_var("semi"), BinOp::Add, e_int(1))),
@@ -912,6 +942,183 @@ fn full_special_chars_decl() -> Stmt {
                 )],
             ),
             s_return(e_var("out")),
+        ])
+        .build()
+}
+
+/// Builds the numeric-entity predicate used by full-special-chars double-encode protection.
+fn numeric_entity_decl() -> Stmt {
+    function("__elephc_filter_numeric_entity")
+        .param("entity", TypeExpr::Str)
+        .returns(t_bool())
+        .body(vec![
+            s_if(
+                e_binop(e_call("strlen", vec![e_var("entity")]), BinOp::Lt, e_int(4)),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_call("substr", vec![e_var("entity"), e_int(0), e_int(2)]),
+                    BinOp::StrictNotEq,
+                    e_str("&#"),
+                ),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_assign("semicolon", e_binop(e_call("strlen", vec![e_var("entity")]), BinOp::Sub, e_int(1))),
+            s_if(
+                e_binop(
+                    e_index(e_var("entity"), e_var("semicolon")),
+                    BinOp::StrictNotEq,
+                    e_str(";"),
+                ),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_assign("index", e_int(2)),
+            s_assign("hex", e_bool(false)),
+            s_if(
+                e_binop(
+                    e_binop(e_index(e_var("entity"), e_int(2)), BinOp::StrictEq, e_str("x")),
+                    BinOp::Or,
+                    e_binop(e_index(e_var("entity"), e_int(2)), BinOp::StrictEq, e_str("X")),
+                ),
+                vec![
+                    s_assign("hex", e_bool(true)),
+                    s_assign("index", e_int(3)),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_var("index"), BinOp::GtEq, e_var("semicolon")),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_assign("value", e_int(0)),
+            s_while(
+                e_binop(e_var("index"), BinOp::Lt, e_var("semicolon")),
+                vec![
+                    s_assign("byte", e_call("ord", vec![e_index(e_var("entity"), e_var("index"))])),
+                    s_assign("digit", e_int(-1)),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("byte"), BinOp::GtEq, e_int(48)),
+                            BinOp::And,
+                            e_binop(e_var("byte"), BinOp::LtEq, e_int(57)),
+                        ),
+                        vec![s_assign("digit", e_binop(e_var("byte"), BinOp::Sub, e_int(48)))],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_var("hex"),
+                            BinOp::And,
+                            e_binop(
+                                e_binop(e_var("byte"), BinOp::GtEq, e_int(65)),
+                                BinOp::And,
+                                e_binop(e_var("byte"), BinOp::LtEq, e_int(70)),
+                            ),
+                        ),
+                        vec![s_assign(
+                            "digit",
+                            e_binop(e_binop(e_var("byte"), BinOp::Sub, e_int(65)), BinOp::Add, e_int(10)),
+                        )],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(
+                            e_var("hex"),
+                            BinOp::And,
+                            e_binop(
+                                e_binop(e_var("byte"), BinOp::GtEq, e_int(97)),
+                                BinOp::And,
+                                e_binop(e_var("byte"), BinOp::LtEq, e_int(102)),
+                            ),
+                        ),
+                        vec![s_assign(
+                            "digit",
+                            e_binop(e_binop(e_var("byte"), BinOp::Sub, e_int(97)), BinOp::Add, e_int(10)),
+                        )],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("digit"), BinOp::StrictEq, e_int(-1)),
+                        vec![s_return(e_bool(false))],
+                        vec![],
+                        None,
+                    ),
+                    s_assign(
+                        "value",
+                        e_binop(
+                            e_binop(
+                                e_var("value"),
+                                BinOp::Mul,
+                                e_ternary(e_var("hex"), e_int(16), e_int(10)),
+                            ),
+                            BinOp::Add,
+                            e_var("digit"),
+                        ),
+                    ),
+                    s_if(
+                        e_binop(e_var("value"), BinOp::Gt, e_int(0x10FFFF)),
+                        vec![s_return(e_bool(false))],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("index", e_binop(e_var("index"), BinOp::Add, e_int(1))),
+                ],
+            ),
+            s_return(e_bool(true)),
+        ])
+        .build()
+}
+
+/// Builds the HTML 4.01 named-entity predicate used by full-special-chars double-encode protection.
+fn named_entity_decl() -> Stmt {
+    function("__elephc_filter_named_entity")
+        .param("entity", TypeExpr::Str)
+        .returns(t_bool())
+        .body(vec![
+            s_if(
+                e_binop(e_call("strlen", vec![e_var("entity")]), BinOp::Lt, e_int(3)),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(
+                    e_index(
+                        e_var("entity"),
+                        e_binop(e_call("strlen", vec![e_var("entity")]), BinOp::Sub, e_int(1)),
+                    ),
+                    BinOp::StrictNotEq,
+                    e_str(";"),
+                ),
+                vec![s_return(e_bool(false))],
+                vec![],
+                None,
+            ),
+            s_assign(
+                "name",
+                e_call("substr", vec![
+                    e_var("entity"),
+                    e_int(1),
+                    e_binop(e_call("strlen", vec![e_var("entity")]), BinOp::Sub, e_int(2)),
+                ]),
+            ),
+            s_return(e_call("str_contains", vec![
+                e_str(HTML4_NAMED_ENTITIES),
+                e_concat_all(vec![e_str("|"), e_var("name"), e_str("|")]),
+            ])),
         ])
         .build()
 }
@@ -1051,9 +1258,9 @@ fn url_decl() -> Stmt {
                     e_var("parser_set"),
                     BinOp::And,
                     e_binop(
-                        e_binop(e_var("parser"), BinOp::StrictNotEq, e_str("Uri\\Rfc3986Uri")),
+                        e_binop(e_var("parser"), BinOp::StrictNotEq, e_str("Uri\\Rfc3986\\Uri")),
                         BinOp::And,
-                        e_binop(e_var("parser"), BinOp::StrictNotEq, e_str("Uri\\WhatWgUri")),
+                        e_binop(e_var("parser"), BinOp::StrictNotEq, e_str("Uri\\WhatWg\\Url")),
                     ),
                 ),
                 vec![s_throw(crate::synthetic_class::e_new_fq(
@@ -1065,6 +1272,14 @@ fn url_decl() -> Stmt {
                 ))],
                 vec![],
                 None,
+            ),
+            s_assign(
+                "whatwg",
+                e_binop(
+                    e_var("parser"),
+                    BinOp::StrictEq,
+                    e_str("Uri\\WhatWg\\Url"),
+                ),
             ),
             s_assign("parts", e_call("parse_url", vec![e_var("value")])),
             s_if(
@@ -1121,6 +1336,25 @@ fn url_decl() -> Stmt {
                             BinOp::StrictNotEq,
                             e_bool(false),
                         ))]),
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("whatwg"), BinOp::StrictEq, e_bool(true)),
+                            BinOp::And,
+                            e_not(e_var("host_ok")),
+                        ),
+                        vec![s_if(
+                            e_binop(
+                                e_call("strpos", vec![e_var("host_text"), e_str("\\")]),
+                                BinOp::StrictNotEq,
+                                e_bool(false),
+                            ),
+                            vec![s_assign("host_ok", e_bool(true))],
+                            vec![],
+                            None,
+                        )],
+                        vec![],
+                        None,
                     ),
                     s_if(
                         e_not(e_var("host_ok")),

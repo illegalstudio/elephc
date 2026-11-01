@@ -169,7 +169,7 @@ fn assign_global(name: &str) -> Vec<Stmt> {
     ]
 }
 
-/// Builds `__elephc_filter_seed_request(int, mixed, string, int, bool, bool): void`.
+/// Builds `__elephc_filter_seed_request(int, mixed, string, int, bool, bool, bool): void`.
 fn seed_request_decl() -> Stmt {
     function("__elephc_filter_seed_request")
         .param("type", t_int())
@@ -178,6 +178,7 @@ fn seed_request_decl() -> Stmt {
         .param("flags", t_int())
         .param_default("deprecate", crate::synthetic_class::t_bool(), e_bool(true))
         .param_default("snapshot", crate::synthetic_class::t_bool(), e_bool(true))
+        .param_default("assign", crate::synthetic_class::t_bool(), e_bool(true))
         .returns(TypeExpr::Void)
         .body(vec![
             s_if(
@@ -258,35 +259,42 @@ fn seed_request_decl() -> Stmt {
                 vec![],
                 None,
             ),
-            s_switch(
-                e_var("type"),
-                vec![
-                    (vec![e_const("INPUT_GET")], assign_global("_GET")),
-                    (vec![e_const("INPUT_POST")], assign_global("_POST")),
-                    (vec![e_const("INPUT_COOKIE")], assign_global("_COOKIE")),
-                    (vec![e_const("INPUT_ENV")], assign_global("_ENV")),
-                    (vec![e_const("INPUT_SERVER")], assign_global("_SERVER")),
-                ],
-                Some(vec![]),
-            ),
             s_if(
-                e_binop(
-                    e_binop(e_var("type"), BinOp::StrictEq, e_const("INPUT_GET")),
-                    BinOp::Or,
-                    e_binop(e_var("type"), BinOp::StrictEq, e_const("INPUT_POST")),
-                ),
+                e_var("assign"),
                 vec![
-                    s_assign("_REQUEST", e_array(vec![])),
-                    s_foreach(e_var("_GET"), Some("key"), "value", vec![s_array_assign(
-                        "_REQUEST",
-                        e_var("key"),
-                        e_var("value"),
-                    )]),
-                    s_foreach(e_var("_POST"), Some("key"), "value", vec![s_array_assign(
-                        "_REQUEST",
-                        e_var("key"),
-                        e_var("value"),
-                    )]),
+                    s_switch(
+                        e_var("type"),
+                        vec![
+                            (vec![e_const("INPUT_GET")], assign_global("_GET")),
+                            (vec![e_const("INPUT_POST")], assign_global("_POST")),
+                            (vec![e_const("INPUT_COOKIE")], assign_global("_COOKIE")),
+                            (vec![e_const("INPUT_ENV")], assign_global("_ENV")),
+                            (vec![e_const("INPUT_SERVER")], assign_global("_SERVER")),
+                        ],
+                        Some(vec![]),
+                    ),
+                    s_if(
+                        e_binop(
+                            e_binop(e_var("type"), BinOp::StrictEq, e_const("INPUT_GET")),
+                            BinOp::Or,
+                            e_binop(e_var("type"), BinOp::StrictEq, e_const("INPUT_POST")),
+                        ),
+                        vec![
+                            s_assign("_REQUEST", e_array(vec![])),
+                            s_foreach(e_var("_GET"), Some("key"), "value", vec![s_array_assign(
+                                "_REQUEST",
+                                e_var("key"),
+                                e_var("value"),
+                            )]),
+                            s_foreach(e_var("_POST"), Some("key"), "value", vec![s_array_assign(
+                                "_REQUEST",
+                                e_var("key"),
+                                e_var("value"),
+                            )]),
+                        ],
+                        vec![],
+                        None,
+                    ),
                 ],
                 vec![],
                 None,
@@ -311,6 +319,7 @@ fn initialize_request_decl(config: &FilterDefault) -> Stmt {
             e_int(config.flags),
             e_bool(true),
             e_var("snapshot_raw"),
+            e_bool(config.name != "unsafe_raw"),
         ]))
     };
     function("__elephc_filter_initialize_request")

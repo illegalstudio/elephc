@@ -339,6 +339,115 @@ var_dump(filter_var("foo/bar/", FILTER_VALIDATE_REGEXP, ["options" => ["regexp" 
     );
 }
 
+/// Verifies the real PHP 8.5 URI parser class names and WhatWg backslash-host handling.
+#[test]
+fn test_filter_url_uri_parser_classes_match_php85() {
+    let out = compile_and_run(
+        r#"<?php
+$url = "http://example.com\\path";
+var_dump(filter_var($url, FILTER_VALIDATE_URL, ["options" => ["uri_parser_class" => "Uri\\WhatWg\\Url"]]));
+var_dump(filter_var($url, FILTER_VALIDATE_URL, ["options" => ["uri_parser_class" => "Uri\\Rfc3986\\Uri"]]));
+try {
+    filter_var($url, FILTER_VALIDATE_URL, ["options" => ["uri_parser_class" => "Uri\\WhatWgUri"]]);
+} catch (ValueError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(23) \"http://example.com\\path\"\nbool(false)\nfilter_var(): \"uri_parser_class\" option has invalid value\n"
+    );
+}
+
+/// CLI filter storage exposes only PHP's five SAPI-owned server keys.
+#[test]
+fn test_filter_input_cli_server_storage_uses_sapi_keys() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(filter_input(INPUT_SERVER, "PATH"));
+var_dump(filter_input(INPUT_SERVER, "PHP_SELF") !== null);
+var_dump(filter_has_var(INPUT_SERVER, "HOME"));
+"#,
+    );
+    assert_eq!(out, "NULL\nbool(true)\nbool(false)\n");
+}
+
+/// `filter_input_array(INPUT_ENV)` participates in the CLI raw snapshot trigger.
+#[test]
+fn test_filter_input_array_env_seeds_cli_raw_storage() {
+    let out = compile_and_run_capture_with_ini(
+        r#"<?php var_dump(is_array(filter_input_array(INPUT_ENV)));"#,
+        &[("variables_order".to_string(), "GPCSE".to_string())],
+    );
+    assert_eq!(out.stdout.trim(), "bool(true)");
+}
+
+/// Filter integer argument coercion emits PHP's null/float deprecations.
+#[test]
+fn test_filter_integer_argument_deprecations_match_php() {
+    let output = compile_and_run_capture(
+        r#"<?php
+set_error_handler(function (int $errno, string $message): bool {
+    echo $errno, "|", $message, "\n";
+    return true;
+});
+filter_var("x", null);
+filter_var("x", 1.5);
+"#,
+    );
+    let lines: Vec<&str> = output.stdout.lines().collect();
+    if lines.len() != 4 {
+        panic!("stdout: {:?}", output.stdout);
+    }
+    assert!(lines[0].contains("8192|filter_var(): Passing null to parameter #2 ($filter) of type int is deprecated"), "{:?}", lines[0]);
+    assert!(lines[1].contains("2|filter_var(): Unknown filter with ID 0"), "{:?}", lines[1]);
+    assert!(lines[2].contains("8192|Implicit conversion from float 1.5 to int loses precision"), "{:?}", lines[2]);
+    assert!(lines[3].contains("2|filter_var(): Unknown filter with ID 1"), "{:?}", lines[3]);
+}
+
+/// PHP's full-special-chars sanitizer preserves only valid HTML 4.01 and numeric entities.
+#[test]
+fn test_filter_full_special_chars_preserves_entities() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "&#x41;",
+    "&#65;a&#39;",
+    "&#0;",
+    "&#x;",
+    "&#999999999999999999999;",
+    "&#xFFFFFFFF;",
+    "&#x10FFFF;",
+    "&#x110000;",
+    "&#12a;",
+    "&#x41g;",
+    "&#000000000000000000000000000000000000000000000000000000000000041;",
+    "&#xD800;",
+    "&amp;",
+    "&nbsp;",
+    "&copy;",
+    "&notin;",
+    "&Aacute;",
+    "&sum;",
+    "&Sigma;",
+    "&&amp;",
+    "&AMP;",
+    "&apos;",
+    "&#+65;",
+    "&#-1;",
+];
+foreach ($cases as $case) {
+    echo filter_var($case, FILTER_SANITIZE_FULL_SPECIAL_CHARS), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "&#x41;\n&#65;a&#39;\n&#0;\n&amp;#x;\n&amp;#999999999999999999999;\n&amp;#xFFFFFFFF;\n&#x10FFFF;\n&amp;#x110000;\n&amp;#12a;\n&amp;#x41g;\n&#000000000000000000000000000000000000000000000000000000000000041;\n&#xD800;\n&amp;\n&nbsp;\n&copy;\n&notin;\n&Aacute;\n&sum;\n&Sigma;\n&amp;&amp;\n&amp;AMP;\n&amp;apos;\n&amp;#+65;\n&amp;#-1;\n"
+    );
+}
+
 /// Verifies function_exists, extension_loaded and literal eval see the filter surface.
 #[test]
 fn test_filter_surface_visibility_and_eval() {

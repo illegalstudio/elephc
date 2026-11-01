@@ -265,9 +265,10 @@ def main() -> None:
         section = sections(path.read_text(errors="replace"))
         source = source_for(path.name, section)
         expected, expectf = expected_for(path.name, section)
-        # PHPT --XFAIL-- cases keep their original EXPECT and record the output php-src
-        # actually produces. The harness validates the known-failing behavior explicitly
-        # instead of rewriting the expectation.
+        # PHPT --XFAIL-- cases keep their original EXPECT and carry the hand-recorded
+        # output php-src 8.5.10 actually produces (these values are updated deliberately
+        # with the oracle, not captured at generation time). The harness validates the
+        # known-failing behavior instead of rewriting the expectation.
         xfail = "XFAIL" in section
         xfail_output = None
         if path.name == "bug67167.02.phpt":
