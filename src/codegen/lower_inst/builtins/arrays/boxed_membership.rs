@@ -61,6 +61,96 @@ pub(super) fn lower_dynamic_membership(
     Ok(())
 }
 
+/// `array_search()` over boxed arrays and values outside the scalar fast paths.
+///
+/// The scan is `in_array()`'s own (`__rt_array_search_boxed` is the same emitter keeping each
+/// element's key), so the two builtins cannot disagree about which element is equal. `$strict`
+/// is passed through at run time: with mixed elements it is observable (`"1"` loosely equals `1`).
+/// A hit boxes the borrowed key — `__rt_mixed_from_value` copies a string key — and a miss boxes
+/// false, the `int|string|false` php returns.
+pub(super) fn lower_dynamic_array_search(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    strict: Option<ValueId>,
+) -> Result<()> {
+    const STRICT_SLOT: usize = 64;
+    const STACK_BYTES: usize = 80;
+    abi::emit_reserve_temporary_stack(ctx.emitter, STACK_BYTES);
+    store_borrowed_cell(ctx, needle, 0)?;
+    store_borrowed_cell(ctx, array, 32)?;
+    let result = abi::int_result_reg(ctx.emitter);
+    match strict {
+        Some(strict) => {
+            ctx.load_value_to_result(strict)?;
+        }
+        None => abi::emit_load_int_immediate(ctx.emitter, result, 0),
+    }
+    abi::emit_store_to_sp(ctx.emitter, result, STRICT_SLOT);
+    for (index, offset) in [(0, 0), (1, 32)] {
+        abi::emit_temporary_stack_address(
+            ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), offset,
+        );
+    }
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), STRICT_SLOT,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_array_search_boxed");
+    abi::emit_release_temporary_stack(ctx.emitter, STACK_BYTES);
+    let valid = ctx.next_label("array_search_boxed_valid");
+    let miss = ctx.next_label("array_search_boxed_miss");
+    let string_key = ctx.next_label("array_search_boxed_string_key");
+    let done = ctx.next_label("array_search_boxed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // only invalid haystacks return a negative sentinel
+            ctx.emitter.instruction(&format!("b.ge {valid}"));                  // a miss or a hit is a valid scan
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // distinguish the invalid sentinel from a miss and a hit
+            ctx.emitter.instruction(&format!("jns {valid}"));                   // a miss or a hit is a valid scan
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(
+        ctx, "array_search(): Argument #2 ($haystack) must be of type array",
+    );
+    ctx.emitter.label(&valid);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {miss}"));                // zero reports that no element was equal
+            ctx.emitter.instruction("cmn x2, #1");                              // a high word of -1 marks an integer key
+            ctx.emitter.instruction(&format!("b.ne {string_key}"));             // string keys box with the string tag
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer key
+            ctx.emitter.instruction("mov x2, xzr");                             // integer Mixed payloads do not use a high word
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {done}"));                      // skip the string and miss boxing paths
+            ctx.emitter.label(&string_key);
+            ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string key, x1/x2 = pointer/length
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {done}"));                      // skip the miss boxing path
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // zero reports that no element was equal
+            ctx.emitter.instruction(&format!("je {miss}"));                     // box false for a miss
+            ctx.emitter.instruction("cmp rdx, -1");                             // a high word of -1 marks an integer key
+            ctx.emitter.instruction(&format!("jne {string_key}"));              // string keys box with the string tag
+            ctx.emitter.instruction("xor esi, esi");                            // integer Mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer key, rdi = key
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // skip the string and miss boxing paths
+            ctx.emitter.label(&string_key);
+            ctx.emitter.instruction("mov rsi, rdx");                            // move the string-key length into the Mixed high word
+            ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string key, rdi = pointer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {done}"));                    // skip the miss boxing path
+        }
+    }
+    ctx.emitter.label(&miss);
+    super::box_array_search_miss(ctx);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Writes a borrowed tag/payload triple without allocating a managed Mixed cell.
 pub(super) fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId, offset: usize) -> Result<()> {
     let ty = ctx.value_php_type(value)?.codegen_repr();
