@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Condition effects reach else and elseif bodies without resurrecting earlier raw proofs.
+#[test]
+fn test_nullable_fallback_flow_r42_condition_prefix_runtime() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    let mut source = String::from("<?php\n");
+    let mut expected = String::new();
+    for (index, (prefix, branch)) in [
+        ("", "else"), ("", "elseif ($key > -1)"),
+        ("$value = $ints[$key]; $value = 7;", "else"),
+        ("$value = $ints[$key]; $value = 7;", "elseif ($key > -1)"),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function condition{index}(int $value, int $key) {{ $ints = [10]; $result = 1; {prefix} if (($value = $ints[$key]) > 100) {{ $result = 0; }} {branch} {{ {body} }} return $result; }}\nvar_dump(condition{index}(7, 5)); echo condition{index}(7, 0), \"\\n\";\n"));
+        // Base already promotes the skipped float alternative on an integer hit.
+        expected.push_str("float(2.5)\n1\n");
+    }
+    source.push_str(&format!("function laterCondition(int $value, int $key) {{ $ints = [10]; $result = 1; if ($key < 0) {{ $result = 0; }} elseif (($value = $ints[$key]) > 100) {{ $result = 0; }} else {{ {body} }} return $result; }}\nvar_dump(laterCondition(7, 5)); echo laterCondition(7, 0), \"\\n\";\n"));
+    expected.push_str("float(2.5)\n1\n");
+    source.push_str(&format!("function freshCondition(int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if (($value = 7) > 100) {{ $result = 0; }} else {{ {body} }} return $result; }}\nvar_dump(freshCondition(5));\n"));
+    expected.push_str("int(1)\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
 /// Switch dispatch preserves a miss before a skipped label and evaluated effects in own/default arms.
 #[test]
 fn test_nullable_fallback_flow_r41_switch_prefix_runtime() {

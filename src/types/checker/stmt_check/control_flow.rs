@@ -618,7 +618,6 @@ impl Checker {
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
                     let branch_entry_boxed_refs = self.boxed_ref_aliased_locals.clone();
-                    let branch_entry_storage = self.guarded_union_types.clone();
                     let branch_entry_reads = self.snapshot_conditional_flow(env);
                     let branch_entry_bound = self.definitely_bound_locals.clone();
 
@@ -671,8 +670,7 @@ impl Checker {
                     self.callable_array_targets = branch_entry_targets;
                     self.callable_array_target_versions = branch_entry_target_versions;
                     self.boxed_ref_aliased_locals = branch_entry_boxed_refs;
-                    self.restore_guarded_storage_provenance(&branch_entry_storage);
-                    self.restore_statement_flow_storage(&flow);
+                    self.restore_statement_flow_storage(&flow, &branch_entry_reads);
                     self.restore_conditional_read_inputs(&branch_entry_reads, env);
                     self.definitely_bound_locals = branch_entry_bound;
                     for (var, previous) in &saved {

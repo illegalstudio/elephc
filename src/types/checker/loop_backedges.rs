@@ -100,10 +100,17 @@ impl<'a> Backedges<'a, '_> {
                 }
                 let mut fallthrough = after;
                 let mut entry = default.is_none() && after;
+                let mut default_live = false;
+                let mut labels = Vec::new();
                 for (values, body) in arms.into_iter().rev() {
                     fallthrough = self.block(body, fallthrough, &nested);
                     entry |= fallthrough;
-                    for value in values { self.expr(value, entry); }
+                    if values.is_empty() { default_live = fallthrough; }
+                    labels.push((values, entry));
+                }
+                // Every failed label can reach default, even when its body appears earlier.
+                for (values, live) in labels {
+                    for value in values { self.expr(value, live | default_live); }
                 }
                 self.expr(subject, entry);
                 entry

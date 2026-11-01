@@ -9,6 +9,22 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Condition-prefix value proofs retain reachable float returns on every supported target.
+#[test]
+fn test_nullable_fallback_flow_r42_condition_prefix_all_targets() {
+    let source = "<?php function conditionPrefix(int $value, int $key) { $ints = [10]; $result = 1; if (($value = $ints[$key]) > 100) { $result = 0; } else { foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; } } return $result; } var_dump(conditionPrefix(7, 5));";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        let function = module.functions.iter().find(|function| function.name == "conditionPrefix").unwrap();
+        let result = &function.return_php_type;
+        assert!(*result == crate::types::PhpType::Mixed || matches!(result, crate::types::PhpType::Union(members)
+            if members.contains(&crate::types::PhpType::Float)), "{name}: {result:?}");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Switch label prefix views retain float-capable returns on every supported target.
 #[test]
 fn test_nullable_fallback_flow_r41_switch_prefix_all_targets() {

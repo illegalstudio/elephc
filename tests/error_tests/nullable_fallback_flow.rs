@@ -9,6 +9,57 @@
 
 use super::*;
 
+/// Default dispatch includes later label writes on every path that can reach a back edge.
+#[test]
+fn test_nullable_fallback_flow_r42_default_backedge_labels() {
+    for coalesce in ["$value ??= 1;", "$value = $value ?? 1;"] {
+        for arms in [
+            "default: continue 2; case ($value = null): return;",
+            "case 0: return; default: continue 2; case ($value = null): return;",
+            "default: case 0: continue 2; case ($value = null): return;",
+            "default: break; case ($value = null): return;",
+            "case ($value = null): return; default: continue 2;",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); switch ($x) {{ {arms} }} }} }}");
+            let error = check_source(&source).expect_err(&source);
+            assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+        }
+        for arms in [
+            "default: return; case ($value = null): return;",
+            "default: break 2; case ($value = null): return;",
+            "default: case 0: return; case ($value = null): return;",
+        ] {
+            let source = format!("<?php function need(int $value): void {{}} function run(?int $value, array $xs): void {{ {coalesce} foreach ($xs as $x) {{ need($value); switch ($x) {{ {arms} }} }} }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+}
+
+/// Later clauses retain condition kills and freshly established condition proofs.
+#[test]
+fn test_nullable_fallback_flow_r42_condition_prefix_proofs() {
+    let body = "foreach ([1, 2] as $item) { if ($value !== null) { continue; } $result = 2.5; break; }";
+    for prefix in ["", "$value = $ints[$key]; $value = 7;"] {
+        for branch in ["else", "elseif ($key > -1)"] {
+            let source = format!("<?php function run(int $value, int $key) {{ $ints = [10]; $result = 1; {prefix} if (($value = $ints[$key]) > 100) {{ $result = 0; }} {branch} {{ {body} }} return $result; }}");
+            let checked = check_source_full(&source).unwrap();
+            let result = &checked.functions["run"].return_type;
+            assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+                if members.contains(&types::PhpType::Float)), "{source}: {result:?}");
+        }
+    }
+    let chain = format!("<?php function run(int $value, int $key) {{ $ints = [10]; $result = 1; if ($key < 0) {{ $result = 0; }} elseif (($value = $ints[$key]) > 100) {{ $result = 0; }} else {{ {body} }} return $result; }}");
+    let checked = check_source_full(&chain).unwrap();
+    let result = &checked.functions["run"].return_type;
+    assert!(*result == types::PhpType::Mixed || matches!(result, types::PhpType::Union(members)
+        if members.contains(&types::PhpType::Float)), "{chain}: {result:?}");
+    for condition in ["($value = 7) > 100", "($value = 7) > 100 || false"] {
+        let source = format!("<?php function run(int $key) {{ $ints = [10]; $result = 1; $value = $ints[$key]; if ({condition}) {{ $result = 0; }} else {{ {body} }} return $result; }}");
+        let checked = check_source_full(&source).unwrap();
+        assert_eq!(checked.functions["run"].return_type, types::PhpType::Int, "{source}");
+    }
+}
+
 /// Later switch labels cannot remove a reachable float exit from an earlier matching arm.
 #[test]
 fn test_nullable_fallback_flow_r41_switch_label_proofs() {

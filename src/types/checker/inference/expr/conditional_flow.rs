@@ -148,13 +148,13 @@ impl Checker {
         self.definitely_bound_locals = flow.bound_entry.clone();
         self.guarded_union_types = flow.storage.clone();
         self.narrowed_local_origins = flow.origins.clone();
-        self.restore_introduced_storage(flow);
+        self.restore_introduced_storage(flow, flow);
     }
 
     /// Keeps newly introduced boxed frame storage independent of a sibling's read view.
-    fn restore_introduced_storage(&mut self, flow: &ConditionalFlow) {
+    fn restore_introduced_storage(&mut self, flow: &ConditionalFlow, entry: &ConditionalFlow) {
         for (name, ty) in &flow.physical {
-            if !flow.bound_entry.contains(name) && !flow.storage.contains_key(name)
+            if !entry.bound_entry.contains(name) && !entry.storage.contains_key(name)
                 && Self::binding_storage_admits_null(ty)
             {
                 self.guarded_union_types.insert(name.clone(), GuardedLocalStorage {
@@ -169,13 +169,12 @@ impl Checker {
         for (name, view) in &flow.views { env.insert(name.clone(), view.clone()); }
     }
 
-    /// Restores tracked storage between statement branches without removing new guard facts.
-    pub(in crate::types::checker) fn restore_statement_flow_storage(&mut self, flow: &ConditionalFlow) {
-        self.retain_raw_entry_proofs(&flow.storage);
-        for name in flow.views.keys() {
-            self.restore_conditional_local_storage(flow, name);
-        }
-        self.restore_introduced_storage(flow);
+    /// Restores the evaluated condition prefix while retaining newly introduced frame storage.
+    pub(in crate::types::checker) fn restore_statement_flow_storage(
+        &mut self, flow: &ConditionalFlow, entry: &ConditionalFlow,
+    ) {
+        self.guarded_union_types = entry.storage.clone();
+        self.restore_introduced_storage(flow, entry);
     }
 
     /// Keeps accepted sibling writes available to assignment checks without changing entry reads.
