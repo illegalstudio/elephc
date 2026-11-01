@@ -232,10 +232,12 @@ iterateUninitializedProperty(new ForeachUninitializedArray());
             .expect("the surrounding catch must publish its handler");
         let initialized = function.instructions.iter().position(|inst| inst.op == Op::PropInitialized)
             .expect("by-reference foreach must probe the typed property state");
+        let null_guard = function.instructions.iter().position(|inst| inst.op == Op::IsNull)
+            .expect("the receiver must be checked before reading its property state");
         let fetch = function.instructions.iter().position(|inst| inst.op == Op::PropGetForWrite)
             .expect("an initialized array property keeps its attached mutable fetch");
-        assert!(handler < initialized && initialized < fetch,
-            "{target}: handler={handler} initialized={initialized} fetch={fetch}");
+        assert!(handler < null_guard && null_guard < initialized && initialized < fetch,
+            "{target}: handler={handler} null={null_guard} initialized={initialized} fetch={fetch}");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

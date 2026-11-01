@@ -335,6 +335,26 @@ fn guard_by_ref_foreach_property_initialized(
         .unwrap_or(normalized)
         .trim_start_matches('\\')
         .to_string();
+    let pins = super::pin_in_flight_owners(ctx, &[object.value], span);
+    // A missing array element carries null even when its declared element type is an object.
+    // PropInitialized reads the fixed slot, so reject that receiver before probing its state.
+    let is_null = ctx.emit_value(
+        Op::IsNull, vec![object.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span),
+    );
+    let missing = ctx.builder.create_named_block("foreach.property.null", vec![]);
+    let present = ctx.builder.create_named_block("foreach.property.present", vec![]);
+    let receiver_slots = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value, then_target: missing, then_args: vec![],
+        else_target: present, else_args: vec![],
+    });
+    ctx.builder.position_at_end(missing);
+    crate::ir_lower::stmt::lower_throw_access_error(
+        ctx, &format!("Attempt to modify property \"{property}\" on null"), span,
+    );
+    ctx.builder.position_at_end(present);
+    ctx.restore_initialized_slots(receiver_slots);
     let data = ctx.intern_string(property);
     let initialized = ctx.emit_value(
         Op::PropInitialized,
@@ -369,6 +389,7 @@ fn guard_by_ref_foreach_property_initialized(
     );
     ctx.builder.position_at_end(ready);
     ctx.restore_initialized_slots(initialized_slots);
+    super::unpin_in_flight_owners(ctx, pins, span);
 }
 
 /// A by-reference `foreach` property source, plus the receiver the loop borrows through.
