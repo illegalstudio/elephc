@@ -165,7 +165,11 @@ $value = null; nullableMixedKeyTarget($value);
         let function = module.functions.iter().find(|function| function.name == "nullableMixedKeyTarget").unwrap();
         assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ArraySetMixedKey).count(), 4,
             "{name}: a literal-key regression would miss the consuming promotion path");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let function_asm = assembly.split("@fn name=nullableMixedKeyTarget ").nth(1).unwrap()
+            .split("@endfn name=nullableMixedKeyTarget").next().unwrap();
+        assert!(!function_asm.contains("ref_cell_store_same_pointer"),
+            "{name}: an acquired mixed-key destination owner must retire even on marker identity writes");
     }
 }
 

@@ -358,7 +358,9 @@ function invalidNamedBox(&...$items): void {
     finally { echo 'copy:', count($copy), '|'; unset($copy); }
 }
 function validPositionalScalar(&...$items): void { $items[0] = 7; }
-function validNamedScalar(&...$items): void { $items['last'] = null; }
+function validNamedScalar(&...$items): void {
+    $items['last'] = 8; $items['last'] = null;
+}
 $holder = new DescriptorNullableProperty(); $value =& $holder->value;
 $positional = $argc > 0 ? 'invalidPositionalScalar' : 'invalidPositionalBox';
 try { $positional($value); } catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }

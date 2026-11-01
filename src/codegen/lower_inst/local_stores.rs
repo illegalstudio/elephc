@@ -76,6 +76,8 @@ pub(super) fn instruction_for_value<'a>(
 pub(in crate::codegen) enum RefCellStorePrevious {
     /// A PHP assignment through the reference: release the payload being replaced.
     Retire,
+    /// The helper returned a separate acquired owner, including when its pointer is unchanged.
+    RetireAcquired,
     /// A container write-back: the mutating helper already owns that transition.
     Keep,
 }
@@ -88,9 +90,24 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
         RefCellStorePrevious::Keep
     } else {
         retire_raw_occupant_before_ref_store(ctx, slot)?;
-        RefCellStorePrevious::Retire
+        if value_is_retained_mutation_of_ref_cell(ctx, value, slot)? {
+            RefCellStorePrevious::RetireAcquired
+        } else {
+            RefCellStorePrevious::Retire
+        }
     };
     store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
+}
+
+/// Detects the independent destination owner acquired by a mixed-key ref-cell write.
+fn value_is_retained_mutation_of_ref_cell(
+    ctx: &FunctionContext<'_>, value: ValueId, slot: LocalSlotId,
+) -> Result<bool> {
+    let Some(mutation) = instruction_for_value(ctx, value)? else { return Ok(false); };
+    if mutation.op != Op::ArraySetMixedKey { return Ok(false); }
+    let Some(source) = mutation.operands.first().copied() else { return Ok(false); };
+    Ok(instruction_for_value(ctx, source)?.is_some_and(|source|
+        source.op == Op::LoadRefCell && source.immediate == Some(Immediate::LocalSlot(slot))))
 }
 
 /// Returns true when a container mutation already consumed the ref-cell owner being replaced.
@@ -763,7 +780,7 @@ fn store_value_to_raw_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
-    let retires_previous = previous == RefCellStorePrevious::Retire
+    let retires_previous = previous != RefCellStorePrevious::Keep
         && (matches!(target_ty, PhpType::Str | PhpType::Callable) || target_ty.is_refcounted());
     if retires_previous {
         abi::emit_push_result_value(ctx.emitter, &target_ty);
@@ -818,34 +835,35 @@ fn store_value_to_raw_ref_cell_as(
         ),
     }
     if retires_previous {
-        // A mutating container write-back republishes whatever its helper returned, which is the
-        // SAME pointer whenever copy-on-write found a sole owner and growth did not relocate.
-        // Retiring then takes the storage the cell still points at: two `$items[$i] = …` writes
-        // through one by-reference variadic were enough to free the collector out from under the
-        // next read. Skip the retirement when nothing was actually replaced.
-        let published = ctx.next_label("ref_cell_store_same_pointer");
-        abi::emit_load_from_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            pointer_reg,
-            0,
-        );
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!(                               // did this store replace the cell's occupant at all?
-                    "cmp {}, {}",
-                    abi::int_result_reg(ctx.emitter),
-                    old_reg
-                ));
-                ctx.emitter.instruction(&format!("b.eq {published}"));          // the same object stays owned by the cell
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!(                               // did this store replace the cell's occupant at all?
-                    "cmp {}, {}",
-                    abi::int_result_reg(ctx.emitter),
-                    old_reg
-                ));
-                ctx.emitter.instruction(&format!("je {published}"));            // the same object stays owned by the cell
+        // An ordinary identical-pointer publication can reuse the cell's existing owner.
+        // A mixed-key helper acquired an independent owner before the call, so its publication
+        // must retire the old owner even when a reference-marker update bypasses COW.
+        let published = (previous == RefCellStorePrevious::Retire)
+            .then(|| ctx.next_label("ref_cell_store_same_pointer"));
+        if let Some(published) = &published {
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                pointer_reg,
+                0,
+            );
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!(                           // did this store replace the cell's occupant at all?
+                        "cmp {}, {}",
+                        abi::int_result_reg(ctx.emitter),
+                        old_reg
+                    ));
+                    ctx.emitter.instruction(&format!("b.eq {published}"));      // the same object stays owned by the cell
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction(&format!(                           // did this store replace the cell's occupant at all?
+                        "cmp {}, {}",
+                        abi::int_result_reg(ctx.emitter),
+                        old_reg
+                    ));
+                    ctx.emitter.instruction(&format!("je {published}"));        // the same object stays owned by the cell
+                }
             }
         }
         // Publish before retirement because object/callable cleanup can execute PHP code.
@@ -857,7 +875,7 @@ fn store_value_to_raw_ref_cell_as(
             abi::emit_decref_preserving_exception(ctx.emitter, &target_ty);
             abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
-        ctx.emitter.label(&published);
+        if let Some(published) = published { ctx.emitter.label(&published); }
     }
     Ok(())
 }
