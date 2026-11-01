@@ -133,9 +133,9 @@ echo $text, $number, $weight, $maybe;
     }
 }
 
-/// A final native-alias unset keeps every eval-visible name in boxed raw frame storage.
+/// A final native-alias unset preserves the established payload ABI for earlier eval barriers.
 #[test]
-fn dynamic_eval_unset_keeps_numeric_aliases_in_the_sync_inventory_on_every_target() {
+fn dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target() {
     let source = r#"<?php
 class EvalUnsetReferenceLayout {
     public int $number = 1;
@@ -173,8 +173,8 @@ unset($number, $box, $source);
             .unwrap();
         assert_eq!(
             number.php_type.codegen_repr(),
-            crate::types::PhpType::Mixed,
-            "{target}: final unset must retain boxed raw storage for eval synchronization"
+            crate::types::PhpType::Int,
+            "{target}: final unset must preserve the native reference payload ABI"
         );
         assert!(
             number.ref_cell_owner.is_some(),
