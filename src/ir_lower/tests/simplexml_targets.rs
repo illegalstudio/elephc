@@ -43,12 +43,12 @@ fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_tar
                 "{target}: {name} must keep the source name attached for finally writes");
             if name.contains("Finally") || name.starts_with("finally") {
                 let writes = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StoreRefCell
-                    && matches!(inst.result_php_type, crate::types::PhpType::Object(_))).collect::<Vec<_>>();
+                    && inst.result_php_type == crate::types::PhpType::Mixed).collect::<Vec<_>>();
                 assert!(!writes.is_empty(), "{target}: {name} must update the returned cell");
                 for write in writes {
-                    assert!(matches!(function.value(write.operands[0]).unwrap().php_type,
-                        crate::types::PhpType::Object(_)),
-                        "{target}: {name} must not publish a nullable box as an object payload");
+                    assert_eq!(function.value(write.operands[0]).unwrap().php_type,
+                        crate::types::PhpType::Mixed,
+                        "{target}: {name} must publish the replacement through the boxed cell ABI");
                 }
                 assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf),
                     "{target}: {name} must check the replacement before unboxing");

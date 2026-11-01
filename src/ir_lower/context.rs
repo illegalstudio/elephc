@@ -2074,21 +2074,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns the physical payload type a store through `variable`'s ref-cell must publish.
     ///
     /// Recursive closures deliberately expose a narrower logical `Callable` view while their
-    /// shared capture cell stores boxed `Mixed`. The local slot records that physical payload
-    /// type, while a hidden promotion owner only keeps the cell alive and may itself use Mixed
-    /// storage for concrete string, float, or integer payloads. Prefer the local slot or incoming
-    /// by-ref ABI parameter so `StoreRefCell` follows the cell's actual payload layout.
+    /// shared capture cell stores boxed `Mixed`. A hidden promotion owner normally records that
+    /// physical payload, except for an adopted reference-return cell whose predeclared owner is
+    /// conservatively Mixed while the attached cell remains concrete. Borrowed property and
+    /// static-property cells have no owner at all, so their logical fallback is authoritative even
+    /// when the alias slot itself widened for conditional ref binding.
     fn ref_cell_store_type(&self, variable: &str, fallback: &PhpType) -> PhpType {
-        if let Some(slot) = self.local_slots.get(variable).copied() {
-            return self.builder.local_php_type(slot);
-        }
-        self.builder
+        if let Some(parameter) = self
+            .builder
             .function()
             .params
             .iter()
             .find(|parameter| parameter.by_ref && parameter.name == variable)
-            .map(|parameter| parameter.php_type.clone())
-            .unwrap_or_else(|| fallback.clone())
+        {
+            return parameter.php_type.clone();
+        }
+        if let Some(owner) = self.ref_cell_owner_slot(variable) {
+            if let Some(slot) = self.local_slots.get(variable).copied() {
+                let local_type = self.builder.local_php_type(slot);
+                if local_type.codegen_repr() != PhpType::Mixed {
+                    return local_type;
+                }
+            }
+            return self.builder.local_php_type(owner);
+        }
+        fallback.clone()
     }
 
     /// PHP-visible name of the body being lowered (`"Class::method"` for methods), as

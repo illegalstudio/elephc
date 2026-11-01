@@ -221,6 +221,54 @@ echo $host->value;
     }
 }
 
+/// A borrowed static-property cell keeps its declared raw array payload after alias widening.
+#[test]
+fn borrowed_static_ref_cell_store_keeps_its_declared_payload_type() {
+    let source = r#"<?php
+class StaticReferencePayloadHost { public static array<mixed> $items = [[5], [7]]; }
+function bumpStaticReferencePayload(string $key): void {
+    ++StaticReferencePayloadHost::$items[$key][0];
+}
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(target).unwrap(),
+        );
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == "bumpStaticReferencePayload")
+            .unwrap_or_else(|| panic!("{target}: missing static update function"));
+        let store = function
+            .instructions
+            .iter()
+            .find(|instruction| {
+                instruction.op == Op::StoreRefCell
+                    && instruction.operands.first().is_some_and(|value| {
+                        function
+                            .value(*value)
+                            .and_then(|metadata| match metadata.def {
+                                crate::ir::ValueDef::Instruction { inst, .. } => {
+                                    function.instruction(inst)
+                                }
+                                _ => None,
+                            })
+                            .is_some_and(|source| source.op == Op::ArrayToHash)
+                    })
+            })
+            .unwrap_or_else(|| panic!("{target}: missing static array promotion write-back"));
+        assert!(
+            matches!(store.result_php_type.codegen_repr(), crate::types::PhpType::Array(_)),
+            "{target}: a borrowed static cell must not receive a boxed Mixed payload",
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Rebindable method closures keep their boxed receiver type in both ABI and body storage.
 #[test]
 fn rebindable_this_capture_separates_body_storage_from_signature_inference() {
