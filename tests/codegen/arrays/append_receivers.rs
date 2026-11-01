@@ -40,10 +40,53 @@ unset($app, $captured, $snapshot);
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = "registry|registry|registry|key|registry|{\"save\":[\"a\",\"b\",\"c\"]}|registry|{\"save\":[\"a\",\"b\",\"c\"],\"late\":[\"d\"]}|snapshot:{\"save\":[\"a\",\"b\",\"c\"]}";
-    assert_bundle_with(&[
+    // Distinct property names let a strict heap report identify the receiver path
+    // that retained a carrier, while all cases still compile in one program.
+    let (definitions, _) = source.split_once("$app = new CapturedAppendApp();").unwrap();
+    let paths = [
+        ("nested_receiver_eval_method", r#"
+$app = new CapturedAppendApp();
+$app->on('save', 'a'); $app->on('save', 'b');
+unset($app);
+"#, "registry|registry|"),
+        ("nested_receiver_eval_result", r#"
+$app = new CapturedAppendApp();
+$captured = $app->registry();
+unset($app, $captured);
+"#, "registry|"),
+        ("nested_receiver_eval_snapshot", r#"
+$app = new CapturedAppendApp();
+$captured = $app->registry();
+$snapshot = $captured->handlers;
+unset($app, $captured, $snapshot);
+"#, "registry|"),
+        ("nested_receiver_eval_cow_rhs", r#"
+$app = new CapturedAppendApp(); $app->on('save', 'a');
+$captured = $app->registry();
+$snapshot = $captured->handlers;
+$captured->handlers['late'][] = CapturedAppendRhs($captured);
+unset($app, $captured, $snapshot);
+"#, "registry|registry|{\"save\":[\"a\"]}|"),
+        ("nested_receiver_eval_computed_key", r#"
+$app = new CapturedAppendApp();
+$app->registry()->handlers[CapturedAppendKey()][] = 'c';
+unset($app);
+"#, "registry|key|"),
+    ];
+    let isolated: Vec<_> = paths.iter().enumerate().map(|(id, (_, statements, _))| {
+        let source = format!("{definitions}{statements}")
+            .replace("CapturedAppend", &format!("Isolated{id}CapturedAppend"))
+            .replace("handlers", &format!("probe{id}"));
+        let body = source.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
+        format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);")
+    }).collect();
+    let mut cases = vec![
         BundleCase { name: "nested_receiver_aot", source, expected },
         BundleCase { name: "nested_receiver_eval", source: &eval, expected },
-    ], |source| {
+    ];
+    cases.extend(paths.iter().zip(&isolated).map(|((name, _, expected), source)|
+        BundleCase { name, source, expected }));
+    assert_bundle_with(&cases, |source| {
         let out = compile_and_run_with_heap_debug(source);
         assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
