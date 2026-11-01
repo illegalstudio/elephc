@@ -383,9 +383,9 @@ fn test_filter_input_array_env_seeds_cli_raw_storage() {
     assert_eq!(out.stdout.trim(), "bool(true)");
 }
 
-/// Filter integer argument coercion emits PHP's null/float deprecations.
+/// Filter integer argument coercion emits PHP's weak-mode deprecations and range errors.
 #[test]
-fn test_filter_integer_argument_deprecations_match_php() {
+fn test_filter_integer_argument_coercion_matches_php() {
     let output = compile_and_run_capture(
         r#"<?php
 set_error_handler(function (int $errno, string $message): bool {
@@ -394,16 +394,74 @@ set_error_handler(function (int $errno, string $message): bool {
 });
 filter_var("x", null);
 filter_var("x", 1.5);
+filter_var("x", "1.5");
+filter_var("x", 1.0);
+filter_var("x", "1.0");
+filter_var("x", "1e2");
+filter_var("x", "1e-2");
+filter_var("x", " 1.5 ");
+filter_var("x", "1.");
+filter_var("x", "1");
+echo "options:";
+var_dump(filter_var("1", FILTER_VALIDATE_INT, 1.5));
+echo "options:";
+var_dump(filter_var("1", FILTER_VALIDATE_INT, "1.5"));
+echo "options:";
+var_dump(filter_var("1", FILTER_VALIDATE_INT, null));
+echo "options:";
+var_dump(filter_var("1", FILTER_VALIDATE_INT, true));
+try {
+    filter_var("x", "9223372036854775808");
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    filter_var("1", FILTER_VALIDATE_INT, "9223372036854775808");
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    filter_var("x", NAN);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+try {
+    filter_var("x", INF);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
 "#,
     );
-    let lines: Vec<&str> = output.stdout.lines().collect();
-    if lines.len() != 4 {
-        panic!("stdout: {:?}", output.stdout);
-    }
-    assert!(lines[0].contains("8192|filter_var(): Passing null to parameter #2 ($filter) of type int is deprecated"), "{:?}", lines[0]);
-    assert!(lines[1].contains("2|filter_var(): Unknown filter with ID 0"), "{:?}", lines[1]);
-    assert!(lines[2].contains("8192|Implicit conversion from float 1.5 to int loses precision"), "{:?}", lines[2]);
-    assert!(lines[3].contains("2|filter_var(): Unknown filter with ID 1"), "{:?}", lines[3]);
+    assert_eq!(
+        output.stdout,
+        r#"8192|filter_var(): Passing null to parameter #2 ($filter) of type int is deprecated
+2|filter_var(): Unknown filter with ID 0
+8192|Implicit conversion from float 1.5 to int loses precision
+2|filter_var(): Unknown filter with ID 1
+8192|Implicit conversion from float-string "1.5" to int loses precision
+2|filter_var(): Unknown filter with ID 1
+2|filter_var(): Unknown filter with ID 1
+2|filter_var(): Unknown filter with ID 1
+2|filter_var(): Unknown filter with ID 100
+8192|Implicit conversion from float-string "1e-2" to int loses precision
+2|filter_var(): Unknown filter with ID 0
+8192|Implicit conversion from float-string " 1.5 " to int loses precision
+2|filter_var(): Unknown filter with ID 1
+2|filter_var(): Unknown filter with ID 1
+2|filter_var(): Unknown filter with ID 1
+options:8192|Implicit conversion from float 1.5 to int loses precision
+int(1)
+options:8192|Implicit conversion from float-string "1.5" to int loses precision
+int(1)
+options:8192|filter_var(): Passing null to parameter #3 ($options) of type array|int is deprecated
+int(1)
+options:int(1)
+filter_var(): Argument #2 ($filter) must be of type int, string given
+filter_var(): Argument #3 ($options) must be of type array|int, string given
+filter_var(): Argument #2 ($filter) must be of type int, float given
+filter_var(): Argument #2 ($filter) must be of type int, float given
+"#
+    );
 }
 
 /// PHP's full-special-chars sanitizer preserves only valid HTML 4.01 and numeric entities.
