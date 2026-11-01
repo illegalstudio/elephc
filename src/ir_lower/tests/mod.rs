@@ -43,6 +43,7 @@ mod computed_property_update_owners;
 mod property_dimension_fetch_modes;
 mod alias_call_string_owners;
 mod method_receiver_owners;
+mod property_foreach_owners;
 mod conditional_assignment_owners;
 mod borrowed_string_reads;
 mod buffer_element_updates;

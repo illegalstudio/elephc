@@ -335,6 +335,15 @@ fn guard_by_ref_foreach_property_initialized(
         .unwrap_or(normalized)
         .trim_start_matches('\\')
         .to_string();
+    // A final Mixed frame slot can make this local read an owning unbox. Ordinary
+    // in-flight pins exclude local loads; guards are pruned once storage stays borrowed.
+    let guard_local = ctx.value_is_owned_unboxed_local_load(object.value)
+        && !ctx.has_call_argument_guard(object.value);
+    if guard_local {
+        ctx.begin_argument_guard_scope();
+        ctx.guard_call_argument(object, 0, span);
+        ctx.end_argument_guard_scope();
+    }
     let pins = super::pin_in_flight_owners(ctx, &[object.value], span);
     // A missing array element carries null even when its declared element type is an object.
     // PropInitialized reads the fixed slot, so reject that receiver before probing its state.
@@ -390,6 +399,7 @@ fn guard_by_ref_foreach_property_initialized(
     ctx.builder.position_at_end(ready);
     ctx.restore_initialized_slots(initialized_slots);
     super::unpin_in_flight_owners(ctx, pins, span);
+    if guard_local { ctx.unguard_call_argument(object.value, span); }
 }
 
 /// A by-reference `foreach` property source, plus the receiver the loop borrows through.
