@@ -15,6 +15,7 @@
 //! - Every frame saves the reserved nested-call register (x19/r12) unless it is a scalar leaf
 //!   of register-neutral instructions, so the unwinder, frame cleanup callbacks, generator
 //!   wrappers and native hosts that keep state in it across PHP calls get it back intact.
+//! - Web handlers preserve every host callee-saved register before request reset can run.
 
 use std::collections::{HashMap, HashSet};
 
@@ -43,7 +44,9 @@ use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
 mod gc_owners;
+mod web_host_abi;
 pub(super) use destructor_cleanup::is_destructor;
+pub(super) use web_host_abi::preserve_host_callee_saved;
 
 const FRAME_FOOTER_BYTES: usize = 16;
 // Every activation has readable reader/line words, including synthetic frames hidden from backtraces.
@@ -304,14 +307,14 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
         })
 }
 
-/// Saves the callee-saved registers the allocator used into their reserved
+/// Saves the callee-saved registers required by this frame into their reserved
 /// frame slots, preserving the caller's values for the function's lifetime.
 fn emit_callee_saved_saves(ctx: &mut FunctionContext<'_>) {
     if ctx.callee_saved_offsets.is_empty() {
         return;
     }
     ctx.emitter
-        .comment("save callee-saved registers used by the register allocator");
+        .comment("save callee-saved registers required by this frame");
     for (reg, offset) in ctx.callee_saved_offsets.clone() {
         abi::store_at_offset(ctx.emitter, reg, offset);
     }
@@ -324,7 +327,7 @@ fn emit_callee_saved_restores(ctx: &mut FunctionContext<'_>) {
         return;
     }
     ctx.emitter
-        .comment("restore callee-saved registers used by the register allocator");
+        .comment("restore callee-saved registers required by this frame");
     for (reg, offset) in ctx.callee_saved_offsets.clone() {
         abi::load_at_offset(ctx.emitter, reg, offset);
     }
@@ -1007,6 +1010,9 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.label_global(WEB_HANDLER_SYMBOL);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // The bridge calls this entry with the host C ABI. Reset and runtime helpers can use
+    // registers outside the allocator's pool, so preserve host state before the first call.
+    emit_callee_saved_saves(ctx);
     // Reset all process-persistent state (function static locals, refcounted
     // static property values, and `_concat_off`) BEFORE this frame captures the
     // concat base and BEFORE the body's re-run static/enum initializers, so each
@@ -1029,7 +1035,6 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     emit_opcache_configuration(ctx);
     emit_opcache_restart_boundary(ctx);
     capture_concat_base(ctx);
-    emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
@@ -2738,3 +2743,6 @@ fn argv_array_type() -> PhpType {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod web_abi_tests;

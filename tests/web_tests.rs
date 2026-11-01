@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 #[path = "web/application.rs"]
 mod application;
 
+#[path = "web/isolated_json.rs"]
+mod isolated_json;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.

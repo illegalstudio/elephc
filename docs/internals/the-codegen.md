@@ -644,6 +644,17 @@ they keep their own state in overwritten, and the process died with SIGSEGV. The
 generator entry wrapper and native hosts keep state in the same register across
 calls into PHP code.
 
+### Web handler host boundary
+
+The C-callable `_elephc_web_handler` preserves the complete host callee-saved
+register set, including registers used as scratch by native runtime helpers:
+`rbx` and `r12`-`r15` on x86_64, and `x19`-`x28` plus the low 64 bits of
+`v8`-`v15` on AArch64. Its frame reserves these slots independently of register
+allocation. Saves precede `__rt_web_reset`, since request reset can also call
+runtime helpers; restores follow request cleanup and precede the return to Rust.
+This keeps Rust-owned state intact after JSON output in worker, pool, and
+per-request isolation.
+
 ### Inline wrappers and branch reach
 
 Some lowerings emit a wrapper or invoker in the middle of the enclosing
