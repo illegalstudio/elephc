@@ -116,26 +116,18 @@ pub(super) fn coerce_borrowed_ref_cell_local(
     coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
 }
 
-/// Decodes boxed cell storage before exposing its borrowed, flow-sensitive view.
+/// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
 pub(super) fn load_ref_cell_local_to_result_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     ty: &PhpType,
 ) -> Result<PhpType> {
-    let result_ty = ty.codegen_repr();
-    // Incoming references and externally rebound aliases keep their stable physical payload ABI,
-    // which may be narrower than this load's logical result. A frame-owned Mixed promotion is the
-    // exception: its cell physically stores boxed Mixed before applying a narrower logical view.
-    let ty = if ctx.owns_mixed_ref_cell_payload(slot) {
-        PhpType::Mixed
-    } else {
-        ctx.ref_cell_payload_type(slot)?
-    };
+    let ty = ty.codegen_repr();
     reject_multiword_ref_param_local(&ty, "load")?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-    match &ty {
+    match ty {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
@@ -172,8 +164,7 @@ pub(super) fn load_ref_cell_local_to_result_as(
             );
         }
     }
-    coerce_borrowed_ref_cell_local(ctx, &ty, &result_ty)?;
-    Ok(result_ty)
+    Ok(ty)
 }
 
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.

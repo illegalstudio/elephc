@@ -31,7 +31,6 @@ pub(super) struct LocalSlotAnalysis {
     ref_cell_slots_before_inst: HashSet<(InstId, LocalSlotId)>,
     release_ops_with_possible_ref_cell: HashSet<InstId>,
     owned_parameter_slots: HashSet<LocalSlotId>,
-    owned_mixed_ref_cell_slots: HashSet<LocalSlotId>,
     stable_ref_cell_payload_types: HashMap<LocalSlotId, PhpType>,
 }
 
@@ -87,7 +86,6 @@ impl LocalSlotAnalysis {
             &ever_ref_cell_slots,
         );
         let dynamic_ref_cell_slots = dynamic_ref_cell_slots(function, &ever_ref_cell_slots);
-        let owned_mixed_ref_cell_slots = ref_cell_payloads::owned_mixed_slots(function);
         let stable_ref_cell_payload_types = ref_cell_payloads::stable_payload_types(
             function,
             &definite_ref_cell_slots_before_inst,
@@ -99,7 +97,6 @@ impl LocalSlotAnalysis {
             ref_cell_slots_before_inst,
             release_ops_with_possible_ref_cell,
             owned_parameter_slots,
-            owned_mixed_ref_cell_slots,
             stable_ref_cell_payload_types,
         }
     }
@@ -137,11 +134,6 @@ impl LocalSlotAnalysis {
     /// Returns whether the frame owns this by-value parameter for its whole lifetime.
     pub(super) fn owns_parameter_slot(&self, slot: LocalSlotId) -> bool {
         self.owned_parameter_slots.contains(&slot)
-    }
-
-    /// Identifies cells allocated by this frame with a boxed payload and no external rebinding.
-    pub(super) fn owns_mixed_ref_cell_payload(&self, slot: LocalSlotId) -> bool {
-        self.owned_mixed_ref_cell_slots.contains(&slot)
     }
 
     /// Returns the stable physical payload type shared by every reference binding of this slot.
@@ -1038,7 +1030,6 @@ mod tests {
             analysis.stable_ref_cell_payload_type(target),
             Some(&PhpType::Callable)
         );
-        assert!(!analysis.owns_mixed_ref_cell_payload(target));
     }
 
     /// An idempotent promotion does not override a transferred cell's concrete payload ABI.
