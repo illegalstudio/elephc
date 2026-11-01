@@ -76,7 +76,7 @@ fn test_simplexml_review_type_boundaries_bundle() {
         BundleCase { name: "boundaries_eval", source: &boundaries_eval, expected: &boundaries_eval_expected },
     ], |source| {
         let out = compile_and_run_with_heap_debug(source);
-        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert!(out.success, "status={} stdout={} stderr={}", out.status, out.stdout, out.stderr);
         assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
         assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
         out.stdout

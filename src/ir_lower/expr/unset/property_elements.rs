@@ -285,14 +285,11 @@ fn lower_unset_receiver_and_key(
     if matches!(object.kind, ExprKind::Variable(_) | ExprKind::This) {
         let index_value = lower_expr(ctx, index);
         let object_value = lower_expr(ctx, object);
-        return (object_value, None, index_value);
+        let (object_value, object_owner) = root_owned_call_operand(ctx, object_value, object.span);
+        return (object_value, object_owner, index_value);
     }
     let object_value = lower_expr(ctx, object);
-    let (object_value, object_owner) = if ctx.value_is_owning_temporary(object_value) {
-        root_owned_call_operand(ctx, object_value, object.span)
-    } else {
-        (object_value, None)
-    };
+    let (object_value, object_owner) = root_owned_call_operand(ctx, object_value, object.span);
     let index_value = lower_expr(ctx, index);
     (object_value, object_owner, index_value)
 }

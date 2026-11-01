@@ -134,6 +134,12 @@ fn guard_object_reference_parameter(
 ) {
     let span = Span::dummy();
     let PhpType::Object(class) = declared_type.codegen_repr() else { return; };
+    let expected = crate::types::diagnostic_names::php_type_name(declared_type);
+    // Native object slots can encode null without changing their static class hint.
+    // Reject it before a diagnostic's is_object/get_class can trust that hint.
+    reject_null(ctx, value, Expr::string_lit(format!(
+        "{callable}(): Argument #{argument} (${name}) must be of type {expected}, null given"
+    )), span, false);
     let condition = if class.is_empty() || class.eq_ignore_ascii_case("object") {
         ctx.emit_value(
             Op::TypePredicate,
@@ -168,7 +174,6 @@ fn guard_object_reference_parameter(
         else_args: vec![],
     });
     ctx.builder.position_at_end(rejected);
-    let expected = crate::types::diagnostic_names::php_type_name(declared_type);
     let variable = Expr::var(name);
     let given = crate::ir_lower::expr::enum_argument_guards::runtime_debug_type(&variable, span);
     let message = Expr::binop(
