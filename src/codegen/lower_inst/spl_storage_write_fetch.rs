@@ -19,8 +19,11 @@ pub(super) fn lower(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbz x0, {absent}"));              // an absent receiver has no attached storage
-            ctx.emitter.instruction("ldr x9, [x0]");                            // read the immutable concrete class identity
             abi::emit_load_symbol_to_reg(ctx.emitter, "x10", "_class_iface_method_count", 0);
+            // The symbol loader uses x9 as its address scratch on AArch64. Load the count before
+            // putting the receiver's class id in x9, otherwise every valid id is overwritten by
+            // the symbol address and the attached-storage probe always answers false.
+            ctx.emitter.instruction("ldr x9, [x0]");                            // read the immutable concrete class identity
             ctx.emitter.instruction("cmp x9, x10");                             // negative and out-of-range identities fail the unsigned bound
             ctx.emitter.instruction(&format!("b.hs {absent}"));                 // reject before indexing the trusted table
             abi::emit_symbol_address(ctx.emitter, "x10", "_class_offsetget_forwrite_ptrs");

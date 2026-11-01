@@ -500,10 +500,37 @@ fn apply_native_function_arg_types(
             continue;
         };
         let original = bound_arg.value;
+        if native_function_object_reference_defers_nominal_check(
+            function,
+            param_index,
+            param_type,
+            original,
+            values,
+        )? {
+            continue;
+        }
         bound_arg.value = eval_method_parameter_value(param_type, original, context, values)?;
         if bound_arg.value != original { release_expr_result(original, context, values)?; }
     }
     Ok(())
+}
+
+/// Leaves exact object-reference validation to the compiled callee entry guard.
+fn native_function_object_reference_defers_nominal_check(
+    function: &NativeFunction,
+    param_index: usize,
+    param_type: &EvalParameterType,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if !function.param_by_ref(param_index)
+        || param_type.is_intersection()
+        || param_type.variants().len() != 1
+        || !matches!(param_type.variants().first(), Some(EvalParameterTypeVariant::Class(_)))
+    {
+        return Ok(false);
+    }
+    Ok(values.type_tag(value)? == EVAL_TAG_OBJECT)
 }
 
 /// Binds one named native AOT function argument to a non-variadic parameter slot.

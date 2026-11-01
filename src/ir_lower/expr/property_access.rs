@@ -1263,8 +1263,11 @@ pub(super) fn property_probe_needs_runtime_name_form(
     ctx: &LoweringContext<'_, '_>,
     object: &Expr,
 ) -> bool {
-    if isset_object_expr_class(ctx, object).is_some() {
-        return false;
+    if let Some((class_name, _)) = isset_object_expr_class(ctx, object) {
+        // Interfaces and other non-concrete declarations do not identify the runtime class.
+        // Their implementations can supply `__isset`, so probing through a statically named
+        // slot would skip PHP's magic-property precedence and eagerly invoke `__get` instead.
+        return !ctx.classes.contains_key(&class_name);
     }
     property_probe_needs_runtime_name_form_for_type(&expr_receiver_type_for_probe(ctx, object))
 }
@@ -1274,12 +1277,13 @@ pub(super) fn property_probe_needs_runtime_name_form(
 /// A nullable or union receiver that still resolves to one object class keeps the ordinary named
 /// read: its declared slot is known and the checker has already ruled on the name.
 pub(super) fn property_probe_needs_runtime_name_form_for_type(receiver_ty: &PhpType) -> bool {
-    singular_object_class(receiver_ty).is_none()
-        && matches!(
+    matches!(receiver_ty.codegen_repr(), PhpType::Object(ref name) if normalized_class_name(name).is_none())
+        || (singular_object_class(receiver_ty).is_none()
+            && matches!(
             receiver_ty.codegen_repr(),
             PhpType::Mixed | PhpType::Union(_) | PhpType::Int | PhpType::Float | PhpType::Bool
                 | PhpType::Str | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
-        )
+        ))
 }
 
 /// Scalar quiet property probes miss without interpreting raw words as object pointers.

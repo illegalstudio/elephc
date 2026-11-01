@@ -519,6 +519,8 @@ mod tests {
     use crate::codegen::generate_user_asm_from_ir;
     use crate::codegen::platform::{Arch, Platform, Target};
     use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership};
+    use crate::parser::ast::TypeExpr;
+    use crate::types::FunctionSig;
 
     /// Eval replacement owns every visible parameter because a by-ref binding can detach.
     #[test]
@@ -883,6 +885,51 @@ mod tests {
             Some("value".to_string()),
             IrType::Heap(crate::ir::IrHeapKind::Object),
             PhpType::Object("ReferenceValue".to_string()),
+            LocalKind::PhpLocal,
+        );
+
+        let analysis = LocalSlotAnalysis::new(&function);
+        assert_eq!(
+            analysis.stable_ref_cell_payload_type(slot),
+            Some(&PhpType::Object("ReferenceValue".to_string()))
+        );
+    }
+
+    /// Boxed object-reference parameters recover their declared raw payload ABI.
+    #[test]
+    fn boxed_object_by_ref_parameter_uses_declared_payload_storage() {
+        let mut function = Function::new(
+            "boxed_object_by_ref_parameter".to_string(),
+            IrType::Void,
+            PhpType::Void,
+        );
+        function.params.push(FunctionParam {
+            name: "value".to_string(),
+            ir_type: IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            php_type: PhpType::Mixed,
+            by_ref: true,
+            variadic: false,
+        });
+        function.signature = Some(FunctionSig {
+            params: vec![("value".to_string(), PhpType::Mixed)],
+            param_type_exprs: vec![Some(TypeExpr::Named(
+                crate::names::Name::unqualified("ReferenceValue"),
+            ))],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Void,
+            declared_return: false,
+            by_ref_return: false,
+            ref_params: vec![true],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+            is_generator: false,
+        });
+        let slot = function.add_local(
+            Some("value".to_string()),
+            IrType::Heap(crate::ir::IrHeapKind::Mixed),
+            PhpType::Mixed,
             LocalKind::PhpLocal,
         );
 
