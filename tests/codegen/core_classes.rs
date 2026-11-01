@@ -491,3 +491,32 @@ eval($source);
     assert_eq!(out.stdout, "same:closure:1:1:0:dead:eval:0:dead");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A promoted constructor parameter's Core attributes stay only on the owner whose target they
+/// match, as php-src keeps them: `#[SensitiveParameter]` on the parameter alone, `#[Override]`
+/// (implementing an interface property) on the property alone, in a class, a trait constructor
+/// and an anonymous class. Before, both owners carried both, so Reflection listed them on each
+/// side and the property copy of `SensitiveParameter` was refused.
+#[test]
+fn test_promoted_parameter_core_attributes_split_by_target() {
+    let out = compile_and_run(
+        r#"<?php
+interface I { public int $x { get; } }
+final class S {
+    public function __construct(#[SensitiveParameter] public string $secret, public int $plain = 1) {}
+}
+final class C implements I { public function __construct(#[Override] public int $x) {} }
+trait T { public function __construct(#[SensitiveParameter] public string $token) {} }
+final class U { use T; }
+$p = new ReflectionProperty(S::class, 'secret');
+$q = (new ReflectionMethod(S::class, '__construct'))->getParameters()[0];
+echo count($p->getAttributes()), count($q->getAttributes()), $q->getAttributes()[0]->getName(), "\n";
+$cp = new ReflectionProperty(C::class, 'x');
+$cq = (new ReflectionMethod(C::class, '__construct'))->getParameters()[0];
+echo count($cp->getAttributes()), count($cq->getAttributes()), $cp->getAttributes()[0]->getName(), get_class($cp->getAttributes()[0]->newInstance()), "\n";
+$a = new class('k') { public function __construct(#[SensitiveParameter] public string $key) {} };
+echo count((new ReflectionProperty(U::class, 'token'))->getAttributes()), (new U('t'))->token, $a->key, "\n";
+"#,
+    );
+    assert_eq!(out, "01SensitiveParameter\n10OverrideOverride\n0tk\n");
+}
