@@ -20,7 +20,14 @@ use super::platform::{Arch, Platform, Target};
 /// (`crates/elephc-magician/src/runtime_hooks/externs.rs`). The callable invokers already save
 /// every callee-saved register they use (`codegen::runtime_callable_invoker`). The stack word
 /// counts are the integer parameters past the sixth; a test checks them against the externs.
-fn rust_called_export_stack_words(name: &str) -> Option<usize> {
+///
+/// `name` is the TARGET-MANGLED symbol `label_c_global` emits, not the Rust-side name: Mach-O
+/// prefixes an external symbol with `_`, so the same export arrives here as
+/// `___elephc_eval_*`. Stripping the target's own prefix keeps the family match below
+/// platform-independent — matching the raw name would silently skip the shim on macOS.
+fn rust_called_export_stack_words(target: Target, name: &str) -> Option<usize> {
+    let extern_prefix = target.extern_symbol("");
+    let name = name.strip_prefix(extern_prefix.as_str()).unwrap_or(name);
     if !name.starts_with("__elephc_eval_") || name.starts_with("__elephc_eval_callable_invoker_") {
         return None;
     }
@@ -199,8 +206,13 @@ impl Emitter {
             let _ = writeln!(self.buf, ".globl {}", name);
             let _ = writeln!(self.buf, "{}:", name);
         }
-        if self.target.arch == Arch::X86_64 {
-            if let Some(stack_words) = rust_called_export_stack_words(name) {
+        // SysV only. Win64 passes the first four integer arguments in
+        // rcx/rdx/r8/r9, reserves 32 bytes of shadow space and makes rdi/rsi
+        // caller-saved, so a shim built for SysV would corrupt the call rather
+        // than fix it. Windows has no working backend yet; this gate keeps the
+        // shim from silently becoming wrong when one lands.
+        if self.target.arch == Arch::X86_64 && self.platform.uses_sysv_abi() {
+            if let Some(stack_words) = rust_called_export_stack_words(self.target, name) {
                 self.emit_sysv_callee_saved_shim(name, stack_words);
             }
         }
@@ -218,6 +230,16 @@ impl Emitter {
     /// which follows the export label.
     fn emit_sysv_callee_saved_shim(&mut self, name: &str, stack_words: usize) {
         let body = format!("{}_sysv_body", name);
+        self.emit_sysv_callee_saved_call(&body, stack_words);
+        let _ = writeln!(self.buf, "{}:", body);
+    }
+
+    /// Saves rbx and r12-r15, calls `target` with `stack_words` copied stack arguments,
+    /// restores the registers and returns `target`'s result.
+    ///
+    /// `stack_words` copies that many caller stack arguments below the saved registers so the
+    /// body sees them at the offsets its own prologue expects.
+    fn emit_sysv_callee_saved_call(&mut self, target: &str, stack_words: usize) {
         for reg in ["rbx", "r12", "r13", "r14", "r15"] {
             self.instruction(&format!("push {}", reg));                     // save a register Rust may keep a value in across this call
         }
@@ -231,7 +253,7 @@ impl Emitter {
         for _ in 0..stack_words {
             self.instruction(&format!("push QWORD PTR [rsp + {}]", source));   // copy a stack-passed argument below the saved registers
         }
-        self.instruction(&format!("call {}", body));                            // run the export body with the caller's registers saved
+        self.instruction(&format!("call {}", target));                          // run the body with the caller's registers saved
         let pushed = 8 * stack_words + padding;
         if pushed != 0 {
             self.instruction(&format!("add rsp, {}", pushed));                  // drop the copied arguments and the padding
@@ -240,7 +262,6 @@ impl Emitter {
             self.instruction(&format!("pop {}", reg));                          // restore the caller's register
         }
         self.instruction("ret");                                                // return the body's rax/rdx/xmm0 result untouched
-        let _ = writeln!(self.buf, "{}:", body);
     }
 
     /// Starts writing a whole function that is needed WHILE another one is being written.
@@ -718,6 +739,31 @@ mod tests {
         arm.label_global("__elephc_eval_value_add");
         let arm = arm.output();
         assert!(!arm.contains("sysv_body"), "{arm}");
+
+        // Darwin mangles the export with a leading `_`, and the shim must still apply: keying
+        // on the unmangled name silently skipped it on macOS x86_64.
+        let mut darwin = Emitter::new(Target::new(Platform::MacOS, Arch::X86_64));
+        darwin.label_global("___elephc_eval_value_method_call");
+        let darwin = darwin.output();
+        assert!(
+            darwin.contains("___elephc_eval_value_method_call_sysv_body:"),
+            "the Mach-O spelling of an eval export needs the shim too: {darwin}"
+        );
+        assert!(darwin.contains(&saves), "{darwin}");
+    }
+
+    /// Win64 does not use the SysV convention, so the shim must not be emitted there.
+    ///
+    /// It assumes six register arguments, no shadow space and the SysV callee-saved set;
+    /// all three are wrong under Win64, so emitting it would corrupt the call rather than
+    /// preserve registers.
+    #[test]
+    fn test_x86_win64_exports_do_not_get_the_sysv_shim() {
+        let mut e = Emitter::new(Target::new(Platform::Windows, Arch::X86_64));
+        e.label_global("__elephc_eval_value_method_call");
+        let output = e.output();
+        assert!(!output.contains("sysv_body"), "{output}");
+        assert!(!output.contains("push rbx"), "{output}");
     }
 
     /// The shim's stack word counts match the eval bridge's `extern "C"` declarations: an
@@ -766,7 +812,7 @@ mod tests {
                     })
                     .count();
                 assert_eq!(
-                    rust_called_export_stack_words(&symbol),
+                    rust_called_export_stack_words(Target::new(Platform::Linux, Arch::X86_64), &symbol),
                     Some(integers.saturating_sub(6)),
                     "{symbol} in {} takes {integers} integer arguments",
                     path.display()

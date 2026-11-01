@@ -1210,6 +1210,24 @@ impl BridgeStaticlib {
             return archive;
         };
         if !rebuild_replaces(&archive, &rebuild_output_dir(&workspace)) {
+            // The rebuild can only ever write Cargo's own output directory, so an archive
+            // found anywhere else is one it cannot refresh. That is normal after unpacking a
+            // nextest archive on a CI shard, and the stale-looking timestamp there says nothing
+            // about the checkout beside it — which is exactly what this skip exists to stop
+            // paying for. But it is ALSO what a `build.target-dir` in a Cargo config or a custom
+            // profile looks like, and then a genuinely stale bridge would be linked silently.
+            // Say so once per bridge, and only when the sources really are newer, so the common
+            // up-to-date path and the CI shard stay quiet.
+            if self.sources_are_newer_than(&workspace, &archive)
+                && self.warn_once_about_unrebuildable_archive()
+            {
+                eprintln!(
+                    "warning: {} looks stale but sits outside this build's output directory ({}); \
+                     cargo cannot refresh it there, so it is linked as-is",
+                    archive.display(),
+                    rebuild_output_dir(&workspace).display()
+                );
+            }
             return archive;
         }
         if !self.sources_are_newer_than(&workspace, &archive) {
@@ -1220,6 +1238,19 @@ impl BridgeStaticlib {
         }
         self.build_staticlib(&workspace);
         self.find_archive().unwrap_or(archive)
+    }
+
+    /// Returns true the first time this bridge reports an archive it cannot rebuild.
+    ///
+    /// Separate from [`Self::claim_rebuild_attempt`] so the diagnostic never consumes the
+    /// once-per-process rebuild budget: the two answer different questions and a link that
+    /// only warned must still be able to rebuild later.
+    fn warn_once_about_unrebuildable_archive(&self) -> bool {
+        static WARNED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+        WARNED
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .is_ok_and(|mut warned| warned.insert(self.crate_name))
     }
 
     /// Registers this bridge as rebuild-attempted, returning whether the caller won the claim.
