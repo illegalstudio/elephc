@@ -9,6 +9,42 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target emits loop-first catch replacements and their outer reads.
+#[test]
+fn test_nullable_fallback_flow_r49_loop_catch_all_targets() {
+    let source = r#"<?php
+class LoopCatchException extends Exception {
+    public function __destruct() {
+        if ($this->getMessage() === 'a0') { throw new Exception('d'); }
+    }
+}
+function needLoopCatch(LoopCatchException $value): void { echo $value->getMessage(); }
+function showTopLoopCatch(): void {
+    global $top;
+    if ($top instanceof LoopCatchException) { needLoopCatch($top); }
+}
+function firstLoopCatch(): void {
+    for ($i = 0; $i < 2; $i++) {
+        try {
+            try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}
+        } catch (Exception $c) { needLoopCatch($e); }
+    }
+}
+firstLoopCatch();
+foreach ([0, 1] as $i) {
+    try {
+        try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $top) {}
+    } catch (Exception $c) { showTopLoopCatch(); }
+}
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Implicit retirement edges and bounded recursive facts check on every supported target.
 #[test]
 fn test_nullable_fallback_flow_r48_implicit_retirement_all_targets() {

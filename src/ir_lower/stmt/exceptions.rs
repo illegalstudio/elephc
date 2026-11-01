@@ -468,7 +468,15 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
     );
     // Keep the old PHP value alive until the replacement is visible. Its last release can
     // throw, and an outer catch must already observe the newly bound exception at that point.
-    let previous_owner = catch.variable.as_ref().filter(|name| ctx.has_local_slot(name)).and_then(|name| {
+    let previous_owner = catch.variable.as_ref().and_then(|name| {
+        if !ctx.has_local_slot(name) {
+            if ctx.loop_stack.is_empty() && !ctx.has_eval_barrier() {
+                return None;
+            }
+            // A first syntactic binding can replace a previous iteration's value or a
+            // value reloaded by eval. The frame slot is zero-initialized when absent.
+            ctx.declare_local(name, php_type.clone());
+        }
         let previous = ctx.load_local(name, Some(span));
         crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
     });

@@ -9,6 +9,44 @@
 
 use super::*;
 
+/// A first catch binding in a loop publishes before retiring the previous iteration's value.
+#[test]
+fn test_nullable_fallback_flow_r49_loop_catch_publication_runtime() {
+    let source = r#"<?php
+class LoopCatchException extends Exception {
+    public function __destruct() {
+        if ($this->getMessage() === 'a0') { throw new Exception('d'); }
+    }
+}
+function needLoopCatch(LoopCatchException $value): void {
+    echo get_class($value), ':', $value->getMessage(), "\n";
+}
+function showTopLoopCatch(): void {
+    global $top;
+    if ($top instanceof LoopCatchException) { needLoopCatch($top); } else { echo "missing\n"; }
+}
+function firstLoopCatch(): void {
+    for ($i = 0; $i < 2; $i++) {
+        try {
+            try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}
+        } catch (Exception $c) { echo $c->getMessage(), ':'; needLoopCatch($e); }
+    }
+    echo "end\n";
+}
+firstLoopCatch();
+foreach ([0, 1] as $i) {
+    try {
+        try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $top) {}
+    } catch (Exception $c) {
+        echo $c->getMessage(), ':';
+        showTopLoopCatch();
+    }
+}
+echo "end\n";
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"d:LoopCatchException:a1\nend\n".repeat(2));
+}
+
 /// The production CLI rejects object-to-integer backedge projections in both IR modes.
 #[test]
 fn test_nullable_fallback_flow_r47_catch_cli_rejection() {
