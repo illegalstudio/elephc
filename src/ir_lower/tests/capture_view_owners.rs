@@ -31,12 +31,41 @@ echo $callback(5);
             source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
         );
         let closure = module.closures.first().unwrap_or_else(|| panic!("{target}: missing closure"));
-        let capture = closure.params.last().unwrap_or_else(|| panic!("{target}: missing capture parameter"));
+        let capture = closure.params.iter().find(|param| param.name == "callback")
+            .unwrap_or_else(|| panic!("{target}: missing capture parameter"));
         assert!(capture.by_ref, "{target}: recursive capture must remain by-reference");
         assert_eq!(capture.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: hidden ABI parameter");
         let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
             .unwrap_or_else(|| panic!("{target}: missing logical capture local"));
         assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Callable, "{target}: body view");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
+/// Rebindable method closures keep their boxed receiver type in both ABI and body storage.
+#[test]
+fn rebindable_this_capture_separates_body_storage_from_signature_inference() {
+    let source = r#"<?php
+class RebindableCaptureHost {
+    public int $value = 42;
+    public function reader(): callable {
+        return function (): int { return $this->value; };
+    }
+}
+echo (new RebindableCaptureHost())->reader()();
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        let closure = module.closures.first().unwrap_or_else(|| panic!("{target}: missing closure"));
+        let capture = closure.params.iter().find(|param| param.name == "this")
+            .unwrap_or_else(|| panic!("{target}: missing receiver capture parameter"));
+        assert_eq!(capture.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: hidden ABI parameter");
+        let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("this"))
+            .unwrap_or_else(|| panic!("{target}: missing receiver capture local"));
+        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: body storage");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }

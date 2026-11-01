@@ -233,7 +233,12 @@ pub(super) fn lower_closure_with_context(
             } else {
                 None
             };
-            if widens_by_ref_capture {
+            if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
+                // The capture is created before the closure descriptor is assigned back to its
+                // own variable. Give that shared cell a stable boxed ABI now, while the closure
+                // body keeps the narrower callable view used for direct recursive dispatch.
+                ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
+            } else if widens_by_ref_capture {
                 // Convert the existing payload before changing the slot contract. Merely
                 // widening metadata first leaves a raw array, object, or string in storage that
                 // `PromoteLocalRefCell` then interprets as a boxed Mixed pointer.
@@ -331,6 +336,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &logical_capture_params,
             &signature_capture_params,
             self_ref_callable_capture,
             by_ref_return,
@@ -346,6 +352,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &logical_capture_params,
             &signature_capture_params,
             contextual_arg_types,
             bound_this_context,
