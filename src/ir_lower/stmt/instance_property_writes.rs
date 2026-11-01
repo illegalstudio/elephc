@@ -555,7 +555,15 @@ pub(super) fn lower_property_assign_without_native(
     } else {
         Vec::new()
     };
-    if preserve_property_operand {
+    // A receiver whose class is known only at run time needs the property name as an operand
+    // even when source syntax used a literal. The complete runtime dispatcher uses that name to
+    // distinguish declared slots, existing dynamic-hash entries, and missing names handled by
+    // `__set`. The immediate-only `PropSet` ladder cannot materialize the guarded magic call.
+    let runtime_shaped_receiver = matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    );
+    if preserve_property_operand || runtime_shaped_receiver {
         let property_name = ctx.emit_value(
             Op::ConstStr,
             Vec::new(),

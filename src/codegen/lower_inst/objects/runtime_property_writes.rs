@@ -122,7 +122,11 @@ pub(super) fn lower_const_dynamic_prop_set(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return lower_mixed_named_prop_set(ctx, object, value, property, inst);
+        // A constant name still needs the complete runtime-name ladder. The named fast path
+        // enumerates declared slots and ordinary dynamic hashes, but cannot stage the name for
+        // a runtime class's guarded `__set` call. Reusing the full dispatcher also preserves the
+        // existing-entry-before-magic precedence for AllowDynamicProperties classes.
+        return lower_runtime_mixed_prop_set(ctx, object, property_value, value, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
