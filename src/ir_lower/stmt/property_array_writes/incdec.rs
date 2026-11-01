@@ -84,6 +84,7 @@ fn step(
     let slot = ctx.local_slots[&name];
     if rooted { crate::ir_lower::expr::register_owned_call_operand(ctx, slot, span); }
     crate::ir_lower::expr::store_value_into_temp(ctx, &name, temp_type, selected, span);
+    warn_null_decrement(ctx, &name, increment, span);
     let expression = Expr::new(if increment { ExprKind::PreIncrement(name) } else { ExprKind::PreDecrement(name) }, span);
     let result = lower_expr(ctx, &expression);
     let ty = ctx.builder.value_php_type(result.value);
@@ -97,4 +98,31 @@ fn step(
     if rooted { crate::ir_lower::expr::unregister_owned_call_operand(ctx, slot, span); }
     ctx.emit_void(Op::ReleaseLocalSlot, vec![], Some(Immediate::LocalSlot(slot)),
         Op::ReleaseLocalSlot.default_effects(), Some(span));
+}
+
+/// Reports PHP 8.3 null decrement through the warning callback while the operand is rooted.
+fn warn_null_decrement(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, increment: bool, span: Span,
+) {
+    if increment || crate::codegen_support::compile_php_version().version_id() < 80300 { return; }
+    let value = ctx.load_local(name, Some(span));
+    let null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span));
+    let warn = ctx.builder.create_named_block("dimension.decrement.null.warning", vec![]);
+    let done = ctx.builder.create_named_block("dimension.decrement.null.done", vec![]);
+    let initial = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::CondBr { cond: null.value,
+        then_target: warn, then_args: vec![], else_target: done, else_args: vec![] });
+    ctx.builder.position_at_end(warn);
+    let diagnostic = Expr::new(ExprKind::FunctionCall {
+        name: "__elephc_builtin_warning".into(),
+        args: vec![Expr::new(ExprKind::StringLiteral(
+            "Decrement on type null has no effect, this will change in the next major version of PHP".into()), span)],
+    }, span);
+    let result = lower_expr(ctx, &diagnostic);
+    crate::ir_lower::ownership::release_if_owned(ctx, result, Some(span));
+    let warned = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::Br { target: done, args: vec![] });
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(initial.intersection(&warned).copied().collect());
 }

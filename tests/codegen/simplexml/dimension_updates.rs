@@ -137,6 +137,31 @@ restore_error_handler();
     assert_eq!(out.stdout, "key|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|8:Indirect modification of overloaded element of SimpleXMLElement has no effect|2:Decrement on type null has no effect, this will change in the next major version of PHP|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n8:Indirect modification of overloaded element of SimpleXMLElement has no effect|<?xml version=\"1.0\"?>\n<r><mark>7</mark></r>\n<p:a xmlns:p=\"urn:p\">kept</p:a>\n[5,8]:[2,2]:[1,3]\n");
 }
 
+/// Null decrement warnings can throw repeatedly without retaining selected XML views.
+#[test]
+fn test_simplexml_null_dimension_decrement_handler_unwind() {
+    if skip_without_xml_native("test_simplexml_null_dimension_decrement_handler_unwind") { return; }
+    let source = r#"<?php
+set_error_handler(function(int $level, string $message): bool {
+    if ($level === 2) { throw new RuntimeException('null-decrement'); }
+    return true;
+});
+$doc = new SimpleXMLElement('<r/>');
+$empty = $doc->absent;
+for ($i = 0; $i < 3; $i++) {
+    try { --$empty[0]; }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+echo $doc->asXML();
+unset($doc, $empty, $error);
+restore_error_handler();
+"#;
+    let output = compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "null-decrement|null-decrement|null-decrement|<?xml version=\"1.0\"?>\n<r/>\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Saved missing views report the indirect notice and leave the document unchanged on failure.
 #[test]
 fn test_simplexml_saved_empty_dimension_write_bundle() {
