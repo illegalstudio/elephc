@@ -9,7 +9,7 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
-/// Typed static extraction retires temporary Mixed cells while preserving borrowed inputs.
+/// Typed static stores preserve guarded Mixed payloads through replacement and source cleanup.
 #[test]
 fn test_static_typed_object_store_retires_mixed_source_cells() {
     let output = compile_and_run_with_heap_debug(r#"<?php
@@ -19,12 +19,19 @@ class StaticMixedItem {
 }
 class StaticMixedHolder { public static StaticMixedItem $item; }
 function staticMixedOpaque(mixed $value): mixed { return $value; }
-StaticMixedHolder::$item = staticMixedOpaque(new StaticMixedItem('first'));
+$source = staticMixedOpaque(new StaticMixedItem('first'));
+if ($source instanceof StaticMixedItem) { StaticMixedHolder::$item = $source; }
+else { throw new Error('unexpected static source'); }
+unset($source);
 echo 'set|';
-StaticMixedHolder::$item = staticMixedOpaque(new StaticMixedItem('second'));
+$source = staticMixedOpaque(new StaticMixedItem('second'));
+if ($source instanceof StaticMixedItem) { StaticMixedHolder::$item = $source; }
+else { throw new Error('unexpected static source'); }
+unset($source);
 echo 'replaced|';
 $borrowed = staticMixedOpaque(new StaticMixedItem('borrowed'));
-StaticMixedHolder::$item = $borrowed;
+if ($borrowed instanceof StaticMixedItem) { StaticMixedHolder::$item = $borrowed; }
+else { throw new Error('unexpected borrowed source'); }
 echo $borrowed->name, '|';
 unset($borrowed);
 echo 'end|';
