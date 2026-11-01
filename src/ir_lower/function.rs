@@ -1612,7 +1612,7 @@ fn lower_closure_function_with_signature(
         signature.is_generator,
     );
     let env = env_with_closure_captures(&signature, logical_captures, parent.web);
-    let lowered_params = params_with_closure_captures(&signature, captures);
+    let lowered_params = params_with_closure_captures(&signature, logical_captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
         closure_name: name.to_string(),

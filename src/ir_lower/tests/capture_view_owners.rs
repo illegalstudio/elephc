@@ -37,12 +37,7 @@ echo $callback(5);
         assert_eq!(capture.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: hidden ABI parameter");
         let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
             .unwrap_or_else(|| panic!("{target}: missing logical capture local"));
-        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: physical body storage");
-        assert!(closure.instructions.iter().any(|inst| {
-            inst.op == crate::ir::Op::LoadRefCell
-                && inst.immediate == Some(crate::ir::Immediate::LocalSlot(local.id))
-                && inst.result_php_type.codegen_repr() == crate::types::PhpType::Callable
-        }), "{target}: recursive body reads need a callable logical view");
+        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Callable, "{target}: body view");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{target}: {error:?}"));
     }
