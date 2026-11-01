@@ -789,7 +789,7 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
     emit_main_static_property_cleanup(ctx, static_properties);
     // Collect PHP cycles while eval declarations and hosted extension state are alive.
-    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
+    emit_shutdown_cycle_collection(ctx.emitter);
     emit_eval_context_epilogue_cleanup(ctx);
     // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
     // hosting tables release the engine objects (`free_obj` may still use module state), and the
@@ -874,6 +874,19 @@ pub(super) fn emit_extern_callback_release_routine(emitter: &mut Emitter, data: 
     }
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
+}
+
+/// Destroys the objects that only a reference cycle keeps alive once every root is released.
+///
+/// PHP destructs every object still alive at shutdown, cycles included. The epilogue
+/// cleanups release locals, statics, globals and static properties, so an object
+/// reachable only through a cycle is garbage by now; one explicit collection runs its
+/// destructor before teardown, and a destructor throw propagates as from the cleanups.
+fn emit_shutdown_cycle_collection(emitter: &mut Emitter) {
+    emitter.comment("shutdown: collect cycles so their destructors run, as PHP's shutdown does");
+    abi::emit_call_label(emitter, "__rt_gc_collect_cycles_explicit");
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), "_exc_value", 0);
+    abi::emit_branch_if_int_result_nonzero(emitter, "__rt_throw_current");
 }
 
 /// Retires class static owners once, finishing every property before propagating a destructor throw.
