@@ -490,41 +490,43 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
     {
         return ptr::null_mut();
     }
-    let thrown = unsafe { release_persistent_context_cells(ctx) };
-    unsafe { &mut *ctx }.end_teardown();
-    if !unsafe { &*ctx }.has_abi_owners()
-        && !crate::context::pcntl_runtime::defer_context_free(ctx)
-    {
-        unsafe { drop_eval_context_now(ctx) };
-    }
-    thrown.map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
-}
-
-/// Releases detached persistent owners while eval destructor dispatch can still find the context.
-///
-/// Each batch is removed before callbacks run. Destructors may create another batch or retain
-/// the context, so no Rust reference into its maps survives a generated-runtime call.
-///
-/// # Safety
-/// The context must be live and protected against recursive teardown for this entire pass.
-unsafe fn release_persistent_context_cells(ctx: *mut ElephcEvalContext) -> Option<crate::value::RuntimeCellHandle> {
-    let mut thrown = unsafe { &mut *ctx }.take_pending_throw();
+    // Reclaim the allocation while callback-sensitive releases run. Nested ABI teardown observes
+    // `teardown_active` and returns without taking a second Box, while this owner keeps the context
+    // live across every destructor callback.
+    let mut context = unsafe { Box::from_raw(ctx) };
+    let mut thrown = context.take_pending_throw();
     loop {
-        let cells = unsafe { &mut *ctx }.take_persistent_cell_owners();
-        if cells.is_empty() { break; }
+        let cells = context.take_persistent_cell_owners();
+        if cells.is_empty() {
+            break;
+        }
         #[cfg(not(test))]
-        { thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown); }
+        {
+            thrown = crate::runtime_hooks::release::release_native_cells(cells, thrown);
+        }
         #[cfg(test)]
-        { let _ = cells; }
+        {
+            let _ = cells;
+        }
     }
     // Teardown callbacks can also schedule a context-local exception.
-    if let Some(pending) = unsafe { &mut *ctx }.take_pending_throw() {
+    if let Some(pending) = context.take_pending_throw() {
         #[cfg(not(test))]
-        { thrown = crate::runtime_hooks::release::release_native_cells(thrown, Some(pending)); }
+        {
+            thrown = crate::runtime_hooks::release::release_native_cells(thrown, Some(pending));
+        }
         #[cfg(test)]
-        { thrown = Some(pending); }
+        {
+            thrown = Some(pending);
+        }
     }
-    thrown
+    if context.has_abi_owners() || crate::context::pcntl_runtime::defer_context_free(ctx) {
+        context.end_teardown();
+        let _ = Box::into_raw(context);
+    } else {
+        drop_eval_context_box(context);
+    }
+    thrown.map_or(ptr::null_mut(), crate::value::RuntimeCellHandle::as_ptr)
 }
 
 /// Unregisters every process-global callback into one context, then drops it immediately.
@@ -539,9 +541,16 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
     let Some(context) = (unsafe { ctx.as_mut() }) else {
         return;
     };
-    if context.has_abi_owners() || context.teardown_active() {
+    if context.has_abi_owners() || context.teardown_active() || !context.begin_teardown() {
         return;
     }
+    let context = unsafe { Box::from_raw(ctx) };
+    drop_eval_context_box(context);
+}
+
+/// Finalizes one exclusively owned context while recursive teardown remains blocked.
+fn drop_eval_context_box(mut context: Box<ElephcEvalContext>) {
+    let ctx = context.as_mut() as *mut ElephcEvalContext;
     #[cfg(not(test))]
     {
         let mut values = crate::runtime_hooks::ElephcRuntimeOps::new();
@@ -554,7 +563,6 @@ pub(crate) unsafe fn drop_eval_context_now(ctx: *mut ElephcEvalContext) {
     context.unregister_dynamic_object_context();
     crate::context::unregister_live_native_context(ctx);
     crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
-    unsafe { drop(Box::from_raw(ctx)) };
 }
 
 /// Records source metadata for the next eval fragment executed in this context.
