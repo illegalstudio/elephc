@@ -38,17 +38,18 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
-        if let PhpType::Object(class_name) = &obj_ty
-            && !class_name.is_empty()
-        {
-            if self.interfaces.contains_key(class_name) {
-                return self
-                    .infer_method_call_on_interface_type(class_name, method, args, expr, env);
+        if let PhpType::Object(class_name) = &obj_ty {
+            if !class_name.is_empty() {
+                if self.interfaces.contains_key(class_name) {
+                    return self
+                        .infer_method_call_on_interface_type(class_name, method, args, expr, env);
+                }
+                let return_ty =
+                    self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
+                return Ok(self
+                    .tracked_reflection_class_method_return_type(object, method)
+                    .unwrap_or(return_ty));
             }
-            let return_ty = self.infer_method_call_on_class_type(class_name, method, args, expr, env)?;
-            return Ok(self
-                .tracked_reflection_class_method_return_type(object, method)
-                .unwrap_or(return_ty));
         }
         // Method calls on a union object type are allowed when the union has a
         // single object class. `?Foo` / `Foo|null` faults on a null receiver as in
