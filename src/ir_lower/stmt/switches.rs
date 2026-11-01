@@ -150,7 +150,7 @@ pub(super) fn lower_dynamic_switch_dispatch(
             let case_is_null = !subject_is_pointer
                 && matches!(
                     ctx.builder.value_php_type(case_value.value).codegen_repr(),
-                    PhpType::Void | PhpType::Never
+                    PhpType::Void
                 );
             let case_value = if case_is_null {
                 // `int == null` and `bool == null` are `int == 0`; materialize that cast so the

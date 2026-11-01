@@ -547,13 +547,15 @@ fn test_null_case_matches_php_across_subject_types() {
         r#"<?php
 function s_string(string $x): string { switch ($x) { case null: return "null"; case "a": return "a"; default: return "other"; } }
 function s_array(): string { $a = []; switch ($a) { case null: return "null"; case 1: return "one"; default: return "other"; } }
+function s_nonempty_array(array $a): string { switch ($a) { case null: return "null"; default: return "other"; } }
 function s_float(float $x): string { switch ($x) { case null: return "null"; case 1: return "one"; default: return "other"; } }
 function s_int(int $x): string { switch ($x) { case null: return "null"; case 1: return "one"; default: return "other"; } }
 function s_bool(bool $x): string { switch ($x) { case null: return "null"; case 1: return "one"; default: return "other"; } }
 function s_nullable(?int $x): string { switch ($x) { case null: return "null"; case 2: return "two"; default: return "other"; } }
 echo s_string("a"), s_string(""), "|", s_array(), "|", s_float(0.0), s_float(1.0), "|",
     s_int(0), s_int(1), "|", s_bool(false), s_bool(true), "|", s_nullable(null), s_nullable(2), "\n";
+echo s_string("0"), "|", s_nonempty_array([1]), "|", s_float(0.5), "\n";
 "#,
     );
-    assert_eq!(out, "anull|null|nullone|nullone|nullone|nulltwo\n");
+    assert_eq!(out, "anull|null|nullone|nullone|nullone|nulltwo\nother|other|other\n");
 }

@@ -2112,7 +2112,7 @@ var_dump($hi <=> $lo);
 /// against a `mixed` value at run time, as they already order a number against one.
 ///
 /// A string beside a `mixed` value was a compile error, so a guard that narrowed one operand to
-/// `string` (`is_string($l) && is_string($r)` narrows `$l`) turned a working `$l <=> $r` over two
+/// `string` (`is_string($l)` narrows only `$l`) turned a working `$l <=> $r` over two
 /// `mixed` values into "Spaceship operator requires numeric or string operands". The mixed side
 /// takes `__rt_php_compare`'s run-time kind: strings, numeric strings, numbers, null and bool.
 ///
@@ -2135,10 +2135,20 @@ function both(mixed $l, mixed $r): int {
     return 2;
 }
 echo both("x", "y"), both("y", "x"), both(1, "x"), "\n";
+function one(mixed $l, mixed $r): int {
+    if (is_string($l)) {
+        return $l <=> $r;
+    }
+    return 2;
+}
+foreach ([["a", "b"], ["b", "a"], ["10", 9], ["9", 10], ["", null], ["x", true], [1, "x"]] as [$l, $r]) {
+    echo one($l, $r), "|";
+}
+echo "\n";
 "#,
     );
     assert_eq!(
         out,
-        "1 false,false\n-1 true,true\n0 false,true\n-1 true,true\n-1 true,true\n0 false,true\n0 false,true\n-112\n"
+        "1 false,false\n-1 true,true\n0 false,true\n-1 true,true\n-1 true,true\n0 false,true\n0 false,true\n-112\n-1|1|1|-1|0|0|2|\n"
     );
 }
