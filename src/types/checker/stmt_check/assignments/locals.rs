@@ -304,6 +304,14 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::MethodCall { args, .. }
         | ExprKind::StaticMethodCall { args, .. }

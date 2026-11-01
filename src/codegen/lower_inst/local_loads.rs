@@ -116,18 +116,19 @@ pub(super) fn coerce_borrowed_ref_cell_local(
     coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
 }
 
-/// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
+/// Loads a ref-cell's physical payload before exposing the requested borrowed logical view.
 pub(super) fn load_ref_cell_local_to_result_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     ty: &PhpType,
 ) -> Result<PhpType> {
-    let ty = ty.codegen_repr();
-    reject_multiword_ref_param_local(&ty, "load")?;
+    let result_ty = ty.codegen_repr();
+    let payload_ty = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+    reject_multiword_ref_param_local(&payload_ty, "load")?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-    match ty {
+    match &payload_ty {
         PhpType::Str => {
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
@@ -164,7 +165,8 @@ pub(super) fn load_ref_cell_local_to_result_as(
             );
         }
     }
-    Ok(ty)
+    coerce_borrowed_ref_cell_local(ctx, &payload_ty, &result_ty)?;
+    Ok(result_ty)
 }
 
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.

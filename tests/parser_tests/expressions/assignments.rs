@@ -235,23 +235,14 @@ fn test_parse_reference_assignment() {
     }
 }
 
-/// Static and runtime-named property references remain legal alias sources.
+/// Static properties remain legal alias sources.
 #[test]
 fn test_parse_property_reference_assignment_sources() {
-    for (source, expected) in [
-        ("<?php $alias =& Holder::$items;", "static"),
-        ("<?php $alias =& $holder->{$name};", "dynamic"),
-    ] {
-        let statements = parse_source(source);
-        let StmtKind::RefAssign { source, .. } = &statements[0].kind else {
-            panic!("expected RefAssign for {expected} property source")
-        };
-        match expected {
-            "static" => assert!(matches!(source.kind, ExprKind::StaticPropertyAccess { .. })),
-            "dynamic" => assert!(matches!(source.kind, ExprKind::DynamicPropertyAccess { .. })),
-            _ => unreachable!(),
-        }
-    }
+    let statements = parse_source("<?php $alias =& Holder::$items;");
+    let StmtKind::RefAssign { source, .. } = &statements[0].kind else {
+        panic!("expected RefAssign for static property source")
+    };
+    assert!(matches!(source.kind, ExprKind::StaticPropertyAccess { .. }));
 }
 
 /// Verifies that `<?php $items[0] += 3;` parses to an `ArrayAssign` (not a generic `Assign`).

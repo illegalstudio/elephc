@@ -301,7 +301,9 @@ pub(super) fn lower_object_cast(
         _ => unreachable!("object cast target checked above"),
     };
     let ty = ctx.builder.value_php_type(value.value);
-    if let Some(class) = crate::types::object_operators::cast_class_with_classes(&ty, ctx.classes) {
+    if let Some(class) = crate::types::object_operators::cast_class(&ty)
+        .or_else(|| crate::types::object_operators::cast_class_with_classes(&ty, ctx.classes))
+    {
         crate::types::object_operators::cast_method(class, cast)?;
         return Some(emit_cast_method(ctx, class, cast, value, expr));
     }

@@ -19,7 +19,7 @@ class SiblingReferenceHolder {
 }
 
 function &siblingReferenceReturn(SiblingReferenceHolder $holder, int $choice): SiblingReferenceNode {
-    $node = $holder->node;
+    ?SiblingReferenceNode $node = $holder->node;
     switch ($choice) {
         case 1:
             if (!($node instanceof SiblingReferenceNode)) { throw new TypeError('node'); }
