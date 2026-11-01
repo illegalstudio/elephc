@@ -69,11 +69,17 @@ class SilentOffsetProbe {
         assert_eq!(reads.len(), 1, "{target}: null coalescing stays silent");
         for read in reads {
             let value = read.result.expect("string offset read result");
+            // A property read can own its receiver, so the byte is acquired before that
+            // receiver is retired. The acquired view preserves the missing sentinel.
+            let guard = function.instructions.iter().find(|instruction| {
+                instruction.op == Op::IsNull && instruction.operands.first().is_some_and(|selected| {
+                    *selected == value || function.instructions.iter().any(|forward|
+                        forward.op == Op::Acquire && forward.operands == [value]
+                            && forward.result == Some(*selected))
+                })
+            }).unwrap_or_else(|| panic!("{target}: test the missing sentinel before boxing"));
             assert!(function.instructions.iter().any(|instruction| {
-                instruction.op == Op::IsNull && instruction.operands == [value]
-            }), "{target}: test the missing sentinel before boxing");
-            assert!(function.instructions.iter().any(|instruction| {
-                instruction.op == Op::MixedBox && instruction.operands == [value]
+                instruction.op == Op::MixedBox && instruction.operands == guard.operands
             }), "{target}: box only the present string byte");
         }
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
