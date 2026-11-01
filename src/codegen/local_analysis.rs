@@ -32,6 +32,7 @@ pub(super) struct LocalSlotAnalysis {
     release_ops_with_possible_ref_cell: HashSet<InstId>,
     owned_parameter_slots: HashSet<LocalSlotId>,
     stable_ref_cell_payload_types: HashMap<LocalSlotId, PhpType>,
+    ref_cell_payload_types_before_inst: HashMap<(InstId, LocalSlotId), PhpType>,
 }
 
 impl LocalSlotAnalysis {
@@ -90,6 +91,9 @@ impl LocalSlotAnalysis {
             function,
             &definite_ref_cell_slots_before_inst,
         );
+        let ref_cell_payload_types_before_inst = ref_cell_payloads::payload_types_before_inst(
+            function, &ref_cell_slots_before_inst, &ever_ref_cell_slots, &stable_ref_cell_payload_types,
+        );
         Self {
             stored_slots,
             ever_ref_cell_slots,
@@ -98,6 +102,7 @@ impl LocalSlotAnalysis {
             release_ops_with_possible_ref_cell,
             owned_parameter_slots,
             stable_ref_cell_payload_types,
+            ref_cell_payload_types_before_inst,
         }
     }
 
@@ -139,6 +144,11 @@ impl LocalSlotAnalysis {
     /// Returns the stable physical payload type shared by every reference binding of this slot.
     pub(super) fn stable_ref_cell_payload_type(&self, slot: LocalSlotId) -> Option<&PhpType> {
         self.stable_ref_cell_payload_types.get(&slot)
+    }
+
+    /// Returns a physical payload proven at one instruction after a heterogeneous rebinding.
+    pub(super) fn ref_cell_payload_type_before_inst(&self, inst: InstId, slot: LocalSlotId) -> Option<&PhpType> {
+        self.ref_cell_payload_types_before_inst.get(&(inst, slot))
     }
 }
 

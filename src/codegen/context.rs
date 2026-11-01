@@ -1612,6 +1612,10 @@ impl<'a> FunctionContext<'a> {
     /// the function signature. Other promoted locals use their final frame storage shape for
     /// both representations.
     pub(super) fn ref_cell_payload_type(&self, slot: LocalSlotId) -> Result<PhpType> {
+        if let Some(ty) = self.current_inst.and_then(|inst|
+            self.local_analysis.ref_cell_payload_type_before_inst(inst, slot)) {
+            return Ok(ty.clone());
+        }
         if let Some(ty) = self.local_analysis.stable_ref_cell_payload_type(slot) {
             return Ok(ty.clone());
         }
