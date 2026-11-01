@@ -13,10 +13,12 @@
 //!   They remain in `tests/php_src/zip/`; the generator records the reasons.
 
 use super::{assert_format, run_case};
+use crate::support::zip_native::skip_without_zip_native;
 
 /// Replays php-src `001.phpt`.
 #[test]
 fn test_php_src_zip_001() {
+    if skip_without_zip_native("test_php_src_zip_001") { return; }
     let out = run_case(r#"<?php
 echo "zip extension is available";
 "#, &[], &[]);
@@ -25,6 +27,7 @@ echo "zip extension is available";
 /// Replays php-src `addGlob_default_options.phpt`.
 #[test]
 fn test_php_src_zip_addGlob_default_options() {
+    if skip_without_zip_native("test_php_src_zip_addGlob_default_options") { return; }
     let out = run_case(r#"<?php
 $dir = __DIR__ . '/addglob_default_options_dir';
 @mkdir($dir);
@@ -95,6 +98,7 @@ bool(true)"#);
 /// Replays php-src `addGlob_empty_options.phpt`.
 #[test]
 fn test_php_src_zip_addGlob_empty_options() {
+    if skip_without_zip_native("test_php_src_zip_addGlob_empty_options") { return; }
     let out = run_case(r#"<?php
 
 touch($file = __DIR__ . '/addglob_empty_options.zip');
@@ -111,6 +115,7 @@ $zip->close();
 /// Replays php-src `addGlob_too_long_add_path_option.phpt`.
 #[test]
 fn test_php_src_zip_addGlob_too_long_add_path_option() {
+    if skip_without_zip_native("test_php_src_zip_addGlob_too_long_add_path_option") { return; }
     let out = run_case(r#"<?php
 
 touch($file = __DIR__ . '/addglob_too_long_add_path.zip');
@@ -126,6 +131,7 @@ $zip->close();
 /// Replays php-src `addPattern_default_options.phpt`.
 #[test]
 fn test_php_src_zip_addPattern_default_options() {
+    if skip_without_zip_native("test_php_src_zip_addPattern_default_options") { return; }
     let out = run_case(r#"<?php
 $dir = __DIR__ . DIRECTORY_SEPARATOR . 'addpattern_default_options_dir';
 @mkdir($dir);
@@ -196,6 +202,7 @@ bool(true)"#);
 /// Replays php-src `bug11216.phpt`.
 #[test]
 fn test_php_src_zip_bug11216() {
+    if skip_without_zip_native("test_php_src_zip_bug11216") { return; }
     let out = run_case(r#"<?php
 $archive = new ZipArchive();
 $archive->open('__test.zip', ZIPARCHIVE::CREATE);
@@ -220,6 +227,7 @@ bool(false)"#);
 /// Replays php-src `bug14962.phpt`.
 #[test]
 fn test_php_src_zip_bug14962() {
+    if skip_without_zip_native("test_php_src_zip_bug14962") { return; }
     let out = run_case(r#"<?php
 
 $dir = __DIR__;
@@ -249,6 +257,7 @@ unlink($dir . '/' . '__14962.zip');
 /// Replays php-src `bug38943_2.phpt`.
 #[test]
 fn test_php_src_zip_bug38943_2() {
+    if skip_without_zip_native("test_php_src_zip_bug38943_2") { return; }
     let out = run_case(r#"<?php
 include 'bug38943.inc';
 "#, &[], &[]);
@@ -283,6 +292,7 @@ object(myZip)#1 (%d) {
 /// Replays php-src `bug38944.phpt`.
 #[test]
 fn test_php_src_zip_bug38944() {
+    if skip_without_zip_native("test_php_src_zip_bug38944") { return; }
     let out = run_case(r#"<?php
 
 $arc_name = __DIR__."/bug38944.zip";
@@ -323,6 +333,7 @@ Done"#);
 /// Replays php-src `bug40228-mb.phpt`.
 #[test]
 fn test_php_src_zip_bug40228_mb() {
+    if skip_without_zip_native("test_php_src_zip_bug40228_mb") { return; }
     let out = run_case(r#"<?php
 $dest = __DIR__ . "/bug40228-mb";
 $arc_name = __DIR__ . "/bug40228私はガラスを食べられます.zip";
@@ -345,6 +356,7 @@ Done"#);
 /// Replays php-src `bug40228.phpt`.
 #[test]
 fn test_php_src_zip_bug40228() {
+    if skip_without_zip_native("test_php_src_zip_bug40228") { return; }
     let out = run_case(r#"<?php
 $dest = __DIR__ . "/bug40228";
 $arc_name = __DIR__ . "/bug40228.zip";
@@ -367,6 +379,7 @@ Done"#);
 /// Replays php-src `bug47667.phpt`.
 #[test]
 fn test_php_src_zip_bug47667() {
+    if skip_without_zip_native("test_php_src_zip_bug47667") { return; }
     let out = run_case(r#"<?php
 $thisdir = __DIR__;
 $filename = $thisdir . "/bug47667.zip";
@@ -403,6 +416,7 @@ unlink($filename);
 /// Replays php-src `bug49072.phpt`.
 #[test]
 fn test_php_src_zip_bug49072() {
+    if skip_without_zip_native("test_php_src_zip_bug49072") { return; }
     let out = run_case(r#"<?php
 $f = __DIR__  . '/bug49072.zip';
 $o = new ZipArchive();
@@ -421,6 +435,7 @@ while (! feof($r)) {
 /// Replays php-src `bug50678.phpt`.
 #[test]
 fn test_php_src_zip_bug50678() {
+    if skip_without_zip_native("test_php_src_zip_bug50678") { return; }
     let out = run_case(r#"<?php
 $filename = __DIR__ . '/test.zip';
 $dirname = __DIR__ . '/bug50678';
@@ -441,6 +456,7 @@ Done"#);
 /// Replays php-src `bug53579.phpt`.
 #[test]
 fn test_php_src_zip_bug53579() {
+    if skip_without_zip_native("test_php_src_zip_bug53579") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'test_with_comment.zip';
@@ -480,6 +496,7 @@ string(5) "foo
 /// Replays php-src `bug53603.phpt`.
 #[test]
 fn test_php_src_zip_bug53603() {
+    if skip_without_zip_native("test_php_src_zip_bug53603") { return; }
     let out = run_case(r#"<?php
 
 class TestStream {
@@ -510,6 +527,7 @@ bool(false)"#);
 /// Replays php-src `bug53854.phpt`.
 #[test]
 fn test_php_src_zip_bug53854() {
+    if skip_without_zip_native("test_php_src_zip_bug53854") { return; }
     let out = run_case(r#"<?php
 
 var_dump(ZipArchive::CM_DEFAULT);
@@ -551,6 +569,7 @@ int(98)"#);
 /// Replays php-src `bug53885.phpt`.
 #[test]
 fn test_php_src_zip_bug53885() {
+    if skip_without_zip_native("test_php_src_zip_bug53885") { return; }
     let out = run_case(r#"<?php
 $fname = __DIR__."/test53885.zip";
 if(file_exists($fname)) unlink($fname);
@@ -567,6 +586,7 @@ echo '==DONE==
 /// Replays php-src `bug64342_0.phpt`.
 #[test]
 fn test_php_src_zip_bug64342_0() {
+    if skip_without_zip_native("test_php_src_zip_bug64342_0") { return; }
     let out = run_case(r#"<?php
 
 $zip = new ZipArchive;
@@ -603,6 +623,7 @@ DONE"#);
 /// Replays php-src `bug64342_1-mb.phpt`.
 #[test]
 fn test_php_src_zip_bug64342_1_mb() {
+    if skip_without_zip_native("test_php_src_zip_bug64342_1_mb") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -642,6 +663,7 @@ OK"#);
 /// Replays php-src `bug64342_1.phpt`.
 #[test]
 fn test_php_src_zip_bug64342_1() {
+    if skip_without_zip_native("test_php_src_zip_bug64342_1") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -681,6 +703,7 @@ OK"#);
 /// Replays php-src `bug70103.phpt`.
 #[test]
 fn test_php_src_zip_bug70103() {
+    if skip_without_zip_native("test_php_src_zip_bug70103") { return; }
     let out = run_case(r#"<?php
 $dir = __DIR__ . '/bug70103';
 
@@ -704,6 +727,7 @@ string(7) "foo.txt""#);
 /// Replays php-src `bug70322.phpt`.
 #[test]
 fn test_php_src_zip_bug70322() {
+    if skip_without_zip_native("test_php_src_zip_bug70322") { return; }
     let out = run_case(r#"<?php
 $zipfile = __DIR__ . '/bug70322.zip';
 $textfile = __DIR__ . '/bug70322.txt';
@@ -720,6 +744,7 @@ bool(false)"#);
 /// Replays php-src `bug70350.phpt`.
 #[test]
 fn test_php_src_zip_bug70350() {
+    if skip_without_zip_native("test_php_src_zip_bug70350") { return; }
     let out = run_case(r#"<?php
 
 $dir = __DIR__."/bug70350";
@@ -742,6 +767,7 @@ bool(false)"#);
 /// Replays php-src `bug70752.phpt`.
 #[test]
 fn test_php_src_zip_bug70752() {
+    if skip_without_zip_native("test_php_src_zip_bug70752") { return; }
     let out = run_case(r#"<?php
 $filename = __DIR__ . DIRECTORY_SEPARATOR . 'bug70752.zip';
 $zip = new ZipArchive();
@@ -762,6 +788,7 @@ bool(false)"#);
 /// Replays php-src `bug7214.phpt`.
 #[test]
 fn test_php_src_zip_bug7214() {
+    if skip_without_zip_native("test_php_src_zip_bug7214") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/binarynull.zip");
 if (!is_resource($zip)) exit(1);
@@ -789,6 +816,7 @@ Ok"#);
 /// Replays php-src `bug72258.phpt`.
 #[test]
 fn test_php_src_zip_bug72258() {
+    if skip_without_zip_native("test_php_src_zip_bug72258") { return; }
     let out = run_case(r#"<?php
 
 $fn = __DIR__ . DIRECTORY_SEPARATOR . "bug72258.zip";
@@ -810,6 +838,7 @@ for ($i = 0; $i < $zip->numFiles; $i++) {
 /// Replays php-src `bug72374.phpt`.
 #[test]
 fn test_php_src_zip_bug72374() {
+    if skip_without_zip_native("test_php_src_zip_bug72374") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 include __DIR__ . '/utils.inc';
@@ -834,6 +863,7 @@ $zip->close();
 /// Replays php-src `bug72660.phpt`.
 #[test]
 fn test_php_src_zip_bug72660() {
+    if skip_without_zip_native("test_php_src_zip_bug72660") { return; }
     let out = run_case(r#"<?php
 $zip = new ZipArchive();
 $zip->open(__DIR__ . "/bug72660.zip", ZIPARCHIVE::CREATE);
@@ -845,6 +875,7 @@ echo 'okey
 /// Replays php-src `bug76524.phpt`.
 #[test]
 fn test_php_src_zip_bug76524() {
+    if skip_without_zip_native("test_php_src_zip_bug76524") { return; }
     let out = run_case(r#"<?php
 
 $i = 0;
@@ -866,6 +897,7 @@ echo 'ok';
 /// Replays php-src `bug7658.phpt`.
 #[test]
 fn test_php_src_zip_bug7658() {
+    if skip_without_zip_native("test_php_src_zip_bug7658") { return; }
     let out = run_case(r#"<?php
 $found = [];
 $expect = array(
@@ -917,6 +949,7 @@ unlink($file);
 /// Replays php-src `bug77978.phpt`.
 #[test]
 fn test_php_src_zip_bug77978() {
+    if skip_without_zip_native("test_php_src_zip_bug77978") { return; }
     let out = run_case(r#"<?php
 $file = __DIR__ . "/bug77978.zip";
 $target = __DIR__ . "/bug77978";
@@ -942,6 +975,7 @@ bool(true)"#);
 /// Replays php-src `bug78641.phpt`.
 #[test]
 fn test_php_src_zip_bug78641() {
+    if skip_without_zip_native("test_php_src_zip_bug78641") { return; }
     let out = run_case(r#"<?php
 define("TMPDIR", __DIR__ . "/");
 
@@ -961,6 +995,7 @@ string(5) "tests""#);
 /// Replays php-src `bug8009.phpt`.
 #[test]
 fn test_php_src_zip_bug8009() {
+    if skip_without_zip_native("test_php_src_zip_bug8009") { return; }
     let out = run_case(r#"<?php
 $thisdir = __DIR__;
 $src = $thisdir . "/bug8009.zip";
@@ -983,6 +1018,7 @@ echo "\n";
 /// Replays php-src `bug80833.phpt`.
 #[test]
 fn test_php_src_zip_bug80833() {
+    if skip_without_zip_native("test_php_src_zip_bug80833") { return; }
     let out = run_case(r#"<?php
 $create_zip = new ZipArchive();
 $create_zip->open(__DIR__ . "/80833.zip", ZipArchive::CREATE);
@@ -1031,6 +1067,7 @@ string(0) """#);
 /// Replays php-src `bug80863.phpt`.
 #[test]
 fn test_php_src_zip_bug80863() {
+    if skip_without_zip_native("test_php_src_zip_bug80863") { return; }
     let out = run_case(r#"<?php
 $archive = __DIR__ . "/bug80863.zip";
 
@@ -1062,6 +1099,7 @@ bool(true)"#);
 /// Replays php-src `bug81420.phpt`.
 #[test]
 fn test_php_src_zip_bug81420() {
+    if skip_without_zip_native("test_php_src_zip_bug81420") { return; }
     let out = run_case(r#"<?php
 $zip = new ZipArchive();
 $zip->open(__DIR__ . "/bug81420.zip");
@@ -1075,6 +1113,7 @@ var_dump(file_exists("$destination/nt1/zzr_noharm.php"));
 /// Replays php-src `bug81490.phpt`.
 #[test]
 fn test_php_src_zip_bug81490() {
+    if skip_without_zip_native("test_php_src_zip_bug81490") { return; }
     let out = run_case(r#"<?php
 $zip = new ZipArchive();
 $zip->open(__DIR__ . "/bug81490.zip", ZipArchive::CREATE|ZipArchive::OVERWRITE);
@@ -1088,6 +1127,7 @@ $zip->extractTo(__DIR__ . "/bug81490", "");
 /// Replays php-src `bug8700.phpt`.
 #[test]
 fn test_php_src_zip_bug8700() {
+    if skip_without_zip_native("test_php_src_zip_bug8700") { return; }
     let out = run_case(r#"<?php
 $thisdir = __DIR__;
 $filename = $thisdir . "/bug8009.zip";
@@ -1113,6 +1153,7 @@ echo "\n";
 /// Replays php-src `bug_gh12661.phpt`.
 #[test]
 fn test_php_src_zip_bug_gh12661() {
+    if skip_without_zip_native("test_php_src_zip_bug_gh12661") { return; }
     let out = run_case(r#"<?php
 include __DIR__ . '/utils.inc';
 
@@ -1132,6 +1173,7 @@ echo 'Done
 /// Replays php-src `bug_gh21705.phpt`.
 #[test]
 fn test_php_src_zip_bug_gh21705() {
+    if skip_without_zip_native("test_php_src_zip_bug_gh21705") { return; }
     let out = run_case(r#"<?php
 $name = __DIR__ . '/bug_gh21705.zip';
 @unlink($name);
@@ -1158,6 +1200,7 @@ string(3) "bar""#);
 /// Replays php-src `bug_gh8781.phpt`.
 #[test]
 fn test_php_src_zip_bug_gh8781() {
+    if skip_without_zip_native("test_php_src_zip_bug_gh8781") { return; }
     let out = run_case(r#"<?php
 touch($file = __DIR__ . '/bug_gh8781.zip');
 var_dump(is_file($file));
@@ -1174,6 +1217,7 @@ bool(false)"#);
 /// Replays php-src `compression_methods.phpt`.
 #[test]
 fn test_php_src_zip_compression_methods() {
+    if skip_without_zip_native("test_php_src_zip_compression_methods") { return; }
     let out = run_case(r#"<?php
 $methods = array(
     'store'     => ZipArchive::CM_STORE,
@@ -1201,6 +1245,7 @@ ppmd: bool(true)"#);
 /// Replays php-src `doubleclose.phpt`.
 #[test]
 fn test_php_src_zip_doubleclose() {
+    if skip_without_zip_native("test_php_src_zip_doubleclose") { return; }
     let out = run_case(r#"<?php
 
 echo "Procedural\n";
@@ -1250,6 +1295,7 @@ Done"#);
 /// Replays php-src `gh18431.phpt`.
 #[test]
 fn test_php_src_zip_gh18431() {
+    if skip_without_zip_native("test_php_src_zip_gh18431") { return; }
     let out = run_case(r#"<?php
 $file = __DIR__ . '/gh18431.zip';
 $callback = function ($value) { var_dump($value); };
@@ -1265,6 +1311,7 @@ float(1)"#);
 /// Replays php-src `gh18438.phpt`.
 #[test]
 fn test_php_src_zip_gh18438() {
+    if skip_without_zip_native("test_php_src_zip_gh18438") { return; }
     let out = run_case(r#"<?php
 class CustomStreamWrapper {
     public $context;
@@ -1304,6 +1351,7 @@ array(0) {
 /// Replays php-src `gh18439.phpt`.
 #[test]
 fn test_php_src_zip_gh18439() {
+    if skip_without_zip_native("test_php_src_zip_gh18439") { return; }
     let out = run_case(r#"<?php
 
 function &cb() {
@@ -1324,6 +1372,7 @@ echo "Done\n";
 /// Replays php-src `gh19688.phpt`.
 #[test]
 fn test_php_src_zip_gh19688() {
+    if skip_without_zip_native("test_php_src_zip_gh19688") { return; }
     let out = run_case(r#"<?php
 $dir = __DIR__ . '/';
 $testfile = $dir . '001.phpt';
@@ -1339,6 +1388,7 @@ var_dump($zip->getNameIndex(0));
 /// Replays php-src `gh19932.phpt`.
 #[test]
 fn test_php_src_zip_gh19932() {
+    if skip_without_zip_native("test_php_src_zip_gh19932") { return; }
     let out = run_case(r#"<?php
 $zip = new ZipArchive();
 $zip->open(__DIR__ . "/gh19932.zip", ZipArchive::CREATE);
@@ -1355,6 +1405,7 @@ echo "OK";
 /// Replays php-src `gh21698.phpt`.
 #[test]
 fn test_php_src_zip_gh21698() {
+    if skip_without_zip_native("test_php_src_zip_gh21698") { return; }
     let out = run_case(r#"<?php
 $zipfile = __DIR__ . '/gh21698.zip';
 $zip = new ZipArchive();
@@ -1370,6 +1421,7 @@ bool(false)"#);
 /// Replays php-src `gh22649.phpt`.
 #[test]
 fn test_php_src_zip_gh22649() {
+    if skip_without_zip_native("test_php_src_zip_gh22649") { return; }
     let out = run_case(r#"<?php
 $file = __DIR__ . '/gh22649.zip';
 
@@ -1419,6 +1471,7 @@ string(15) "dir/entry3d.txt""#);
 /// Replays php-src `oo_add_encoding.phpt`.
 #[test]
 fn test_php_src_zip_oo_add_encoding() {
+    if skip_without_zip_native("test_php_src_zip_oo_add_encoding") { return; }
     let out = run_case(r#"<?php
 
 include __DIR__ . '/utils.inc';
@@ -1456,6 +1509,7 @@ if ($zip->status == ZIPARCHIVE::ER_OK) {
 /// Replays php-src `oo_add_from_string.phpt`.
 #[test]
 fn test_php_src_zip_oo_add_from_string() {
+    if skip_without_zip_native("test_php_src_zip_oo_add_from_string") { return; }
     let out = run_case(r#"<?php
 
 include __DIR__ . '/utils.inc';
@@ -1503,6 +1557,7 @@ Done"#);
 /// Replays php-src `oo_addemptydir.phpt`.
 #[test]
 fn test_php_src_zip_oo_addemptydir() {
+    if skip_without_zip_native("test_php_src_zip_oo_addemptydir") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -1550,6 +1605,7 @@ OK"#);
 /// Replays php-src `oo_addemptydir_error.phpt`.
 #[test]
 fn test_php_src_zip_oo_addemptydir_error() {
+    if skip_without_zip_native("test_php_src_zip_oo_addemptydir_error") { return; }
     let out = run_case(r#"<?php
 
 include __DIR__ . '/utils.inc';
@@ -1575,6 +1631,7 @@ OK"#);
 /// Replays php-src `oo_addfile.phpt`.
 #[test]
 fn test_php_src_zip_oo_addfile() {
+    if skip_without_zip_native("test_php_src_zip_oo_addfile") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -1653,6 +1710,7 @@ bool(true)"#);
 #[cfg(target_os = "linux")]
 #[test]
 fn test_php_src_zip_oo_addfile_proc() {
+    if skip_without_zip_native("test_php_src_zip_oo_addfile_proc") { return; }
     let out = run_case(r#"<?php
 
 include __DIR__ . '/utils.inc';
@@ -1696,6 +1754,7 @@ Done"#);
 /// Replays php-src `oo_addglob.phpt`.
 #[test]
 fn test_php_src_zip_oo_addglob() {
+    if skip_without_zip_native("test_php_src_zip_oo_addglob") { return; }
     let out = run_case(r#"<?php
 include __DIR__ . '/utils.inc';
 $dirname = __DIR__ . '/oo_addglob_dir/';
@@ -1749,6 +1808,7 @@ OK"#);
 /// Replays php-src `oo_addglob2.phpt`.
 #[test]
 fn test_php_src_zip_oo_addglob2() {
+    if skip_without_zip_native("test_php_src_zip_oo_addglob2") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 include __DIR__ . '/utils.inc';
@@ -1802,6 +1862,7 @@ if ($zip->status == ZIPARCHIVE::ER_OK) {
 /// Replays php-src `oo_addglob_leak.phpt`.
 #[test]
 fn test_php_src_zip_oo_addglob_leak() {
+    if skip_without_zip_native("test_php_src_zip_oo_addglob_leak") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 include __DIR__ . '/utils.inc';
@@ -1840,6 +1901,7 @@ array(1) {
 /// Replays php-src `oo_addpattern.phpt`.
 #[test]
 fn test_php_src_zip_oo_addpattern() {
+    if skip_without_zip_native("test_php_src_zip_oo_addpattern") { return; }
     let out = run_case(r#"<?php
 include __DIR__ . '/utils.inc';
 
@@ -1893,6 +1955,7 @@ OK"#);
 /// Replays php-src `oo_archive_flag.phpt`.
 #[test]
 fn test_php_src_zip_oo_archive_flag() {
+    if skip_without_zip_native("test_php_src_zip_oo_archive_flag") { return; }
     let out = run_case(r#"<?php
 $zip = new ZipArchive();
 
@@ -1927,6 +1990,7 @@ int(1)"#);
 /// Replays php-src `oo_cancel.phpt`.
 #[test]
 fn test_php_src_zip_oo_cancel() {
+    if skip_without_zip_native("test_php_src_zip_oo_cancel") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . '__tmp_oo_cancel.zip';
@@ -1960,6 +2024,7 @@ Done"#);
 /// Replays php-src `oo_cancel_non_int_return.phpt`.
 #[test]
 fn test_php_src_zip_oo_cancel_non_int_return() {
+    if skip_without_zip_native("test_php_src_zip_oo_cancel_non_int_return") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . '__tmp_oo_cancel_incorrect_return.zip';
@@ -1996,6 +2061,7 @@ Done"#);
 /// Replays php-src `oo_cancel_trampoline.phpt`.
 #[test]
 fn test_php_src_zip_oo_cancel_trampoline() {
+    if skip_without_zip_native("test_php_src_zip_oo_cancel_trampoline") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . '__tmp_oo_cancel_trampoline.zip';
@@ -2079,6 +2145,7 @@ Done"#);
 /// Replays php-src `oo_close.phpt`.
 #[test]
 fn test_php_src_zip_oo_close() {
+    if skip_without_zip_native("test_php_src_zip_oo_close") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -2099,6 +2166,7 @@ if ($zip->status == ZIPARCHIVE::ER_OK) {
 /// Replays php-src `oo_close_empty.phpt`.
 #[test]
 fn test_php_src_zip_oo_close_empty() {
+    if skip_without_zip_native("test_php_src_zip_oo_close_empty") { return; }
     let out = run_case(r#"<?php
 $name = __DIR__ . '/oo_close_empty.zip';
 
@@ -2136,6 +2204,7 @@ bool(true)"#);
 /// Replays php-src `oo_count.phpt`.
 #[test]
 fn test_php_src_zip_oo_count() {
+    if skip_without_zip_native("test_php_src_zip_oo_count") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -2157,6 +2226,7 @@ Done"#);
 /// Replays php-src `oo_delete.phpt`.
 #[test]
 fn test_php_src_zip_oo_delete() {
+    if skip_without_zip_native("test_php_src_zip_oo_delete") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'oo_delete.zip';
@@ -2234,6 +2304,7 @@ bool(false)"#);
 /// Replays php-src `oo_encryption.phpt`.
 #[test]
 fn test_php_src_zip_oo_encryption() {
+    if skip_without_zip_native("test_php_src_zip_oo_encryption") { return; }
     let out = run_case(r#"<?php
 
 $name = __DIR__ . '/encrypted.zip';
@@ -2289,6 +2360,7 @@ string(3) "bar"
 /// Replays php-src `oo_ext_zip.phpt`.
 #[test]
 fn test_php_src_zip_oo_ext_zip() {
+    if skip_without_zip_native("test_php_src_zip_oo_ext_zip") { return; }
     let out = run_case(r#"<?php
 class myZip extends ZipArchive {
     private $test = 0;
@@ -2311,6 +2383,7 @@ $z = new myZip;
 /// Replays php-src `oo_externalattributes.phpt`.
 #[test]
 fn test_php_src_zip_oo_externalattributes() {
+    if skip_without_zip_native("test_php_src_zip_oo_externalattributes") { return; }
     let out = run_case(r#"<?php
 $a = 0;
 $b = 0;
@@ -2378,6 +2451,7 @@ int(234)
 /// Replays php-src `oo_extract.phpt`.
 #[test]
 fn test_php_src_zip_oo_extract() {
+    if skip_without_zip_native("test_php_src_zip_oo_extract") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'test_with_comment.zip';
@@ -2455,6 +2529,7 @@ foo"#);
 /// Replays php-src `oo_getcomment.phpt`.
 #[test]
 fn test_php_src_zip_oo_getcomment() {
+    if skip_without_zip_native("test_php_src_zip_oo_getcomment") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'test_with_comment.zip';
@@ -2486,6 +2561,7 @@ ZipArchive::getCommentName(): Argument #1 ($name) must not be empty"#);
 /// Replays php-src `oo_getexternalattributesname_error.phpt`.
 #[test]
 fn test_php_src_zip_oo_getexternalattributesname_error() {
+    if skip_without_zip_native("test_php_src_zip_oo_getexternalattributesname_error") { return; }
     let out = run_case(r#"<?php
 
 $zip = new ZipArchive();
@@ -2507,6 +2583,7 @@ try {
 /// Replays php-src `oo_getnameindex.phpt`.
 #[test]
 fn test_php_src_zip_oo_getnameindex() {
+    if skip_without_zip_native("test_php_src_zip_oo_getnameindex") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 include __DIR__ . '/utils.inc';
@@ -2549,6 +2626,7 @@ bool(false)"#);
 /// Replays php-src `oo_getstatusstring.phpt`.
 #[test]
 fn test_php_src_zip_oo_getstatusstring() {
+    if skip_without_zip_native("test_php_src_zip_oo_getstatusstring") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -2567,6 +2645,7 @@ string(16) "Invalid argument""#);
 /// Replays php-src `oo_getstreamindex.phpt`.
 #[test]
 fn test_php_src_zip_oo_getstreamindex() {
+    if skip_without_zip_native("test_php_src_zip_oo_getstreamindex") { return; }
     let out = run_case(r#"<?php
 
 $name = __DIR__ . '/getstream.zip';
@@ -2630,6 +2709,7 @@ bool(true)
 /// Replays php-src `oo_namelocate.phpt`.
 #[test]
 fn test_php_src_zip_oo_namelocate() {
+    if skip_without_zip_native("test_php_src_zip_oo_namelocate") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 include __DIR__ . '/utils.inc';
@@ -2671,6 +2751,7 @@ int(2)"#);
 /// Replays php-src `oo_open.phpt`.
 #[test]
 fn test_php_src_zip_oo_open() {
+    if skip_without_zip_native("test_php_src_zip_oo_open") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -2715,6 +2796,7 @@ OK"#);
 /// Replays php-src `oo_progress.phpt`.
 #[test]
 fn test_php_src_zip_oo_progress() {
+    if skip_without_zip_native("test_php_src_zip_oo_progress") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . '__tmp_oo_progress.zip';
@@ -2745,6 +2827,7 @@ Done"#);
 /// Replays php-src `oo_progress_trampoline.phpt`.
 #[test]
 fn test_php_src_zip_oo_progress_trampoline() {
+    if skip_without_zip_native("test_php_src_zip_oo_progress_trampoline") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 $file = $dirname . '__tmp_oo_progress_trampoline.zip';
@@ -2827,6 +2910,7 @@ Done"#);
 /// Replays php-src `oo_properties.phpt`.
 #[test]
 fn test_php_src_zip_oo_properties() {
+    if skip_without_zip_native("test_php_src_zip_oo_properties") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -2881,6 +2965,7 @@ zip->comment (19):
 /// Replays php-src `oo_readonly_properties.phpt`.
 #[test]
 fn test_php_src_zip_oo_readonly_properties() {
+    if skip_without_zip_native("test_php_src_zip_oo_readonly_properties") { return; }
     let out = run_case(r#"<?php
 
 $zip = new ZipArchive();
@@ -2957,6 +3042,7 @@ string(0) """#);
 /// Replays php-src `oo_rename.phpt`.
 #[test]
 fn test_php_src_zip_oo_rename() {
+    if skip_without_zip_native("test_php_src_zip_oo_rename") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 include __DIR__ . '/utils.inc';
@@ -3021,6 +3107,7 @@ OK"#);
 /// Replays php-src `oo_replacefile.phpt`.
 #[test]
 fn test_php_src_zip_oo_replacefile() {
+    if skip_without_zip_native("test_php_src_zip_oo_replacefile") { return; }
     let out = run_case(r#"<?php
 
 $dirname = __DIR__ . '/';
@@ -3071,6 +3158,7 @@ bool(true)"#);
 /// Replays php-src `oo_setcomment.phpt`.
 #[test]
 fn test_php_src_zip_oo_setcomment() {
+    if skip_without_zip_native("test_php_src_zip_oo_setcomment") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 include __DIR__ . '/utils.inc';
@@ -3137,6 +3225,7 @@ string(7) "archive""#);
 /// Replays php-src `oo_setcomment_error.phpt`.
 #[test]
 fn test_php_src_zip_oo_setcomment_error() {
+    if skip_without_zip_native("test_php_src_zip_oo_setcomment_error") { return; }
     let out = run_case(r#"<?php
 $file = __DIR__ . '/__tmp_oo_set_comment_error.zip';
 
@@ -3177,6 +3266,7 @@ ZipArchive::setCommentIndex(): Argument #2 ($comment) must be less than 65535 by
 /// Replays php-src `oo_setcompression.phpt`.
 #[test]
 fn test_php_src_zip_oo_setcompression() {
+    if skip_without_zip_native("test_php_src_zip_oo_setcompression") { return; }
     let out = run_case(r#"<?php
 $tmpfile = __DIR__ . '/oo_setcompression.zip';
 
@@ -3287,6 +3377,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `oo_setmtime.phpt`.
 #[test]
 fn test_php_src_zip_oo_setmtime() {
+    if skip_without_zip_native("test_php_src_zip_oo_setmtime") { return; }
     let out = run_case(r#"<?php
 $dirname = dirname(__FILE__) . '/';
 include __DIR__ . '/utils.inc';
@@ -3355,6 +3446,7 @@ bool(true)"#);
 /// Replays php-src `oo_stream.phpt`.
 #[test]
 fn test_php_src_zip_oo_stream() {
+    if skip_without_zip_native("test_php_src_zip_oo_stream") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'test_with_comment.zip';
@@ -3400,6 +3492,7 @@ string(5) "foo
 /// Replays php-src `oo_stream_seek.phpt`.
 #[test]
 fn test_php_src_zip_oo_stream_seek() {
+    if skip_without_zip_native("test_php_src_zip_oo_stream_seek") { return; }
     let out = run_case(r#"<?php
 var_dump(ZipArchive::LIBZIP_VERSION);
 $file = __DIR__ . '/test.zip';
@@ -3473,6 +3566,7 @@ int(2)"#);
 /// Replays php-src `oo_supported.phpt`.
 #[test]
 fn test_php_src_zip_oo_supported() {
+    if skip_without_zip_native("test_php_src_zip_oo_supported") { return; }
     let out = run_case(r#"<?php
 $methods = [
     ZipArchive::CM_STORE      => "STORE",
@@ -3532,6 +3626,7 @@ Done"#);
 /// Replays php-src `oo_torrentzip.phpt`.
 #[test]
 fn test_php_src_zip_oo_torrentzip() {
+    if skip_without_zip_native("test_php_src_zip_oo_torrentzip") { return; }
     let out = run_case(r#"<?php
 $name = __DIR__ . '/torrent.zip';
 
@@ -3561,6 +3656,7 @@ int(1)"#);
 /// Replays php-src `oo_unchangeIndex.phpt`.
 #[test]
 fn test_php_src_zip_oo_unchangeIndex() {
+    if skip_without_zip_native("test_php_src_zip_oo_unchangeIndex") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'oo_unchangeIndex.zip';
@@ -3600,6 +3696,7 @@ string(32) "cb753d0a812b2edb386bdcbc4cd7d131""#);
 /// Replays php-src `oo_unchangeName.phpt`.
 #[test]
 fn test_php_src_zip_oo_unchangeName() {
+    if skip_without_zip_native("test_php_src_zip_oo_unchangeName") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'oo_unchangeName.zip';
@@ -3639,6 +3736,7 @@ string(32) "cb753d0a812b2edb386bdcbc4cd7d131""#);
 /// Replays php-src `pecl12414.phpt`.
 #[test]
 fn test_php_src_zip_pecl12414() {
+    if skip_without_zip_native("test_php_src_zip_pecl12414") { return; }
     let out = run_case(r#"<?php
 $filename = 'MYLOGOV2.GFX';
 $zipname = __DIR__ . "/pecl12414.zip";
@@ -3671,6 +3769,7 @@ if ($res === TRUE) {
 /// Replays php-src `property_existence_test.phpt`.
 #[test]
 fn test_php_src_zip_property_existence_test() {
+    if skip_without_zip_native("test_php_src_zip_property_existence_test") { return; }
     let out = run_case(r#"<?php
 
 $archive = new ZipArchive(__DIR__.'/property_existence.zip');
@@ -3685,6 +3784,7 @@ var_dump([$archive->lastId]);
 /// Replays php-src `stream_meta_data.phpt`.
 #[test]
 fn test_php_src_zip_stream_meta_data() {
+    if skip_without_zip_native("test_php_src_zip_stream_meta_data") { return; }
     let out = run_case(r#"<?php
 $dirname = __DIR__ . '/';
 $file = $dirname . 'test_with_comment.zip';
@@ -3754,6 +3854,7 @@ array(9) {
 /// Replays php-src `zip_close.phpt`.
 #[test]
 fn test_php_src_zip_zip_close() {
+    if skip_without_zip_native("test_php_src_zip_zip_close") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 if (!is_resource($zip)) exit(1);
@@ -3769,6 +3870,7 @@ OK"#);
 /// Replays php-src `zip_entry_close.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_close() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_close") { return; }
     let out = run_case(r#"<?php
 $zip    = zip_open(__DIR__."/test_procedural.zip");
 $entry  = zip_read($zip);
@@ -3801,6 +3903,7 @@ Done"#);
 /// Replays php-src `zip_entry_compressedsize.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_compressedsize() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_compressedsize") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 if (!is_resource($zip)) exit(1);
@@ -3840,6 +3943,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `zip_entry_compressionmethod.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_compressionmethod() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_compressionmethod") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 if (!is_resource($zip)) exit(1);
@@ -3879,6 +3983,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `zip_entry_filesize.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_filesize() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_filesize") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 if (!is_resource($zip)) exit(1);
@@ -3918,6 +4023,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `zip_entry_name.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_name() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_name") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 if (!is_resource($zip)) exit(1);
@@ -3957,6 +4063,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `zip_entry_open.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_open() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_open") { return; }
     let out = run_case(r#"<?php
 $zip    = zip_open(__DIR__."/test_procedural.zip");
 $entry  = zip_read($zip);
@@ -3978,6 +4085,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `zip_entry_read.phpt`.
 #[test]
 fn test_php_src_zip_zip_entry_read() {
+    if skip_without_zip_native("test_php_src_zip_zip_entry_read") { return; }
     let out = run_case(r#"<?php
 $zip    = zip_open(__DIR__."/test_procedural.zip");
 $entry  = zip_read($zip);
@@ -4004,6 +4112,7 @@ Deprecated: Function zip_close() is deprecated since 8.0, use ZipArchive::close(
 /// Replays php-src `zip_open.phpt`.
 #[test]
 fn test_php_src_zip_zip_open() {
+    if skip_without_zip_native("test_php_src_zip_zip_open") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 
@@ -4016,6 +4125,7 @@ OK"#);
 /// Replays php-src `zip_open_error.phpt`.
 #[test]
 fn test_php_src_zip_zip_open_error() {
+    if skip_without_zip_native("test_php_src_zip_zip_open_error") { return; }
     let out = run_case(r#"<?php
 echo "Test case 1:";
 try {
@@ -4039,6 +4149,7 @@ Failure"#);
 /// Replays php-src `zip_read.phpt`.
 #[test]
 fn test_php_src_zip_zip_read() {
+    if skip_without_zip_native("test_php_src_zip_zip_read") { return; }
     let out = run_case(r#"<?php
 $zip = zip_open(__DIR__."/test_procedural.zip");
 if (!is_resource($zip)) exit(1);

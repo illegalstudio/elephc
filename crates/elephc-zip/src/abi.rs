@@ -1,6 +1,6 @@
 //! Purpose:
 //! The stable, panic-free C ABI of the `elephc_zip` bridge: handle registry, metadata
-//! accessors, mutations, extraction, and supported-method queries.
+//! accessors, mutations, extraction, and supported-method queries over libzip.
 //!
 //! Called from:
 //! - Compiled PHP programs through the `extern "elephc_zip"` block in `src/zip_prelude.rs`.
@@ -9,6 +9,8 @@
 //! - Handles are positive integers; `0` is never valid and unknown handles fail closed.
 //! - Strings may contain NUL: callers pass an explicit byte length and binary results use hex.
 //! - Returned strings live in thread-local cells until the next call on the same thread.
+//! - `close` only frees libzip's handle on success, so a failed close can still report
+//!   `status`/`getStatusString()`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -17,9 +19,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::consts::*;
-use crate::error::ZipError;
-use crate::model::Archive;
+use crate::archive::Archive;
 
 /// Next handle value; 0 is reserved for "no archive".
 static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
@@ -59,7 +59,7 @@ fn result_hex(value: &[u8]) -> *const c_char {
     result_text(&encoded)
 }
 
-/// Stores a UTF-8/text result and marks it valid.
+/// Stores a text result and marks it valid.
 fn result_text(value: &str) -> *const c_char {
     RESULT_OK.with(|flag| flag.set(true));
     RESULT.with(|slot| {
@@ -84,19 +84,35 @@ fn with_archive<R>(handle: i64, fallback: R, call: impl FnOnce(&mut Archive) -> 
     catch_unwind(AssertUnwindSafe(|| {
         let mut guard = registry().lock().unwrap_or_else(|error| error.into_inner());
         guard.get_mut(&handle).map(call)
-    })).ok().flatten().unwrap_or(fallback)
+    }))
+    .ok()
+    .flatten()
+    .unwrap_or(fallback)
+}
+
+/// Records a bridge-side rejection only when libzip has not already set an error.
+fn record_failure(archive: &mut Archive, error: crate::error::ZipError) {
+    if archive.status() == (0, 0) {
+        archive.fail(error);
+    }
 }
 
 /// Runs one fallible mutation, recording success or failure on the archive.
-fn mutation(handle: i64, call: impl FnOnce(&mut Archive) -> Result<i64, ZipError>) -> i64 {
+fn mutation(handle: i64, call: impl FnOnce(&mut Archive) -> Result<i64, crate::error::ZipError>) -> i64 {
     with_archive(handle, -1, |archive| match call(archive) {
-        Ok(value) => { archive.success(); value }
-        Err(error) => { archive.fail(error); -1 }
+        Ok(value) => {
+            archive.succeed();
+            value
+        }
+        Err(error) => {
+            record_failure(archive, error);
+            -1
+        }
     })
 }
 
 /// Runs one fallible mutation that has no numeric result.
-fn mutation_unit(handle: i64, call: impl FnOnce(&mut Archive) -> Result<(), ZipError>) -> i64 {
+fn mutation_unit(handle: i64, call: impl FnOnce(&mut Archive) -> Result<(), crate::error::ZipError>) -> i64 {
     mutation(handle, |archive| call(archive).map(|_| 1))
 }
 
@@ -105,20 +121,23 @@ fn mutation_unit(handle: i64, call: impl FnOnce(&mut Archive) -> Result<(), ZipE
 pub unsafe extern "C" fn elephc_zip_open(path: *const c_char, path_len: i64, flags: i64) -> i64 {
     let path = bytes(path, path_len);
     let Ok(path) = String::from_utf8(path) else {
-        OPEN_ERROR.with(|slot| slot.set(ZipError::Invalid.code()));
+        OPEN_ERROR.with(|slot| slot.set(crate::error::ZipError::Invalid.code()));
         return 0;
     };
     let opened = catch_unwind(AssertUnwindSafe(|| Archive::open(path, flags)))
-        .unwrap_or_else(|_| Err(ZipError::Truncated));
+        .unwrap_or_else(|_| Err(crate::error::ZipError::Truncated.code()));
     match opened {
         Ok(archive) => {
             OPEN_ERROR.with(|slot| slot.set(0));
             let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-            registry().lock().unwrap_or_else(|error| error.into_inner()).insert(handle, archive);
+            registry()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(handle, archive);
             handle
         }
         Err(error) => {
-            OPEN_ERROR.with(|slot| slot.set(error.code()));
+            OPEN_ERROR.with(|slot| slot.set(error));
             0
         }
     }
@@ -130,10 +149,13 @@ pub extern "C" fn elephc_zip_last_open_error() -> i64 {
     OPEN_ERROR.with(|slot| slot.get())
 }
 
-/// Closes an archive and releases its handle.
+/// Closes an archive and releases its handle on success.
 #[no_mangle]
 pub extern "C" fn elephc_zip_close(handle: i64) -> i64 {
-    mutation_unit(handle, |archive| archive.close())
+    with_archive(handle, -1, |archive| match archive.close() {
+        Ok(()) => 1,
+        Err(_) => -1,
+    })
 }
 
 /// Discards uncommitted changes and releases the handle.
@@ -147,35 +169,34 @@ pub extern "C" fn elephc_zip_discard(handle: i64) {
 /// Returns the last error code.
 #[no_mangle]
 pub extern "C" fn elephc_zip_status(handle: i64) -> i64 {
-    with_archive(handle, 8, |archive| archive.status.code())
+    with_archive(handle, 8, |archive| archive.status().0)
 }
 
 /// Returns the last OS error number.
 #[no_mangle]
 pub extern "C" fn elephc_zip_status_sys(handle: i64) -> i64 {
-    with_archive(handle, 0, |archive| archive.status_sys)
+    with_archive(handle, 0, |archive| archive.status().1)
 }
 
 /// Returns libzip's English status string.
 #[no_mangle]
 pub extern "C" fn elephc_zip_status_string(handle: i64) -> *const c_char {
-    let message = with_archive(handle, "Containing zip archive was closed", |archive| archive.status.message());
-    result_text(message)
+    let message = with_archive(handle, "Containing zip archive was closed".to_string(), |archive| {
+        archive.status_string()
+    });
+    result_text(&message)
 }
 
 /// Overrides the stored error code for a PHP wrapper that rejected an argument itself.
 #[no_mangle]
 pub extern "C" fn elephc_zip_set_status(handle: i64, code: i64) {
-    with_archive(handle, (), |archive| {
-        archive.status = crate::error::ZipError::from_code(code);
-        archive.status_sys = 0;
-    });
+    with_archive(handle, (), |archive| archive.set_status(code));
 }
 
 /// Clears the stored error.
 #[no_mangle]
 pub extern "C" fn elephc_zip_clear_error(handle: i64) {
-    with_archive(handle, (), |archive| archive.success());
+    with_archive(handle, (), |archive| archive.clear_error());
 }
 
 /// Returns whether the previous string-returning call produced a result.
@@ -199,7 +220,7 @@ pub extern "C" fn elephc_zip_last_id(handle: i64) -> i64 {
 /// Returns the entry count including deleted placeholders.
 #[no_mangle]
 pub extern "C" fn elephc_zip_num_entries(handle: i64) -> i64 {
-    with_archive(handle, 0, |archive| archive.num_entries() as i64)
+    with_archive(handle, 0, |archive| archive.num_entries())
 }
 
 /// Returns the archive filename.
@@ -212,43 +233,21 @@ pub extern "C" fn elephc_zip_filename(handle: i64) -> *const c_char {
 /// Returns the archive's current comment as hex.
 #[no_mangle]
 pub extern "C" fn elephc_zip_archive_comment(handle: i64, flags: i64) -> *const c_char {
-    let value = with_archive(handle, None, |archive| {
-        Some(if flags & FL_UNCHANGED != 0 { archive.original_comment.clone() } else { archive.comment.clone() })
-    });
-    match value { Some(value) => result_hex(&value), None => result_empty() }
+    let value = with_archive(handle, None, |archive| archive.archive_comment(flags));
+    match value {
+        Some(value) => result_hex(&value),
+        None => result_empty(),
+    }
 }
 
 /// Returns one entry's name as hex, honoring raw/CP437/UTF-8 flags.
 #[no_mangle]
-pub extern "C" fn elephc_zip_name(handle: i64, index: i64, raw: i64, flags: i64) -> *const c_char {
-    let value = with_archive(handle, None, |archive| {
-        let unchanged = flags & FL_UNCHANGED != 0;
-        let entry = if unchanged { archive.original.get(index as usize) } else { archive.entries.get(index as usize) }
-            .filter(|entry| !entry.deleted)?;
-        let bytes = if raw != 0 || flags & FL_ENC_RAW != 0 {
-            entry.name_raw.clone()
-        } else if flags & FL_ENC_CP437 != 0 {
-            entry.name_raw.iter().map(|&byte| cp437(byte)).collect::<String>().into_bytes()
-        } else if flags & FL_ENC_UTF_8 != 0 {
-            entry.name_raw.clone()
-        } else {
-            entry.name.clone()
-        };
-        Some(bytes)
-    });
-    match value { Some(value) => result_hex(&value), None => result_empty() }
-}
-
-/// Returns the default decoded name bytes for a raw byte sequence.
-fn cp437(byte: u8) -> char {
-    if byte < 0x80 { return char::from(byte); }
-    const TABLE: &[char] = &[
-        'Ç','ü','é','â','ä','à','å','ç','ê','ë','è','ï','î','ì','Ä','Å','É','æ','Æ','ô','ö','ò','û','ù','ÿ','Ö','Ü','¢','£','¥','₧','ƒ',
-        'á','í','ó','ú','ñ','Ñ','ª','º','¿','⌐','¬','½','¼','¡','«','»','░','▒','▓','│','┤','╡','╢','╖','╕','╣','║','╗','╝','╜','╛','┐',
-        '└','┴','┬','├','─','┼','╞','╟','╚','╔','╩','╦','╠','═','╬','╧','╨','╤','╥','╙','╘','╒','╓','╫','╪','┘','┌','█','▄','▌','▐','▀',
-        'α','ß','Γ','π','Σ','σ','µ','τ','Φ','Θ','Ω','δ','∞','φ','ε','∩','≡','±','≥','≤','⌠','⌡','÷','≈','°','∙','·','√','ⁿ','²','■','\u{a0}',
-    ];
-    TABLE[(byte - 0x80) as usize]
+pub extern "C" fn elephc_zip_name(handle: i64, index: i64, _raw: i64, flags: i64) -> *const c_char {
+    let value = with_archive(handle, None, |archive| archive.name(index, flags));
+    match value {
+        Some(value) => result_hex(&value),
+        None => result_empty(),
+    }
 }
 
 /// Locates an entry by name, honoring case/directory/unchanged flags.
@@ -256,62 +255,63 @@ fn cp437(byte: u8) -> char {
 pub unsafe extern "C" fn elephc_zip_locate(handle: i64, name: *const c_char, name_len: i64, flags: i64) -> i64 {
     let wanted = bytes(name, name_len);
     with_archive(handle, -1, |archive| match archive.locate(&wanted, flags) {
-        Some(index) => { archive.success(); index as i64 }
-        None => { archive.fail(ZipError::NoEnt); -1 }
+        Some(index) => {
+            archive.succeed();
+            index
+        }
+        None => -1,
     })
 }
 
-/// Returns a numeric stat field for an index.
+/// Returns one numeric stat field for an index.
 #[no_mangle]
 pub extern "C" fn elephc_zip_stat_index(handle: i64, index: i64, flags: i64, field: i64) -> i64 {
-    with_archive(handle, -1, |archive| match stat_field(archive, index as usize, flags, field) {
-        Ok(value) => { archive.success(); value }
-        Err(error) => { archive.fail(error); -1 }
-    })
+    stat_field(handle, field, |archive| archive.stat(index, flags))
 }
 
-/// Returns a numeric stat field for a name.
+/// Returns one numeric stat field for a name.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_stat_name(handle: i64, name: *const c_char, name_len: i64, flags: i64, field: i64) -> i64 {
     let wanted = bytes(name, name_len);
-    with_archive(handle, -1, |archive| {
-        let Some(index) = archive.locate(&wanted, flags) else { archive.fail(ZipError::NoEnt); return -1 };
-        match stat_field(archive, index, flags, field) {
-            Ok(value) => { archive.success(); value }
-            Err(error) => { archive.fail(error); -1 }
-        }
-    })
+    stat_field(handle, field, |archive| archive.stat_name(&wanted, flags))
 }
 
-/// Reads one numeric field from an entry.
-fn stat_field(archive: &Archive, index: usize, flags: i64, field: i64) -> Result<i64, ZipError> {
-    let entry = if flags & FL_UNCHANGED != 0 { archive.original.get(index) } else { archive.entries.get(index) }
-        .filter(|entry| !entry.deleted)
-        .ok_or(ZipError::NoEnt)?;
-    Ok(match field {
-        0 => index as i64,
-        1 => i64::from(entry.crc),
-        2 => entry.size as i64,
-        3 => entry.mtime,
-        4 => entry.comp_size as i64,
-        5 => entry.method,
-        6 => entry.encryption,
-        7 => i64::from(entry.flags),
-        _ => return Err(ZipError::Invalid),
+/// Reads one numeric field from an entry stat record.
+fn stat_field(
+    handle: i64,
+    field: i64,
+    stat: impl FnOnce(&Archive) -> Result<crate::ffi::zip_stat, crate::error::ZipError>,
+) -> i64 {
+    with_archive(handle, -1, |archive| match stat(archive) {
+        Ok(stat) => {
+            archive.succeed();
+            match field {
+                0 => stat.index as i64,
+                1 => i64::from(stat.crc),
+                2 => stat.size as i64,
+                3 => stat.mtime,
+                4 => stat.comp_size as i64,
+                5 => i64::from(stat.comp_method),
+                6 => i64::from(stat.encryption_method),
+                7 => i64::from(stat.flags),
+                _ => -1,
+            }
+        }
+        Err(error) => {
+            record_failure(archive, error);
+            -1
+        }
     })
 }
 
 /// Returns one entry comment as hex.
 #[no_mangle]
 pub extern "C" fn elephc_zip_comment_index(handle: i64, index: i64, flags: i64) -> *const c_char {
-    let value = with_archive(handle, None, |archive| {
-        if flags & FL_UNCHANGED != 0 {
-            archive.original.get(index as usize).map(|entry| entry.comment.clone())
-        } else {
-            archive.entries.get(index as usize).filter(|entry| !entry.deleted).map(|entry| entry.comment.clone())
-        }
-    });
-    match value { Some(value) => result_hex(&value), None => result_empty() }
+    let value = with_archive(handle, None, |archive| archive.comment(index, flags));
+    match value {
+        Some(value) => result_hex(&value),
+        None => result_empty(),
+    }
 }
 
 /// Returns one entry comment by name as hex.
@@ -319,49 +319,56 @@ pub extern "C" fn elephc_zip_comment_index(handle: i64, index: i64, flags: i64) 
 pub unsafe extern "C" fn elephc_zip_comment_name(handle: i64, name: *const c_char, name_len: i64, flags: i64) -> *const c_char {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, flags));
-    match index { Some(index) => elephc_zip_comment_index(handle, index as i64, flags), None => result_empty() }
+    match index {
+        Some(index) => elephc_zip_comment_index(handle, index, flags),
+        None => result_empty(),
+    }
 }
 
 /// Reads an entry payload as hex, honoring `len`, `FL_COMPRESSED`, and `FL_UNCHANGED`.
 #[no_mangle]
 pub extern "C" fn elephc_zip_get_index(handle: i64, index: i64, len: i64, flags: i64) -> *const c_char {
-    let value = with_archive(handle, None, |archive| {
-        let result = if flags & FL_COMPRESSED != 0 {
-            archive.compressed_payload(index as usize, flags)
-        } else {
-            archive.payload(index as usize, flags, None)
-        };
-        match result {
-            Ok(mut data) => {
-                if len > 0 && (len as usize) < data.len() { data.truncate(len as usize); }
-                archive.success();
-                Some(data)
+    let value = with_archive(handle, None, |archive| match archive.payload(index, flags) {
+        Ok(mut data) => {
+            if len > 0 && (len as usize) < data.len() {
+                data.truncate(len as usize);
             }
-            Err(error) => { archive.fail(error); None }
+            archive.succeed();
+            Some(data)
+        }
+        Err(error) => {
+            record_failure(archive, error);
+            None
         }
     });
-    match value { Some(value) => result_hex(&value), None => result_empty() }
+    match value {
+        Some(value) => result_hex(&value),
+        None => result_empty(),
+    }
 }
 
 /// Reads an entry payload for a stream wrapper as hex, preserving CRC mismatches.
 #[no_mangle]
 pub extern "C" fn elephc_zip_get_index_stream(handle: i64, index: i64, len: i64, flags: i64) -> *const c_char {
-    let value = with_archive(handle, None, |archive| {
-        match archive.payload_stream(index as usize, flags, None) {
-            Ok((mut data, crc_error)) => {
-                STREAM_CRC_ERROR.with(|flag| flag.set(crc_error));
-                if len > 0 && (len as usize) < data.len() { data.truncate(len as usize); }
-                archive.success();
-                Some(data)
+    let value = with_archive(handle, None, |archive| match archive.payload_stream(index, flags) {
+        Ok((mut data, crc_error)) => {
+            STREAM_CRC_ERROR.with(|flag| flag.set(crc_error));
+            if len > 0 && (len as usize) < data.len() {
+                data.truncate(len as usize);
             }
-            Err(error) => {
-                STREAM_CRC_ERROR.with(|flag| flag.set(false));
-                archive.fail(error);
-                None
-            }
+            archive.succeed();
+            Some(data)
+        }
+        Err(error) => {
+            STREAM_CRC_ERROR.with(|flag| flag.set(false));
+            record_failure(archive, error);
+            None
         }
     });
-    match value { Some(value) => result_hex(&value), None => result_empty() }
+    match value {
+        Some(value) => result_hex(&value),
+        None => result_empty(),
+    }
 }
 
 /// Returns whether the last `elephc_zip_get_index_stream` saw a CRC mismatch.
@@ -375,115 +382,132 @@ pub extern "C" fn elephc_zip_stream_crc_error() -> i64 {
 pub unsafe extern "C" fn elephc_zip_get_name(handle: i64, name: *const c_char, name_len: i64, len: i64, flags: i64) -> *const c_char {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, flags));
-    match index { Some(index) => elephc_zip_get_index(handle, index as i64, len, flags), None => result_empty() }
+    match index {
+        Some(index) => elephc_zip_get_index(handle, index, len, flags),
+        None => result_empty(),
+    }
 }
 
 /// Adds an in-memory entry and returns its index.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_add_from_string(
-    handle: i64, name: *const c_char, name_len: i64, data: *const c_char, data_len: i64, flags: i64,
+    handle: i64,
+    name: *const c_char,
+    name_len: i64,
+    data: *const c_char,
+    data_len: i64,
+    flags: i64,
 ) -> i64 {
     let name = bytes(name, name_len);
     let payload = bytes(data, data_len);
-    mutation(handle, |archive| archive.add_from_string(&name, payload, flags).map(|index| index as i64))
+    mutation(handle, |archive| archive.add_from_string(&name, payload, flags))
 }
 
 /// Adds a directory entry and returns its index.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_add_dir(handle: i64, name: *const c_char, name_len: i64, flags: i64) -> i64 {
     let name = bytes(name, name_len);
-    mutation(handle, |archive| archive.add_directory(&name, flags).map(|index| index as i64))
+    mutation(handle, |archive| archive.add_directory(&name, flags))
 }
 
 /// Adds a file slice and returns its index; `-2` means the source file is missing.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_add_file(
-    handle: i64, path: *const c_char, path_len: i64, entry: *const c_char, entry_len: i64,
-    start: i64, length: i64, flags: i64,
+    handle: i64,
+    path: *const c_char,
+    path_len: i64,
+    entry: *const c_char,
+    entry_len: i64,
+    start: i64,
+    length: i64,
+    flags: i64,
 ) -> i64 {
     let path = bytes(path, path_len);
     let entry = bytes(entry, entry_len);
     let Ok(path) = String::from_utf8(path) else { return -3 };
-    let Ok(data) = std::fs::read(&path) else {
-        with_archive(handle, (), |archive| { archive.last_id = -1; });
-        return -2;
-    };
-    let Some(slice) = slice_data(&data, start, length) else { return invalid_parameter(handle) };
-    let name = if entry.is_empty() { path.as_bytes().to_vec() } else { entry };
-    let remember = (flags & 0x4000_0000) == 0;
-    let source = remember.then(|| path.clone());
-    mutation(handle, |archive| archive.add_from_path(&name, slice, flags, source).map(|index| index as i64))
+    let result = with_archive(handle, -2, |archive| {
+        match archive.add_or_replace_file(&path, Some(&entry), start, length, flags, None) {
+            Ok(index) => index,
+            Err(crate::error::ZipError::Open) => {
+                archive.last_id = -1;
+                -2
+            }
+            Err(error) => {
+                archive.last_id = -1;
+                record_failure(archive, error);
+                -1
+            }
+        }
+    });
+    result
 }
 
 /// Replaces an entry's payload from a file slice; `-2` means the source file is missing.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_replace_file(
-    handle: i64, path: *const c_char, path_len: i64, index: i64, start: i64, length: i64, _flags: i64,
+    handle: i64,
+    path: *const c_char,
+    path_len: i64,
+    index: i64,
+    start: i64,
+    length: i64,
+    flags: i64,
 ) -> i64 {
     let path = bytes(path, path_len);
     let Ok(path) = String::from_utf8(path) else { return -3 };
-    let Ok(data) = std::fs::read(&path) else {
-        with_archive(handle, (), |archive| { archive.last_id = -1; });
-        return -2;
-    };
-    let Some(slice) = slice_data(&data, start, length) else { return invalid_parameter(handle) };
-    mutation(handle, |archive| archive.replace_entry(index as usize, slice).map(|value| value as i64))
-}
-
-/// Returns a file-data slice for `addFile`/`replaceFile` range arguments.
-fn slice_data(data: &[u8], start: i64, length: i64) -> Option<Vec<u8>> {
-    if start < 0 { return None; }
-    let start = start as usize;
-    if start > data.len() { return None; }
-    let end = match length {
-        LENGTH_TO_END | LENGTH_UNCHECKED => data.len(),
-        value if value < 0 => return None,
-        value => start.checked_add(value as usize)?.min(data.len()),
-    };
-    if length > 0 && end != start + length as usize { return None; }
-    Some(data[start..end].to_vec())
-}
-
-/// Records `ER_INVAL` for a malformed range argument and answers the failure sentinel.
-fn invalid_parameter(handle: i64) -> i64 {
-    with_archive(handle, -1, |archive| {
-        archive.fail(ZipError::Invalid);
-        -1
+    with_archive(handle, -2, |archive| {
+        match archive.add_or_replace_file(&path, None, start, length, flags, Some(index)) {
+            Ok(_) => 1,
+            Err(crate::error::ZipError::Open) => -2,
+            Err(error) => {
+                record_failure(archive, error);
+                -1
+            }
+        }
     })
 }
 
 /// Deletes one entry.
 #[no_mangle]
 pub extern "C" fn elephc_zip_delete(handle: i64, index: i64) -> i64 {
-    mutation(handle, |archive| archive.delete(index as usize).map(|_| 1))
+    mutation_unit(handle, |archive| archive.delete(index))
 }
 
 /// Renames one entry.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_rename(handle: i64, index: i64, name: *const c_char, name_len: i64) -> i64 {
     let name = bytes(name, name_len);
-    mutation(handle, |archive| archive.rename(index as usize, &name).map(|_| 1))
+    mutation_unit(handle, |archive| archive.rename(index, &name))
 }
 
 /// Sets one entry comment.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_set_comment_index(handle: i64, index: i64, comment: *const c_char, comment_len: i64) -> i64 {
     let comment = bytes(comment, comment_len);
-    mutation(handle, |archive| archive.set_comment(index as usize, &comment).map(|_| 1))
+    mutation_unit(handle, |archive| archive.set_comment(index, &comment))
 }
 
 /// Sets one entry comment by name.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_zip_set_comment_name(handle: i64, name: *const c_char, name_len: i64, comment: *const c_char, comment_len: i64) -> i64 {
+pub unsafe extern "C" fn elephc_zip_set_comment_name(
+    handle: i64,
+    name: *const c_char,
+    name_len: i64,
+    comment: *const c_char,
+    comment_len: i64,
+) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_set_comment_index(handle, index as i64, comment, comment_len), None => -1 }
+    match index {
+        Some(index) => elephc_zip_set_comment_index(handle, index, comment, comment_len),
+        None => -1,
+    }
 }
 
 /// Sets one entry mtime.
 #[no_mangle]
-pub extern "C" fn elephc_zip_set_mtime_index(handle: i64, index: i64, timestamp: i64, _flags: i64) -> i64 {
-    mutation(handle, |archive| archive.set_mtime(index as usize, timestamp).map(|_| 1))
+pub extern "C" fn elephc_zip_set_mtime_index(handle: i64, index: i64, timestamp: i64, flags: i64) -> i64 {
+    mutation_unit(handle, |archive| archive.set_mtime(index, timestamp, flags))
 }
 
 /// Sets one entry mtime by name.
@@ -491,13 +515,16 @@ pub extern "C" fn elephc_zip_set_mtime_index(handle: i64, index: i64, timestamp:
 pub unsafe extern "C" fn elephc_zip_set_mtime_name(handle: i64, name: *const c_char, name_len: i64, timestamp: i64, flags: i64) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_set_mtime_index(handle, index as i64, timestamp, flags), None => -1 }
+    match index {
+        Some(index) => elephc_zip_set_mtime_index(handle, index, timestamp, flags),
+        None => -1,
+    }
 }
 
 /// Sets one entry's compression method.
 #[no_mangle]
-pub extern "C" fn elephc_zip_set_compression_index(handle: i64, index: i64, method: i64, _compflags: i64) -> i64 {
-    mutation(handle, |archive| archive.set_compression(index as usize, method).map(|_| 1))
+pub extern "C" fn elephc_zip_set_compression_index(handle: i64, index: i64, method: i64, compflags: i64) -> i64 {
+    mutation_unit(handle, |archive| archive.set_compression(index, method, compflags))
 }
 
 /// Sets one entry's compression method by name.
@@ -505,53 +532,94 @@ pub extern "C" fn elephc_zip_set_compression_index(handle: i64, index: i64, meth
 pub unsafe extern "C" fn elephc_zip_set_compression_name(handle: i64, name: *const c_char, name_len: i64, method: i64, compflags: i64) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_set_compression_index(handle, index as i64, method, compflags), None => -1 }
+    match index {
+        Some(index) => elephc_zip_set_compression_index(handle, index, method, compflags),
+        None => -1,
+    }
 }
 
 /// Sets one entry's encryption method.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_zip_set_encryption_index(handle: i64, index: i64, method: i64, password: *const c_char, password_len: i64) -> i64 {
+pub unsafe extern "C" fn elephc_zip_set_encryption_index(
+    handle: i64,
+    index: i64,
+    method: i64,
+    password: *const c_char,
+    password_len: i64,
+) -> i64 {
     let password = if password_len < 0 { None } else { Some(bytes(password, password_len)) };
-    mutation(handle, |archive| archive.set_encryption(index as usize, method, password).map(|_| 1))
+    mutation_unit(handle, |archive| archive.set_encryption(index, method, password.as_deref()))
 }
 
 /// Sets one entry's encryption method by name.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_zip_set_encryption_name(handle: i64, name: *const c_char, name_len: i64, method: i64, password: *const c_char, password_len: i64) -> i64 {
+pub unsafe extern "C" fn elephc_zip_set_encryption_name(
+    handle: i64,
+    name: *const c_char,
+    name_len: i64,
+    method: i64,
+    password: *const c_char,
+    password_len: i64,
+) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_set_encryption_index(handle, index as i64, method, password, password_len), None => -1 }
+    match index {
+        Some(index) => elephc_zip_set_encryption_index(handle, index, method, password, password_len),
+        None => -1,
+    }
 }
 
 /// Sets one entry's external attributes.
 #[no_mangle]
-pub extern "C" fn elephc_zip_set_external_attributes_index(handle: i64, index: i64, opsys: i64, attr: i64, _flags: i64) -> i64 {
-    mutation(handle, |archive| archive.set_external_attributes(index as usize, opsys, attr as u32).map(|_| 1))
+pub extern "C" fn elephc_zip_set_external_attributes_index(handle: i64, index: i64, opsys: i64, attr: i64, flags: i64) -> i64 {
+    mutation_unit(handle, |archive| archive.set_external_attributes(index, opsys, attr as u32, flags))
 }
 
 /// Sets one entry's external attributes by name.
 #[no_mangle]
-pub unsafe extern "C" fn elephc_zip_set_external_attributes_name(handle: i64, name: *const c_char, name_len: i64, opsys: i64, attr: i64, flags: i64) -> i64 {
+pub unsafe extern "C" fn elephc_zip_set_external_attributes_name(
+    handle: i64,
+    name: *const c_char,
+    name_len: i64,
+    opsys: i64,
+    attr: i64,
+    flags: i64,
+) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_set_external_attributes_index(handle, index as i64, opsys, attr, flags), None => -1 }
+    match index {
+        Some(index) => elephc_zip_set_external_attributes_index(handle, index, opsys, attr, flags),
+        None => -1,
+    }
 }
 
 /// Returns one entry's `OPSYS_*` value.
 #[no_mangle]
 pub extern "C" fn elephc_zip_external_opsys(handle: i64, index: i64, flags: i64) -> i64 {
-    with_archive(handle, -1, |archive| match archive.external_attributes(index as usize, flags) {
-        Ok((opsys, _)) => { archive.success(); opsys }
-        Err(error) => { archive.fail(error); -1 }
+    with_archive(handle, -1, |archive| match archive.external_attributes(index, flags) {
+        Ok((opsys, _)) => {
+            archive.succeed();
+            opsys
+        }
+        Err(error) => {
+            record_failure(archive, error);
+            -1
+        }
     })
 }
 
 /// Returns one entry's external attribute bit field.
 #[no_mangle]
 pub extern "C" fn elephc_zip_external_attr(handle: i64, index: i64, flags: i64) -> i64 {
-    with_archive(handle, -1, |archive| match archive.external_attributes(index as usize, flags) {
-        Ok((_, attr)) => { archive.success(); i64::from(attr) }
-        Err(error) => { archive.fail(error); -1 }
+    with_archive(handle, -1, |archive| match archive.external_attributes(index, flags) {
+        Ok((_, attr)) => {
+            archive.succeed();
+            i64::from(attr)
+        }
+        Err(error) => {
+            record_failure(archive, error);
+            -1
+        }
     })
 }
 
@@ -560,7 +628,10 @@ pub extern "C" fn elephc_zip_external_attr(handle: i64, index: i64, flags: i64) 
 pub unsafe extern "C" fn elephc_zip_external_opsys_name(handle: i64, name: *const c_char, name_len: i64, flags: i64) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_external_opsys(handle, index as i64, flags), None => -1 }
+    match index {
+        Some(index) => elephc_zip_external_opsys(handle, index, flags),
+        None => -1,
+    }
 }
 
 /// Returns the external attribute bit field for an entry name.
@@ -568,55 +639,48 @@ pub unsafe extern "C" fn elephc_zip_external_opsys_name(handle: i64, name: *cons
 pub unsafe extern "C" fn elephc_zip_external_attr_name(handle: i64, name: *const c_char, name_len: i64, flags: i64) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_external_attr(handle, index as i64, flags), None => -1 }
+    match index {
+        Some(index) => elephc_zip_external_attr(handle, index, flags),
+        None => -1,
+    }
 }
 
 /// Sets the archive comment.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_set_archive_comment(handle: i64, comment: *const c_char, comment_len: i64) -> i64 {
     let comment = bytes(comment, comment_len);
-    mutation(handle, |archive| archive.set_archive_comment(&comment).map(|_| 1))
+    mutation_unit(handle, |archive| archive.set_archive_comment(&comment))
 }
 
 /// Sets the archive default password.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_set_password(handle: i64, password: *const c_char, password_len: i64) -> i64 {
     let password = bytes(password, password_len);
-    mutation(handle, |archive| {
-        archive.password = Some(password);
-        archive.success();
-        Ok(1)
-    })
+    mutation_unit(handle, |archive| archive.set_password(&password))
 }
 
 /// Gets one archive flag.
 #[no_mangle]
-pub extern "C" fn elephc_zip_archive_flag(handle: i64, flag: i64, _flags: i64) -> i64 {
-    with_archive(handle, 0, |archive| match flag {
-        AFL_RDONLY => i64::from(archive.archive_flags & AFL_RDONLY != 0),
-        AFL_IS_TORRENTZIP => i64::from(archive.archive_flags & AFL_IS_TORRENTZIP != 0),
-        AFL_WANT_TORRENTZIP => i64::from(archive.archive_flags & AFL_WANT_TORRENTZIP != 0),
-        AFL_KEEP_EMPTY => i64::from(archive.archive_flags & AFL_KEEP_EMPTY != 0),
-        _ => 0,
-    })
+pub extern "C" fn elephc_zip_archive_flag(handle: i64, flag: i64, flags: i64) -> i64 {
+    with_archive(handle, 0, |archive| archive.archive_flag(flag, flags))
 }
 
 /// Sets one archive flag.
 #[no_mangle]
 pub extern "C" fn elephc_zip_set_archive_flag(handle: i64, flag: i64, value: i64) -> i64 {
-    mutation(handle, |archive| archive.set_archive_flag(flag, value).map(|_| 1))
+    mutation_unit(handle, |archive| archive.set_archive_flag(flag, value))
 }
 
 /// Reverts all changes.
 #[no_mangle]
 pub extern "C" fn elephc_zip_unchange_all(handle: i64) -> i64 {
-    mutation(handle, |archive| archive.unchange_all().map(|_| 1))
+    mutation_unit(handle, |archive| archive.unchange_all())
 }
 
 /// Reverts one entry.
 #[no_mangle]
 pub extern "C" fn elephc_zip_unchange_index(handle: i64, index: i64) -> i64 {
-    mutation(handle, |archive| archive.unchange_index(index as usize).map(|_| 1))
+    mutation_unit(handle, |archive| archive.unchange_index(index))
 }
 
 /// Reverts one entry by name.
@@ -624,35 +688,44 @@ pub extern "C" fn elephc_zip_unchange_index(handle: i64, index: i64) -> i64 {
 pub unsafe extern "C" fn elephc_zip_unchange_name(handle: i64, name: *const c_char, name_len: i64) -> i64 {
     let wanted = bytes(name, name_len);
     let index = with_archive(handle, None, |archive| archive.locate(&wanted, 0));
-    match index { Some(index) => elephc_zip_unchange_index(handle, index as i64), None => -1 }
+    match index {
+        Some(index) => elephc_zip_unchange_index(handle, index),
+        None => -1,
+    }
 }
 
 /// Reverts the archive comment and flags.
 #[no_mangle]
 pub extern "C" fn elephc_zip_unchange_archive(handle: i64) -> i64 {
-    mutation(handle, |archive| archive.unchange_archive().map(|_| 1))
+    mutation_unit(handle, |archive| archive.unchange_archive())
 }
 
 /// Extracts selected entries into a destination directory.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_extract(
-    handle: i64, destination: *const c_char, destination_len: i64,
-    selection: *const c_char, selection_len: i64,
+    handle: i64,
+    destination: *const c_char,
+    destination_len: i64,
+    selection: *const c_char,
+    selection_len: i64,
 ) -> i64 {
     let destination = String::from_utf8_lossy(&bytes(destination, destination_len)).into_owned();
     let selection = crate::extract::parse_selection(&bytes(selection, selection_len));
-    mutation(handle, |archive| {
-        crate::extract::extract_to(archive, &destination, selection.as_deref()).map(|_| 1)
+    mutation_unit(handle, |archive| {
+        crate::extract::extract_to(archive, &destination, selection.as_deref())
     })
 }
 
-/// Matches a PCRE-style `/pattern/flags` against a subject using the pure-Rust engine.
+/// Matches a PCRE-style `/pattern/flags` against a subject using the shared regex engine.
 ///
 /// Returns 1 on a match, 0 on no match, and -1 for an invalid expression. The prelude
 /// owns PHP's warning strings; this entry point only answers the match question.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_zip_pattern_match(
-    pattern: *const c_char, pattern_len: i64, subject: *const c_char, subject_len: i64,
+    pattern: *const c_char,
+    pattern_len: i64,
+    subject: *const c_char,
+    subject_len: i64,
 ) -> i64 {
     let pattern = bytes(pattern, pattern_len);
     let subject = bytes(subject, subject_len);
@@ -696,17 +769,22 @@ fn pcre_body(pattern: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
 /// Reports whether a compression method is available.
 #[no_mangle]
 pub extern "C" fn elephc_zip_compression_supported(method: i64, encode: i64) -> i64 {
-    i64::from(crate::compress::supported_compression(method, encode != 0))
+    i64::from(unsafe { crate::ffi::zip_compression_method_supported(method as i32, i64::from(encode != 0) as i32) })
 }
 
 /// Reports whether an encryption method is available.
 #[no_mangle]
 pub extern "C" fn elephc_zip_encryption_supported(method: i64, encode: i64) -> i64 {
-    i64::from(crate::compress::supported_encryption(method, encode != 0))
+    i64::from(unsafe { crate::ffi::zip_encryption_method_supported(method as u16, i64::from(encode != 0) as i32) })
 }
 
-/// Returns the libzip compatibility version string.
+/// Returns the linked libzip version string.
 #[no_mangle]
 pub extern "C" fn elephc_zip_version() -> *const c_char {
-    result_text(crate::engine_version())
+    let pointer = unsafe { crate::ffi::zip_libzip_version() };
+    if pointer.is_null() {
+        return result_text("1.11.4");
+    }
+    let version = unsafe { CStr::from_ptr(pointer) }.to_string_lossy();
+    result_text(&version)
 }

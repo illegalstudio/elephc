@@ -2870,6 +2870,21 @@ fn decl_fn_zip_open() -> Stmt {
                 vec![],
                 None,
             ),
+            // php-src's procedural zip_open() calls libzip directly with flags 0, unlike
+            // ZipArchive::open(), which promotes a zero-byte file to ZIP_TRUNCATE. Keep the
+            // deprecated API's ER_NOZIP result instead of inheriting the OO compatibility path.
+            s_if(
+                e_binop(
+                    e_call("is_file", vec![e_var("filename")]),
+                    BinOp::And,
+                    e_binop(e_call("filesize", vec![e_var("filename")]), BinOp::StrictEq, e_int(0)),
+                ),
+                vec![
+                    s_return(e_int(19)),
+                ],
+                vec![],
+                None,
+            ),
             s_assign("archive", e_new("ZipArchive", vec![])),
             s_assign("opened", e_method_call(e_var("archive"), "open", vec![e_var("filename")])),
             s_if(

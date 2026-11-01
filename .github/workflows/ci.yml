@@ -239,6 +239,17 @@ jobs:
           restore-keys: |
             libxml2-native-macos-aarch64-
 
+      - name: Cache managed native libzip
+        # The zip bridge's engine is libzip itself (the managed `libzip` catalog
+        # package plus its bzip2/LZMA/zlib/OpenSSL chain, see
+        # src/native_deps/recipes/libzip.rs). Same shared cache path and recipe
+        # inputs as the libxml2 entry above; the codegen shards restore this key.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libzip-native-macos-aarch64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libzip-native-macos-aarch64-
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
@@ -257,6 +268,14 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libzip
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
@@ -309,6 +328,17 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
             cargo test -p elephc-xml
 
+      - name: Test the zip bridge against managed libzip
+        # crates/elephc-zip/build.rs reads ELEPHC_ZIP_NATIVE_LIB_DIRS (the libzip,
+        # bzip2, xz, zlib, and openssl lib/ directories in link order), links the six
+        # archives into the crate's test binary and compiles the libzip-calling tests
+        # in behind cfg(elephc_zip_native). Without the variable the crate takes the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the archive
+        # was taken so the plain libelephc_zip.a every codegen shard links is never
+        # the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_ZIP_NATIVE_LIB_DIRS="$(sh scripts/ci/zip_lib_dirs.sh macos-aarch64)" \
+            cargo test -p elephc-zip
       - name: Upload test archive
         # Only when this run's test jobs for the platform consume it (see `plan`).
         if: needs.plan.outputs.extended == 'true'
@@ -455,6 +485,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-x86_64-
 
+      - name: Cache managed native libzip
+        # The zip bridge's engine is libzip itself (the managed `libzip` catalog
+        # package plus its bzip2/LZMA/zlib/OpenSSL chain, see
+        # src/native_deps/recipes/libzip.rs). Same shared cache path and recipe
+        # inputs as the libxml2 entry above; the codegen shards restore this key.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libzip-native-linux-x86_64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libzip-native-linux-x86_64-
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
@@ -473,6 +514,14 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libzip
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
@@ -525,6 +574,17 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
             cargo test -p elephc-xml
 
+      - name: Test the zip bridge against managed libzip
+        # crates/elephc-zip/build.rs reads ELEPHC_ZIP_NATIVE_LIB_DIRS (the libzip,
+        # bzip2, xz, zlib, and openssl lib/ directories in link order), links the six
+        # archives into the crate's test binary and compiles the libzip-calling tests
+        # in behind cfg(elephc_zip_native). Without the variable the crate takes the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the archive
+        # was taken so the plain libelephc_zip.a every codegen shard links is never
+        # the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_ZIP_NATIVE_LIB_DIRS="$(sh scripts/ci/zip_lib_dirs.sh linux-x86_64)" \
+            cargo test -p elephc-zip
       - name: Upload test archive
         # Only when this run's test jobs for the platform consume it (see `plan`).
         if: needs.plan.outputs.run == 'true'
@@ -663,6 +723,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-aarch64-
 
+      - name: Cache managed native libzip
+        # The zip bridge's engine is libzip itself (the managed `libzip` catalog
+        # package plus its bzip2/LZMA/zlib/OpenSSL chain, see
+        # src/native_deps/recipes/libzip.rs). Same shared cache path and recipe
+        # inputs as the libxml2 entry above; the codegen shards restore this key.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libzip-native-linux-aarch64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libzip-native-linux-aarch64-
       - name: Cache managed native gmp
         # The gmp bridge links the managed `gmp` catalog package; keyed on the
         # committed lock plus the recipe sources that decide what gets built.
@@ -681,6 +752,14 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libzip
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Ensure GMP configure dependency
         # GMP's configure needs a usable m4. The prebuilt CI image may predate this
@@ -733,6 +812,17 @@ jobs:
           ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
             cargo test -p elephc-xml
 
+      - name: Test the zip bridge against managed libzip
+        # crates/elephc-zip/build.rs reads ELEPHC_ZIP_NATIVE_LIB_DIRS (the libzip,
+        # bzip2, xz, zlib, and openssl lib/ directories in link order), links the six
+        # archives into the crate's test binary and compiles the libzip-calling tests
+        # in behind cfg(elephc_zip_native). Without the variable the crate takes the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the archive
+        # was taken so the plain libelephc_zip.a every codegen shard links is never
+        # the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_ZIP_NATIVE_LIB_DIRS="$(sh scripts/ci/zip_lib_dirs.sh linux-aarch64)" \
+            cargo test -p elephc-zip
       - name: Upload test archive
         # Only when this run's test jobs for the platform consume it (see `plan`).
         if: needs.plan.outputs.run == 'true'
@@ -1336,6 +1426,17 @@ jobs:
           restore-keys: |
             libxml2-native-macos-aarch64-
 
+      - name: Cache managed native libzip
+        # The zip bridge's engine is libzip itself (the managed `libzip` catalog
+        # package plus its bzip2/LZMA/zlib/OpenSSL chain, see
+        # src/native_deps/recipes/libzip.rs). Same shared cache path and recipe
+        # inputs as the libxml2 entry above; the codegen shards restore this key.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libzip-native-macos-aarch64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libzip-native-macos-aarch64-
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
@@ -1356,6 +1457,14 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libzip
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
@@ -1397,6 +1506,9 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the zip PHPT corpus: libzip and its chain
+          # were materialized just above, so a missing one is a provisioning bug.
+          ELEPHC_TEST_REQUIRE_ZIP_NATIVE: "1"
           # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
@@ -1459,6 +1571,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-x86_64-
 
+      - name: Cache managed native libzip
+        # The zip bridge's engine is libzip itself (the managed `libzip` catalog
+        # package plus its bzip2/LZMA/zlib/OpenSSL chain, see
+        # src/native_deps/recipes/libzip.rs). Same shared cache path and recipe
+        # inputs as the libxml2 entry above; the codegen shards restore this key.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libzip-native-linux-x86_64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libzip-native-linux-x86_64-
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
@@ -1479,6 +1602,14 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-x86_64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libzip
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
@@ -1520,6 +1651,9 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the zip PHPT corpus: libzip and its chain
+          # were materialized just above, so a missing one is a provisioning bug.
+          ELEPHC_TEST_REQUIRE_ZIP_NATIVE: "1"
           # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
@@ -1582,6 +1716,17 @@ jobs:
           restore-keys: |
             libxml2-native-linux-aarch64-
 
+      - name: Cache managed native libzip
+        # The zip bridge's engine is libzip itself (the managed `libzip` catalog
+        # package plus its bzip2/LZMA/zlib/OpenSSL chain, see
+        # src/native_deps/recipes/libzip.rs). Same shared cache path and recipe
+        # inputs as the libxml2 entry above; the codegen shards restore this key.
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/elephc/native
+          key: libzip-native-linux-aarch64-${{ hashFiles('examples/zip/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libzip.rs', 'src/native_deps/recipes/bzip2.rs', 'src/native_deps/recipes/xz.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            libzip-native-linux-aarch64-
       - name: Extract test archive
         # The same nextest archive that carries the codegen_tests binary also carries
         # target/debug/elephc (see the archive notes in .config/nextest.toml); the
@@ -1602,6 +1747,14 @@ jobs:
           "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/xml/elephc.toml
+
+      - name: Materialize managed native libzip
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/zip/elephc.lock builds libzip + bzip2 + xz + zlib + openssl.
+        run: |
+          "$RUNNER_TEMP/nextest/target/debug/elephc" native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/zip/elephc.toml
 
       - name: Cache managed native gmp
         # GMP PHPT fixtures link the elephc_gmp bridge against the managed gmp
@@ -1643,6 +1796,9 @@ jobs:
           # A missing libxml2 artifact must FAIL an xml fixture here, never skip it:
           # the package was materialized just above, so absence is a provisioning bug.
           ELEPHC_TEST_REQUIRE_XML_NATIVE: "1"
+          # Same fail-closed rule for the zip PHPT corpus: libzip and its chain
+          # were materialized just above, so a missing one is a provisioning bug.
+          ELEPHC_TEST_REQUIRE_ZIP_NATIVE: "1"
           # Same fail-closed rule for the GMP PHPT corpus: the managed libgmp
           # artifact was materialized just above, so a missing one is a bug.
           ELEPHC_TEST_REQUIRE_GMP_NATIVE: "1"
@@ -3130,7 +3286,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.run == 'true'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -3154,6 +3310,10 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Install iOS Rust targets
+        if: matrix.target == 'macos-aarch64'
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 
       - name: Cache Rust build state
         # Dependencies only (registry, git checkouts, and the dependency
@@ -3180,7 +3340,7 @@ jobs:
         # runtime's phar stream feature.
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
+          sudo apt-get install -y binutils build-essential cmake file libbz2-dev zlib1g-dev
 
       - name: Build elephc
         run: cargo build --bin elephc
@@ -3253,6 +3413,25 @@ jobs:
               --manifest-path "$RUNNER_TEMP/oniguruma-$target/elephc.toml"
           done
 
+      - name: Build libzip and its iOS chain for device and Simulator
+        # The same managed package recipes run under the Xcode toolchain for both
+        # iOS targets: bzip2 and xz via their configure/Makefile paths, OpenSSL via
+        # its ios64-xcrun/iossimulator-arm64-xcrun configurations (no-asm), and
+        # libzip via a generated CMake toolchain file. This is the native half of
+        # the all-targets contract; the Rust bridge itself is checked separately.
+        if: matrix.target == 'macos-aarch64'
+        shell: bash
+        run: |
+          for target in ios-arm64 ios-sim-arm64; do
+            source scripts/ci/configure_ios_native_toolchain.sh "$target"
+            mkdir -p "$RUNNER_TEMP/zip-$target"
+            ./target/debug/elephc native add libzip \
+              --target "$target" \
+              --manifest-path "$RUNNER_TEMP/zip-$target/elephc.toml"
+          done
+          cargo build -p elephc-zip --target aarch64-apple-ios
+          cargo build -p elephc-zip --target aarch64-apple-ios-sim
+
       - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
         # curl's recipe declares libssh2, nghttp2, openssl and zlib as
         # dependencies, and libssh2 declares openssl and zlib in turn (see
@@ -3291,6 +3470,20 @@ jobs:
           git diff --exit-code -- \
             examples/xml/elephc.toml \
             examples/xml/elephc.lock
+
+      - name: Materialize catalog libzip and its compression/crypto chain from verified source
+        # libzip is the ext/zip engine itself. `elephc native add libzip` declares
+        # bzip2, xz, zlib and openssl through the catalog; the recipe compiles all
+        # five from the verified tarballs and never probes a system -lzip/-lbz2/
+        # -llzma/-lcrypto. The committed example lock must stay reproducible.
+        shell: bash
+        run: |
+          ./target/debug/elephc native add libzip \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/zip/elephc.toml
+          git diff --exit-code -- \
+            examples/zip/elephc.toml \
+            examples/zip/elephc.lock
 
       - name: Compile and run regex through the production resolver
         shell: bash
@@ -3350,6 +3543,23 @@ jobs:
           grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
           grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out"
 
+      - name: Compile and run zip through the production resolver
+        # Exercises the chain every tests/codegen/zip fixture also needs (see
+        # tests/codegen/support/zip_native.rs) end to end: the elephc_zip bridge
+        # staticlib linked against the managed libzip + bzip2 + liblzma + libz +
+        # libssl + libcrypto archives from the project's lock. The example writes,
+        # reads back, comments, extracts and streams an archive, so every asserted
+        # line proves the bridge reached real libzip.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ matrix.target }}" \
+            examples/zip/main.php
+          ./examples/zip/main > "$RUNNER_TEMP/zip.out"
+          grep -F "entries: 3" "$RUNNER_TEMP/zip.out"
+          grep -F "0 readme.txt" "$RUNNER_TEMP/zip.out"
+          grep -F "archive comment: generated" "$RUNNER_TEMP/zip.out"
+
       - name: Reinstall locked state offline
         shell: bash
         run: |
@@ -3368,6 +3578,11 @@ jobs:
             --offline \
             --target "${{ matrix.target }}" \
             --manifest-path examples/xml/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ matrix.target }}" \
+            --manifest-path examples/zip/elephc.toml
 
   frame-assertions-release:
     name: Frame assertions (release)

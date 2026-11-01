@@ -1134,6 +1134,10 @@ stream_wrapper_register('zip', '__ElephcZipStreamWrapper');
 function zip_open(string $filename) {
     trigger_error('Function zip_open() is deprecated since 8.0, use ZipArchive::open() instead', E_USER_DEPRECATED);
     if ($filename === '') { throw new \ValueError('zip_open(): Argument #1 ($filename) must not be empty'); }
+    // php-src's procedural zip_open() calls libzip directly with flags 0, unlike
+    // ZipArchive::open(), which promotes a zero-byte file to ZIP_TRUNCATE. Keep the
+    // deprecated API's ER_NOZIP result instead of inheriting the OO compatibility path.
+    if (is_file($filename) && filesize($filename) === 0) { return 19; }
     $archive = new ZipArchive();
     $opened = $archive->open($filename);
     if ($opened === false) { return 11; }

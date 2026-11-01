@@ -397,6 +397,16 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     if planned_link_libraries.iter().any(|lib| lib == "elephc_fileinfo") {
         native_requirements.push(NativeRequirement::package("libmagic"));
     }
+    // The zip bridge is a thin FFI layer over libzip, so the final link must resolve
+    // `libzip.a` plus its managed bzip2/LZMA/zlib/OpenSSL chain. Like curl and xml there is
+    // no system `-lzip` fallback: a missing managed package fails closed with the catalog's
+    // `elephc native add libzip` recovery.
+    if planned_link_libraries
+        .iter()
+        .any(|library| library == "elephc_zip")
+    {
+        native_requirements.push(NativeRequirement::package("libzip"));
+    }
     let mut resolved_native = match crate::native_deps::resolve_for_compilation(
         Path::new(filename),
         target,

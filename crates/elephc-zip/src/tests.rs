@@ -1,18 +1,19 @@
 //! Purpose:
-//! Archive-engine unit tests for creation, mutation, encryption, extraction, and reopen paths.
+//! Archive-engine unit tests for creation, mutation, encryption, extraction, and reopen
+//! paths against the real libzip 1.11.4 archives.
 //!
 //! Called from:
-//! - `cargo test -p elephc-zip` through Rust's test harness.
+//! - `cargo test -p elephc-zip` with `ELEPHC_ZIP_NATIVE_LIB_DIRS` set.
 //!
 //! Key details:
 //! - Each test uses an isolated temporary directory; no PHP compiler is involved.
-//! - Assertions exercise the same model methods the C ABI calls.
+//! - Assertions exercise the same `Archive` methods the C ABI calls.
 
 use std::path::{Path, PathBuf};
 
+use crate::archive::Archive;
 use crate::consts::*;
 use crate::error::ZipError;
-use crate::model::Archive;
 
 /// Creates and returns one isolated test directory.
 fn test_dir(name: &str) -> PathBuf {
@@ -32,17 +33,17 @@ fn archive_path(dir: &Path, name: &str) -> String {
 fn create_write_reopen_roundtrip() {
     let dir = test_dir("roundtrip");
     let path = archive_path(&dir, "test.zip");
-    let mut archive = Archive::open(path.clone(), CREATE).unwrap();
-    archive.add_from_string(b"hello.txt", b"hello world".to_vec(), FL_OVERWRITE).unwrap();
-    archive.add_directory(b"dir", 0).unwrap();
-    archive.close().unwrap();
+    let mut archive = Archive::open(path.clone(), CREATE).expect("create archive");
+    archive.add_from_string(b"hello.txt", b"hello world".to_vec(), FL_OVERWRITE).expect("add file");
+    archive.add_directory(b"dir", 0).expect("add directory");
+    archive.close().expect("close");
     assert!(Path::new(&path).is_file());
 
-    let mut reopened = Archive::open(path, 0).unwrap();
+    let mut reopened = Archive::open(path, 0).expect("reopen");
     assert_eq!(reopened.num_entries(), 2);
-    assert_eq!(reopened.payload(0, 0, None).unwrap(), b"hello world");
-    assert_eq!(reopened.entries[1].name, b"dir/");
-    reopened.close().unwrap();
+    assert_eq!(reopened.payload(0, 0).expect("payload"), b"hello world");
+    assert_eq!(reopened.name(1, 0).expect("name"), b"dir/");
+    reopened.close().expect("close reopened");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -51,13 +52,16 @@ fn create_write_reopen_roundtrip() {
 fn overwrite_reuses_the_original_index() {
     let dir = test_dir("overwrite");
     let path = archive_path(&dir, "test.zip");
-    let mut archive = Archive::open(path, CREATE).unwrap();
-    assert_eq!(archive.add_from_string(b"a.txt", b"one".to_vec(), FL_OVERWRITE).unwrap(), 0);
-    assert_eq!(archive.add_from_string(b"a.txt", b"two".to_vec(), 0), Err(ZipError::Exists));
-    assert_eq!(archive.add_from_string(b"a.txt", b"three".to_vec(), FL_OVERWRITE).unwrap(), 0);
+    let mut archive = Archive::open(path, CREATE).expect("create archive");
+    assert_eq!(archive.add_from_string(b"a.txt", b"one".to_vec(), FL_OVERWRITE).expect("first"), 0);
+    assert_eq!(
+        archive.add_from_string(b"a.txt", b"two".to_vec(), 0),
+        Err(ZipError::Exists)
+    );
+    assert_eq!(archive.add_from_string(b"a.txt", b"three".to_vec(), FL_OVERWRITE).expect("overwrite"), 0);
     assert_eq!(archive.num_entries(), 1);
-    assert_eq!(archive.payload(0, 0, None).unwrap(), b"three");
-    archive.close().unwrap();
+    assert_eq!(archive.payload(0, 0).expect("payload"), b"three");
+    archive.close().expect("close");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -66,23 +70,23 @@ fn overwrite_reuses_the_original_index() {
 fn mutations_survive_reopen() {
     let dir = test_dir("mutations");
     let path = archive_path(&dir, "test.zip");
-    let mut archive = Archive::open(path.clone(), CREATE).unwrap();
-    archive.add_from_string(b"one.txt", b"1".to_vec(), FL_OVERWRITE).unwrap();
-    archive.add_from_string(b"two.txt", b"2".to_vec(), FL_OVERWRITE).unwrap();
-    archive.rename(0, b"renamed.txt").unwrap();
-    archive.set_comment(0, b"note").unwrap();
-    archive.set_mtime(0, 1_600_000_000).unwrap();
-    archive.delete(1).unwrap();
-    archive.set_archive_comment(b"archive note").unwrap();
-    archive.close().unwrap();
+    let mut archive = Archive::open(path.clone(), CREATE).expect("create archive");
+    archive.add_from_string(b"one.txt", b"1".to_vec(), FL_OVERWRITE).expect("first");
+    archive.add_from_string(b"two.txt", b"2".to_vec(), FL_OVERWRITE).expect("second");
+    archive.rename(0, b"renamed.txt").expect("rename");
+    archive.set_comment(0, b"note").expect("comment");
+    archive.set_mtime(0, 1_600_000_000, 0).expect("mtime");
+    archive.delete(1).expect("delete");
+    archive.set_archive_comment(b"archive note").expect("archive comment");
+    archive.close().expect("close");
 
-    let mut reopened = Archive::open(path, 0).unwrap();
+    let mut reopened = Archive::open(path, 0).expect("reopen");
     assert_eq!(reopened.num_entries(), 1);
-    assert_eq!(reopened.entries[0].name, b"renamed.txt");
-    assert_eq!(reopened.entries[0].comment, b"note");
-    assert_eq!(reopened.entries[0].mtime, 1_600_000_000);
-    assert_eq!(reopened.comment, b"archive note");
-    reopened.close().unwrap();
+    assert_eq!(reopened.name(0, 0).expect("name"), b"renamed.txt");
+    assert_eq!(reopened.comment(0, 0).expect("comment"), b"note");
+    assert_eq!(reopened.stat(0, 0).expect("stat").mtime, 1_600_000_000);
+    assert_eq!(reopened.archive_comment(0).expect("archive comment"), b"archive note");
+    reopened.close().expect("close reopened");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -91,17 +95,19 @@ fn mutations_survive_reopen() {
 fn aes_encryption_requires_the_password() {
     let dir = test_dir("encryption");
     let path = archive_path(&dir, "test.zip");
-    let mut archive = Archive::open(path.clone(), CREATE).unwrap();
-    archive.add_from_string(b"secret.txt", b"classified".to_vec(), FL_OVERWRITE).unwrap();
-    archive.set_encryption(0, EM_AES_256, Some(b"hunter2".to_vec())).unwrap();
-    archive.close().unwrap();
+    let mut archive = Archive::open(path.clone(), CREATE).expect("create archive");
+    archive.add_from_string(b"secret.txt", b"classified".to_vec(), FL_OVERWRITE).expect("add");
+    archive.set_encryption(0, EM_AES_256, Some(b"hunter2")).expect("encrypt");
+    archive.close().expect("close");
 
-    let mut reopened = Archive::open(path, 0).unwrap();
-    assert_eq!(reopened.entries[0].encryption, EM_AES_256);
-    assert_eq!(reopened.payload(0, 0, None).unwrap_err(), ZipError::NoPassword);
-    assert_eq!(reopened.payload(0, 0, Some(b"wrong")).unwrap_err(), ZipError::WrongPassword);
-    assert_eq!(reopened.payload(0, 0, Some(b"hunter2")).unwrap(), b"classified");
-    reopened.close().unwrap();
+    let mut reopened = Archive::open(path, 0).expect("reopen");
+    assert_eq!(reopened.stat(0, 0).expect("stat").encryption_method, EM_AES_256 as u16);
+    assert_eq!(reopened.payload(0, 0), Err(ZipError::NoPassword));
+    reopened.set_password(b"wrong").expect("set wrong password");
+    assert!(reopened.payload(0, 0).is_err());
+    reopened.set_password(b"hunter2").expect("set password");
+    assert_eq!(reopened.payload(0, 0).expect("payload"), b"classified");
+    reopened.close().expect("close reopened");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -110,17 +116,18 @@ fn aes_encryption_requires_the_password() {
 fn extract_creates_nested_directories() {
     let dir = test_dir("extract");
     let path = archive_path(&dir, "test.zip");
-    let mut archive = Archive::open(path, CREATE).unwrap();
-    archive.add_directory(b"outer/inner", 0).unwrap();
-    archive.add_from_string(b"outer/file.txt", b"payload".to_vec(), FL_OVERWRITE).unwrap();
-    archive.close().unwrap();
+    let mut archive = Archive::open(path, CREATE).expect("create archive");
+    archive.add_directory(b"outer/inner", 0).expect("add directory");
+    archive.add_from_string(b"outer/file.txt", b"payload".to_vec(), FL_OVERWRITE).expect("add file");
+    archive.close().expect("close");
 
-    let mut archive = Archive::open(archive_path(&dir, "test.zip"), 0).unwrap();
+    let mut archive = Archive::open(archive_path(&dir, "test.zip"), 0).expect("reopen");
     let destination = dir.join("out");
-    crate::extract::extract_to(&mut archive, destination.to_str().unwrap(), None).unwrap();
+    crate::extract::extract_to(&archive, destination.to_str().expect("utf-8 destination"), None)
+        .expect("extract");
     assert!(destination.join("outer/inner").is_dir());
-    assert_eq!(std::fs::read(destination.join("outer/file.txt")).unwrap(), b"payload");
-    archive.close().unwrap();
+    assert_eq!(std::fs::read(destination.join("outer/file.txt")).expect("read"), b"payload");
+    archive.close().expect("close");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -129,16 +136,27 @@ fn extract_creates_nested_directories() {
 fn zipcrypto_write_requires_the_password() {
     let dir = test_dir("zipcrypto");
     let path = archive_path(&dir, "test.zip");
-    let mut archive = Archive::open(path.clone(), CREATE).unwrap();
-    archive.add_from_string(b"legacy.txt", b"legacy payload".to_vec(), FL_OVERWRITE).unwrap();
-    archive.set_encryption(0, EM_TRAD_PKWARE, Some(b"secret".to_vec())).unwrap();
-    archive.close().unwrap();
+    let mut archive = Archive::open(path.clone(), CREATE).expect("create archive");
+    archive.add_from_string(b"legacy.txt", b"legacy payload".to_vec(), FL_OVERWRITE).expect("add");
+    archive.set_encryption(0, EM_TRAD_PKWARE, Some(b"secret")).expect("encrypt");
+    archive.close().expect("close");
 
-    let mut reopened = Archive::open(path, 0).unwrap();
-    assert_eq!(reopened.entries[0].encryption, EM_TRAD_PKWARE);
-    assert_eq!(reopened.payload(0, 0, None).unwrap_err(), ZipError::NoPassword);
-    assert_eq!(reopened.payload(0, 0, Some(b"wrong")).unwrap_err(), ZipError::WrongPassword);
-    assert_eq!(reopened.payload(0, 0, Some(b"secret")).unwrap(), b"legacy payload");
-    reopened.close().unwrap();
+    let mut reopened = Archive::open(path, 0).expect("reopen");
+    assert_eq!(reopened.stat(0, 0).expect("stat").encryption_method, EM_TRAD_PKWARE as u16);
+    assert_eq!(reopened.payload(0, 0), Err(ZipError::NoPassword));
+    reopened.set_password(b"wrong").expect("set wrong password");
+    assert!(reopened.payload(0, 0).is_err());
+    reopened.set_password(b"secret").expect("set password");
+    assert_eq!(reopened.payload(0, 0).expect("payload"), b"legacy payload");
+    reopened.close().expect("close reopened");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies the bridge reports the linked libzip release, not a hardcoded string.
+#[test]
+fn linked_libzip_version_matches_the_pinned_catalog_release() {
+    let pointer = unsafe { crate::ffi::zip_libzip_version() };
+    assert!(!pointer.is_null());
+    let version = unsafe { std::ffi::CStr::from_ptr(pointer) }.to_string_lossy();
+    assert_eq!(version, "1.11.4");
 }

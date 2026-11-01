@@ -322,7 +322,9 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         apple_frameworks: &[],
         apple_libraries: &[],
         needs_libdl: true,
-        // The pure-Rust archive engine implements PHP's `zip` extension surface.
+        // The bridge is a thin FFI layer over libzip (the managed `libzip` catalog package,
+        // whose bzip2/LZMA/zlib/OpenSSL archives `src/pipeline/backend.rs` splices in whenever
+        // this bridge is planned).
         php_extensions: &["zip"],
         monitoring: MonitoringPolicy::GenericTiming,
     },

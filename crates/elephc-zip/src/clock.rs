@@ -1,19 +1,11 @@
 //! Purpose:
-//! Supplies Unix timestamps for new entries without a libc/timezone dependency.
+//! Restores extracted file mtimes without a libc crate or timezone dependency.
 //!
 //! Called from:
-//! - `crate::model::Archive::add_from_string` and directory creation.
+//! - `crate::extract::apply_mtime` after writing one extracted entry.
 //!
 //! Key details:
-//! - Uses `SystemTime`; a pre-epoch clock answers 0.
-
-/// Returns the current time as seconds since the Unix epoch.
-pub(crate) fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or(0)
-}
+//! - Uses `utimensat` directly; non-Unix targets skip the timestamp restore.
 
 /// Sets a file's modification time to `timestamp` seconds since the epoch.
 pub(crate) fn set_mtime(path: &std::path::Path, timestamp: i64) -> std::io::Result<()> {

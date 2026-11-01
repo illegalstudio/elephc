@@ -14,6 +14,7 @@ use crate::support::*;
 /// Creates, closes, reopens, and reads a small archive.
 #[test]
 fn test_zip_create_read_roundtrip() {
+    if skip_without_zip_native("test_zip_create_read_roundtrip") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/roundtrip.zip';
 $zip = new ZipArchive();
@@ -38,6 +39,7 @@ var_dump($zip->close());
 /// Exercises comments, mtimes, rename/delete, and read-only properties.
 #[test]
 fn test_zip_mutations_and_properties() {
+    if skip_without_zip_native("test_zip_mutations_and_properties") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/mutate.zip';
 $zip = new ZipArchive();
@@ -73,6 +75,7 @@ var_dump($zip->close());
 /// Verifies AES-256 encryption requires the password and succeeds with it.
 #[test]
 fn test_zip_encryption() {
+    if skip_without_zip_native("test_zip_encryption") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/encrypted.zip';
 $zip = new ZipArchive();
@@ -98,6 +101,7 @@ $zip->close();
 /// Extracts nested empty directories and file payloads.
 #[test]
 fn test_zip_extract_to() {
+    if skip_without_zip_native("test_zip_extract_to") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/extract.zip';
 $zip = new ZipArchive();
@@ -125,6 +129,7 @@ $zip->close();
 /// Adds files with `addGlob`, including path rewriting options.
 #[test]
 fn test_zip_add_glob() {
+    if skip_without_zip_native("test_zip_add_glob") { return; }
     let out = compile_and_run(r#"<?php
 $dir = __DIR__ . '/glob';
 @mkdir($dir);
@@ -149,6 +154,7 @@ $zip->close();
 /// Adds files with `addPattern` and verifies invalid patterns fail cleanly.
 #[test]
 fn test_zip_add_pattern() {
+    if skip_without_zip_native("test_zip_add_pattern") { return; }
     let out = compile_and_run(r#"<?php
 $dir = __DIR__ . '/pattern';
 @mkdir($dir);
@@ -176,6 +182,7 @@ $zip->close();
 /// Replays the deprecated procedural API over an archive.
 #[test]
 fn test_zip_procedural_api() {
+    if skip_without_zip_native("test_zip_procedural_api") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/procedural.zip';
 $zip = new ZipArchive();
@@ -196,9 +203,24 @@ zip_close($directory);
     assert_eq!(out.replace("\r\n", "\n").trim_end(), "string(9) \"first.txt\"\nbool(true)\nstring(5) \"hello\"\nbool(true)");
 }
 
+/// Verifies the deprecated procedural `zip_open()` keeps libzip's `ER_NOZIP` result for a
+/// pre-existing zero-byte file, unlike `ZipArchive::open()`'s empty-file compatibility path.
+#[test]
+fn test_zip_procedural_open_empty_file_returns_nozip() {
+    if skip_without_zip_native("test_zip_procedural_open_empty_file_returns_nozip") { return; }
+    let out = compile_and_run(r#"<?php
+$file = __DIR__ . '/empty-open.zip';
+file_put_contents($file, '');
+var_dump(zip_open($file));
+@unlink($file);
+"#);
+    assert_eq!(out.replace("\r\n", "\n").trim_end(), "int(19)");
+}
+
 /// Verifies string probes for the optional extension discover the injected surface.
 #[test]
 fn test_zip_extension_probes() {
+    if skip_without_zip_native("test_zip_extension_probes") { return; }
     let out = compile_and_run(r#"<?php
 var_dump(extension_loaded('zip'));
 var_dump(class_exists('ZipArchive'));
@@ -211,6 +233,7 @@ var_dump(ZipArchive::isEncryptionMethodSupported(ZipArchive::EM_AES_256));
 /// Verifies the `zip://` fopen wrapper and its PHP-shaped stream metadata.
 #[test]
 fn test_zip_stream_wrapper_metadata() {
+    if skip_without_zip_native("test_zip_stream_wrapper_metadata") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/stream.zip';
 $zip = new ZipArchive();
@@ -231,6 +254,7 @@ fclose($stream);
 /// Verifies traditional PKWARE (ZipCrypto) writing and password reads.
 #[test]
 fn test_zip_zipcrypto_write() {
+    if skip_without_zip_native("test_zip_zipcrypto_write") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/zipcrypto.zip';
 $zip = new ZipArchive();
@@ -254,6 +278,7 @@ $zip->close();
 /// Verifies failed opens return PHP's integer error code and leave `status` at zero.
 #[test]
 fn test_zip_open_failure_returns_error_code() {
+    if skip_without_zip_native("test_zip_open_failure_returns_error_code") { return; }
     let out = compile_and_run(r#"<?php
 $missing = new ZipArchive();
 var_dump($missing->open(__DIR__ . '/missing.zip'));
@@ -268,6 +293,7 @@ var_dump($directory->status);
 /// Verifies reopening an archive commits pending changes instead of discarding them.
 #[test]
 fn test_zip_reopen_commits_pending_changes() {
+    if skip_without_zip_native("test_zip_reopen_commits_pending_changes") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/reopen.zip';
 $zip = new ZipArchive();
@@ -293,6 +319,7 @@ $check->close();
 /// Verifies closed archives throw PHP's ValueError for count() and getArchiveFlag().
 #[test]
 fn test_zip_closed_archive_value_errors() {
+    if skip_without_zip_native("test_zip_closed_archive_value_errors") { return; }
     let out = compile_and_run(r#"<?php
 $zip = new ZipArchive();
 try { $zip->count(); } catch (ValueError $error) { echo $error->getMessage(), "\n"; }
@@ -307,6 +334,7 @@ try { $zip->getArchiveFlag(0); } catch (ValueError $error) { echo $error->getMes
 /// Verifies extractTo() selection semantics and file:// destination handling match PHP.
 #[test]
 fn test_zip_extract_selection_and_file_uri() {
+    if skip_without_zip_native("test_zip_extract_selection_and_file_uri") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/selection.zip';
 $zip = new ZipArchive();
@@ -337,6 +365,7 @@ $zip->close();
 /// Verifies a `zip://` literal alone injects the wrapper without any ZipArchive reference.
 #[test]
 fn test_zip_literal_stream_wrapper_without_class() {
+    if skip_without_zip_native("test_zip_literal_stream_wrapper_without_class") { return; }
     // Minimal stored ZIP containing `x.txt` => `hello`.
     let out = compile_and_run(r#"<?php
 $archive = __DIR__ . '/literal.zip';
@@ -352,6 +381,7 @@ if ($stream !== false) { echo stream_get_contents($stream), "\n"; fclose($stream
 /// Verifies `file_get_contents()` honors a zip stream context password.
 #[test]
 fn test_zip_file_get_contents_context_password() {
+    if skip_without_zip_native("test_zip_file_get_contents_context_password") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/context.zip';
 $zip = new ZipArchive();
@@ -372,6 +402,7 @@ var_dump(file_get_contents('zip://' . $file . '#bar.txt', false, $context));
 /// Verifies pending memory entries expose PHP's uncompressed CM_STORE stat shape.
 #[test]
 fn test_zip_pending_stat_shape() {
+    if skip_without_zip_native("test_zip_pending_stat_shape") { return; }
     let out = compile_and_run(r#"<?php
 $zip = new ZipArchive();
 $zip->open(__DIR__ . '/pending.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE);
@@ -387,6 +418,7 @@ $zip->close();
 /// Verifies deflated getStream() descriptors refuse seeks while stored ones allow them.
 #[test]
 fn test_zip_getstream_seekability() {
+    if skip_without_zip_native("test_zip_getstream_seekability") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/seek.zip';
 $zip = new ZipArchive();
@@ -410,6 +442,7 @@ $zip->close();
 /// Verifies CREATE leaves no file behind until an entry is committed.
 #[test]
 fn test_zip_create_defers_file_creation() {
+    if skip_without_zip_native("test_zip_create_defers_file_creation") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/deferred.zip';
 $zip = new ZipArchive();
@@ -424,6 +457,7 @@ var_dump(file_exists($file));
 /// Verifies setPassword("") is refused and does not replace the previous password.
 #[test]
 fn test_zip_empty_password_is_refused() {
+    if skip_without_zip_native("test_zip_empty_password_is_refused") { return; }
     let out = compile_and_run(r#"<?php
 $zip = new ZipArchive();
 $zip->open(__DIR__ . '/password.zip', ZipArchive::CREATE | ZipArchive::OVERWRITE);
@@ -438,6 +472,7 @@ $zip->close();
 /// Verifies a header-only rewrite preserves a CRC-corrupt payload instead of emptying it.
 #[test]
 fn test_zip_crc_corrupt_payload_survives_close() {
+    if skip_without_zip_native("test_zip_crc_corrupt_payload_survives_close") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/crc.zip';
 $zip = new ZipArchive();
@@ -470,6 +505,7 @@ $zip->close();
 /// Verifies CHECKCONS rejects a central entry whose local-header offset is broken.
 #[test]
 fn test_zip_checkcons_rejects_broken_local_offset() {
+    if skip_without_zip_native("test_zip_checkcons_rejects_broken_local_offset") { return; }
     let out = compile_and_run(r#"<?php
 $file = __DIR__ . '/checkcons.zip';
 $zip = new ZipArchive();
@@ -487,5 +523,5 @@ var_dump($zip->open($file, ZipArchive::CHECKCONS));
 var_dump($zip->status);
 @unlink($file);
 "#);
-    assert_eq!(out.replace("\r\n", "\n").trim_end(), "int(21)\nint(0)");
+    assert_eq!(out.replace("\r\n", "\n").trim_end(), "int(35)\nint(0)");
 }

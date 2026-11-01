@@ -1,5 +1,5 @@
 //! Purpose:
-//! Safe extraction of selected archive entries into a destination directory.
+//! Safe extraction of selected archive entries into a destination directory through libzip.
 //!
 //! Called from:
 //! - `crate::abi::elephc_zip_extract`.
@@ -7,46 +7,48 @@
 //! Key details:
 //! - Stored names are sanitized so `..` and absolute components cannot escape the target.
 //! - Directory entries create recursive empty paths, and file mtimes are restored.
+//! - Deleted placeholders are skipped; libzip reports them as missing on access.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use crate::archive::Archive;
 use crate::error::ZipError;
-use crate::model::Archive;
 
 /// Extracts selected entries (empty selection means every entry) into `destination`.
-pub(crate) fn extract_to(archive: &mut Archive, destination: &str, selected: Option<&[Vec<u8>]>) -> Result<(), ZipError> {
+pub(crate) fn extract_to(archive: &Archive, destination: &str, selected: Option<&[Vec<u8>]>) -> Result<(), ZipError> {
     let root = Path::new(destination);
     if root.exists() && !root.is_dir() {
         return Err(ZipError::Invalid);
     }
     fs::create_dir_all(root).map_err(|_| ZipError::Write)?;
-    for index in 0..archive.entries.len() {
-        let entry = archive.entries[index].clone();
-        if entry.deleted {
+    let count = archive.num_entries().max(0);
+    for index in 0..count {
+        let Some(name) = archive.name(index, 0) else {
             continue;
-        }
+        };
         if let Some(selected) = selected {
-            if !selected.iter().any(|name| name == &entry.name) {
+            if !selected.iter().any(|wanted| wanted == &name) {
                 continue;
             }
         }
-        let relative = safe_relative(&entry.name);
+        let relative = safe_relative(&name);
         if relative.as_os_str().is_empty() {
             continue;
         }
         let target = root.join(&relative);
-        if entry.is_dir() {
+        let mtime = archive.stat(index, 0).map(|stat| stat.mtime).unwrap_or(0);
+        if name.ends_with(b"/") {
             fs::create_dir_all(&target).map_err(|_| ZipError::Write)?;
-            apply_mtime(&target, entry.mtime);
+            apply_mtime(&target, mtime);
             continue;
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).map_err(|_| ZipError::Write)?;
         }
-        let data = archive.payload(index, 0, None).map_err(|error| error)?;
+        let data = archive.payload(index, 0)?;
         fs::write(&target, data).map_err(|_| ZipError::Write)?;
-        apply_mtime(&target, entry.mtime);
+        apply_mtime(&target, mtime);
     }
     Ok(())
 }

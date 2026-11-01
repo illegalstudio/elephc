@@ -47,6 +47,7 @@ mod native_projects;
 mod oniguruma;
 mod projects;
 pub(crate) mod xml_native;
+pub(crate) mod zip_native;
 
 pub(crate) use platform::*;
 pub(crate) use runner::*;
@@ -64,4 +65,7 @@ pub(crate) use gmp_native::{gmp_native_package, skip_without_gmp_native, GmpNati
 pub(crate) use xml_native::{
     skip_without_xml_native, xml_native_archives, xml_native_package, XmlNativePackage,
     XML_APPLE_LIBRARIES, XML_NATIVE_ARCHIVES, XML_NATIVE_PACKAGE,
+};
+pub(crate) use zip_native::{
+    skip_without_zip_native, zip_native_packages, ZipNativePackage,
 };

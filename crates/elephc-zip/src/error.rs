@@ -2,10 +2,14 @@
 //! libzip-compatible error codes and their user-facing status strings.
 //!
 //! Called from:
-//! - Every archive operation in `crate::model` and the C ABI entry points in `crate::abi`.
+//! - `crate::archive` for manual validation failures and closed-archive status replay.
+//! - `crate::abi` for the numeric status entry points.
 //!
 //! Key details:
-//! - Codes match `ZipArchive::ER_*`; `string()` matches libzip 1.11.4's messages.
+//! - Codes match libzip 1.11.4's `ZIP_ER_*` values and PHP's `ZipArchive::ER_*` constants.
+//! - Live archives report libzip's own error through `zip_get_error`; this table covers
+//!   errors the bridge rejects before calling libzip and archives closed after a failed
+//!   `zip_close`.
 
 /// One libzip error code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,37 +163,6 @@ impl ZipError {
             Self::DataLength => "Data length mismatch",
             Self::NotAllowed => "Operation not allowed",
             Self::Truncated => "Truncated ZIP file",
-        }
-    }
-}
-
-impl From<std::io::Error> for ZipError {
-    /// Maps an IO failure to libzip's closest documented code.
-    fn from(error: std::io::Error) -> Self {
-        match error.kind() {
-            std::io::ErrorKind::NotFound => Self::Open,
-            std::io::ErrorKind::AlreadyExists => Self::Exists,
-            std::io::ErrorKind::PermissionDenied => Self::Open,
-            _ => Self::Read,
-        }
-    }
-}
-
-/// The subset of `zip::result::ZipError` this bridge translates.
-impl From<zip::result::ZipError> for ZipError {
-    /// Maps engine failures to libzip's codes.
-    fn from(error: zip::result::ZipError) -> Self {
-        use zip::result::ZipError as Engine;
-        match error {
-            Engine::Io(io) => Self::from(io),
-            Engine::InvalidArchive(_) => Self::Inconsistent,
-            Engine::UnsupportedArchive(message) if message == Engine::PASSWORD_REQUIRED => Self::NoPassword,
-            Engine::UnsupportedArchive(_) => Self::CompNotSupported,
-            Engine::CompressionMethodNotSupported(_) => Self::CompNotSupported,
-            Engine::FileNotFound => Self::NoEnt,
-            Engine::InvalidPassword => Self::WrongPassword,
-            Engine::DecompressedSizeLimitExceeded { .. } | Engine::DecompressedSizeUnknown => Self::Read,
-            _ => Self::Internal,
         }
     }
 }

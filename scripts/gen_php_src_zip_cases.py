@@ -222,6 +222,7 @@ def main() -> None:
             f"/// Replays php-src `{name}.phpt`.\n"
             f"{platform_gate}#[test]\n"
             f"fn {ident}() {{\n"
+            f"    if skip_without_zip_native(\"{ident}\") {{ return; }}\n"
             f"    let out = run_case({rust_raw(source)}, {ini}, {env});\n"
             f"{assertion}\n"
             "}"
@@ -241,6 +242,7 @@ def main() -> None:
 //!   They remain in `tests/php_src/zip/`; the generator records the reasons.
 
 use super::{assert_format, run_case};
+use crate::support::zip_native::skip_without_zip_native;
 """
     OUTPUT.write_text(header + "\n" + "\n".join(functions) + "\n")
     print(f"wrote {len(functions)} inline tests to {OUTPUT}")

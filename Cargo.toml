@@ -22,7 +22,7 @@ categories = ["compilers", "command-line-utilities"]
 # listAbbreviations), libelephc_image.a (GD/Exif/Imagick/Gmagick/Cairo),
 # libelephc_web.a (--web prefork HTTP server), libelephc_pcntl.a (process
 # control), libelephc_magician.a (optional eval runtime), libelephc_curl.a
-# (ext/curl bridge), and libelephc_zip.a (pure-Rust ext/zip engine)
+# (ext/curl bridge), and libelephc_zip.a (libzip-backed ext/zip bridge)
 # into target/<profile>/, where linker.rs locates
 # them for programs that use those features. elephc-curl declares libcurl's
 # `extern "C"` symbols without linking them, so being a default member never

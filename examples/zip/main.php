@@ -9,7 +9,7 @@ if ($zip->open($archive, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
     exit(1);
 }
 
-$zip->addFromString('readme.txt', "Built by elephc's pure-Rust Zip bridge.\n");
+$zip->addFromString('readme.txt', "Built by elephc's libzip-backed Zip bridge.\n");
 $zip->addFile(__FILE__, 'source/main.php');
 $zip->addEmptyDir('assets');
 $zip->setCommentName('readme.txt', 'generated');

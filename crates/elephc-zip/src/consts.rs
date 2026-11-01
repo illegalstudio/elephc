@@ -1,11 +1,15 @@
 //! Purpose:
-//! Numeric constants shared by the ZIP engine, matching PHP's `ZipArchive::*` values.
+//! Numeric constants matching PHP's `ZipArchive::*` values and libzip 1.11.4's flags.
 //!
 //! Called from:
-//! - Metadata parsing, archive mutation, and the C ABI's supported-method queries.
+//! - `crate::archive` for archive modes and source ranges.
+//! - `crate::tests` for the engine round-trips.
 //!
 //! Key details:
-//! - Values are the libzip 1.11.4 constants PHP 8.5 exposes.
+//! - The full PHP surface stays listed even where the bridge passes a caller-supplied flag
+//!   straight through, so the catalog of values has one authoritative home.
+
+#![allow(dead_code)]
 
 /// Stored (no compression).
 pub(crate) const CM_STORE: i64 = 0;

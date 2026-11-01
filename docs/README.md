@@ -55,7 +55,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [iconv](php/iconv.md) — character-set conversion, `//TRANSLIT`/`//IGNORE`, character-oriented string functions, RFC 2047 MIME headers, and the encoding trio
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
-- [Zip](php/zip.md) - `ZipArchive` archives, compression, AES encryption, glob/pattern adds, extraction, and the deprecated procedural API on a pure-Rust bridge
+- [Zip](php/zip.md) - `ZipArchive` archives, compression, AES encryption, glob/pattern adds, extraction, and the deprecated procedural API on the managed libzip 1.11.4 package
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
 - [XML](php/xml.md) — the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes) and `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods

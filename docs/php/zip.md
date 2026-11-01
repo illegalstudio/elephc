@@ -5,14 +5,27 @@ sidebar:
   order: 29
 ---
 
-elephc implements PHP's `ext/zip` extension on a pure-Rust archive engine. There is
-no system `libzip`, no `-lzip`, and no native package to install: `libelephc_zip.a`
-is linked only when a program references the zip surface. `fopen('zip://archive#entry')`
-is available, including archive passwords supplied through the `zip` stream context,
-and `ZipArchive::getStream*()` exposes PHP-shaped stream metadata, CRC errors, and
-archive-close invalidation.
+elephc implements PHP's `ext/zip` extension as a thin FFI layer over **libzip 1.11.4**,
+the same C library PHP itself uses. The bridge is a Rust `staticlib` (`libelephc_zip.a`)
+that declares libzip's public API; the final link resolves the pinned archives from the
+managed native catalog. There is no system `-lzip` and no Homebrew fallback.
+`fopen('zip://archive#entry')` is available, including archive passwords supplied
+through the `zip` stream context, and `ZipArchive::getStream*()` exposes PHP-shaped
+stream metadata, CRC errors, and archive-close invalidation.
 
 ## Setup
+
+Add the managed package to the project once:
+
+```bash
+elephc native add libzip
+```
+
+That declares `libzip` plus its `bzip2`, `xz` (LZMA), `zlib`, and `openssl`
+dependencies in `elephc.toml`/`elephc.lock` and builds them with the target C
+toolchain. `cmake` must be available when the package is first built; the pinned
+OpenSSL archive provides AES support on every target, and no system compression or
+crypto library is consulted.
 
 Static references to `ZipArchive`, a `zip_*` function, or a `zip://` literal inject
 the zip prelude automatically. For code reached only through opaque `eval()` source,
@@ -75,21 +88,22 @@ deprecation notice.
 `addGlob()` supports `add_path`, `remove_path`, `remove_all_path`, `flags`,
 `comp_method`, `comp_flags`, `enc_method`, and `enc_password`, including brace
 patterns such as `*.{txt,baz}`. `addPattern()` matches PCRE-style patterns against
-the basenames in one directory with the pure-Rust engine, without requiring the
+the basenames in one directory with the crate's regex engine, without requiring the
 managed PCRE2 package.
 
 ## Compression and encryption
 
-Reading supports stored, deflate, deflate64, bzip2, LZMA, XZ, PPMd, AES-128/192/256,
-and traditional PKWARE encryption. Writing supports stored, deflate, bzip2,
+libzip provides the format layer. Reading supports stored, deflate, bzip2,
+LZMA/XZ, and PPMd entry metadata, with AES-128/192/256 and traditional PKWARE
+encryption. Writing supports stored, deflate, bzip2, LZMA/XZ,
 AES-128/192/256, and traditional PKWARE (ZipCrypto). `setEncryptionName()` /
 `setEncryptionIndex()` default to the password passed at the call site;
 `setPassword()` supplies the archive-wide fallback used by reads and later writes.
 
 ## Differences from PHP
 
-- `ZipArchive::LIBZIP_VERSION` answers `1.11.4` as a compatibility identifier for
-  the libzip surface this engine implements. The engine itself is pure Rust.
+- `ZipArchive::LIBZIP_VERSION` reports the version of the linked libzip archive,
+  exactly as PHP does (`1.11.4` for the pinned catalog package).
 - The `zip://` wrapper is a PHP user-space wrapper over the same bridge rather than
   a native libzip stream. A `zip://` literal (and `--with-zip`) injects it, it accepts
   the `zip` stream-context password, and `file_get_contents()` honors that context.
@@ -102,22 +116,26 @@ AES-128/192/256, and traditional PKWARE (ZipCrypto). `setEncryptionName()` /
 - `extractTo()` into a custom (non-`file://`) stream wrapper is refused with PHP's
   `stream_open` warning when the wrapper cannot open a target; actual extraction is
   limited to local filesystem destinations.
-- `addPattern()` accepts the PCRE subset the pure-Rust `regex` engine understands.
+- `addPattern()` accepts the PCRE subset the crate's `regex` engine understands.
   Lookarounds/backreferences that only PCRE2 can evaluate are rejected with
   `ZipArchive::addPattern(): Invalid expression`.
 - `addGlob()` honors `GLOB_BRACE`; the remaining `GLOB_*` ordering/only-directory
   flags are not represented by the compiler's `glob()`.
-- `CHECKCONS` validates local headers, entry names/methods and data ranges. It does
-  not turn an entry CRC mismatch into an open failure; the stream read reports it,
-  matching PHP.
+- `CHECKCONS` delegates consistency checking to libzip. It reports libzip's
+  `ER_TRUNCATED`/`ER_INCONSISTENT` code for a damaged central directory rather than
+  opening the archive and deferring the failure to a read.
+- The exact compression-method availability follows the managed libzip build, just as
+  PHP's follows its own libzip build: bzip2, LZMA, and XZ are enabled, while zstd,
+  deflate64, and PPMd encode are not. `isCompressionMethodSupported()` therefore
+  reports `false` for those methods.
 - When no OPcache/web `ini_set()` owns the name, the zip prelude's fallback answers
   `false` for directives other than `open_basedir`. The shared `open_basedir` arm
   returns the previous value even when PHP would refuse a loosening.
 - `stream_get_meta_data()` on a generic user-space wrapper now reports its URI,
   `seekable` and `eof`; PHP's `wrapper_data` object is not exposed. Runtime
   `file_get_contents()` warnings omit PHP's `in <file> on line <line>` suffix.
-- `torrentzip` writes a deterministic `TORRENTZIPPED-*` archive comment and reports
-  `AFL_IS_TORRENTZIP` on reopen; the exact libzip byte layout is not reproduced.
+- `torrentzip` is libzip's own implementation: `AFL_WANT_TORRENTZIP` writes the
+  deterministic byte layout and `AFL_IS_TORRENTZIP` reports it on reopen.
 - `getStream*()` snapshots the entry when the stream is created, then marks the
   stream closed when the archive closes, matching PHP's observable failure mode.
 - Rewriting an encrypted entry (for example to change its comment or mtime)
@@ -134,4 +152,5 @@ expects `false` from PHP's own freed archive resource while elephc safely return
 the entry name. The generator applies the compiler-compatibility source edits listed in
 `tests/php_src/zip/README.md`; the assertions still compare php-src's values.
 `tests/codegen/zip.rs` carries focused end-to-end coverage, and
-`cargo test -p elephc-zip` runs the engine unit tests.
+`cargo test -p elephc-zip` runs the libzip-backed engine unit tests when
+`ELEPHC_ZIP_NATIVE_LIB_DIRS` points at the installed `lib/` directories.

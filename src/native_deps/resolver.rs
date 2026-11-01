@@ -81,13 +81,14 @@ pub fn resolve_for_compilation_in_cache(
 }
 
 /// Names the PHP-visible surface a managed package serves, for the "<feature> support requires
-/// managed native package <name>" diagnostics: `pcre2` backs the regex builtins and `libxml2`
-/// the xml/xmlwriter extensions. A package without a surface of its own (the curl chain, zlib)
-/// is reported by its package name.
+/// managed native package <name>" diagnostics: `pcre2` backs the regex builtins, `libxml2` the
+/// xml/xmlwriter extensions, and `libzip` the ext/zip surface. A package without a surface of
+/// its own (the curl chain, zlib) is reported by its package name.
 fn feature_label(package: &str) -> &str {
     match package {
         "pcre2" => "regex",
         "libxml2" => "xml",
+        "libzip" => "zip",
         _ => package,
     }
 }
@@ -355,12 +356,14 @@ mod tests {
     }
 
     /// Verifies the diagnostic names the PHP surface a package serves — regex for pcre2, xml
-    /// for libxml2 — and falls back to the package name for every other catalog package.
+    /// for libxml2, zip for libzip — and falls back to the package name for every other
+    /// catalog package.
     #[test]
     fn feature_label_names_the_php_surface_or_the_package() {
         assert_eq!(feature_label("libxml2"), "xml");
         assert_eq!(feature_label("pcre2"), "regex");
-        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "unknown"] {
+        assert_eq!(feature_label("libzip"), "zip");
+        for package in ["curl", "libssh2", "nghttp2", "openssl", "zlib", "bzip2", "xz", "unknown"] {
             assert_eq!(feature_label(package), package, "{package} has no surface of its own");
         }
     }
