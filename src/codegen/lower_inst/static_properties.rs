@@ -849,6 +849,10 @@ fn ensure_static_property_value_supported(
     if value_ty == &slot.php_type {
         return Ok(());
     }
+    if matches!((value_ty.codegen_repr(), slot.php_type.codegen_repr()),
+        (PhpType::Object(_), PhpType::Object(_))) {
+        return Ok(());
+    }
     if can_store_value_as_tagged_scalar_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }

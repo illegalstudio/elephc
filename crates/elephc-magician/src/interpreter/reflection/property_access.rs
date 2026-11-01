@@ -173,6 +173,10 @@ pub(super) fn eval_reflection_aot_instance_property_set_raw_value(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     eval_reflection_aot_instance_property_validate_object(declaring_class, object, context, values)?;
+    if let Some(ty) = context.native_property_type(declaring_class, property_name) {
+        let metadata = EvalClassProperty::new(property_name, None).with_type(Some(ty));
+        eval_reject_null_object_property(declaring_class, &metadata, value, context, values)?;
+    }
     eval_reflection_with_declaring_class_scope(declaring_class, context, |_| {
         values.property_set(object, property_name, value)
     })

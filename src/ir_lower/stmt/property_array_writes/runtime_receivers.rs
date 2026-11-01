@@ -299,7 +299,7 @@ fn apply_slot_guard(
     let reject = ctx.builder.create_named_block("property.array.null_reject", vec![]);
     let write = ctx.builder.create_named_block("property.array.nonnull_write", vec![]);
     let initialized_slots = ctx.initialized_slots_snapshot();
-    if mode == FetchMode::Write || guard.object_only {
+    if mode == FetchMode::Write {
         let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
         let read = if guard.nullable || guard.object_only {

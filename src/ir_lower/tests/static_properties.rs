@@ -9,6 +9,30 @@
 //! - Destructor boundaries must finish remaining slots before propagating exceptions.
 //! - Buffer and pointer slots own nothing, so they receive no shutdown cleanup.
 
+/// Concrete object values fit generic-object and ancestor-typed static slots on every ABI.
+#[test]
+fn static_object_subtypes_share_storage_on_all_targets() {
+    let source = r#"<?php
+class StaticObjectParent {}
+class StaticObjectChild extends StaticObjectParent {}
+class StaticObjectSlots {
+    public static object $any;
+    public static StaticObjectParent $base;
+}
+StaticObjectSlots::$any = new stdClass();
+StaticObjectSlots::$base = new StaticObjectChild();
+echo get_class(StaticObjectSlots::$any), ':', get_class(StaticObjectSlots::$base);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Verifies mixed static roots use storage-aware hash writes and captured prefix results.
 fn assert_mixed_static_update_storage(name: &str) {
     let source = r#"<?php

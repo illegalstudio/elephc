@@ -174,13 +174,16 @@ writeNullableDimensionSlot(new ReadonlyNullableDimensionSlot());
             crate::codegen::platform::Target::parse(target).unwrap(),
         );
         let function = module.functions.iter().find(|f| f.name == "writeNullableDimensionSlot").unwrap();
-        let guards = function.instructions.iter().filter(|inst| inst.op == Op::IsNull
+        let guards = function.instructions.iter().filter(|inst| (inst.op == Op::IsNull
+            || (inst.op == Op::TypePredicate && inst.immediate == Some(crate::ir::Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object))))
             && inst.operands.first().and_then(|value| function.value(*value))
                 .and_then(|value| match value.def {
                     ValueDef::Instruction { inst, .. } => function.instruction(inst),
                     _ => None,
                 }).is_some_and(|producer| producer.op == Op::PropGet)).collect::<Vec<_>>();
         assert_eq!(guards.len(), 3, "{target}: nullable declared slots require payload guards");
+        assert_eq!(guards.iter().filter(|guard| guard.op == Op::TypePredicate).count(), 1,
+            "{target}: a readonly field permits object contents only");
         assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::PropInitialized).count(), 3,
             "{target}: write fetches must test initialization before reading a typed slot");
         for guard in guards {
