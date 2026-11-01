@@ -1585,6 +1585,7 @@ fn lower_closure_function_with_signature(
     callable_default: Option<Expr>,
 ) -> FunctionSig {
     closure_defaults::lower_helpers(parent, name, &signature);
+    let signature = eir_signature_with_object_reference_contracts(&signature);
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
     let closure_body_return_type = generator_body_return_type(body, &signature.return_type, signature.is_generator);
@@ -2173,7 +2174,7 @@ pub(crate) fn eir_signature_with_php_param_contracts(
     signature: &FunctionSig,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
 ) -> FunctionSig {
-    let mut eir_signature = signature.clone();
+    let mut eir_signature = eir_signature_with_object_reference_contracts(signature);
     let mut has_dynamic_untyped_param = false;
     for (index, (name, php_type)) in eir_signature.params.iter_mut().enumerate() {
         let declared = signature
@@ -2183,8 +2184,7 @@ pub(crate) fn eir_signature_with_php_param_contracts(
             .unwrap_or(false);
         let by_ref = signature.ref_params.get(index).copied().unwrap_or(false);
         let variadic = signature.variadic.as_deref() == Some(name.as_str());
-        if by_ref && matches!(php_type, PhpType::Object(_)) {
-            *php_type = PhpType::Mixed;
+        if by_ref {
             continue;
         }
         if !declared && !by_ref && !variadic {
@@ -2205,6 +2205,19 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
             &eir_signature.return_type,
         );
+    }
+    eir_signature
+}
+
+/// Boxes declared object-reference parameters while retaining their source type metadata.
+fn eir_signature_with_object_reference_contracts(signature: &FunctionSig) -> FunctionSig {
+    let mut eir_signature = signature.clone();
+    for (index, (_, php_type)) in eir_signature.params.iter_mut().enumerate() {
+        if signature.ref_params.get(index).copied().unwrap_or(false)
+            && matches!(php_type, PhpType::Object(_))
+        {
+            *php_type = PhpType::Mixed;
+        }
     }
     eir_signature
 }

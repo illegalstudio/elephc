@@ -237,6 +237,18 @@ pub(super) fn lower_closure_with_context(
                 // The capture is created before the closure descriptor is assigned back to its
                 // own variable. Give that shared cell a stable boxed ABI now, while the closure
                 // body keeps the narrower callable view used for direct recursive dispatch.
+                // A first assignment such as `$f = function () use (&$f) { ... };` has no
+                // existing payload to promote. Seed the binding with PHP null so reference-cell
+                // construction never reads an uninitialized frame word as a Mixed pointer.
+                let initialized = ctx
+                    .local_slots
+                    .get(capture)
+                    .copied()
+                    .is_some_and(|slot| ctx.slot_is_initialized(slot));
+                if !initialized {
+                    let null = lower_boxed_null(ctx, expr);
+                    ctx.store_local(capture, null, PhpType::Mixed, Some(expr.span));
+                }
                 ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
             } else if widens_by_ref_capture {
                 // Convert the existing payload before changing the slot contract. Merely
