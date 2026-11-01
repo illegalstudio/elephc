@@ -97,7 +97,7 @@ fn parameter_payload_type(function: &Function, param: &FunctionParam) -> PhpType
         .param_type_exprs
         .get(source_index)
         .and_then(Option::as_ref)
-        .map(crate::ir_lower::context::type_expr_to_php_type)
+        .map(crate::ir_lower::type_expr_to_php_type)
     else {
         return param.php_type.clone();
     };
