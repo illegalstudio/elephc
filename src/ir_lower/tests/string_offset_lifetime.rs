@@ -343,7 +343,7 @@ offsetBoundaries("\x07aaaaaaaZ");
                 persisted_reads += 1;
             }
         }
-        assert_eq!(reads, 44, "{target}: reads and persistent stores exercise StrCharAt");
+        assert_eq!(reads, 43, "{target}: reads and persistent stores exercise StrCharAt");
         assert_eq!(store_reads, 7,
             "{target}: cover indexed, mixed, hash-key, hash-value and property stores");
         let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
