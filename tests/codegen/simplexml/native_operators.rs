@@ -129,10 +129,13 @@ catch (TypeError $error) { echo $error->getMessage(), '|'; }
 try { $unused = ~$child; echo 'unexpected|'; }
 catch (TypeError $error) { echo $error->getMessage(), '|'; }
 rejectNativeBitnot($xml); rejectNativeBitnot($iterator); rejectNativeBitnot($child);
+try { ~(new SimpleXMLElement('<temporary/>')); echo 'unexpected|'; }
+catch (TypeError $error) { echo $error->getMessage(), '|'; }
 "#;
     let expected = concat!(
         "Cannot perform bitwise not on SimpleXMLElement|Cannot perform bitwise not on SimpleXMLIterator|Cannot perform bitwise not on BitnotNativeXml|",
         "Cannot perform bitwise not on SimpleXMLElement|Cannot perform bitwise not on SimpleXMLIterator|Cannot perform bitwise not on BitnotNativeXml|",
+        "Cannot perform bitwise not on SimpleXMLElement|",
     );
     let aot = format!("{setup}{body}");
     let eval_setup = setup.replace("BitnotNativeXml", "EvalBitnotNativeXml")

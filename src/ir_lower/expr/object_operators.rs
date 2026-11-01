@@ -261,7 +261,9 @@ pub(super) fn lower_object_bitnot(
         .or_else(|| crate::types::object_operators::cast_class_with_classes(&ty, ctx.classes)) {
         let operators = class.operators?;
         if let Some(method) = operators.bit_not {
-            return Some(emit_guarded_adapter(ctx, value, class.name, method, PhpType::Mixed, Some(expr.span)));
+            return Some(with_bitnot_operand(ctx, value, expr, |ctx, value| {
+                emit_guarded_adapter(ctx, value, class.name, method, PhpType::Mixed, Some(expr.span))
+            }));
         }
         if operators.operand_dispatch == elephc_builtin_contract::ObjectOperandDispatch::NumericConversion {
             return None;
@@ -274,12 +276,31 @@ pub(super) fn lower_object_bitnot(
         }).collect::<Vec<_>>();
         handlers.sort_unstable(); handlers.dedup();
         if handlers.is_empty() { return None; }
-        return Some(lower_dynamic_numeric_cast(ctx, value, PhpType::Mixed, Some(expr.span), &handlers, true));
+        return Some(with_bitnot_operand(ctx, value, expr, |ctx, value| {
+            lower_dynamic_numeric_cast(ctx, value, PhpType::Mixed, Some(expr.span), &handlers, true)
+        }));
     }
     let zero = lower_int_literal(ctx, 0, expr);
     let negative = lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr)?;
     let one = lower_int_literal(ctx, 1, expr);
     lower_object_binary_values(ctx, negative, &BinOp::Sub, one, expr)
+}
+
+/// Owns the input across native refusals and retires it after publishing an independent result.
+fn with_bitnot_operand(
+    ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, expr: &Expr,
+    operation: impl FnOnce(&mut LoweringContext<'_, '_>, LoweredValue) -> LoweredValue,
+) -> LoweredValue {
+    let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
+    let (input, owner) = root_owned_call_operand(ctx, input, expr.span);
+    let ty = ctx.builder.value_php_type(input.value);
+    let borrowed = ctx.emit_value(Op::Borrow, vec![input.value], None, ty,
+        Op::Borrow.default_effects(), Some(expr.span));
+    ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+    let result = operation(ctx, borrowed);
+    stage_call_result(ctx, staging.as_ref(), result, expr.span);
+    if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, expr.span); }
+    take_prepublished_call_result(ctx, staging, result, expr.span)
 }
 
 /// Calls an internal class's scalar cast adapter for an explicit `(int)`/`(float)` cast.
