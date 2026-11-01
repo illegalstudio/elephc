@@ -390,7 +390,7 @@ $attributeUpdate->attributes()->a += 1;
 $attributeUpdate->attributes()->b += 1;
 echo $attributeUpdate->asXML(), '|';
 $liveUpdate = new SimpleXMLElement('<r/>');
-$liveUpdate->a->b->c += reviewCreateUpdateNode();
+$liveUpdate->a->b->c += reviewCreateUpdateNode($liveUpdate);
 echo (string)$liveUpdate->a->b->c, '|';
 $offsetUpdate = new SimpleXMLElement('<r/>');
 $offsetUpdate->a[0]->b = 1;
@@ -434,13 +434,13 @@ echo $resourceRoot->asXML(), '|'; fclose($resourceInput);
 unset($resourceRoot, $resourceInput, $resourceClosed, $resourceValue, $resourceError);
 unset($computedOrder);
 $lateName = 'old'; $lateUpdate = new SimpleXMLElement('<r/>');
-$lateUpdate->{$lateName} += reviewChangeWriteName();
+$lateUpdate->{$lateName} += reviewChangeWriteName($lateName);
 echo $lateUpdate->asXML(), '|';
 $lateName = 'old'; $lateUpdate = new SimpleXMLElement('<r/>');
-$lateUpdate->{$lateName}->leaf = reviewChangeWriteName();
+$lateUpdate->{$lateName}->leaf = reviewChangeWriteName($lateName);
 echo $lateUpdate->asXML(), '|';
 $nameObject = new ReviewWriteName();
-$lateUpdate->{$nameObject} = reviewChangeWriteName();
+$lateUpdate->{$nameObject} = reviewChangeWriteName($lateName);
 echo $lateUpdate->asXML(), '|';
 unset($lateName, $lateUpdate, $nameObject);
 __CAPTURE_LIFETIMES__
@@ -463,12 +463,18 @@ unset($subclassOffset, $subclassOffsetError);
 restore_error_handler();
 unset($updates, $existingUpdate, $attributeUpdate, $liveUpdate, $offsetUpdate, $hookUpdate, $badOffset, $appendedOffset, $offsetError);
 "####;
-    let native_captures = format!("function reviewAotCapturedStatements(): void {{{capture_lifetimes}}} reviewAotCapturedStatements();");
-    let eval_captures = capture_lifetimes.replace('\\', "\\\\").replace('\'', "\\'");
+    // Keep AOT declarations at top level and unsupported eval syntax in native helpers.
+    // Every operation and expected destructor marker remains covered in both modes.
+    let native_captures = "reviewAotCapturedStatements();";
+    let eval_captures = capture_lifetimes
+        .replace("throw new RuntimeException('capture-rhs')", "reviewCaptureThrowRhs()")
+        .replace("$root->{reviewCaptureName()}->c ??= reviewCaptureValue();",
+            "reviewCapturedCoalesce($root, reviewCaptureName());")
+        .replace('\\', "\\\\").replace('\'', "\\'");
     let runtime_captures = format!("reviewEvalCapturedStatements('{eval_captures}');");
     let native_updates = updates.replace("__EXPRESSION_UPDATES__", update_expressions)
         .replace("__INDEXED_INCDEC_UPDATES__", indexed_incdec_updates)
-        .replace("__CAPTURE_LIFETIMES__", &native_captures);
+        .replace("__CAPTURE_LIFETIMES__", native_captures);
     let runtime_updates = updates.replace("__EXPRESSION_UPDATES__", "")
         .replace("__INDEXED_INCDEC_UPDATES__", "")
         .replace("__CAPTURE_LIFETIMES__", &runtime_captures);
@@ -875,8 +881,7 @@ function reviewNativeHookCoalesce(): void {
 class ReviewNumericZeroXml extends SimpleXMLElement {}
 function reviewWriteNestedXml(mixed $node, string $name): void { $node->opaque->{$name}->leaf = 'boxed'; }
 function reviewThrowWriteName(): string { throw new RuntimeException('write-name'); }
-function reviewCreateUpdateNode(): int {
-    global $liveUpdate;
+function reviewCreateUpdateNode(SimpleXMLElement $liveUpdate): int {
     echo (int)isset($liveUpdate->a->b->c), '|';
     $liveUpdate->a->b->c = 7;
     return 1;
@@ -908,6 +913,8 @@ function reviewCaptureName(): ReviewCaptureName { echo 'g|'; return new ReviewCa
 function reviewCaptureThrowName(): ReviewCaptureName { echo 'g|'; return new ReviewCaptureName(true); }
 function reviewCaptureValue(): int { echo 'f|'; return 2; }
 function reviewCaptureText(): ReviewCaptureText { echo 'f|'; return new ReviewCaptureText(); }
+function reviewCaptureThrowRhs(): never { throw new RuntimeException('capture-rhs'); }
+function reviewCapturedCoalesce(mixed $root, mixed $name): void { $root->{$name}->c ??= reviewCaptureValue(); }
 function reviewEvalCapturedStatements(string $code): void { eval($code); }
 class ReviewTypedPrefix { public string $s = '5'; }
 function reviewTypedPrefix(mixed $object): mixed { return ++$object->s; }
@@ -927,8 +934,7 @@ function reviewOrderOrdinary(mixed $items): void {
 class ReviewWriteName {
     public function __toString(): string { echo 'name|'; return 'converted'; }
 }
-function reviewChangeWriteName(): int {
-    global $lateName;
+function reviewChangeWriteName(string &$lateName): int {
     echo 'rhs|'; $lateName = 'new'; return 1;
 }
 class ReviewHookInner { public string $label = ''; }
@@ -968,6 +974,7 @@ stream_filter_register('xml.review.throw', 'XmlReviewThrowFilter');
     let eval_dom_probes = dom_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let eval_contract_probes = contract_probes.replace('\\', "\\\\").replace('\'', "\\'");
     let source = format!("{declarations}
+        function reviewAotCapturedStatements(): void {{ {capture_lifetimes} }}
         if ($argc === 1) {{ {names} }}
         elseif ($argc === 2) {{ $source = $argc > 0 ? '{eval_names}' : ''; eval($source); }}
         elseif ($argc === 7) {{ {semantics} }}

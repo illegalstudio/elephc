@@ -390,8 +390,10 @@ unset($holder, $empty, $nested, $doc, $copy, $mixedCopy, $staticCopy);
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");
     let expected = "<?xml version=\"1.0\"?>\n<r><a>y</a><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\nkey|{\"1\":9}|<?xml version=\"1.0\"?>\n<r><b id=\"keep\"/></r>\n<?xml version=\"1.0\"?>\n<r><b/></r>\n<?xml version=\"1.0\"?>\n<r/>\nquiet|{\"0\":4,\"2\":6}:[4,5,6]|{\"j\":2}:{\"k\":1,\"j\":2}|{\"1\":5}:[4,5]|";
-    let source = format!("<?php if ($argc === 1) {{ {} }} else {{ {} }}",
-        source.strip_prefix("<?php").unwrap(), eval.strip_prefix("<?php").unwrap());
+    // AOT class and function declarations must be visible before the argv branch.
+    let (declarations, native_body) = source.split_once("$doc =").unwrap();
+    let source = format!("{declarations} if ($argc === 1) {{ $doc = {native_body} }} else {{ {} }}",
+        eval.strip_prefix("<?php").unwrap());
     let (runs, _) = compile_and_run_with_heap_debug_and_asm_per_argv(&source, &[&[], &["eval"]]);
     let mut failures = Vec::new();
     for (mode, out) in runs.iter().enumerate() {
