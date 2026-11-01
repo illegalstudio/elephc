@@ -9,6 +9,60 @@
 
 use super::*;
 
+/// Same-type array proofs do not turn successive mutating builtins into Mixed outputs.
+#[test]
+fn test_nullable_fallback_flow_r45_mutating_array_chains() {
+    for body in [
+        "$a = [3, 1, 2]; sort($a); rsort($a); echo implode(',', $a);",
+        "$a = ['b' => 2, 'a' => 1]; ksort($a); asort($a); echo count($a);",
+        "$a = [1, 2]; array_push($a, 3); array_pop($a); echo count($a);",
+        "$a = ['a', 'b']; array_unshift($a, 'p'); array_shift($a); echo count($a);",
+        "$old = []; pcntl_sigprocmask(SIG_BLOCK, [], $old); pcntl_sigprocmask(SIG_BLOCK, [], $old);",
+    ] {
+        let source = format!("<?php {body}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+/// Structural non-null results retain guarded, coalesced and expression assignment views.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_store_proofs() {
+    for value in [
+        "$v > 100 ? 100 : $v", "$flag ? 1 : 2", "$w ?: 4", "$w ?? 4",
+        "match ($a) { 1 => 10, default => 20 }", "$a & 1", "$a % 3", "$a <=> 3",
+        "C::K", "C::$s", "$c->n", "@($flag ? 1 : 2)", "($copy = $flag ? 1 : 2)",
+    ] {
+        for prefix in ["if ($v === null) { return 0; }", "$v ??= 1;"] {
+            let source = format!("<?php class C {{ const K = 7; public static int $s = 8; public int $n = 9; }} function need(int $v): void {{}} function run(?int $v, int $a, bool $flag, ?int $w, C $c): int {{ {prefix} $v = {value}; need($v); return $v; }}");
+            check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+    for value in ["$s . '!'", "\"n={$n}\""] {
+        let source = format!("<?php function need(string $s): void {{}} function run(?string $s, int $n): void {{ if ($s === null) {{ return; }} $s = {value}; need($s); }}");
+        check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+    check_source("<?php function need(int $v): void {} function run(?int $v, bool $flag): void { $v ??= 1; need($v = $flag ? 1 : 2); if ($v !== null) { $v = $flag ? 3 : 4; need($v); } }").unwrap();
+    check_source("<?php function need(int $v): void {} function run(?int $v, bool $flag, array $xs): void { if ($v === null) { return; } foreach ($xs as $x) { need($v); $v = $flag ? 1 : 2; } }").unwrap();
+}
+
+/// Composite expressions cannot hide fallible element reads or written loop-copy sources.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_store_negatives() {
+    for value in [
+        "$flag ? $ints[$key] : 1", "match ($key) { 1 => 1, default => $ints[$key] }",
+        "$w ?? $ints[$key]", "$w ?: $ints[$key]", "@$ints[$key]", "($copy = $ints[$key])",
+    ] {
+        let source = format!("<?php function need(int $v): void {{}} function run(?int $v, ?int $w, bool $flag, int $key): void {{ $v ??= 1; $ints = [10]; $v = {value}; need($v); }}");
+        let error = check_source(&source).expect_err(&source);
+        assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+    }
+    for value in ["$flag ? $other : 7", "match ($key) { 1 => 7, default => $other }", "$other ?? $ints[$key]"] {
+        let source = format!("<?php function need(int $v): void {{}} function run(?int $v, ?int $other, ?int $w, bool $flag, int $key): void {{ $w ??= 1; $other ??= 3; $ints = [10]; if ($v !== null) {{ foreach ([1, 2] as $i) {{ if ($v !== null) {{ $other = $ints[$key]; $v = {value}; continue; }} $w = null; break; }} }} need($w); }}");
+        let error = check_source(&source).expect_err(&source);
+        assert!(error.contains("expects int") && error.contains("null"), "{source}: {error}");
+    }
+}
+
 /// Unproved continuing stores preserve null at narrowed nullable loop reads and exits.
 #[test]
 fn test_nullable_fallback_flow_r44_backedge_store_reads() {

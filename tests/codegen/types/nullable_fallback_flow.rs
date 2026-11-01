@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Successive array mutations retain their native array layouts and PHP results.
+#[test]
+fn test_nullable_fallback_flow_r45_mutating_array_runtime() {
+    let source = r#"<?php
+$a = [3, 1, 2]; sort($a); rsort($a); echo implode(',', $a), "\n";
+$m = ['b' => 2, 'a' => 1]; ksort($m); asort($m); echo implode(',', array_keys($m)), "\n";
+$q = [1, 2]; array_push($q, 3); var_dump(array_pop($q));
+$j = [4, 5]; array_unshift($j, 3); var_dump(array_shift($j));
+"#;
+    assert_nullable_flow_cli_heap_output(source, "3,2,1\na,b\nint(3)\nint(3)\n");
+}
+
+/// Structural stores remain non-null through declared returns, arguments and loop headers.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_store_runtime() {
+    let mut source = String::from("<?php class C { const K = 7; public static int $s = 8; public int $n = 9; }\n");
+    let mut expected = String::new();
+    for (index, (value, result)) in [
+        ("$v > 100 ? 100 : $v", 5), ("$flag ? 1 : 2", 2), ("$w ?: 4", 4), ("$w ?? 4", 4),
+        ("match ($a) { 1 => 10, default => 20 }", 20), ("$a & 1", 0), ("$a % 3", 0), ("$a <=> 3", 1),
+        ("C::K", 7), ("C::$s", 8), ("$c->n", 9), ("@($flag ? 1 : 2)", 2), ("($copy = $flag ? 1 : 2)", 2),
+    ].into_iter().enumerate() {
+        source.push_str(&format!("function structural{index}(?int $v, int $a, bool $flag, ?int $w, C $c): int {{ if ($v === null) {{ return 0; }} $v = {value}; return $v; }}\nvar_dump(structural{index}(5, 6, false, null, new C()));\n"));
+        expected.push_str(&format!("int({result})\n"));
+    }
+    source.push_str(r#"function joinedString(?string $s): string {
+    if ($s === null) { return 'none'; } $s = $s . '!'; return $s;
+}
+function interpolatedString(?string $s, int $n): string {
+    if ($s === null) { return 'none'; } $s = "n={$n}"; return $s;
+}
+function needValue(int $v): void { var_dump($v); }
+function expressionStore(?int $v, bool $flag): void { $v ??= 1; needValue($v = $flag ? 1 : 2); }
+function loopStore(?int $v, bool $flag): int {
+    if ($v === null) { return 0; }
+    foreach ([1, 2] as $i) { needValue($v); $v = $flag ? 1 : 2; }
+    return $v;
+}
+var_dump(joinedString('a'), interpolatedString('a', 6));
+expressionStore(null, false); var_dump(loopStore(5, false));
+"#);
+    expected.push_str("string(2) \"a!\"\nstring(3) \"n=6\"\nint(2)\nint(5)\nint(2)\nint(2)\n");
+    assert_nullable_flow_cli_heap_output(&source, &expected);
+}
+
 /// Continuing nullable stores retain null payloads and reachable float exits in both IR modes.
 #[test]
 fn test_nullable_fallback_flow_r44_backedge_runtime() {

@@ -148,13 +148,11 @@ pub(super) fn stabilize_loop_storage(
         if let super::super::loop_storage::AssignedValue::Expr(expr) = value {
             let nullable_storage = checker.guarded_local_storage_type(&Expr::var(name), &snapshot)
                 .is_some_and(Checker::binding_storage_admits_null);
-            // A source written anywhere in the body cannot reuse its entry value proof.
-            let stable_source = match &expr.kind {
-                ExprKind::Variable(source) => !evidence.unbind_all && !written_sources.contains(source),
-                _ => true,
-            };
+            // Composite RHSs must not hide a source whose entry proof a body write kills.
+            let proven = checker.stored_value_is_non_null_with_source_filter(expr, &ty, &analysis.fixed,
+                &|source| !evidence.unbind_all && !written_sources.contains(source));
             if nullable_storage && super::type_is_definitely_non_null(&ty)
-                && !(stable_source && checker.stored_value_is_non_null(expr, &ty, &analysis.fixed))
+                && !proven
             {
                 ty = checker.normalize_union_type(vec![ty, PhpType::Void]);
             }

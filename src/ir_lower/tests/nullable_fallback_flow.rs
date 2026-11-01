@@ -9,6 +9,40 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Array mutation chains and structural guarded stores lower on all supported targets.
+#[test]
+fn test_nullable_fallback_flow_r45_structural_all_targets() {
+    let source = "<?php class C { const K = 7; public static int $s = 8; public int $n = 9; } function structural(?int $v, bool $flag, ?int $w, C $c): int { if ($v === null) { return 0; } $v = $flag ? C::K : $c->n; $v = $w ?? C::$s; return $v; } $a = [3, 1, 2]; sort($a); rsort($a); echo implode(',', $a); var_dump(structural(5, false, null, new C()));";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// An unsupported nested native array sort retains its compile-time diagnostic on every target.
+#[test]
+fn test_nullable_fallback_flow_r45_nested_sort_refusal() {
+    use crate::codegen::platform::Target;
+    use crate::ir_lower::LoweringError;
+    use std::path::Path;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let result = super::try_lower_source_at_for_target("<?php $a = [[2, 'b'], [1, 'a']]; sort($a);",
+            Path::new("main.php"), Path::new("."), Target::parse(name).unwrap());
+        let error = match result {
+            Err(LoweringError::Unsupported(error)) => error.message,
+            Err(other) => panic!("{name}: expected source refusal, got {other:?}"),
+            Ok(module) => {
+                let error = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+                    .err().unwrap_or_else(|| panic!("{name}: nested array sort must be refused before execution"));
+                format!("{error:?}")
+            }
+        };
+        assert!(error.contains("sort indexed-array element PHP type"), "{name}: {error}");
+    }
+}
+
 /// Unproved nullable backedge stores retain float-capable loop returns on every target.
 #[test]
 fn test_nullable_fallback_flow_r44_backedge_all_targets() {

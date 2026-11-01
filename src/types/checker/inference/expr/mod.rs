@@ -24,6 +24,7 @@ mod effects;
 mod eager_operands;
 mod calls_objects;
 mod null_coalesce;
+mod stored_value_proofs;
 mod static_closure;
 use super::super::Checker;
 use super::syntactic::null_coalesce_merge_type;

@@ -254,7 +254,8 @@ impl Checker {
                     // A mixed reference can replace a guarded value and require a wider cell.
                     // Publish the same storage transition as an ordinary mixed-reference call.
                     if def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
-                        && self.guarded_local_storage_type(arg, env).is_some()
+                        && self.guarded_local_storage_type(arg, env)
+                            .is_some_and(|storage| !Self::is_raw_non_null_contract(storage))
                     {
                         let actual = self.infer_type(arg, env)?;
                         self.require_boxed_by_ref_storage(

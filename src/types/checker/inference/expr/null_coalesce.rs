@@ -11,8 +11,9 @@
 //!   its checker type: a fresh value (literal, `new`, `clone`, closure, `$this`) or a call whose
 //!   target DECLARES a return type that excludes null. Storage reads keep the default whatever
 //!   their type says: an unassigned or `unset()` variable, an absent array key and an
-//!   uninitialized property all read as null inside `??`, and the checker has no
-//!   definite-assignment analysis to rule that out. Inferred returns are not trusted either,
+//!   uninitialized property all read as null inside `??`. This operand predicate stays
+//!   separate from completed-store guarantees that use binding presence and value facts.
+//!   Inferred returns are not trusted either,
 //!   because they omit the implicit `null` of a body that can fall off its end, and builtin and
 //!   extern results are left out because their checker types can omit a null they return.
 //! - A join where one arm is already an object/scalar union keeps a union instead of `mixed`,
@@ -102,6 +103,11 @@ pub(super) fn operand_is_never_null(
     if type_admits_null(value_ty) {
         return false;
     }
+    intrinsic_non_null_value(checker, value, env)
+}
+
+/// Recognizes fresh values and declared returns independently of a surrounding result type.
+pub(super) fn intrinsic_non_null_value(checker: &Checker, value: &Expr, env: &TypeEnv) -> bool {
     match &value.kind {
         ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
@@ -130,39 +136,11 @@ pub(super) fn operand_is_never_null(
 }
 
 /// Returns whether a checker type admits PHP null (`void` is the checker's null type).
-fn type_admits_null(ty: &PhpType) -> bool {
+pub(super) fn type_admits_null(ty: &PhpType) -> bool {
     match ty {
         PhpType::Void | PhpType::Mixed | PhpType::Never | PhpType::TaggedScalar => true,
         PhpType::Union(members) => members.iter().any(type_admits_null),
         _ => false,
-    }
-}
-
-impl Checker {
-    /// Proves that a completed store cannot import null hidden by a storage-read type.
-    pub(in crate::types::checker) fn stored_value_is_non_null(
-        &self, value: &Expr, ty: &PhpType, env: &TypeEnv,
-    ) -> bool {
-        if type_admits_null(ty) { return false; }
-        if operand_is_never_null(self, value, ty, env) { return true; }
-        match &value.kind {
-            ExprKind::Cast { .. } | ExprKind::Not(_) | ExprKind::InstanceOf { .. }
-                | ExprKind::Print(_) => true,
-            ExprKind::Variable(name) => self.local_flow_read_is_stable(name)
-                && self.definitely_bound_locals.contains(name)
-                && self.guarded_local_storage_type(value, env).is_some(),
-            ExprKind::FunctionCall { name, .. }
-                if self.builtin_call_types.contains_key(&value.span) => {
-                crate::builtins::registry::lookup(name.as_str()).is_some_and(|def| {
-                    // The neutral fopen declaration is Mixed because it cannot express
-                    // stream-resource|false. Its typed operation never returns null.
-                    !type_admits_null(&def.return_type) || matches!(def.spec.semantics.lowering,
-                        crate::builtins::semantics::BuiltinLowering::Runtime(
-                            crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Fopen)))
-                })
-            }
-            _ => false,
-        }
     }
 }
 
@@ -237,18 +215,7 @@ fn static_call_declares_non_null_return(
     receiver: &StaticReceiver,
     method: &str,
 ) -> bool {
-    let class_name = match receiver {
-        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
-        StaticReceiver::Self_ | StaticReceiver::Static => checker.current_class.clone(),
-        StaticReceiver::Parent => checker
-            .current_class
-            .as_ref()
-            .and_then(|current| checker.classes.get(current))
-            .and_then(|class_info| class_info.parent.clone()),
-        // `generics::classes` rewrites every generic receiver before the checker runs; should one
-        // survive, "may return null" is the answer that cannot fold anything away wrongly.
-        StaticReceiver::Generic(_) => None,
-    };
+    let class_name = static_receiver_class_name(checker, receiver);
     let Some(class_name) = class_name else {
         return false;
     };
@@ -266,6 +233,22 @@ fn static_call_declares_non_null_return(
                 .or_else(|| class_info.methods.get(&method_key))
         })
         .is_some_and(declares_non_null_return)
+}
+
+/// Resolves a static receiver without inferring expressions or publishing flow effects.
+pub(super) fn static_receiver_class_name(checker: &Checker, receiver: &StaticReceiver) -> Option<String> {
+    match receiver {
+        StaticReceiver::Named(name) => Some(name.as_str().to_string()),
+        StaticReceiver::Self_ | StaticReceiver::Static => checker.current_class.clone(),
+        StaticReceiver::Parent => checker
+            .current_class
+            .as_ref()
+            .and_then(|current| checker.classes.get(current))
+            .and_then(|class_info| class_info.parent.clone()),
+        // `generics::classes` rewrites every generic receiver before the checker runs; should one
+        // survive, "may return null" is the answer that cannot fold anything away wrongly.
+        StaticReceiver::Generic(_) => None,
+    }
 }
 
 /// Joins `??` arms when one of them already mixes an object with a non-false scalar.
@@ -348,7 +331,7 @@ fn split_object_members(checker: &Checker, ty: &PhpType) -> (Option<PhpType>, Ve
 }
 
 /// Yields a type's union members, or the type itself when it is not a union.
-fn union_members(ty: &PhpType) -> std::slice::Iter<'_, PhpType> {
+pub(super) fn union_members(ty: &PhpType) -> std::slice::Iter<'_, PhpType> {
     match ty {
         PhpType::Union(members) => members.iter(),
         other => std::slice::from_ref(other).iter(),
