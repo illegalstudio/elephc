@@ -16,6 +16,32 @@ const TARGETS: [&str; 5] = [
     "macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64",
 ];
 
+/// A recursive capture keeps its boxed cell ABI while the closure body sees a callable view.
+#[test]
+fn recursive_by_ref_capture_separates_physical_and_logical_types() {
+    let source = r#"<?php
+$callback = null;
+$callback = function (int $value) use (&$callback): int {
+    return $value <= 1 ? 1 : $value * $callback($value - 1);
+};
+echo $callback(5);
+"#;
+    for target in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(target).unwrap(),
+        );
+        let closure = module.closures.first().unwrap_or_else(|| panic!("{target}: missing closure"));
+        let capture = closure.params.last().unwrap_or_else(|| panic!("{target}: missing capture parameter"));
+        assert!(capture.by_ref, "{target}: recursive capture must remain by-reference");
+        assert_eq!(capture.php_type.codegen_repr(), crate::types::PhpType::Mixed, "{target}: hidden ABI parameter");
+        let local = closure.locals.iter().find(|local| local.name.as_deref() == Some("callback"))
+            .unwrap_or_else(|| panic!("{target}: missing logical capture local"));
+        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Callable, "{target}: body view");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+    }
+}
+
 /// Alternative captures each publish the same fallback owner before their closure is built.
 #[test]
 fn alternative_mutating_captures_publish_cell_owners_on_every_target() {

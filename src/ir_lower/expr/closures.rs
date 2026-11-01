@@ -187,6 +187,7 @@ pub(super) fn lower_closure_with_context(
     let body_contains_eval = body_contains_eval_call(body);
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
+    let mut logical_capture_params = Vec::with_capacity(captures.len());
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
@@ -257,7 +258,15 @@ pub(super) fn lower_closure_with_context(
             value: captured.value,
             by_ref_local: by_ref.then(|| capture.clone()),
         });
-        capture_params.push((capture.clone(), php_type, by_ref));
+        let physical_php_type = if by_ref {
+            ctx.ref_cell_owner_slot(capture)
+                .map(|owner| ctx.builder.local_php_type(owner))
+                .unwrap_or_else(|| php_type.clone())
+        } else {
+            php_type.clone()
+        };
+        capture_params.push((capture.clone(), physical_php_type, by_ref));
+        logical_capture_params.push((capture.clone(), php_type, by_ref));
     }
     if ctx.current_class.is_some()
         && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
@@ -290,8 +299,13 @@ pub(super) fn lower_closure_with_context(
             PhpType::Int,
             false,
         ));
+        logical_capture_params.push((
+            CALLED_CLASS_ID_CAPTURE.to_string(),
+            PhpType::Int,
+            false,
+        ));
     }
-    let signature_capture_params = capture_params
+    let signature_capture_params = logical_capture_params
         .iter()
         .map(|(name, php_type, by_ref)| {
             let signature_type = if name == "this" && ctx.local_slots.contains_key("this") {

@@ -1499,6 +1499,7 @@ pub(crate) fn lower_closure_function(
         signature,
         body,
         captures,
+        signature_captures,
         self_ref_callable_capture,
         loop_storage_scope,
         None,
@@ -1561,6 +1562,7 @@ pub(crate) fn lower_closure_function_with_context(
         signature,
         body,
         captures,
+        signature_captures,
         self_ref_callable_capture,
         loop_storage_scope,
         None,
@@ -1575,6 +1577,7 @@ fn lower_closure_function_with_signature(
     signature: FunctionSig,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
+    logical_captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     loop_storage_scope: String,
     callable_default: Option<Expr>,
@@ -1606,13 +1609,13 @@ fn lower_closure_function_with_signature(
         body,
         signature.is_generator,
     );
-    let env = env_with_closure_captures(&signature, captures, parent.web);
-    let lowered_params = params_with_closure_captures(&signature, captures);
+    let env = env_with_closure_captures(&signature, logical_captures, parent.web);
+    let lowered_params = params_with_closure_captures(&signature, logical_captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
         local_name: local_name.to_string(),
         closure_name: name.to_string(),
         signature: signature.clone(),
-        captures: captures
+        captures: logical_captures
             .iter()
             .map(|(capture_name, _, by_ref)| (capture_name.clone(), *by_ref))
             .collect(),
