@@ -15,12 +15,30 @@ static DIAGNOSTIC_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Preserves failing heap-debug executions before their temporary source directory disappears.
 pub(super) fn preserve_heap_failure(source: &str, assembly: &str, output: &ProgramOutput) {
-    let leaked = output.stderr.lines().any(|line|
-        line.contains("HEAP DEBUG: leak summary:") && !line.ends_with("clean"));
-    if !output.success || leaked {
+    if heap_execution_failed(output) {
         save_failure("heap", Some(source), assembly,
             &format!("stdout:\n{}\nstderr:\n{}", output.stdout, output.stderr));
     }
+}
+
+/// Keeps every failed argument run while saving their shared source and assembly only once.
+pub(super) fn preserve_heap_failures(
+    source: &str, assembly: &str, outputs: &[ProgramOutput], argvs: &[&[&str]],
+) {
+    let mut report = String::new();
+    for (index, output) in outputs.iter().enumerate() {
+        if heap_execution_failed(output) {
+            report.push_str(&format!("mode={index} arguments={:?}\nstdout:\n{}\nstderr:\n{}\n",
+                argvs.get(index), output.stdout, output.stderr));
+        }
+    }
+    if !report.is_empty() { save_failure("heap", Some(source), assembly, &report); }
+}
+
+/// Recognizes process errors and non-clean heap reports without changing test assertions.
+fn heap_execution_failed(output: &ProgramOutput) -> bool {
+    !output.success || output.stderr.lines().any(|line|
+        line.contains("HEAP DEBUG: leak summary:") && !line.ends_with("clean"))
 }
 
 /// Preserves an assembler's exact stdin, including runtime assembly when that is what failed.

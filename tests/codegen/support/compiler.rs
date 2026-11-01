@@ -542,6 +542,7 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
     check_result: &elephc::types::CheckResult,
     source_path: &Path,
 ) -> elephc::ir::Module {
+    let lowering_phase = fixture_phase_timing("eir.lower");
     let mut module = elephc::ir_lower::lower_program_with_source_path(
         program,
         check_result,
@@ -549,9 +550,12 @@ pub(crate) fn lower_and_validate_ir_for_codegen_fixture(
         source_path,
     )
         .expect("AST-to-EIR lowering failed for codegen fixture");
+    drop(lowering_phase);
     if ir_opt_enabled_for_codegen_fixture() {
+        let _phase = fixture_phase_timing("eir.optimize");
         elephc::ir_passes::optimize_module(&mut module);
     }
+    let _phase = fixture_phase_timing("eir.validate");
     elephc::ir::validate_module(&module).expect("EIR validation failed for codegen fixture");
     module
 }
@@ -948,10 +952,10 @@ fn compile_and_capture_per_argv(
     );
 
     if heap_debug {
-        for output in &outputs {
-            super::diagnostics::preserve_heap_failure(source, &user_asm, output);
-        }
+        let _phase = fixture_phase_timing("diagnostics");
+        super::diagnostics::preserve_heap_failures(source, &user_asm, &outputs, argvs);
     }
+    let _phase = fixture_phase_timing("cleanup");
     let _ = fs::remove_dir_all(&dir);
     (outputs, user_asm)
 }
