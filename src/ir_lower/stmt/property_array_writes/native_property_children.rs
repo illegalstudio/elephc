@@ -1,5 +1,5 @@
 //! Purpose:
-//! Probes ordinary stored property values for independently owned native XML children.
+//! Probes ordinary stored property values for children that can outlive a temporary parent.
 //!
 //! Called from:
 //! - Native XML write-fetch lowering for owning temporary property receivers.
@@ -7,15 +7,21 @@
 //! Key details:
 //! - Plain probes read initialized accessible fields or existing dynamic entries without mutation.
 //! - Already supported XML-typed get hooks are fetched once, with no retry on a null result.
-//! - Non-native values fall through to their original guards and writeback semantics.
+//! - Native XML views always detach; arrays detach only from a final parent owner.
+//! - Inaccessible declared fields use normal property reads so `__get` remains authoritative.
 
 use super::*;
 
 /// Identifies ordinary field storage versus a dynamic entry that must already exist.
 #[derive(Clone, Copy)]
-enum Storage { Declared, Dynamic, NativeHook }
+enum Storage {
+    Declared { array_writable: bool },
+    Dynamic,
+    Magic,
+    NativeHook,
+}
 
-/// Selects a native child by its actual value, returning null for every other storage shape.
+/// Selects a native child or a final parent's array, returning null for every other shape.
 pub(super) fn fetch(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, expression: &Expr,
     property: &str, span: Span,
@@ -78,17 +84,33 @@ pub(super) fn fetch(
         let class = ctx.intern_class_name("SimpleXMLElement");
         let native = ctx.emit_value(Op::InstanceOf, vec![child.value], Some(Immediate::Data(class)),
             PhpType::Bool, Op::InstanceOf.default_effects(), Some(span));
-        let selected = ctx.builder.create_named_block("xml.property_child.native", vec![]);
+        let selected = ctx.builder.create_named_block("xml.property_child.selected", vec![]);
         let ordinary = ctx.builder.create_named_block("xml.property_child.not_native", vec![]);
+        let rejected = ctx.builder.create_named_block("xml.property_child.rejected", vec![]);
         let split = ctx.initialized_slots_snapshot();
         ctx.builder.terminate(Terminator::CondBr { cond: native.value,
             then_target: selected, then_args: vec![], else_target: ordinary, else_args: vec![] });
-        ctx.builder.position_at_end(selected);
-        crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
-        merge_slots(&mut merged, ctx.initialized_slots_snapshot());
-        jump(ctx, done);
         ctx.builder.position_at_end(ordinary);
-        ctx.restore_initialized_slots(split);
+        ctx.restore_initialized_slots(split.clone());
+        if matches!(storage, Storage::NativeHook | Storage::Magic)
+            || matches!(storage, Storage::Declared { array_writable: false }) {
+            jump(ctx, rejected);
+        } else {
+            let array = ctx.emit_value(Op::TypePredicate, vec![child.value],
+                Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Array)), PhpType::Bool,
+                Op::TypePredicate.default_effects(), Some(span));
+            let array_candidate = ctx.builder.create_named_block("xml.property_child.array", vec![]);
+            ctx.builder.terminate(Terminator::CondBr { cond: array.value,
+                then_target: array_candidate, then_args: vec![], else_target: rejected, else_args: vec![] });
+            ctx.builder.position_at_end(array_candidate);
+            let shared = ctx.emit_value(Op::RuntimeCall, vec![receiver.value],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ObjectCellHasOtherOwner)), PhpType::Bool,
+                effects_lookup::runtime_effects(), Some(span));
+            ctx.builder.terminate(Terminator::CondBr { cond: shared.value,
+                then_target: rejected, then_args: vec![], else_target: selected, else_args: vec![] });
+        }
+        ctx.builder.position_at_end(rejected);
+        ctx.restore_initialized_slots(split.clone());
         crate::ir_lower::ownership::release_if_owned(ctx, child, Some(span));
         if matches!(storage, Storage::NativeHook) {
             let PhpType::Object(class) = ctx.builder.value_php_type(receiver.value) else { unreachable!() };
@@ -98,6 +120,11 @@ pub(super) fn fetch(
                 &format!("Indirect modification of {}::${property} is not allowed", owner.trim_start_matches('\\')), span);
         }
         jump(ctx, missing);
+        ctx.builder.position_at_end(selected);
+        ctx.restore_initialized_slots(split);
+        crate::ir_lower::expr::store_value_into_temp(ctx, &result, PhpType::Mixed, child, span);
+        merge_slots(&mut merged, ctx.initialized_slots_snapshot());
+        jump(ctx, done);
         ctx.builder.position_at_end(next);
         ctx.restore_initialized_slots(before);
     }
@@ -131,22 +158,29 @@ fn storage(
     }
     if accessible {
         if let Some((_, (_, ty))) = info.visible_property(property) {
-            return may_contain_native(ctx, ty).then_some(Storage::Declared);
+            let declaring = info.property_declaring_classes.get(property)
+                .map(String::as_str).unwrap_or(class);
+            let inaccessible_set = info.property_set_visibilities.get(property).is_some_and(|visibility|
+                !crate::ir_lower::expr::ir_can_access_member(ctx, declaring, visibility));
+            let array_writable = !info.readonly_properties.contains(property) && !inaccessible_set;
+            return may_select_child(ctx, ty).then_some(Storage::Declared { array_writable });
         }
+    }
+    if magic_append::is_candidate(ctx, class, info, property) {
+        return Some(Storage::Magic);
     }
     let hash = crate::types::checker::builtin_stdclass::is_stdclass(class)
         || info.dynamic_property_hash_is_name_addressable();
-    (hash && (runtime_receivers::dynamic_slot(info, class, property)
-        || magic_append::is_candidate(ctx, class, info, property))).then_some(Storage::Dynamic)
+    (hash && runtime_receivers::dynamic_slot(info, class, property)).then_some(Storage::Dynamic)
 }
 
-/// Includes general object-bearing PHP types without treating scalar or array payloads as objects.
-fn may_contain_native(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+/// Includes native-object and array-bearing types that can survive a temporary parent.
+fn may_select_child(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
     match ty {
-        PhpType::Mixed | PhpType::Iterable => true,
+        PhpType::Mixed | PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. } => true,
         PhpType::Object(class) => class.is_empty() || ctx.interfaces.contains_key(class)
             || crate::types::builtin_classes::has_native_dimensions(class, ctx.classes),
-        PhpType::Union(members) => members.iter().any(|ty| may_contain_native(ctx, ty)),
+        PhpType::Union(members) => members.iter().any(|ty| may_select_child(ctx, ty)),
         _ => false,
     }
 }
@@ -156,7 +190,7 @@ fn read(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, expression: &Expr,
     property: &str, storage: Storage, missing: BlockId, span: Span,
 ) -> LoweredValue {
-    if matches!(storage, Storage::NativeHook) {
+    if matches!(storage, Storage::NativeHook | Storage::Magic) {
         let expr = Expr::new(ExprKind::PropertyAccess {
             object: Box::new(expression.clone()), property: property.into(),
         }, span);
@@ -164,8 +198,8 @@ fn read(
     }
     let data = ctx.intern_string(property);
     let present = match storage {
-        Storage::NativeHook => unreachable!(),
-        Storage::Declared => ctx.emit_value(Op::PropInitialized, vec![object.value],
+        Storage::NativeHook | Storage::Magic => unreachable!(),
+        Storage::Declared { .. } => ctx.emit_value(Op::PropInitialized, vec![object.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span)),
         Storage::Dynamic => {
             let name = ctx.emit_value(Op::ConstStr, vec![], Some(Immediate::Data(data)), PhpType::Str,
@@ -180,8 +214,8 @@ fn read(
         then_target: stored, then_args: vec![], else_target: missing, else_args: vec![] });
     ctx.builder.position_at_end(stored);
     match storage {
-        Storage::NativeHook => unreachable!(),
-        Storage::Declared => {
+        Storage::NativeHook | Storage::Magic => unreachable!(),
+        Storage::Declared { .. } => {
             let expr = Expr::new(ExprKind::PropertyAccess {
                 object: Box::new(expression.clone()), property: property.into(),
             }, span);

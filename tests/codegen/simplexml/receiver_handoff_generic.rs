@@ -136,6 +136,13 @@ class GenericXmlFallback {
 }
 function GenericXmlArray(): mixed { return new GenericXmlFallback([1]); }
 GenericXmlArray()->items[] = 2;
+function GenericXmlShared(): mixed { global $genericShared; return $genericShared; }
+$genericShared = new GenericXmlFallback([1]);
+GenericXmlShared()->items[] = 2;
+echo 'shared:', count($genericShared->items), '|'; unset($genericShared);
+function GenericXmlReadonlyArray(): mixed { return new GenericXmlReadonly([1]); }
+try { GenericXmlReadonlyArray()->items[] = 2; }
+catch (Throwable $error) { echo $error->getMessage(), '|'; }
 function GenericXmlBorrowed(object $box): void { $box->items[] = 2; }
 $borrowed = new GenericXmlReadonly(GenericXmlNode());
 GenericXmlBorrowed($borrowed);
@@ -214,7 +221,7 @@ try { $visProtected->items[] = 'S'; } catch (Throwable $visError) { echo $visErr
 try { $visPrivate->items[] = 'S'; } catch (Throwable $visError) { echo $visError->getMessage(), '|'; }
 echo 'append-hidden:', count($visHidden->item), ':', $visHidden->item[0], '|';
 "#;
-    let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|Cannot access protected property GenericXmlVisProtected::$items|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|Cannot access private property GenericXmlVisPrivate::$items|hidden:H|magic-get|magic:H:S|magic-get|magic-literal:H:T|private-get|magic-private:H:P|private-get|magic-private-literal:H:Q|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|append-hidden:1:H|";
+    let expected = "mixed:1:1|mixed:1:1|mixed:1:1|object:1:1|object:1:1|object:1:1|countable:1:1|countable:1:1|countable:1:1|iterable:1:1|iterable:1:1|iterable:1:1|union:1:1|union:1:1|union:1:1|untyped:1:1|untyped:1:1|untyped:1:1|readonly:1:1|readonly:1:1|readonly:1:1|private-set:1:1|private-set:1:1|private-set:1:1|dynamic:1:1|dynamic:1:1|dynamic:1:1|getter:1:1|getter:1:1|getter:1:1|mixed:1:1|object:1:1|countable:1:1|final:S|array:1|shared:2|array:2|readonly:1:1|Cannot indirectly modify readonly property GenericXmlReadonly::$items|borrowed:2|readonly:2:1|hook-get|hook-drop|hook-known:S|hook-get|hook-drop|hook-erased:S|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|hook-get|hook-drop|Indirect modification of GenericXmlHook::$items is not allowed|key-drop|key:A:S:1|key-drop|compound-key:A:BS:1|compound-final:DS|hook-get|hook-drop|hook-key-known:D:S:1|hook-get|hook-drop|hook-key-erased:D:S:1|Cannot access protected property GenericXmlVisProtected::$items|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|Cannot access private property GenericXmlVisPrivate::$items|hidden:H|magic-get|magic:H:S|magic-get|magic-literal:H:T|private-get|magic-private:H:P|private-get|magic-private-literal:H:Q|Cannot access protected property GenericXmlVisProtected::$items|Cannot access private property GenericXmlVisPrivate::$items|append-hidden:1:H|";
     let renamed = source.replace("GenericXml", "EvalGenericXml");
     let body = renamed.strip_prefix("<?php").unwrap().replace('\\', "\\\\").replace('\'', "\\'");
     let eval = format!("<?php $source = $argc > 0 ? '{body}' : ''; eval($source);");

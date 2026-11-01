@@ -88,7 +88,8 @@ pub(super) fn lower(
         RuntimeCallTarget::StringWriteOffset => super::string_write_offsets::lower_offset(ctx, inst),
         RuntimeCallTarget::WriteDiagnostic => super::string_write_offsets::lower_diagnostic(ctx, inst),
         RuntimeCallTarget::MixedArrayCellHasLiveOwner => super::runtime_array_liveness::lower(ctx, inst),
-        RuntimeCallTarget::MixedCellHasOtherOwner => lower_mixed_cell_has_other_owner(ctx, inst),
+        RuntimeCallTarget::MixedCellHasOtherOwner
+        | RuntimeCallTarget::ObjectCellHasOtherOwner => lower_heap_cell_has_other_owner(ctx, inst),
         RuntimeCallTarget::MixedCellPromoteToHash(sort) => {
             lower_mixed_cell_promote_to_hash(ctx, inst, sort, false)
         }
@@ -249,8 +250,8 @@ fn lower_exception_catch_host_replacement(
     Ok(())
 }
 
-/// Checks the uniform cell header without adding an owner that would change the answer.
-fn lower_mixed_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Checks a uniform heap-cell header without adding an owner that would change the answer.
+fn lower_heap_cell_has_other_owner(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ctx.load_value_to_result(expect_operand(inst, 0)?)?;
     let done = ctx.next_label("mixed_cell_other_owner_done");
     // -- distinguish attached cell ownership from the sole pending write pin --

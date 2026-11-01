@@ -128,6 +128,8 @@ pub enum RuntimeCallTarget {
     WriteDiagnostic,
     /// Tests whether a pinned Mixed cell still has an owner besides the pending write.
     MixedCellHasOtherOwner,
+    /// Tests whether an object cell still has an owner besides the pending write.
+    ObjectCellHasOtherOwner,
     /// Borrows a boxed PHP array and returns an independently owned hash for literal unpacking.
     /// Rejects non-array values without mutating the original cell or its payload.
     ArrayUnpackToHash,
@@ -250,6 +252,9 @@ impl RuntimeCallTarget {
             | RuntimeCallTarget::MixedCellHasOtherOwner => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)], result: IrType::I64,
             }),
+            RuntimeCallTarget::ObjectCellHasOtherOwner => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Object)], result: IrType::I64,
+            }),
             RuntimeCallTarget::MixedCellPromoteToHash(_)
             | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             | RuntimeCallTarget::ArrayUnpackToHash => {
@@ -348,6 +353,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::MixedArrayCellHasLiveOwner => "array.mixed_cell_has_live_owner",
             RuntimeCallTarget::WriteDiagnostic => "diagnostic.write",
             RuntimeCallTarget::MixedCellHasOtherOwner => "mixed.has_other_owner",
+            RuntimeCallTarget::ObjectCellHasOtherOwner => "object.has_other_owner",
             RuntimeCallTarget::ArrayUnpackToHash => "array.unpack_to_hash",
             RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
                 "array.mixed_cell_promote_to_hash_ksort"

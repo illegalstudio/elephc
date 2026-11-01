@@ -181,8 +181,13 @@ pub(super) fn write(
 /// Uses the distinct append entry or computes a compound value from the selected native dimension.
 fn native_write(ctx: &mut LoweringContext<'_, '_>, child: LoweredValue, index: Option<LoweredValue>, value: LoweredValue, compound: Option<(&BinOp, &Expr)>, span: Span, diagnosed: bool) {
     let Some(index) = index else {
-        let handled = super::super::native_dimension_append::lower(ctx, child, value, span, |_, _, _| {});
-        assert!(handled, "native XML child append has native dimensions");
+        let append = |ctx: &mut LoweringContext<'_, '_>, array: LoweredValue, value: LoweredValue| {
+            ctx.emit_void(Op::MixedArrayAppend, vec![array.value, value.value], None,
+                Op::MixedArrayAppend.default_effects(), Some(span));
+        };
+        if !super::super::native_dimension_append::lower(ctx, child, value, span, append) {
+            append(ctx, child, value);
+        }
         return;
     };
     if let Some((op, key)) = compound {
