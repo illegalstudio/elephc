@@ -141,10 +141,13 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         return None;
     }
     match param_type.variants().first()? {
-        EvalParameterTypeVariant::Array
-        | EvalParameterTypeVariant::Class(_)
-        | EvalParameterTypeVariant::Iterable
-        | EvalParameterTypeVariant::Object => Some(NativeFunctionRawRefKind::OwnedHeap),
+        EvalParameterTypeVariant::Array | EvalParameterTypeVariant::Iterable => {
+            Some(NativeFunctionRawRefKind::OwnedHeap)
+        }
+        // Declared object references cross the AOT boundary as boxed Mixed cells. The logical
+        // class contract still validates the value before staging, but it must not select a raw
+        // object slot that the physical invoker would interpret as a boxed-cell pointer.
+        EvalParameterTypeVariant::Class(_) | EvalParameterTypeVariant::Object => None,
         EvalParameterTypeVariant::Bool => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_BOOL }),
         EvalParameterTypeVariant::Float => {
             Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_FLOAT })
@@ -152,5 +155,39 @@ fn native_function_raw_ref_kind(param_type: Option<&EvalParameterType>) -> Optio
         EvalParameterTypeVariant::Int => Some(NativeFunctionRawRefKind::Scalar { tag: EVAL_TAG_INT }),
         EvalParameterTypeVariant::String => Some(NativeFunctionRawRefKind::String),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Declared object references retain the boxed Mixed physical boundary.
+    #[test]
+    fn object_reference_types_do_not_select_raw_heap_slots() {
+        let class = EvalParameterType::new(
+            vec![EvalParameterTypeVariant::Class("NativeNode".to_string())],
+            false,
+        );
+        let object = EvalParameterType::new(vec![EvalParameterTypeVariant::Object], false);
+
+        assert!(native_function_raw_ref_kind(Some(&class)).is_none());
+        assert!(native_function_raw_ref_kind(Some(&object)).is_none());
+    }
+
+    /// Array and iterable references keep their supported raw heap layout.
+    #[test]
+    fn container_reference_types_keep_raw_heap_slots() {
+        let array = EvalParameterType::new(vec![EvalParameterTypeVariant::Array], false);
+        let iterable = EvalParameterType::new(vec![EvalParameterTypeVariant::Iterable], false);
+
+        assert!(matches!(
+            native_function_raw_ref_kind(Some(&array)),
+            Some(NativeFunctionRawRefKind::OwnedHeap)
+        ));
+        assert!(matches!(
+            native_function_raw_ref_kind(Some(&iterable)),
+            Some(NativeFunctionRawRefKind::OwnedHeap)
+        ));
     }
 }
