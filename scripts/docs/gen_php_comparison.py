@@ -397,28 +397,32 @@ def classify(registry: list, symbols: dict, baseline: dict):
     # ext/filter is implemented by an injected synthetic prelude, not by shared contracts,
     # so its functions/classes never appear in the generated registries. Count the complete
     # surface explicitly; the filter PHPT corpus and docs/php/filter.md own its behavior.
-    for name in FILTER_PRELUDE_FUNCTIONS:
-        functions.add(
-            "filter",
-            {
-                "name": name,
-                "module": "filter",
-                "_aot": True,
-                "_eval": True,
-                "_aot_kind": "prelude",
-            },
-        )
-    for name in FILTER_PRELUDE_CLASSES:
-        classes.add(
-            "filter",
-            {
-                "name": name,
-                "module": "filter",
-                "_aot": True,
-                "_eval": True,
-                "_aot_kind": "prelude",
-            },
-        )
+    # Minimal unit-test baselines do not contain ext/filter; only add the synthetic coverage
+    # when the real PHP baseline does.
+    if all(name in baseline_functions for name in FILTER_PRELUDE_FUNCTIONS):
+        for name in FILTER_PRELUDE_FUNCTIONS:
+            functions.add(
+                "filter",
+                {
+                    "name": name,
+                    "module": "filter",
+                    "_aot": True,
+                    "_eval": True,
+                    "_aot_kind": "prelude",
+                },
+            )
+    if all(name.lower() in baseline_classes for name in FILTER_PRELUDE_CLASSES):
+        for name in FILTER_PRELUDE_CLASSES:
+            classes.add(
+                "filter",
+                {
+                    "name": name,
+                    "module": "filter",
+                    "_aot": True,
+                    "_eval": True,
+                    "_aot_kind": "prelude",
+                },
+            )
     return functions, classes, constants, constructs, beyond, pecl, newer, dynamic, unavailable, errors
 
 
